@@ -4764,6 +4764,96 @@ async def test_manager_refresh_latest_skips_old_synthetic_pnl_repair_window(
 
 
 @pytest.mark.asyncio
+async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
+    cache_dir = tmp_path / "fills_old_degraded_targeted_repair"
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    entry_ts = now_ms - 28 * 24 * 60 * 60 * 1000
+    close_ts = entry_ts + 60_000
+    entry = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="buy",
+        qty=5.0,
+        price=100.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
+    pending_close = dict(
+        id="close",
+        timestamp=close_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="sell",
+        qty=-6.0,
+        price=103.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-close",
+    )
+    authoritative_close = dict(pending_close)
+    authoritative_close["pnl"] = 12.0
+    authoritative_close["pnl_status"] = "complete"
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+            self.batches = [[entry, pending_close], [authoritative_close]]
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [dict(event) for event in self.batches.pop(0)]
+            if since_ms is not None:
+                batch = [event for event in batch if event["timestamp"] >= since_ms]
+            if until_ms is not None:
+                batch = [event for event in batch if event["timestamp"] <= until_ms]
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _RecordingFetcher()
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+        fee_pct_fallback=0.0,
+    )
+
+    await manager.refresh()
+    close = next(event for event in manager.get_events() if event.id == "close")
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED
+    assert close.pnl_synthetic_reason == "close_exceeds_known_position"
+
+    report = await manager.refresh_degraded_pnl_events(
+        start_ms=entry_ts - 60_000,
+        end_ms=now_ms,
+    )
+
+    assert fetcher.calls[1] == (
+        max(entry_ts - 60_000, close_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS),
+        close_ts + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+    )
+    assert report == {
+        "attempted": True,
+        "before_count": 1,
+        "repaired_count": 1,
+        "remaining_count": 0,
+        "range_count": 1,
+    }
+    close = next(event for event in manager.get_events() if event.id == "close")
+    assert close.pnl == pytest.approx(12.0)
+    assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
+    assert not FillEventsManager.degraded_pnl_events(manager.get_events())
+
+
+@pytest.mark.asyncio
 async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
     tmp_path: Path, caplog
 ):

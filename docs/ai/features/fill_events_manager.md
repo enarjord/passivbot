@@ -30,6 +30,12 @@
    retries from the position/fill anchor with bounded in-memory backoff. Direction,
    quantity, and price alone do not prove a flat-to-position transition when truncated
    history has polluted reconstructed `psize`/`pprice`.
+10. A degraded synthetic PnL row inside the configured live risk lookback is not
+    authoritative merely because cache metadata proves time coverage. Refetch bounded
+    windows around each such row, preserve ordinary recent-fill overlap for routine
+    ingestion, and defer risk planning without consuming restart budget until the row
+    is authoritatively replaced. Replacement diagnostics count pending or synthetic
+    rows becoming authoritative; health PnL applies only the old-to-new net-PnL delta.
 
 ## Runtime Provenance
 
@@ -70,6 +76,10 @@ logs, runtime windows, and immutable manifests.
    Full responses are recursively split into disjoint time windows because the endpoint does not
    guarantee row ordering or expose a stable cursor. Saturation within one millisecond is unavailable
    rather than silently treated as complete.
+5. Old synthetic rows remain outside ordinary recent-fill overlap to avoid repeatedly
+   widening every routine refresh. Risk-blocking degraded rows use a separate bounded
+   repair path so proven coverage cannot strand an otherwise recoverable authoritative
+   exchange record.
 
 ## Failure Semantics And Risks
 
@@ -88,6 +98,8 @@ merely because an auxiliary endpoint failed.
 3. PnL attachment behavior when auxiliary endpoints fail.
 4. Provenance round-trip, preservation during refresh/deduplication, and legacy
    rows remaining unattributed.
+5. Old degraded synthetic PnL is refetched in bounded windows, authoritative
+   replacement is persisted, and unresolved rows defer live planning without restarts.
 
 ## Key Code
 

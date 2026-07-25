@@ -4756,6 +4756,95 @@ class FillEventsManager:
             )
         await self.refresh(start_ms=start_ms, end_ms=None)
 
+    async def refresh_degraded_pnl_events(
+        self,
+        *,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Refetch bounded windows around risk-blocking synthetic PnL events.
+
+        A cache may already prove the configured history lookback while still
+        containing an old degraded PnL reconstruction.  Ordinary recent-fill
+        overlap intentionally excludes old synthetic rows, so those events
+        need a separate targeted path to acquire authoritative exchange data.
+        """
+        await self.ensure_loaded()
+        lower_bound = max(0, int(start_ms or 0))
+        upper_bound = int(
+            end_ms
+            if end_ms is not None
+            else datetime.now(tz=timezone.utc).timestamp() * 1000
+        )
+        degraded_before = [
+            ev
+            for ev in self.degraded_pnl_events(self._events)
+            if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
+        ]
+        if not degraded_before:
+            return {
+                "attempted": False,
+                "before_count": 0,
+                "repaired_count": 0,
+                "remaining_count": 0,
+                "range_count": 0,
+            }
+
+        intervals = self._merge_intervals(
+            [
+                (
+                    max(lower_bound, int(ev.timestamp) - PENDING_PNL_REFRESH_MARGIN_MS),
+                    min(
+                        upper_bound,
+                        int(ev.timestamp) + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+                    ),
+                )
+                for ev in degraded_before
+            ]
+        )
+        logger.info(
+            "[fills] refetching authoritative PnL for degraded cached fills | "
+            "exchange=%s user=%s events=%d ranges=%d oldest=%s newest=%s",
+            self.exchange,
+            self.user,
+            len(degraded_before),
+            len(intervals),
+            _format_ms(min(ev.timestamp for ev in degraded_before)),
+            _format_ms(max(ev.timestamp for ev in degraded_before)),
+        )
+        for interval_start, interval_end in intervals:
+            await self.refresh(start_ms=interval_start, end_ms=interval_end)
+
+        degraded_after = [
+            ev
+            for ev in self.degraded_pnl_events(self._events)
+            if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
+        ]
+        repaired_count = max(0, len(degraded_before) - len(degraded_after))
+        if degraded_after:
+            logger.warning(
+                "[fills] authoritative PnL remains unavailable after bounded repair | "
+                "exchange=%s user=%s repaired=%d remaining=%d action=defer_risk_planning",
+                self.exchange,
+                self.user,
+                repaired_count,
+                len(degraded_after),
+            )
+        else:
+            logger.info(
+                "[fills] authoritative PnL repair complete | exchange=%s user=%s repaired=%d",
+                self.exchange,
+                self.user,
+                repaired_count,
+            )
+        return {
+            "attempted": True,
+            "before_count": len(degraded_before),
+            "repaired_count": repaired_count,
+            "remaining_count": len(degraded_after),
+            "range_count": len(intervals),
+        }
+
     async def refresh_for_lookback(
         self,
         start_ms: int,
@@ -5060,7 +5149,20 @@ class FillEventsManager:
 
     @staticmethod
     def synthetic_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
-        return [ev for ev in events if _is_synthetic_pnl_source(ev.pnl_source)]
+        return [
+            ev
+            for ev in events
+            if _is_synthetic_pnl_source(getattr(ev, "pnl_source", ""))
+        ]
+
+    @staticmethod
+    def degraded_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
+        return [
+            ev
+            for ev in events
+            if str(getattr(ev, "pnl_source", "") or "").lower()
+            == PNL_SOURCE_SYNTHETIC_DEGRADED
+        ]
 
     @staticmethod
     def assert_no_pending_pnl(events: Iterable[FillEvent], *, context: str) -> None:

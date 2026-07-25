@@ -4706,6 +4706,42 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_log_enriched_fill_events_applies_only_authoritative_pnl_delta(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
+        _log_fill_event = lambda self, event: f"id={event.id}"
+
+        def __init__(self):
+            self._health_pnl = 100.0
+
+    previous = SimpleNamespace(
+        id="degraded-close",
+        timestamp=1_700_000_000_000,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="synthetic_fill_reconstruction_degraded",
+    )
+    authoritative = SimpleNamespace(
+        id="degraded-close",
+        timestamp=previous.timestamp,
+        pnl=3.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="authoritative",
+    )
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_enriched_fill_events([(previous, authoritative)])
+
+    assert bot._health_pnl == pytest.approx(98.0)
+    assert "previous_source=synthetic_fill_reconstruction_degraded" in caplog.text
+    assert "pnl_delta=-2" in caplog.text
+
+
 def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
     import passivbot as pb_mod
 
@@ -5162,6 +5198,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         new_count=2,
         enriched_count=1,
         pending_pnl_count=0,
+        degraded_pnl_count=1,
         coverage_before={
             "ready": False,
             "reason": "window_coverage_not_proven",
@@ -5201,6 +5238,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         "new_count": 2,
         "enriched_count": 1,
         "pending_pnl_count": 0,
+        "degraded_pnl_count": 1,
         "event_count_delta": 4,
         "coverage_before_ready": False,
         "coverage_before_reason": "window_coverage_not_proven",
