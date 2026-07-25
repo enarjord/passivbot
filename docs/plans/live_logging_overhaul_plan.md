@@ -152,7 +152,8 @@ Each event should include a stable envelope:
 - `reason_code`
 - `message`: short human text
 - `data`: bounded JSON object with event-specific fields
-- `raw_ref`: optional reference to a permitted non-exchange diagnostic artifact
+- `raw_ref`: optional reference to a policy-permitted bounded, scrubbed
+  diagnostic artifact that contains no raw exchange/account payload
 - `raw_hash`: hash of a source payload that is intentionally not persisted
 
 Compatibility mapping:
@@ -308,14 +309,15 @@ and retention needs differ:
 - completed candles
 - candle fetches
 - EMA bundles or EMA summaries
-- Rust payload raw refs
+- Rust diagnostic hashes and bounded scrubbed summaries
 
 ### Diagnostic Artifact Store
 
-Raw exchange/account payloads must never be retained. Exchange diagnostics keep
-only hashes and bounded normalized summaries. Permitted non-exchange artifacts,
-such as targeted Rust input/output diagnostics, require explicit policy,
-redaction, short retention, and byte caps.
+Raw exchange/account payloads must never be retained. Exchange and Rust
+orchestrator diagnostics keep hashes and bounded normalized summaries by
+default. A targeted Rust artifact may retain only a bounded scrubbed projection
+that omits account state; it also requires explicit policy, short retention, and
+byte caps.
 
 ## High-Volume Policy
 
@@ -403,17 +405,18 @@ rather than staying a dead-end hook.
 The call to Rust should become a first-class event chain:
 
 - `rust_orchestrator.called`
-  Summary plus raw ref/hash for the full input payload.
+  Bounded summary plus hash for the full input payload, which is not persisted.
 - `rust_orchestrator.returned`
-  Summary plus raw ref/hash for the output.
+  Bounded summary plus hash for the output.
 - `planning.symbol_state`
   Per-symbol non-tradable/deferred/reason state, compacted and throttled.
 - `action.planned`
   Per order or compact batch summary with reason and source.
 
-Targeted Rust diagnostics may retain permitted redacted artifacts because they
-capture the complete decision surface passed to the pure Rust order computer.
-Exchange diagnostics remain hashes and bounded normalized summaries only.
+Targeted Rust diagnostics may retain only policy-permitted bounded scrubbed
+projections that omit account state such as balances, position sizes, and entry
+prices. Full Rust inputs and raw exchange/account payloads are never persisted;
+their diagnostics remain hashes and bounded normalized summaries.
 
 ## Cache And Disk Instrumentation
 
@@ -505,12 +508,14 @@ No trading behavior change.
 - Add call ids and call group ids.
 - Add tests for concurrent vs isolated remote-call reconstruction.
 
-### Phase 3: Rust Planning And Payload Raw Refs
+### Phase 3: Rust Planning And Bounded Payload Diagnostics
 
 No trading behavior change.
 
 - Emit `rust_orchestrator.called` and `rust_orchestrator.returned`.
-- Persist raw Rust payloads under debug/raw-ref policy.
+- Retain hashes and bounded summaries; any targeted artifact must be a scrubbed
+  projection that omits account state and satisfies the diagnostic-artifact
+  policy.
 - Emit planning summaries and per-symbol unavailable reasons from the same
   snapshot context.
 - Add payload redaction/hash tests and retention tests.
@@ -550,13 +555,13 @@ After the event bus exists.
 - Treat gatekeeper output as one producer, not as a separate logging system.
 - Console shows only gatekeeper decisions that affect execution or explain
   blocked/degraded behavior.
-- Structured events retain full diagnostic context subject to volume policy.
+- Structured events retain bounded, policy-permitted diagnostic context.
 
 ## Validation Strategy
 
 - Unit tests for envelope defaults, routing, redaction, queue overflow, and sink
   degradation.
-- Unit tests for payload digest/raw-ref behavior and context propagation across
+- Unit tests for payload digest/scrubbed-artifact behavior and context propagation across
   `cycle_id`, `remote_call_group_id`, `plan_id`, and `order_wave_id`.
 - Fake-live integration tests for a full chain:
   `cycle.started -> remote_call.* -> data_packet.updated -> snapshot.built ->
@@ -602,9 +607,9 @@ work unless later live evidence forces a revision.
    should summarize only user-relevant effects, such as entries deferred,
    forager unavailable counts, stale market data, or degraded readiness. Per-span
    EMA diagnostics are DEBUG/TRACE material.
-5. Raw Rust input/output payloads default to summary plus hash. Full redacted raw
-   refs are enabled only by explicit DEBUG/targeted diagnostic policy with short
-   retention.
+5. Raw Rust input/output payloads are not retained. Diagnostics use summaries
+   plus hashes. Explicit DEBUG/targeted diagnostic policy may retain only a
+   bounded scrubbed projection that omits account state and has short retention.
 6. Raw exchange/account payloads are never retained, including in DEBUG/TRACE.
    Events keep hashes and bounded normalized summaries only.
 7. Reuse and evolve monitor storage as the canonical structured sink instead of
