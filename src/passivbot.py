@@ -13,6 +13,7 @@ import traceback
 import argparse
 import asyncio
 import json
+import hashlib
 import sys
 import signal
 import hjson
@@ -8296,22 +8297,95 @@ class Passivbot:
                 return update_ts
         return None
 
+    def _position_open_timestamp_from_row(self, position: dict) -> int | None:
+        """Return an explicit exchange-reported position opening time."""
+        open_keys = (
+            "open_time",
+            "openTime",
+            "createdTime",
+            "createTime",
+            "cTime",
+        )
+        candidates = [position.get(key) for key in open_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in open_keys)
+        for candidate in candidates:
+            open_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if open_ts is not None:
+                return open_ts
+        return None
+
     def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_anchor_timestamp_from_row(position)
+
+    def _position_history_anchor_timestamp_ms(
+        self, symbol: str, pside: str
+    ) -> int | None:
+        """Return an exchange position-opening timestamp usable for fill recovery.
+
+        Candle anchoring prefers the latest position update. Fill-history recovery
+        has the opposite requirement: start before the position opened so the
+        reconstructed state includes every entry and reduction still available
+        from the exchange. An update-only timestamp is not an opening boundary;
+        callers must progressively widen history when no open/generic timestamp
+        is available.
+        """
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        if open_ts is not None:
+            return open_ts
+
+        generic_keys = ("timestamp", "timestamp_ms")
+        candidates = [position.get(key) for key in generic_keys]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(info.get(key) for key in generic_keys)
+        parsed = [
+            timestamp
+            for timestamp in (
+                self._parse_position_anchor_timestamp_ms(candidate)
+                for candidate in candidates
+            )
+            if timestamp is not None
+        ]
+        update_ts = self._position_update_timestamp_from_row(position)
+        if update_ts is not None:
+            # Snapshot normalization stores its latest anchor in ``timestamp``.
+            # When that value is only a copy of the update time, it does not
+            # establish where the position opened. A genuinely earlier generic
+            # timestamp remains useful when an exchange exposes both.
+            parsed = [timestamp for timestamp in parsed if timestamp < update_ts]
+        return min(parsed) if parsed else None
 
     def _position_update_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         return self._position_update_timestamp_from_row(position)
 
     @staticmethod
-    def _fill_position_change_epoch(event, event_index: int) -> str:
-        timestamp = int(event.timestamp)
-        event_id = getattr(event, "id", None) or getattr(
-            event, "client_order_id", None
+    def _fill_position_change_fallback_key(event) -> str:
+        """Return an immutable content key for a fill without exchange identity."""
+        fields = (
+            int(event.timestamp),
+            str(getattr(event, "symbol", "") or ""),
+            str(getattr(event, "position_side", "") or ""),
+            str(getattr(event, "side", "") or ""),
+            str(getattr(event, "qty", "") or ""),
+            str(getattr(event, "price", "") or ""),
         )
+        payload = json.dumps(fields, ensure_ascii=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+
+    @classmethod
+    def _fill_position_change_epoch(
+        cls, event, fallback_occurrence: int = 0
+    ) -> str:
+        timestamp = int(event.timestamp)
+        event_id = str(getattr(event, "id", "") or "")
         if not event_id:
-            event_id = f"event_index:{event_index}"
+            fallback_key = cls._fill_position_change_fallback_key(event)
+            event_id = f"fingerprint:{fallback_key}:{int(fallback_occurrence)}"
         return f"fill:{timestamp}:{event_id}"
 
     def _latest_fill_position_change_anchors(self) -> dict[tuple[str, str], dict]:
@@ -8319,37 +8393,51 @@ class Passivbot:
         manager = getattr(self, "_pnls_manager", None)
         events = [] if manager is None else manager.get_events()
         anchors: dict[tuple[str, str], dict] = {}
+        fallback_occurrences: dict[str, int] = defaultdict(int)
+        fallback_occurrence_by_index: dict[int, int] = {}
+        for event_index, event in enumerate(events):
+            if getattr(event, "id", None):
+                continue
+            fallback_key = self._fill_position_change_fallback_key(event)
+            fallback_occurrence_by_index[event_index] = fallback_occurrences[
+                fallback_key
+            ]
+            fallback_occurrences[fallback_key] += 1
         for event_index in range(len(events) - 1, -1, -1):
             event = events[event_index]
             key = (str(event.symbol), str(event.position_side))
             if key not in anchors:
                 anchor = {
                     "timestamp": int(event.timestamp),
-                    "epoch": self._fill_position_change_epoch(event, event_index),
+                    "epoch": self._fill_position_change_epoch(
+                        event, fallback_occurrence_by_index.get(event_index, 0)
+                    ),
                 }
-                for field in ("psize", "pprice"):
+                for field in ("psize", "pprice", "qty", "price", "c_mult"):
                     try:
                         value = float(getattr(event, field))
                     except (AttributeError, TypeError, ValueError, OverflowError):
                         continue
                     if math.isfinite(value):
                         anchor[field] = value
+                side = str(getattr(event, "side", "") or "").lower()
+                if side:
+                    anchor["side"] = side
                 anchors[key] = anchor
         return anchors
 
     def _fill_anchor_matches_position_state(
-        self, symbol: str, state: tuple[float, float], anchor: dict | None
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict | None,
     ) -> bool:
         """Whether a fill's recorded after-state matches an exchange position."""
-        if anchor is None or "psize" not in anchor or "pprice" not in anchor:
+        if anchor is None:
             return False
         position_size, position_price = state
-        fill_size = abs(float(anchor["psize"]))
-        fill_price = float(anchor["pprice"])
-        if not all(
-            math.isfinite(value)
-            for value in (position_size, position_price, fill_size, fill_price)
-        ):
+        if not all(math.isfinite(value) for value in (position_size, position_price)):
             return False
         qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
         price_step = abs(
@@ -8359,9 +8447,22 @@ class Passivbot:
         position_size_in_fill_units = abs(position_size) * c_mult
         qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
         price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
-        return abs(fill_size - position_size_in_fill_units) <= qty_tolerance and abs(
-            fill_price - position_price
-        ) <= price_tolerance
+        if "psize" in anchor and "pprice" in anchor:
+            fill_size = abs(float(anchor["psize"]))
+            fill_price = float(anchor["pprice"])
+            if (
+                math.isfinite(fill_size)
+                and math.isfinite(fill_price)
+                and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
+                and abs(fill_price - position_price) <= price_tolerance
+            ):
+                return True
+
+        # Price and quantity alone cannot prove this fill opened the entire
+        # position: unseen reductions can produce the same live size/average.
+        # Keep the cohort pending until refreshed history reconstructs a
+        # matching post-fill state.
+        return False
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -8540,7 +8641,7 @@ class Passivbot:
                         and current_epoch.startswith("fill:")
                         and expected_position_state is not None
                         and not self._fill_anchor_matches_position_state(
-                            symbol, expected_position_state, anchor
+                            symbol, pside, expected_position_state, anchor
                         )
                     ):
                         failed_predicates.append("fill_after_state_mismatch")
@@ -8597,6 +8698,8 @@ class Passivbot:
         self._trailing_pending_position_states = pending_position_states
         self._trailing_position_snapshot_fill_epochs = associated_fill_epochs
         self._trailing_fill_confirmation_diagnostics = confirmation_diagnostics
+        if not confirmation_diagnostics:
+            self._trailing_fill_history_recovery_state = {}
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
@@ -11466,6 +11569,203 @@ class Passivbot:
                 since_ms=since_ms,
             )
 
+    def _trailing_fill_history_recovery_start_ms(
+        self, age_limit: int | None
+    ) -> int | None:
+        """Return a bounded refetch start for unresolved position/fill state.
+
+        Routine confirmation refreshes intentionally cover only recent fills.
+        If that leaves a position tied to a stale or mismatched fill, retry from
+        the exchange-reported position anchor (or the stale fill itself) with
+        an in-memory exponential backoff.  The affected position remains
+        nontradable until normal confirmation succeeds.
+        """
+        diagnostics = dict(
+            getattr(self, "_trailing_fill_confirmation_diagnostics", {}) or {}
+        )
+        recoverable_predicates = {
+            "missing_fill_anchor",
+            "non_fill_anchor",
+            "fill_identity_unchanged",
+            "fill_after_state_mismatch",
+        }
+        now_ms = utc_ms()
+        try:
+            history_now_ms = int(self.get_exchange_time())
+        except Exception:
+            history_now_ms = now_ms
+        day_ms = 24 * 60 * ONE_MIN_MS
+        # Bound recovery to a horizon the connector can actually traverse.
+        # Bybit's sub-seven-day windows fit two years within its 200-request
+        # cap. Classic Bitget and KuCoin need roughly one request per day and
+        # cap pagination at 400 requests, so they (and the conservative
+        # default) stop at one year. Older unresolved states remain
+        # fail-closed.
+        exchange = str(getattr(self, "exchange", "")).lower()
+        max_window_days = 730 if exchange == "bybit" else 365
+        max_window_ms = max_window_days * day_ms
+        earliest_recovery_ms = max(1, history_now_ms - max_window_ms)
+
+        previous_state = dict(
+            getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
+        )
+        previous_cohort_states = dict(previous_state.get("cohorts", {}) or {})
+        cohort_states: dict[tuple[str, str], dict] = {}
+        attempted_cohorts: list[tuple[str, str]] = []
+        candidates: list[int] = []
+        for raw_key, detail in diagnostics.items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 2:
+                continue
+            if not isinstance(detail, dict):
+                continue
+            failed = set(detail.get("failed_predicates") or [])
+            if not failed.intersection(recoverable_predicates):
+                continue
+            symbol, pside = str(raw_key[0]), str(raw_key[1])
+            cohort = (symbol, pside)
+            cohort_state = dict(previous_cohort_states.get(cohort, {}) or {})
+            cohort_states[cohort] = cohort_state
+            # First satisfy the mandatory fetch generation after the position
+            # snapshot. Widen only if that recent confirmation completes and
+            # the reconstructed after-state still mismatches.
+            if "post_snapshot_fill_refresh_pending" in failed:
+                continue
+            if now_ms < int(cohort_state.get("next_retry_ms", 0) or 0):
+                continue
+
+            retry_count = int(cohort_state.get("retry_count", 0) or 0) + 1
+            anchor_ts = self._position_history_anchor_timestamp_ms(symbol, pside)
+            missing_anchor = anchor_ts is None
+            if anchor_ts is None:
+                try:
+                    diagnostic_fill_ts = (
+                        int(detail.get("fill_timestamp_ms") or 0) or None
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    diagnostic_fill_ts = None
+                base_window_ms = (
+                    max(day_ms, history_now_ms - int(age_limit))
+                    if age_limit is not None
+                    else 30 * day_ms
+                )
+                widened_window_ms = min(
+                    max_window_ms,
+                    base_window_ms * (2 ** min(retry_count, 10)),
+                )
+                candidate = max(
+                    earliest_recovery_ms,
+                    history_now_ms - widened_window_ms,
+                )
+                if diagnostic_fill_ts is not None:
+                    candidate = min(
+                        candidate,
+                        max(
+                            earliest_recovery_ms,
+                            int(diagnostic_fill_ts) - 5 * ONE_MIN_MS,
+                        ),
+                    )
+            else:
+                candidate = max(
+                    earliest_recovery_ms,
+                    int(anchor_ts) - 5 * ONE_MIN_MS,
+                )
+            at_history_bound = candidate <= earliest_recovery_ms
+            if at_history_bound:
+                delay_ms = 24 * 60 * ONE_MIN_MS
+            else:
+                delay_ms = min(
+                    60 * ONE_MIN_MS,
+                    5 * ONE_MIN_MS * (2 ** min(retry_count - 1, 4)),
+                )
+            cohort_states[cohort] = {
+                "retry_count": retry_count,
+                "last_attempt_ms": now_ms,
+                "next_retry_ms": now_ms + delay_ms,
+                "start_ms": candidate,
+                "missing_anchor": missing_anchor,
+                "at_history_bound": at_history_bound,
+            }
+            candidates.append(candidate)
+            attempted_cohorts.append(cohort)
+
+        if not candidates:
+            self._trailing_fill_history_recovery_state = (
+                {"cohorts": cohort_states} if cohort_states else {}
+            )
+            return None
+        start_ms = min(candidates)
+        # `age_limit` bounds PnL accounting, not current-position
+        # reconciliation. Timestamp-free positions progressively widen beyond
+        # that window up to the venue-history bound; timestamped positions start
+        # before their opening anchor when it remains within that bound.
+        next_retry_ms = min(
+            int(cohort_states[cohort]["next_retry_ms"])
+            for cohort in attempted_cohorts
+        )
+        retry_count = max(
+            int(cohort_states[cohort]["retry_count"])
+            for cohort in attempted_cohorts
+        )
+        self._trailing_fill_history_recovery_state = {
+            "cohorts": cohort_states,
+            "retry_count": retry_count,
+            "last_attempt_ms": now_ms,
+            "next_retry_ms": next_retry_ms,
+            "start_ms": start_ms,
+        }
+        logging.warning(
+            "[fills] widening refresh for unresolved position/fill confirmation | "
+            "cohorts=%s start=%s retry=%d next_retry_minutes=%.1f "
+            "action=refetch_then_keep_nontradable_until_confirmed",
+            ",".join(
+                f"{symbol}:{pside}" for symbol, pside in sorted(attempted_cohorts)
+            ),
+            ts_to_date(start_ms)[:19],
+            retry_count,
+            max(0, next_retry_ms - now_ms) / ONE_MIN_MS,
+        )
+        return start_ms
+
+    def _trailing_fill_recovery_prefetch_due(self) -> bool:
+        """Whether unresolved trailing evidence needs a nonblocking fill prefetch."""
+        if "fills" in (
+            getattr(self, "_authoritative_pending_confirmations", {}) or {}
+        ):
+            return False
+        diagnostics = dict(
+            getattr(self, "_trailing_fill_confirmation_diagnostics", {}) or {}
+        )
+        recoverable_predicates = {
+            "missing_fill_anchor",
+            "non_fill_anchor",
+            "fill_identity_unchanged",
+            "fill_after_state_mismatch",
+        }
+        cohort_states = dict(
+            (
+                getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
+            ).get("cohorts", {})
+            or {}
+        )
+        now_ms = utc_ms()
+        for raw_key, detail in diagnostics.items():
+            if not isinstance(raw_key, tuple) or len(raw_key) != 2:
+                continue
+            if not isinstance(detail, dict):
+                continue
+            failed = set(detail.get("failed_predicates") or [])
+            if not failed.intersection(recoverable_predicates):
+                continue
+            if "post_snapshot_fill_refresh_pending" in failed:
+                # The position snapshot itself arms the authoritative fills
+                # confirmation; do not race it with a background recovery.
+                continue
+            cohort = (str(raw_key[0]), str(raw_key[1]))
+            state = dict(cohort_states.get(cohort, {}) or {})
+            if now_ms >= int(state.get("next_retry_ms", 0) or 0):
+                return True
+        return False
+
     async def _update_pnls_locked(
         self,
         *,
@@ -11642,6 +11942,10 @@ class Passivbot:
                     getattr(self, "_authoritative_pending_confirmations", {}) or {}
                 )
                 confirmation_refresh = "fills" in pending
+                trailing_recovery_refresh = bool(
+                    getattr(self, "_trailing_fill_confirmation_diagnostics", {})
+                    or {}
+                ) and source == "routine_prefetch:trailing_recovery"
                 refresh_mode = (
                     "incremental_confirm"
                     if confirmation_refresh
@@ -11654,6 +11958,15 @@ class Passivbot:
                         end_ms=None,
                     )
                 else:
+                    # Mandatory account-wide confirmations must stay on the
+                    # bounded recent path. Potentially expensive history
+                    # widening is reserved for the nonblocking trailing
+                    # recovery prefetch.
+                    recovery_start_ms = (
+                        self._trailing_fill_history_recovery_start_ms(age_limit)
+                        if trailing_recovery_refresh
+                        else None
+                    )
                     overlap_minutes_key = (
                         "fills_confirmation_overlap_minutes"
                         if confirmation_refresh
@@ -11667,10 +11980,17 @@ class Passivbot:
                         )
                     )
                     overlap_minutes = max(0.0, overlap_minutes)
-                    await self._pnls_manager.refresh_latest(
-                        overlap=20,
-                        last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
-                    )
+                    if recovery_start_ms is not None:
+                        refresh_mode = "trailing_confirmation_recovery"
+                        await self._pnls_manager.refresh(
+                            start_ms=int(recovery_start_ms),
+                            end_ms=None,
+                        )
+                    else:
+                        await self._pnls_manager.refresh_latest(
+                            overlap=20,
+                            last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
+                        )
                 fill_fetch_completed = True
 
             # Find and log new events (those not in cache before refresh)
@@ -11747,7 +12067,13 @@ class Passivbot:
                 )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
-                refresh_mode in {"full", "lookback_bootstrap", "incremental_confirm"}
+                refresh_mode
+                in {
+                    "full",
+                    "lookback_bootstrap",
+                    "incremental_confirm",
+                    "trailing_confirmation_recovery",
+                }
                 or "confirm" in str(source)
                 or "staged" in str(source)
             )
@@ -14355,6 +14681,9 @@ class Passivbot:
                     "short": {"size": 0.0, "price": 0.0},
                 }
             normalized_position = {"size": psize, "price": pprice}
+            open_ts = self._position_open_timestamp_from_row(elm)
+            if open_ts is not None:
+                normalized_position["openTime"] = open_ts
             anchor_ts = self._position_anchor_timestamp_from_row(elm)
             if anchor_ts is not None:
                 normalized_position["timestamp"] = anchor_ts

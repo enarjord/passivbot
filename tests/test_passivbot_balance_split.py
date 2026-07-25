@@ -6354,6 +6354,165 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
 
 
 @pytest.mark.asyncio
+async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    position_anchor_ms = now_ms - 2 * 60 * 60 * 1000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    symbol = "WLD/USDT:USDT"
+    cached_events = [
+        SimpleNamespace(
+            timestamp=position_anchor_ms - 24 * 60 * 60 * 1000,
+            id="stale-close",
+            source_ids=["stale-close"],
+        )
+    ]
+
+    class _Manager:
+        def __init__(self):
+            self._events = list(cached_events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return "all"
+
+        def set_history_scope(self, scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_confirmation_overlap_minutes": 60.0,
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot.positions = {
+        symbol: {
+            "long": {
+                "size": 165.0,
+                "price": 0.3896,
+                "timestamp": position_anchor_ms,
+            }
+        }
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": cached_events[0].timestamp,
+        }
+    }
+    bot._authoritative_pending_confirmations = {"fills": 2}
+    bot._pnls_manager = _Manager()
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls(
+        source="routine_prefetch:trailing_recovery"
+    )
+
+    assert result is True
+    bot._pnls_manager.refresh.assert_awaited_once_with(
+        start_ms=position_anchor_ms - 5 * 60 * 1000,
+        end_ms=None,
+    )
+    bot._pnls_manager.refresh_latest.assert_not_awaited()
+    state = bot._trailing_fill_history_recovery_state
+    assert state["retry_count"] == 1
+    assert state["next_retry_ms"] == now_ms + 5 * 60 * 1000
+
+
+@pytest.mark.asyncio
+async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    position_anchor_ms = now_ms - 180 * 24 * 60 * 60 * 1000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    symbol = "WLD/USDT:USDT"
+    cached_events = [
+        SimpleNamespace(
+            timestamp=position_anchor_ms,
+            id="stale-fill",
+            source_ids=["stale-fill"],
+        )
+    ]
+
+    class _Manager:
+        def __init__(self):
+            self._events = list(cached_events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return "all"
+
+        def set_history_scope(self, scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_confirmation_overlap_minutes": 60.0,
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot.positions = {
+        symbol: {
+            "long": {
+                "size": 1.0,
+                "price": 100.0,
+                "timestamp": position_anchor_ms,
+            }
+        }
+    }
+    bot.exchange = "weex"
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": position_anchor_ms,
+        }
+    }
+    bot._authoritative_pending_confirmations = {"fills": 2}
+    bot._pnls_manager = _Manager()
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls(source="staged_refresh:fills_confirmation")
+
+    assert result is True
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+        overlap=20,
+        last_refresh_overlap_ms=60 * 60 * 1000,
+    )
+    assert getattr(bot, "_trailing_fill_history_recovery_state", {}) == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown_requested", [False, True])
 async def test_update_pnls_propagates_unexpected_refresh_errors_without_retaining_text(
     caplog, capsys, shutdown_requested
@@ -8823,6 +8982,53 @@ def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 180_000)
     plan = bot._authoritative_staged_refresh_plan()
 
+    assert plan == {"balance", "positions", "open_orders", "fills"}
+
+
+def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._trailing_fill_recovery_prefetch_due = lambda: True
+    scheduled = []
+    bot._schedule_routine_fill_refresh_prefetch = (
+        lambda *, reason: scheduled.append(reason) or True
+    )
+    bot.freshness_ledger.stamp(
+        "fills", ("fills", "fresh"), now_ms=120_010, epoch=1
+    )
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
+    plan = bot._authoritative_staged_refresh_plan()
+
+    assert scheduled == ["trailing_recovery"]
+    assert plan == {"balance", "positions", "open_orders"}
+    assert bot._authoritative_pending_confirmations == {}
+
+
+def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._trailing_fill_recovery_prefetch_due = lambda: True
+    scheduled = []
+    bot._schedule_routine_fill_refresh_prefetch = (
+        lambda *, reason: scheduled.append(reason) or True
+    )
+    bot.freshness_ledger.stamp(
+        "fills", ("fills", "stale"), now_ms=120_010, epoch=1
+    )
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 360_500)
+    plan = bot._authoritative_staged_refresh_plan()
+
+    assert scheduled == []
     assert plan == {"balance", "positions", "open_orders", "fills"}
 
 

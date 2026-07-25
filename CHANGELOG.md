@@ -26,6 +26,23 @@ All notable user-facing changes will be documented in this file.
   so extreme optimizer candidates terminate normally instead of panicking an optimizer worker.
   Other invalid orchestrator inputs now propagate as backtest errors without unwinding Rust.
 
+- Live fill confirmation now preserves the last successful exchange-refresh timestamp while
+  loading or repairing local fill caches, widens fill-history fetches with bounded backoff when a
+  position remains tied to a stale or mismatched fill, starting before the earliest available
+  position/open timestamp even when that predates the configured PnL window. Affected trailing
+  positions remain fail-closed until refreshed history reconstructs a post-fill state matching
+  exchange state; price and quantity alone cannot prove a flat-to-position transition. Id-less
+  fills use stable content-based identities rather than history-list indices. Position snapshots
+  preserve distinct exchange opening times, while timestamp-free positions retry with
+  progressively wider history windows outside the account-wide execution barrier, so only the
+  affected trailing coin and position side remain nontradable between attempts.
+  Widening starts only in background recovery after the required recent post-snapshot confirmation,
+  tracks progress per coin and position side, and is capped by connector pagination capacity
+  (two years on Bybit, otherwise one year) to avoid unbounded exchange pagination. Sparse Bybit
+  trade history now traverses empty recent windows instead of stopping before older fills, while
+  stale fill state remains part of the blocking authoritative refresh rather than being displaced
+  by a background recovery.
+
 - Bybit closed-PnL refreshes now cover requested history with explicit,
   contiguous sub-seven-day windows and cursor pagination inside each window.
   Sparse pages no longer create gaps in older realized-PnL history, and endpoint

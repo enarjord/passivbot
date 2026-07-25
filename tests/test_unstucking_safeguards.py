@@ -839,16 +839,35 @@ class _DummyFillEvent:
         pb_order_type: str = "unknown",
         psize: float | None = None,
         pprice: float | None = None,
+        side: str = "buy",
+        qty: float = 1.0,
+        price: float = 100.0,
+        client_order_id: str = "",
+        source_ids: list[str] | None = None,
+        c_mult: float | None = None,
     ):
         self.symbol = symbol
         self.position_side = position_side
         self.timestamp = timestamp
         self.id = event_id
         self.pb_order_type = pb_order_type
+        self.side = side
+        self.qty = qty
+        self.price = price
+        self.client_order_id = client_order_id
+        self.source_ids = list(source_ids or [])
         if psize is not None:
             self.psize = psize
         if pprice is not None:
             self.pprice = pprice
+        if side is not None:
+            self.side = side
+        if qty is not None:
+            self.qty = qty
+        if price is not None:
+            self.price = price
+        if c_mult is not None:
+            self.c_mult = c_mult
 
 
 class _DummyPnlsManager:
@@ -1195,6 +1214,49 @@ async def test_same_timestamp_fill_identity_advances_trailing_epoch():
     )
 
 
+def test_idless_fill_identity_is_prefix_stable_and_distinguishes_duplicate_fills():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    first = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        qty=0.5,
+        price=100.0,
+    )
+    bot._pnls_manager = _DummyPnlsManager([first])
+
+    first_epoch = bot._latest_fill_position_change_epochs()[(symbol, "long")]
+    assert ":fingerprint:" in first_epoch
+
+    older = _DummyFillEvent(
+        symbol,
+        "long",
+        60_000,
+        None,
+        qty=0.25,
+        price=99.0,
+    )
+    bot._pnls_manager._events.insert(0, older)
+    assert bot._latest_fill_position_change_epochs()[(symbol, "long")] == first_epoch
+
+    duplicate = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        qty=0.5,
+        price=100.0,
+    )
+    bot._pnls_manager._events.append(duplicate)
+    duplicate_epoch = bot._latest_fill_position_change_epochs()[(symbol, "long")]
+
+    assert duplicate_epoch != first_epoch
+    assert duplicate_epoch.endswith(":1")
+
+
 @pytest.mark.asyncio
 async def test_fill_epoch_reset_is_isolated_by_symbol_and_position_side():
     cfg = _dummy_config()
@@ -1308,7 +1370,54 @@ def test_position_anchor_timestamp_prefers_update_fields_over_open_fields():
     )
 
     assert bot._position_anchor_timestamp_ms(symbol, "long") == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") == 120_000
     assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
+
+
+def test_fill_history_anchor_ignores_update_only_timestamp():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "updatedTime": "360000",
+            }
+        ]
+    )
+
+    assert bot.positions[symbol]["long"]["timestamp"] == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") is None
+    assert bot._position_update_timestamp_ms(symbol, "long") == 360_000
+
+
+def test_position_snapshot_preserves_distinct_open_and_update_timestamps():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+                "openTime": 120_000,
+                "updatedTime": 360_000,
+            }
+        ]
+    )
+
+    position = bot.positions[symbol]["long"]
+    assert position["openTime"] == 120_000
+    assert position["timestamp"] == 360_000
+    assert position["lastUpdateTimestamp"] == 360_000
+    assert bot._position_history_anchor_timestamp_ms(symbol, "long") == 120_000
 
 
 @pytest.mark.asyncio
@@ -1483,10 +1592,16 @@ async def test_fill_prefetch_before_position_delta_waits_for_post_snapshot_refre
         "failed_predicates"
     ] == ["post_snapshot_fill_refresh_pending"]
 
+    bot._trailing_fill_history_recovery_state = {
+        "key": (((symbol, "long"),), 120_000),
+        "retry_count": 3,
+        "next_retry_ms": 1_800_000_000_000,
+    }
     bot._trailing_fill_fetch_generation = 1
     await bot.update_trailing_data()
 
     assert bot._trailing_pending_fill_confirmations == {}
+    assert bot._trailing_fill_history_recovery_state == {}
     assert bot._orchestrator_trailing_unavailable_symbols == set()
     assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
         103.0
@@ -1593,6 +1708,257 @@ def test_restart_without_update_timestamp_requires_matching_fill_after_state():
     assert "fills" in bot._authoritative_pending_confirmations
 
 
+def test_matching_fill_shape_does_not_override_truncated_cache_psize():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    anchor = {
+        "psize": 5.01,
+        "pprice": 63.8149,
+        "side": "buy",
+        "qty": 1.1,
+        "price": 58.717,
+        "c_mult": 1.0,
+    }
+
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.1, 58.717), anchor
+    )
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.2, 58.717), anchor
+    )
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "short", (1.1, 58.717), anchor
+    )
+
+
+def test_fill_history_recovery_starts_before_open_even_outside_pnl_window():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    minute_ms = 60_000
+    open_ms = now_ms - 60 * 24 * 60 * minute_ms
+    update_ms = now_ms - 2 * 60 * minute_ms
+    age_limit = now_ms - 30 * 24 * 60 * minute_ms
+    bot.positions[symbol]["long"].update(
+        {
+            "openTime": open_ms,
+            "lastUpdateTimestamp": update_ms,
+        }
+    )
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": update_ms,
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        open_ms - 5 * minute_ms
+    )
+
+
+def test_timestamp_free_fill_history_recovery_progressively_widens(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    age_limit = now_ms - 30 * day_ms
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 100.0}
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["missing_fill_anchor"],
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 60 * day_ms
+    )
+    cohort_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    cohort_state["next_retry_ms"] = 0
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 120 * day_ms
+    )
+    assert bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]["retry_count"] == 2
+
+
+def test_all_history_fill_recovery_uses_bounded_progressive_start(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "lastUpdateTimestamp": now_ms - 60_000,
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+            "fill_timestamp_ms": now_ms - 30_000,
+        }
+    }
+
+    expected_start_ms = now_ms - 60 * 24 * 60 * 60_000
+    assert bot._trailing_fill_history_recovery_start_ms(None) == expected_start_ms
+    assert (
+        bot._trailing_fill_history_recovery_state["start_ms"]
+        == expected_start_ms
+    )
+    for _ in range(4):
+        bot._trailing_fill_history_recovery_state["cohorts"][
+            (symbol, "long")
+        ]["next_retry_ms"] = 0
+        recovery_start_ms = bot._trailing_fill_history_recovery_start_ms(None)
+    assert recovery_start_ms == now_ms - 730 * 24 * 60 * 60_000
+    bounded_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    assert bounded_state["at_history_bound"] is True
+    assert bounded_state["next_retry_ms"] == now_ms + 24 * 60 * 60_000
+
+
+def test_weex_fill_recovery_uses_venue_retention_bound(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "weex"
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "lastUpdateTimestamp": now_ms - 60_000,
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+        }
+    }
+
+    recovery_start_ms = None
+    for _ in range(5):
+        recovery_start_ms = bot._trailing_fill_history_recovery_start_ms(None)
+        bot._trailing_fill_history_recovery_state["cohorts"][
+            (symbol, "long")
+        ]["next_retry_ms"] = 0
+
+    assert recovery_start_ms == now_ms - 365 * day_ms
+    bounded_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    assert bounded_state["at_history_bound"] is True
+
+
+@pytest.mark.parametrize("exchange", ["bitget", "kucoin", "gateio", "hyperliquid"])
+def test_fill_recovery_uses_conservative_connector_bound(monkeypatch, exchange):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = exchange
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "lastUpdateTimestamp": now_ms - 60_000,
+    }
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": ["fill_after_state_mismatch"],
+        }
+    }
+
+    recovery_start_ms = None
+    for _ in range(5):
+        recovery_start_ms = bot._trailing_fill_history_recovery_start_ms(None)
+        bot._trailing_fill_history_recovery_state["cohorts"][
+            (symbol, "long")
+        ]["next_retry_ms"] = 0
+
+    assert recovery_start_ms == now_ms - 365 * day_ms
+    bounded_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    assert bounded_state["at_history_bound"] is True
+
+
+def test_fill_recovery_waits_for_post_snapshot_confirmation(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": [
+                "post_snapshot_fill_refresh_pending",
+                "fill_after_state_mismatch",
+            ],
+            "fill_timestamp_ms": now_ms - 30_000,
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(None) is None
+    assert bot._trailing_fill_history_recovery_state == {
+        "cohorts": {(symbol, "long"): {}}
+    }
+
+
+def test_fill_recovery_progress_survives_other_cohort_changes(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    first_symbol = _set_basic_state(bot)
+    second_symbol = "SECOND/USDT"
+    bot.positions[second_symbol] = {
+        "long": {"size": 1.0, "price": 100.0},
+        "short": {"size": 0.0, "price": 0.0},
+    }
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    age_limit = now_ms - 30 * day_ms
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot._trailing_fill_confirmation_diagnostics = {
+        (first_symbol, "long"): {"failed_predicates": ["missing_fill_anchor"]}
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 60 * day_ms
+    )
+    bot._trailing_fill_history_recovery_state["cohorts"][
+        (first_symbol, "long")
+    ]["next_retry_ms"] = 0
+    bot._trailing_fill_confirmation_diagnostics[(second_symbol, "long")] = {
+        "failed_predicates": ["missing_fill_anchor"]
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 120 * day_ms
+    )
+    cohort_states = bot._trailing_fill_history_recovery_state["cohorts"]
+    assert cohort_states[(first_symbol, "long")]["retry_count"] == 2
+    assert cohort_states[(second_symbol, "long")]["retry_count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_restart_same_state_waits_for_post_position_fill_refresh():
     cfg = _dummy_config()
@@ -1669,7 +2035,7 @@ async def test_restart_same_state_waits_for_post_position_fill_refresh():
 
 
 @pytest.mark.asyncio
-async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_fill():
+async def test_runtime_delta_keeps_mismatched_after_state_pending():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1725,35 +2091,166 @@ async def test_runtime_delta_without_update_time_rejects_mismatched_prefetched_f
 
     async def complete_matching_epoch_candles(*args, **kwargs):
         return _make_candles(
-            [(300_000, 101.0, 103.0, 100.0, 102.0, 1.0)]
+            [
+                (240_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                (300_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+            ]
         )
 
     bot.cm.get_candles = complete_matching_epoch_candles
     bot._trailing_fill_refresh_started_generation = 3
     bot._trailing_fill_fetch_generation = 3
+    # Simulate the account-wide barrier clearing the successful fetch before
+    # trailing validation observes that the fill evidence is still mismatched.
+    bot._authoritative_pending_confirmations = {}
     await bot.update_trailing_data()
 
     assert bot._trailing_pending_fill_confirmations == {
         (symbol, "long"): "fill:120000:old-fill"
     }
+    assert bot._trailing_fill_confirmation_diagnostics[(symbol, "long")][
+        "failed_predicates"
+    ] == ["fill_after_state_mismatch"]
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
+    assert "fills" not in bot._authoritative_pending_confirmations
+    assert bot._trailing_fill_recovery_prefetch_due() is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_delta_rejects_idless_fill_reindexed_by_older_history():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    latest_known_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        120_000,
+        None,
+        psize=1.0,
+        pprice=100.0,
+        qty=1.0,
+        price=100.0,
+    )
+    bot._pnls_manager = _DummyPnlsManager([latest_known_fill])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    baseline = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.0,
+            "price": 100.0,
+            "lastUpdateTimestamp": 120_000,
+        }
+    ]
+    changed = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 1.5,
+            "price": 101.0,
+            "lastUpdateTimestamp": 240_000,
+        }
+    ]
+    bot._apply_positions_snapshot(baseline)
+    bot._begin_authoritative_refresh_epoch()
+    bot._apply_positions_snapshot(changed)
+    baseline_epoch = bot._trailing_pending_fill_confirmations[(symbol, "long")]
+
+    older_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        60_000,
+        None,
+        psize=0.5,
+        pprice=99.0,
+        qty=0.5,
+        price=99.0,
+    )
+    bot._pnls_manager._events.insert(0, older_fill)
+    bot._trailing_fill_fetch_generation = 1
+
+    async def complete_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                (240_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                (300_000, 102.0, 104.0, 101.0, 103.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = complete_epoch_candles
+    await bot.update_trailing_data()
+
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): baseline_epoch
+    }
+    assert bot._latest_fill_position_change_epochs()[(symbol, "long")] == baseline_epoch
     assert bot._orchestrator_trailing_unavailable_reasons == {
         symbol: ["position_fill_confirmation_pending"]
     }
 
-    bot._pnls_manager._events.append(
-        _DummyFillEvent(
-            symbol, "long", 240_000, "matching-fill", psize=1.5, pprice=101.0
-        )
+
+@pytest.mark.asyncio
+async def test_restart_keeps_partial_history_fill_pending_until_recovery():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [
+            _DummyFillEvent(
+                symbol,
+                "long",
+                120_000,
+                "partial-history-fill",
+                psize=0.4,
+                pprice=99.0,
+            )
+        ]
     )
-    bot._trailing_fill_refresh_started_generation = 4
-    bot._trailing_fill_fetch_generation = 4
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    bot._apply_positions_snapshot(
+        [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 1.5,
+                "price": 101.0,
+                "lastUpdateTimestamp": 240_000,
+            }
+        ]
+    )
+
+    async def complete_epoch_candles(*args, **kwargs):
+        return _make_candles(
+            [
+                (180_000, 100.0, 110.0, 90.0, 100.0, 1.0),
+                (240_000, 100.0, 111.0, 89.0, 101.0, 1.0),
+                (300_000, 101.0, 112.0, 88.0, 102.0, 1.0),
+            ]
+        )
+
+    bot.cm.get_candles = complete_epoch_candles
+    await bot.update_trailing_data()
+    assert bot._trailing_pending_fill_confirmations == {(symbol, "long"): None}
+
+    bot._trailing_fill_fetch_generation = 1
     await bot.update_trailing_data()
 
-    assert bot._trailing_pending_fill_confirmations == {}
-    assert bot._trailing_position_snapshot_fill_epochs == {
-        (symbol, "long"): "fill:240000:matching-fill"
+    assert bot._trailing_pending_fill_confirmations == {
+        (symbol, "long"): None
     }
-    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot._trailing_fill_confirmation_diagnostics[(symbol, "long")][
+        "failed_predicates"
+    ] == ["fill_after_state_mismatch"]
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["position_fill_confirmation_pending"]
+    }
 
 
 @pytest.mark.asyncio
