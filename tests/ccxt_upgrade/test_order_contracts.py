@@ -923,6 +923,93 @@ def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
     assert custom_id_to_snake(gateio_text) == "entry_grid_normal_long"
 
 
+@pytest.mark.asyncio
+async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
+    calls = []
+
+    async def set_leverage(leverage, symbol=None, params=None):
+        calls.append((leverage, symbol, params))
+        return {
+            "contract": "DOGE_USDT",
+            "leverage": "0",
+            "cross_leverage_limit": str(leverage),
+            "risk_limit": "1000000",
+        }
+
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.cca = SimpleNamespace(set_leverage=set_leverage)
+    bot._calc_leverage_for_symbol = lambda _symbol: 10
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+
+    await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
+
+    assert calls == [
+        (10, "DOGE/USDT:USDT", {"marginMode": "cross"}),
+    ]
+
+
+def test_ccxt_gate_cross_leverage_maps_to_documented_request_tuple():
+    exchange = ccxt.gate({"options": {"defaultType": "swap"}})
+    exchange.set_markets(
+        [
+            {
+                "id": "DOGE_USDT",
+                "symbol": "DOGE/USDT:USDT",
+                "base": "DOGE",
+                "quote": "USDT",
+                "settle": "USDT",
+                "baseId": "DOGE",
+                "quoteId": "USDT",
+                "settleId": "USDT",
+                "type": "swap",
+                "spot": False,
+                "margin": False,
+                "swap": True,
+                "future": False,
+                "option": False,
+                "contract": True,
+                "linear": True,
+                "inverse": False,
+                "active": True,
+            }
+        ]
+    )
+    captured = {}
+    exchange.privateFuturesPostSettlePositionsContractLeverage = (
+        lambda request: captured.update(request) or request
+    )
+
+    exchange.set_leverage(
+        10,
+        "DOGE/USDT:USDT",
+        {"marginMode": "cross"},
+    )
+
+    assert captured["contract"] == "DOGE_USDT"
+    assert captured["leverage"] == "0"
+    assert captured["cross_leverage_limit"] == "10"
+
+
+@pytest.mark.asyncio
+async def test_gateio_updates_isolated_leverage_explicitly():
+    calls = []
+
+    async def set_leverage(leverage, symbol=None, params=None):
+        calls.append((leverage, symbol, params))
+        return {}
+
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.cca = SimpleNamespace(set_leverage=set_leverage)
+    bot._calc_leverage_for_symbol = lambda _symbol: 7
+    bot._get_margin_mode_for_symbol = lambda _symbol: "isolated"
+
+    await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
+
+    assert calls == [
+        (7, "DOGE/USDT:USDT", {"marginMode": "isolated"}),
+    ]
+
+
 def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
     bot = GateIOBot.__new__(GateIOBot)
     bot.exchange = "gateio"

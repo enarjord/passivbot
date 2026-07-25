@@ -1,7 +1,7 @@
 from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
-from utils import to_ccxt_client_id, ts_to_date, utc_ms
+from utils import symbol_to_coin, to_ccxt_client_id, ts_to_date, utc_ms
 from config.access import require_live_value
 from custom_endpoint_overrides import (
     get_custom_endpoint_source,
@@ -183,8 +183,21 @@ class GateIOBot(CCXTBot):
             return False
 
     async def update_exchange_config_by_symbols(self, symbols):
-        """GateIO: No per-symbol configuration needed."""
-        pass
+        """Apply the configured leverage and margin mode through Gate's leverage endpoint."""
+        for symbol in symbols:
+            leverage = self._calc_leverage_for_symbol(symbol)
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
+            await self.cca.set_leverage(
+                leverage,
+                symbol=symbol,
+                params={"marginMode": margin_mode},
+            )
+            logging.info(
+                "%s: set %s leverage to %sx",
+                symbol_to_coin(symbol, verbose=False) or symbol,
+                margin_mode,
+                leverage,
+            )
 
     async def update_exchange_config(self):
         """GateIO: No exchange-level configuration needed."""

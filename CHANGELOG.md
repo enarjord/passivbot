@@ -9,6 +9,11 @@ All notable user-facing changes will be documented in this file.
   Sensitive-marked values and long identifier-like tokens remain redacted; the
   existing bot restart error budget is unchanged.
 
+- Gate.io now applies the configured leverage and margin mode before a symbol's
+  first order creation. This refreshes Gate's leverage-derived position risk limit
+  after contract risk-table changes instead of repeatedly failing valid orders
+  with a zero risk limit.
+
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently
   selects the dedicated Gate.io connector. Standalone market loading now also

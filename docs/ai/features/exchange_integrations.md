@@ -184,6 +184,28 @@ migration. Only CCXT REST and WebSocket client construction translates `gateio` 
 Normalize Gate's numeric REST account `user` value to a string before assigning it
 as CCXT Pro's private futures subscription UID.
 
+### Per-symbol leverage initializes the position risk limit
+
+Problem:
+
+1. Gate derives a position's current risk limit from its configured leverage.
+2. A contract risk-table update can leave a previously configured leverage above
+   the new maximum. Gate then reports a zero risk limit and rejects every opening
+   order with `RISK_LIMIT_EXCEEDED`.
+3. Gate's leverage endpoint also controls margin mode: nonzero `leverage` selects
+   isolated mode, while cross mode requires `leverage=0` plus
+   `cross_leverage_limit`.
+
+Handling:
+
+1. Configure every symbol before its first order creation in a bot process.
+2. Use the leverage capped by current market metadata and the configured margin
+   preference.
+3. Call CCXT `set_leverage` with an explicit `marginMode`; CCXT then produces the
+   correct Gate parameter tuple without accidentally switching margin mode.
+4. Propagate configuration failures and keep creations deferred until configuration
+   succeeds.
+
 ### Contract order text must start with `t-`
 
 Problem:
