@@ -132,7 +132,10 @@ transaction/log identity, and complete payout-numerator vector. Map that vector 
 market's retained original outcome ordering; do not assume canonical YES is always vector index
 zero. Binary `[1, 0]`, `[0, 1]`, and fractional `[1, 1]` payouts respectively normalize to YES
 fractions `1`, `0`, and `0.5`. Gamma `outcomePrices`, the last fill, and book state are not
-settlement evidence.
+settlement evidence. Resolution makes winning shares redeemable; it does not prove that a wallet
+has redeemed them or that collateral is reusable. Portfolio replay and live allocation release
+therefore require a redemption event or authoritative account-availability timestamp in addition
+to `ConditionResolution`.
 
 ## Fees And Incentives
 
@@ -318,9 +321,12 @@ sets, delayed resolution/redemption, and venue-specific settlement timing.
 An archived full-contract job is admissible only when the archive contains immutable market
 metadata, one consistent authoritative settlement payout, actual fills, and continuous verified
 coverage for both native side assets from trading open through trading close. The archive replay
-builder then supplies the retained settlement timestamp and payout to Rust. The EMA-anchor job
+builder also requires independent full-window price-grid stream coverage on venues such as
+Polymarket where tick-size changes are a separate event source. Fill coverage does not prove grid
+coverage. The builder supplies the authoritative capital-release timestamp and payout to Rust;
+resolution-only evidence remains archived but is not a release timestamp. The EMA-anchor job
 adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
-shared-wallet orchestrator locks that job's allocation until settlement.
+shared-wallet orchestrator locks that job's allocation until that release.
 
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,

@@ -11,6 +11,7 @@ from outcome.models import (
     OutcomeSide,
     OutcomeSignalCandle1s,
 )
+from outcome.order_ownership import is_managed_outcome_client_order_id
 from outcome.rust_runner import (
     normalized_market_to_rust_spec,
     plan_outcome_ema_anchor,
@@ -63,6 +64,29 @@ class OutcomeLivePlan:
 
 def _average_cost(entry_notional: float, qty: float) -> float:
     return entry_notional / qty if qty > 0.0 else 0.0
+
+
+def _planning_free_collateral(
+    market: NormalizedOutcomeMarket,
+    account: HyperliquidOutcomeAccountSnapshot,
+) -> float:
+    """Include collateral reclaimable from this market's managed replacement orders."""
+
+    managed_buy_reserve = sum(
+        order.native_price * order.qty
+        for order in account.open_orders
+        if order.market_id == market.market_id
+        and order.side is OutcomeOrderSide.BUY
+        and is_managed_outcome_client_order_id(
+            order.client_order_id,
+            market.market_id,
+        )
+    )
+    reclaimable = min(account.collateral.held, managed_buy_reserve)
+    return min(
+        account.collateral.total,
+        account.collateral.conservative_available + reclaimable,
+    )
 
 
 def build_ema_anchor_outcome_live_plan(
@@ -132,7 +156,7 @@ def build_ema_anchor_outcome_live_plan(
             "no_qty": no.total_qty,
             "yes_average_cost": _average_cost(yes.entry_notional, yes.total_qty),
             "no_average_cost": _average_cost(no.entry_notional, no.total_qty),
-            "free_collateral": account.collateral.conservative_available,
+            "free_collateral": _planning_free_collateral(market, account),
         },
     }
     output = plan_outcome_ema_anchor(payload)

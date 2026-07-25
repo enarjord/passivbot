@@ -537,6 +537,7 @@ def normalize_settlement_evidence(
                 yes_fraction=0.0 if yes_fraction < 0.5 else 1.0,
                 payout_unit=market.payout_unit,
                 settlement_time_ms=timestamp_ms,
+                capital_release_time_ms=timestamp_ms,
                 received_time_ms=received_time_ms,
                 source_event_id=f"{market.market_id}:{transaction_hash}:{timestamp_ms}",
                 evidence_source=evidence_source,

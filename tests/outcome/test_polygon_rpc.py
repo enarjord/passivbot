@@ -260,6 +260,7 @@ async def test_download_proves_exact_range_and_filters_other_markets():
     assert len(result.batch.settlements) == 1
     assert result.batch.settlements[0].yes_fraction == 1.0
     assert result.batch.settlements[0].settlement_time_ms == 10_000
+    assert result.batch.settlements[0].capital_release_time_ms is None
 
 
 @pytest.mark.asyncio

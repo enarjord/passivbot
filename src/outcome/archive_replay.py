@@ -55,7 +55,8 @@ def _authoritative_settlement(
     return max(
         settlements,
         key=lambda settlement: (
-            settlement.settlement_time_ms,
+            settlement.capital_release_time_ms is not None,
+            settlement.capital_release_time_ms or settlement.settlement_time_ms,
             settlement.received_time_ms,
             settlement.source_event_id,
         ),
@@ -134,8 +135,14 @@ def build_archived_ema_anchor_replay(
         archive.load_settlements(venue, market_id),
         market_id=market_id,
     )
-    if settlement.settlement_time_ms < end_ms:
-        raise ValueError(f"outcome settlement for {market_id} predates trading close")
+    capital_release_time_ms = settlement.capital_release_time_ms
+    if capital_release_time_ms is None:
+        raise ValueError(
+            f"outcome archive has resolution but no authoritative capital release "
+            f"evidence for {market_id}"
+        )
+    if capital_release_time_ms < end_ms:
+        raise ValueError(f"outcome capital release for {market_id} predates trading close")
 
     trades = []
     for asset in (market.yes_asset, market.no_asset):
@@ -166,6 +173,18 @@ def build_archived_ema_anchor_replay(
         start_ms=start_ms,
         end_ms=end_ms,
     )
+    if venue is OutcomeVenue.POLYMARKET:
+        grid_coverage = archive.load_verified_price_grid_coverage(
+            venue,
+            market_id,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if not _proves_interval(grid_coverage, start_ms, end_ms):
+            raise ValueError(
+                f"outcome archive does not prove full-contract price-grid coverage "
+                f"for {market_id}"
+            )
     full_coverage = VerifiedCoverage(start_ms, end_ms)
     payload = build_trade_derived_ema_anchor_input(
         market_spec=normalized_market_to_rust_spec(market, qty_step=qty_step),
@@ -174,7 +193,7 @@ def build_archived_ema_anchor_replay(
         fee_schedule=fee_schedule,
         starting_collateral=requested_collateral,
         strategy_params=strategy_params,
-        settlement_time_ms=settlement.settlement_time_ms,
+        settlement_time_ms=capital_release_time_ms,
         yes_fraction=settlement.yes_fraction,
         price_grid_changes=price_grid_changes,
     )

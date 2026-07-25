@@ -402,6 +402,25 @@ def test_build_backtest_payload_aggregates_one_second_bars_to_five_seconds():
     assert np.all(np.diff(np.asarray(payload.bundle.timestamps)) == 5_000)
 
 
+def test_second_bar_aggregation_rejects_source_gap_hidden_inside_output_bucket():
+    from ohlcv_utils import align_and_aggregate_hlcvs_ms
+
+    hlcvs = np.ones((10, 1, 4), dtype=np.float64)
+    timestamps = np.asarray(
+        [0, 1_000, 3_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000],
+        dtype=np.int64,
+    )
+
+    with pytest.raises(ValueError, match="strictly contiguous"):
+        align_and_aggregate_hlcvs_ms(
+            hlcvs,
+            timestamps,
+            None,
+            source_interval_ms=1_000,
+            target_interval_ms=5_000,
+        )
+
+
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_perp_rust_backtester_executes_native_one_second_bars():
     from backtest import build_backtest_payload, execute_backtest

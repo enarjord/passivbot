@@ -193,6 +193,7 @@ def test_polymarket_condition_resolution_maps_original_outcome_order_to_canonica
     assert settlement.yes_fraction == 1.0
     assert settlement.payout_unit == 1.0
     assert settlement.settlement_time_ms == 20_000
+    assert settlement.capital_release_time_ms is None
     assert settlement.source_event_id == "0xresolution:7"
     assert settlement.evidence_source == "polymarket_ctf_condition_resolution"
 

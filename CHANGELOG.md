@@ -61,9 +61,15 @@ All notable user-facing changes will be documented in this file.
   Passivbot client-order IDs before every cancellation or creation and verifies the complete final
   managed-order set, including verified cleanup after ambiguous partial creation. Public HIP-4
   collection waits for both native-book subscription acknowledgements before establishing
-  coverage. Archived replay derives executable venue-grid bounds, requires an explicit quantity
-  step when retained metadata omits one, preserves representable venue fee formulas, applies
-  same-second grid changes before fills, and includes settlement fees in worst-case equity.
+  coverage. Live replacement sizing reclaims only collateral reserved by the same market's
+  Passivbot-managed buy orders. Archived replay derives executable venue-grid bounds, requires an
+  explicit quantity step when retained metadata omits one, preserves representable venue fee
+  formulas, applies same-second grid changes before fills, and includes settlement fees in
+  worst-case equity. Polymarket full-contract replay independently requires verified price-grid
+  history and capital-release evidence, rather than treating fill coverage as tick history or
+  `ConditionResolution` as redemption. Source bars must be contiguous before interval aggregation;
+  one-sided pair completion can use its full remaining inventory headroom; mode summaries retain
+  peak paired and residual exposure.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

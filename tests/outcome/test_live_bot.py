@@ -117,6 +117,7 @@ def lifecycle_snapshot(
             yes_fraction=1.0,
             payout_unit=1.0,
             settlement_time_ms=market().lifecycle.scheduled_event_time_ms + 1_000,
+            capital_release_time_ms=market().lifecycle.scheduled_event_time_ms + 1_000,
             received_time_ms=observed_at_ms,
             source_event_id="0xsettlement",
             evidence_source="hyperliquid_user_fills",

@@ -59,6 +59,8 @@ class OutcomeStrategyModeSummary:
     orders_placed_count: int
     fills_count: int
     order_fill_ratio: float
+    max_paired_qty: float
+    max_abs_residual_qty: float
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
 
@@ -168,6 +170,8 @@ def summarize_outcome_strategy_modes(
             "order_fill_ratio",
             "cumulative_yes_buy_qty",
             "cumulative_no_buy_qty",
+            "max_paired_qty",
+            "max_abs_residual_qty",
             "time_weighted_abs_residual_qty",
             "time_weighted_total_inventory_qty",
             "worst_case_settlement_equity_min",
@@ -221,6 +225,8 @@ def summarize_outcome_strategy_modes(
                 orders_placed_count=baseline.orders_placed_count,
                 fills_count=baseline.fills_count,
                 order_fill_ratio=baseline.order_fill_ratio,
+                max_paired_qty=baseline.max_paired_qty,
+                max_abs_residual_qty=baseline.max_abs_residual_qty,
                 time_weighted_abs_residual_qty=baseline.time_weighted_abs_residual_qty,
                 time_weighted_total_inventory_qty=(
                     baseline.time_weighted_total_inventory_qty

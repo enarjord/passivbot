@@ -316,6 +316,13 @@ def align_and_aggregate_hlcvs_ms(
             f"target interval {target_interval_ms}ms is not a whole multiple of "
             f"source {source_interval_ms}ms"
         )
+    if timestamps is not None:
+        if len(timestamps) != hlcvs.shape[0]:
+            raise ValueError("timestamps and HLCVs must contain the same number of bars")
+        if len(timestamps) > 1 and np.any(np.diff(timestamps) != source_interval_ms):
+            raise ValueError(
+                f"source timestamps must be strictly contiguous at {source_interval_ms}ms"
+            )
     interval = target_interval_ms // source_interval_ms
     if interval <= 1:
         return hlcvs, timestamps, btc_usd_prices, 0

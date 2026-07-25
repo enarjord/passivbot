@@ -13,11 +13,13 @@ from outcome.hyperliquid_live import (
 from outcome.live_planning import build_ema_anchor_outcome_live_plan
 from outcome.models import (
     OutcomeCollateralBalance,
+    OutcomeOpenOrder,
     OutcomeOrderSide,
     OutcomeSignalCandle1s,
     OutcomeSide,
     OutcomeTokenBalance,
 )
+from outcome.order_ownership import managed_outcome_client_order_id
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
@@ -34,14 +36,17 @@ def account(
     *,
     yes_qty: float = 0.0,
     no_qty: float = 0.0,
+    held_collateral: float = 0.0,
+    available_after_maintenance: float = 100.0,
+    open_orders: tuple[OutcomeOpenOrder, ...] = (),
 ) -> HyperliquidOutcomeAccountSnapshot:
     return HyperliquidOutcomeAccountSnapshot(
         received_time_ms=received_time_ms,
         collateral=OutcomeCollateralBalance(
             asset="USDC",
             total=100.0,
-            held=0.0,
-            available_after_maintenance=100.0,
+            held=held_collateral,
+            available_after_maintenance=available_after_maintenance,
         ),
         fee_rates=HyperliquidOutcomeFeeRates(
             user_add_rate=0.0001,
@@ -67,7 +72,7 @@ def account(
                 entry_notional=no_qty * 0.4,
             ),
         ),
-        open_orders=(),
+        open_orders=open_orders,
         recent_fills=(),
         unknown_outcome_balance_coins=(),
         unknown_outcome_order_coins=(),
@@ -147,6 +152,54 @@ def test_live_plan_retains_higher_configured_fee_estimate():
     assert plan.configured_estimated_fee_per_share == pytest.approx(0.001)
     assert plan.effective_estimated_fee_per_share == pytest.approx(0.001)
     assert plan.estimated_fee_source == "configured"
+
+
+def test_live_plan_restores_only_managed_buy_reserve_for_replacement_sizing():
+    signal_candles = candles()
+    now_ms = signal_candles[-1].timestamp_ms + 1_000
+    managed_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="managed",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=50.0,
+        original_qty=50.0,
+        timestamp_ms=now_ms - 1_000,
+        client_order_id=managed_outcome_client_order_id(
+            "913",
+            slot="canonical_bid",
+            observation_end_ms=signal_candles[-1].timestamp_ms,
+        ),
+    )
+    unmanaged_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="unmanaged",
+        asset_id="+9131",
+        outcome=OutcomeSide.NO,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=100.0,
+        original_qty=100.0,
+        timestamp_ms=now_ms - 1_000,
+        client_order_id="0x" + "00" * 16,
+    )
+    plan = build_ema_anchor_outcome_live_plan(
+        market(),
+        params(),
+        signal_candles,
+        account(
+            now_ms,
+            held_collateral=99.0,
+            available_after_maintenance=1.0,
+            open_orders=(managed_order, unmanaged_order),
+        ),
+        now_ms=now_ms,
+    )
+
+    assert len(plan.intents) == 2
+    assert all(intent.qty == pytest.approx(25.0) for intent in plan.intents)
 
 
 def test_live_plan_rejects_stale_account_and_signal_inputs():

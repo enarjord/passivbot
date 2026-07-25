@@ -157,6 +157,7 @@ class OutcomeSettlementEvidence:
     yes_fraction: float
     payout_unit: float
     settlement_time_ms: int
+    capital_release_time_ms: int | None
     received_time_ms: int
     source_event_id: str
     evidence_source: str
@@ -177,6 +178,11 @@ class OutcomeSettlementEvidence:
             raise ValueError("outcome settlement payout_unit must be finite and positive")
         if self.settlement_time_ms < 0 or self.received_time_ms < 0:
             raise ValueError("outcome settlement timestamps must be non-negative")
+        if self.capital_release_time_ms is not None:
+            if self.capital_release_time_ms < self.settlement_time_ms:
+                raise ValueError(
+                    "outcome capital release must not predate resolution evidence"
+                )
         for name in (
             "observed_yes_qty",
             "observed_no_qty",

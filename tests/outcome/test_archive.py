@@ -148,6 +148,36 @@ def test_verified_coverage_is_merged_but_collection_gaps_are_not_marked_covered(
     ) == [VerifiedCoverage(1_000, 3_000), VerifiedCoverage(4_000, 6_000)]
 
 
+def test_verified_price_grid_coverage_is_stored_separately_from_fill_coverage(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    archive.record_verified_price_grid_coverage(
+        OutcomeVenue.POLYMARKET,
+        "condition-1",
+        VerifiedCoverage(1_000, 3_000),
+        collector_session="grid-1",
+    )
+    archive.record_verified_price_grid_coverage(
+        OutcomeVenue.POLYMARKET,
+        "condition-1",
+        VerifiedCoverage(3_000, 5_000),
+        collector_session="grid-2",
+    )
+
+    assert archive.load_verified_price_grid_coverage(
+        OutcomeVenue.POLYMARKET,
+        "condition-1",
+        start_ms=0,
+        end_ms=10_000,
+    ) == [VerifiedCoverage(1_000, 5_000)]
+    assert archive.load_verified_coverage(
+        OutcomeVenue.POLYMARKET,
+        "condition-1",
+        "yes",
+        start_ms=0,
+        end_ms=10_000,
+    ) == []
+
+
 def test_book_archive_keeps_raw_snapshots_without_using_them_as_trades(tmp_path):
     archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
     book = OutcomeBookSnapshot(

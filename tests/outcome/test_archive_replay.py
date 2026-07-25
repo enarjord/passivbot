@@ -4,6 +4,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 
+import pytest
+
 from outcome.adapters import hyperliquid
 from outcome.archive import OutcomeTradeArchive
 from outcome.archive_replay import build_archived_ema_anchor_replay
@@ -79,6 +81,7 @@ def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
             yes_fraction=1.0,
             payout_unit=1.0,
             settlement_time_ms=5_100,
+            capital_release_time_ms=5_100,
             received_time_ms=5_200,
             source_event_id="settlement",
             evidence_source="fixture",
@@ -177,6 +180,7 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
             yes_fraction=0.0,
             payout_unit=1.0,
             settlement_time_ms=5_200,
+            capital_release_time_ms=5_200,
             received_time_ms=5_300,
             source_event_id="settlement",
             evidence_source="fixture",
@@ -204,3 +208,134 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
 
     assert replay.market.lifecycle.trading_close_time_ms == 5_000
     assert replay.market.lifecycle.accepting_orders is False
+
+
+def test_replay_does_not_treat_resolution_as_polymarket_capital_release(tmp_path):
+    raw_market = json.loads(
+        (FIXTURES / "hyperliquid_price_binary.json").read_text()
+    )
+    market = replace(
+        hyperliquid.normalize_market(raw_market),
+        venue=OutcomeVenue.POLYMARKET,
+        lifecycle=MarketLifecycle(
+            trading_open_time_ms=1_000,
+            trading_close_time_ms=5_000,
+            scheduled_event_time_ms=5_000,
+        ),
+    )
+    archive = OutcomeTradeArchive(tmp_path / "resolution-only.sqlite")
+    archive.append_market_metadata(
+        market,
+        observed_at_ms=500,
+        observation_source="fixture",
+    )
+    archive.append_settlement(
+        OutcomeSettlementEvidence(
+            venue=market.venue,
+            market_id=market.market_id,
+            yes_fraction=1.0,
+            payout_unit=1.0,
+            settlement_time_ms=5_100,
+            capital_release_time_ms=None,
+            received_time_ms=5_200,
+            source_event_id="condition-resolution",
+            evidence_source="polymarket_ctf_condition_resolution",
+            observed_yes_qty=0.0,
+            observed_no_qty=0.0,
+            collateral_payout=0.0,
+            fee=0.0,
+            fee_asset="USDC",
+        )
+    )
+
+    with pytest.raises(ValueError, match="no authoritative capital release"):
+        build_archived_ema_anchor_replay(
+            archive,
+            venue=market.venue,
+            market_id=market.market_id,
+            fee_schedule={"maker_rate": 0.0, "taker_rate": 0.0, "formula": "notional"},
+            requested_collateral=10.0,
+            strategy_params={"execution_mode": "accumulate_pairs"},
+        )
+
+
+def test_polymarket_replay_requires_separate_verified_price_grid_history(tmp_path):
+    raw_market = json.loads(
+        (FIXTURES / "hyperliquid_price_binary.json").read_text()
+    )
+    market = replace(
+        hyperliquid.normalize_market(raw_market),
+        venue=OutcomeVenue.POLYMARKET,
+        lifecycle=MarketLifecycle(
+            trading_open_time_ms=1_000,
+            trading_close_time_ms=5_000,
+            scheduled_event_time_ms=5_000,
+        ),
+    )
+    archive = OutcomeTradeArchive(tmp_path / "grid-coverage.sqlite")
+    archive.append_market_metadata(
+        market,
+        observed_at_ms=500,
+        observation_source="fixture",
+    )
+    archive.append_trade(
+        NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.5,
+            canonical_yes_price=0.5,
+            qty=1.0,
+            exchange_time_ms=1_500,
+            received_time_ms=1_600,
+            source_event_id="trade",
+        )
+    )
+    for asset in (market.yes_asset, market.no_asset):
+        archive.record_verified_coverage(
+            market.venue,
+            market.market_id,
+            asset.asset_id,
+            VerifiedCoverage(1_000, 5_000),
+            collector_session="fills",
+        )
+    archive.append_settlement(
+        OutcomeSettlementEvidence(
+            venue=market.venue,
+            market_id=market.market_id,
+            yes_fraction=1.0,
+            payout_unit=1.0,
+            settlement_time_ms=5_100,
+            capital_release_time_ms=5_200,
+            received_time_ms=5_300,
+            source_event_id="redemption",
+            evidence_source="fixture_redemption",
+            observed_yes_qty=1.0,
+            observed_no_qty=0.0,
+            collateral_payout=1.0,
+            fee=0.0,
+            fee_asset="USDC",
+        )
+    )
+    kwargs = {
+        "venue": market.venue,
+        "market_id": market.market_id,
+        "fee_schedule": {"maker_rate": 0.0, "taker_rate": 0.0, "formula": "notional"},
+        "requested_collateral": 10.0,
+        "strategy_params": {"execution_mode": "accumulate_pairs"},
+    }
+
+    with pytest.raises(ValueError, match="price-grid coverage"):
+        build_archived_ema_anchor_replay(archive, **kwargs)
+
+    archive.record_verified_price_grid_coverage(
+        market.venue,
+        market.market_id,
+        VerifiedCoverage(1_000, 5_000),
+        collector_session="grid",
+    )
+    replay = build_archived_ema_anchor_replay(archive, **kwargs)
+
+    assert replay.payload["settlement_time_ms"] == 5_200

@@ -368,17 +368,32 @@ impl OutcomeEmaAnchorState {
 
         let remaining_inventory =
             (params.max_total_inventory_qty - inventory.total_inventory_qty()).max(0.0);
-        let pair_cost_per_qty =
-            bid_price + (market.payout_unit - ask_price) + 2.0 * params.estimated_fee_per_share;
-        let affordable_pair_qty = if pair_cost_per_qty > 0.0 {
-            inventory.free_collateral / pair_cost_per_qty
+        let one_sided_pair_completion = params.execution_mode
+            == OutcomeEmaAnchorExecutionMode::AccumulatePairs
+            && inventory.residual_qty().abs() > EPSILON;
+        let inventory_headroom_per_intent = if one_sided_pair_completion {
+            remaining_inventory.min(inventory.residual_qty().abs())
+        } else {
+            remaining_inventory * 0.5
+        };
+        let collateral_cost_per_qty = if one_sided_pair_completion {
+            if inventory.residual_qty() > EPSILON {
+                market.payout_unit - ask_price + params.estimated_fee_per_share
+            } else {
+                bid_price + params.estimated_fee_per_share
+            }
+        } else {
+            bid_price + (market.payout_unit - ask_price) + 2.0 * params.estimated_fee_per_share
+        };
+        let affordable_qty = if collateral_cost_per_qty > 0.0 {
+            inventory.free_collateral / collateral_cost_per_qty
         } else {
             0.0
         };
         let buy_qty = params
             .clip_qty
-            .min(remaining_inventory * 0.5)
-            .min(affordable_pair_qty);
+            .min(inventory_headroom_per_intent)
+            .min(affordable_qty);
         let mut bid = self.bid_intent(bid_price, buy_qty, market, params, inventory);
         let mut ask = self.ask_intent(ask_price, buy_qty, market, params, inventory);
         bid = cap_intent_to_residual_bounds(
@@ -810,6 +825,39 @@ mod tests {
 
         assert_eq!(quotes.canonical_bid.unwrap().qty, 10.0);
         assert_eq!(quotes.canonical_ask.unwrap().qty, 10.0);
+    }
+
+    #[test]
+    fn one_sided_pair_completion_uses_full_remaining_inventory_headroom() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        parameters.clip_qty = 10.0;
+        parameters.max_total_inventory_qty = 18.0;
+        parameters.max_abs_residual_qty = 10.0;
+        let mut outcome_market = market();
+        outcome_market.min_qty = 5.0;
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: 9.0,
+            no_qty: 0.0,
+            yes_average_cost: 0.4,
+            no_average_cost: 0.0,
+            free_collateral: 100.0,
+        };
+
+        let quotes = state
+            .quote(2_000, 0.5, &outcome_market, &parameters, &inventory)
+            .unwrap();
+
+        assert!(quotes.canonical_bid.is_none());
+        let completion = quotes.canonical_ask.unwrap();
+        assert_eq!(
+            (completion.outcome, completion.side),
+            (Outcome::No, OutcomeOrderSide::Buy)
+        );
+        assert!((completion.qty - 9.0).abs() < 1e-12);
     }
 
     #[test]

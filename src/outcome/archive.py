@@ -242,6 +242,7 @@ class OutcomeTradeArchive:
                     yes_fraction REAL NOT NULL,
                     payout_unit REAL NOT NULL,
                     settlement_time_ms INTEGER NOT NULL,
+                    capital_release_time_ms INTEGER,
                     received_time_ms INTEGER NOT NULL,
                     source_event_id TEXT NOT NULL,
                     evidence_source TEXT NOT NULL,
@@ -270,6 +271,16 @@ class OutcomeTradeArchive:
                     PRIMARY KEY(venue, market_id, asset_id, start_ms, end_ms, collector_session)
                 );
 
+                CREATE TABLE IF NOT EXISTS outcome_price_grid_coverage (
+                    venue TEXT NOT NULL,
+                    market_id TEXT NOT NULL,
+                    start_ms INTEGER NOT NULL,
+                    end_ms INTEGER NOT NULL,
+                    collector_session TEXT NOT NULL,
+                    recorded_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(venue, market_id, start_ms, end_ms, collector_session)
+                );
+
                 CREATE TABLE IF NOT EXISTS outcome_collection_gaps (
                     venue TEXT NOT NULL,
                     market_id TEXT NOT NULL,
@@ -294,6 +305,17 @@ class OutcomeTradeArchive:
             if "collector_sequence" not in columns:
                 connection.execute(
                     "ALTER TABLE outcome_trades ADD COLUMN collector_sequence INTEGER"
+                )
+            settlement_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(outcome_settlements)"
+                ).fetchall()
+            }
+            if "capital_release_time_ms" not in settlement_columns:
+                connection.execute(
+                    "ALTER TABLE outcome_settlements "
+                    "ADD COLUMN capital_release_time_ms INTEGER"
                 )
 
     def append_market_metadata(
@@ -571,12 +593,12 @@ class OutcomeTradeArchive:
                 """
                 INSERT OR IGNORE INTO outcome_settlements (
                     venue, market_id, yes_fraction, payout_unit,
-                    settlement_time_ms, received_time_ms,
+                    settlement_time_ms, capital_release_time_ms, received_time_ms,
                     source_event_id, evidence_source,
                     observed_yes_qty, observed_no_qty, collateral_payout,
                     fee, fee_asset, raw_payload_json,
                     collector_session, source_cursor, archived_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     settlement.venue.value,
@@ -584,6 +606,7 @@ class OutcomeTradeArchive:
                     settlement.yes_fraction,
                     settlement.payout_unit,
                     settlement.settlement_time_ms,
+                    settlement.capital_release_time_ms,
                     settlement.received_time_ms,
                     settlement.source_event_id,
                     settlement.evidence_source,
@@ -740,6 +763,7 @@ class OutcomeTradeArchive:
                 yes_fraction=row["yes_fraction"],
                 payout_unit=row["payout_unit"],
                 settlement_time_ms=row["settlement_time_ms"],
+                capital_release_time_ms=row["capital_release_time_ms"],
                 received_time_ms=row["received_time_ms"],
                 source_event_id=row["source_event_id"],
                 evidence_source=row["evidence_source"],
@@ -801,6 +825,73 @@ class OutcomeTradeArchive:
             ORDER BY start_ms, end_ms
             """,
             (venue.value, str(market_id), str(asset_id), int(start_ms), int(end_ms)),
+        ).fetchall()
+        intervals = [
+            VerifiedCoverage(
+                start_ms=max(start_ms, row["start_ms"]),
+                end_ms=min(end_ms, row["end_ms"]),
+            )
+            for row in rows
+        ]
+        if not intervals:
+            return []
+        merged = [intervals[0]]
+        for interval in intervals[1:]:
+            previous = merged[-1]
+            if interval.start_ms <= previous.end_ms:
+                merged[-1] = VerifiedCoverage(
+                    start_ms=previous.start_ms,
+                    end_ms=max(previous.end_ms, interval.end_ms),
+                )
+            else:
+                merged.append(interval)
+        return merged
+
+    def record_verified_price_grid_coverage(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        coverage: VerifiedCoverage,
+        *,
+        collector_session: str,
+    ) -> None:
+        if not collector_session:
+            raise ValueError("collector_session must not be empty")
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO outcome_price_grid_coverage (
+                    venue, market_id, start_ms, end_ms,
+                    collector_session, recorded_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    venue.value,
+                    str(market_id),
+                    coverage.start_ms,
+                    coverage.end_ms,
+                    collector_session,
+                    _utc_ms(),
+                ),
+            )
+
+    def load_verified_price_grid_coverage(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+    ) -> list[VerifiedCoverage]:
+        rows = self._connect().execute(
+            """
+            SELECT start_ms, end_ms
+            FROM outcome_price_grid_coverage
+            WHERE venue = ? AND market_id = ?
+              AND end_ms > ? AND start_ms < ?
+            ORDER BY start_ms, end_ms
+            """,
+            (venue.value, str(market_id), int(start_ms), int(end_ms)),
         ).fetchall()
         intervals = [
             VerifiedCoverage(

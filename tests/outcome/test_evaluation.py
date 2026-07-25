@@ -119,6 +119,8 @@ def test_evaluation_runs_modes_and_both_settlement_outcomes():
     assert summaries[0].cumulative_no_buy_qty == pytest.approx(1.0)
     assert summaries[0].complementary_buy_qty == pytest.approx(1.0)
     assert summaries[0].pair_completion_ratio == pytest.approx(1.0)
+    assert summaries[0].max_paired_qty == pytest.approx(1.0)
+    assert summaries[0].max_abs_residual_qty == pytest.approx(0.0)
     assert summaries[0].time_weighted_abs_residual_qty == pytest.approx(0.0)
     assert summaries[0].time_weighted_total_inventory_qty == pytest.approx(1.5)
 
@@ -213,5 +215,7 @@ def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
     assert summary.complementary_buy_qty == pytest.approx(0.0)
     assert summary.pair_completion_ratio == pytest.approx(0.0)
     assert summary.settlement_sensitivity == pytest.approx(1.0)
+    assert summary.max_paired_qty == pytest.approx(0.0)
+    assert summary.max_abs_residual_qty == pytest.approx(1.0)
     assert summary.time_weighted_abs_residual_qty == pytest.approx(0.75)
     assert summary.time_weighted_total_inventory_qty == pytest.approx(0.75)

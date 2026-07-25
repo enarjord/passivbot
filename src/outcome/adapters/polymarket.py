@@ -257,6 +257,7 @@ def normalize_condition_resolution(
         yes_fraction=payouts[yes_index] / denominator,
         payout_unit=market.payout_unit,
         settlement_time_ms=settlement_time_ms,
+        capital_release_time_ms=None,
         received_time_ms=int(received_time_ms),
         source_event_id=f"{transaction_hash}:{log_index}",
         evidence_source="polymarket_ctf_condition_resolution",
