@@ -576,11 +576,11 @@ After the event bus exists.
 - Rotation/retention tests using small byte limits.
 - A replay utility that loads one structured event directory and reconstructs a
   planning cycle by ids.
-- Manual VPS smoke with DEBUG off to verify console remains tail-safe and CPU
-  does not materially regress.
-- Operational verification that one live order can be traced from Rust output to
-  exchange result, rotated NDJSON segments remain valid, and monitor relay still
-  serves snapshots/events.
+- After explicit approval in the current task, manual VPS smoke with DEBUG off
+  may verify that console remains tail-safe and CPU does not materially regress.
+- After the same explicit approval, operational verification may trace one live
+  order from Rust output to exchange result and confirm that rotated NDJSON
+  segments remain valid and monitor relay still serves snapshots/events.
 
 ## Settled Design Decisions
 
