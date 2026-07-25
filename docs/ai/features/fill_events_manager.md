@@ -32,10 +32,15 @@
    history has polluted reconstructed `psize`/`pprice`.
 10. A degraded synthetic PnL row inside the configured live risk lookback is not
     authoritative merely because cache metadata proves time coverage. Refetch bounded
-    windows around each such row, preserve ordinary recent-fill overlap for routine
-    ingestion, and defer risk planning without consuming restart budget until the row
-    is authoritatively replaced. Replacement diagnostics count pending or synthetic
-    rows becoming authoritative; health PnL applies only the old-to-new net-PnL delta.
+    windows around each such row, preserving the pre-repair incremental checkpoint and
+    processing at most four disjoint repair ranges per authoritative cycle. Rotate
+    remaining ranges across backed-off cycles so one unresolved range cannot starve the
+    others. Preserve ordinary recent-fill overlap for routine ingestion, and defer risk
+    planning without consuming restart budget until every in-lookback row is
+    authoritatively replaced. Replacement diagnostics count pending or synthetic rows
+    becoming authoritative. Uptime health adds the full authoritative net PnL when the
+    previous cached value was not counted by this process, and applies only the
+    old-to-new delta when it was.
 
 ## Runtime Provenance
 
@@ -79,7 +84,9 @@ logs, runtime windows, and immutable manifests.
 5. Old synthetic rows remain outside ordinary recent-fill overlap to avoid repeatedly
    widening every routine refresh. Risk-blocking degraded rows use a separate bounded
    repair path so proven coverage cannot strand an otherwise recoverable authoritative
-   exchange record.
+   exchange record. Repair-only calls do not advance `last_refresh_ms`; the subsequent
+   ordinary recent refresh must still cover downtime from the prior successful
+   checkpoint.
 
 ## Failure Semantics And Risks
 

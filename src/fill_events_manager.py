@@ -1503,6 +1503,7 @@ GAP_REASON_CONFIRMED = "confirmed_legitimate"
 GAP_REASON_MANUAL = "manual"
 PENDING_PNL_REFRESH_MARGIN_MS = 5 * 60 * 1000
 KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS = 10 * 60 * 1000
+DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE = 4
 
 
 class KnownGap(TypedDict, total=False):
@@ -3252,6 +3253,7 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._degraded_pnl_repair_attempted_ranges: set[tuple[int, int]] = set()
 
     def _apply_fee_policy(
         self,
@@ -4437,6 +4439,7 @@ class FillEventsManager:
         *,
         start_ms: Optional[int] = None,
         end_ms: Optional[int] = None,
+        mark_refreshed: bool = True,
     ) -> None:
         await self.ensure_loaded()
         logger.debug(
@@ -4672,8 +4675,10 @@ class FillEventsManager:
 
         # Update cache metadata with timestamps
         if self._events:
-            self.cache.update_metadata_from_events(self._events)
-        else:
+            self.cache.update_metadata_from_events(
+                self._events, mark_refreshed=mark_refreshed
+            )
+        elif mark_refreshed:
             self.cache.mark_refreshed()
         if fetched_bounded_range:
             # A successful bounded fetch proves the retried range even when the
@@ -4782,12 +4787,15 @@ class FillEventsManager:
             if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
         ]
         if not degraded_before:
+            self._degraded_pnl_repair_attempted_ranges = set()
             return {
                 "attempted": False,
                 "before_count": 0,
                 "repaired_count": 0,
                 "remaining_count": 0,
                 "range_count": 0,
+                "total_range_count": 0,
+                "deferred_range_count": 0,
             }
 
         intervals = self._merge_intervals(
@@ -4802,18 +4810,41 @@ class FillEventsManager:
                 for ev in degraded_before
             ]
         )
+        interval_count = len(intervals)
+        attempted_ranges = set(
+            getattr(self, "_degraded_pnl_repair_attempted_ranges", set()) or set()
+        )
+        attempted_ranges.intersection_update(intervals)
+        unattempted_intervals = [
+            interval for interval in intervals if interval not in attempted_ranges
+        ]
+        if not unattempted_intervals:
+            attempted_ranges.clear()
+            unattempted_intervals = list(intervals)
+        selected_count = min(
+            len(unattempted_intervals),
+            DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE,
+        )
+        selected_intervals = unattempted_intervals[:selected_count]
         logger.info(
             "[fills] refetching authoritative PnL for degraded cached fills | "
-            "exchange=%s user=%s events=%d ranges=%d oldest=%s newest=%s",
+            "exchange=%s user=%s events=%d ranges=%d/%d oldest=%s newest=%s",
             self.exchange,
             self.user,
             len(degraded_before),
-            len(intervals),
+            len(selected_intervals),
+            interval_count,
             _format_ms(min(ev.timestamp for ev in degraded_before)),
             _format_ms(max(ev.timestamp for ev in degraded_before)),
         )
-        for interval_start, interval_end in intervals:
-            await self.refresh(start_ms=interval_start, end_ms=interval_end)
+        for interval_start, interval_end in selected_intervals:
+            attempted_ranges.add((interval_start, interval_end))
+            self._degraded_pnl_repair_attempted_ranges = attempted_ranges
+            await self.refresh(
+                start_ms=interval_start,
+                end_ms=interval_end,
+                mark_refreshed=False,
+            )
 
         degraded_after = [
             ev
@@ -4842,7 +4873,10 @@ class FillEventsManager:
             "before_count": len(degraded_before),
             "repaired_count": repaired_count,
             "remaining_count": len(degraded_after),
-            "range_count": len(intervals),
+            "range_count": len(selected_intervals),
+            "total_range_count": interval_count,
+            "deferred_range_count": len(unattempted_intervals)
+            - len(selected_intervals),
         }
 
     async def refresh_for_lookback(

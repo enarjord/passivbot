@@ -1502,6 +1502,7 @@ class Passivbot:
         self._health_orders_cancelled = 0
         self._health_fills = 0
         self._health_pnl = 0.0  # sum of realized PnL from fills
+        self._health_counted_fill_keys: set[str] = set()
         self._health_errors = 0
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
@@ -12338,9 +12339,11 @@ class Passivbot:
 
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
-        self._health_pnl += sum(
-            fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
-        )
+        for event in new_events:
+            if fill_event_pnl_pending(event):
+                continue
+            self._health_pnl += fill_event_net_pnl(event)
+            Passivbot._mark_health_fill_pnl_counted(self, event)
 
         batch_summary = len(new_events) > 20
         pending_count = 0
@@ -12401,35 +12404,54 @@ class Passivbot:
                     pending_pnl_count=pending_count,
                 )
 
+    @staticmethod
+    def _health_fill_identity_keys(event: object) -> set[str]:
+        keys: set[str] = set()
+        event_id = str(getattr(event, "id", "") or "")
+        if event_id:
+            keys.add(f"id:{event_id}")
+        for source_id in getattr(event, "source_ids", None) or ():
+            normalized = str(source_id or "")
+            if normalized:
+                keys.add(f"source:{normalized}")
+        return keys
+
+    def _health_fill_pnl_was_counted(self, event: object) -> bool:
+        counted = set(getattr(self, "_health_counted_fill_keys", set()) or set())
+        return bool(Passivbot._health_fill_identity_keys(event) & counted)
+
+    def _mark_health_fill_pnl_counted(self, event: object) -> None:
+        counted = getattr(self, "_health_counted_fill_keys", None)
+        if counted is None:
+            counted = set()
+            self._health_counted_fill_keys = counted
+        counted.update(Passivbot._health_fill_identity_keys(event))
+
     def _log_enriched_fill_events(self, transitions: list[tuple[object, object]]) -> None:
         """Log authoritative PnL replacing pending or synthetic cached values."""
         if not transitions:
             return
-        self._health_pnl += sum(
-            fill_event_net_pnl(event)
-            - (
-                0.0
-                if fill_event_pnl_pending(previous)
-                else fill_event_net_pnl(previous)
-            )
-            for previous, event in transitions
-        )
         for previous, event in sorted(
             transitions, key=lambda item: item[1].timestamp
         ):
+            previous_counted = Passivbot._health_fill_pnl_was_counted(self, previous)
+            previous_net_pnl = (
+                fill_event_net_pnl(previous)
+                if previous_counted and not fill_event_pnl_pending(previous)
+                else 0.0
+            )
+            pnl_delta = fill_event_net_pnl(event) - previous_net_pnl
+            self._health_pnl += pnl_delta
+            Passivbot._mark_health_fill_pnl_counted(self, event)
             previous_source = str(
                 getattr(previous, "pnl_source", "") or "pending"
             ).lower()
             logging.info(
                 "[fill] authoritative realized pnl replaced cached estimate | "
-                "previous_source=%s pnl_delta=%+.8g | %s",
+                "previous_source=%s previous_counted=%s pnl_delta=%+.8g | %s",
                 previous_source,
-                fill_event_net_pnl(event)
-                - (
-                    0.0
-                    if fill_event_pnl_pending(previous)
-                    else fill_event_net_pnl(previous)
-                ),
+                str(previous_counted).lower(),
+                pnl_delta,
                 self._log_fill_event(event),
             )
 

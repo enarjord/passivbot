@@ -4706,7 +4706,7 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_log_enriched_fill_events_applies_only_authoritative_pnl_delta(caplog):
+def test_log_enriched_cached_fill_adds_full_authoritative_pnl_to_health(caplog):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -4715,6 +4715,7 @@ def test_log_enriched_fill_events_applies_only_authoritative_pnl_delta(caplog):
 
         def __init__(self):
             self._health_pnl = 100.0
+            self._health_counted_fill_keys = set()
 
     previous = SimpleNamespace(
         id="degraded-close",
@@ -4737,8 +4738,49 @@ def test_log_enriched_fill_events_applies_only_authoritative_pnl_delta(caplog):
     with caplog.at_level(logging.INFO):
         bot._log_enriched_fill_events([(previous, authoritative)])
 
-    assert bot._health_pnl == pytest.approx(98.0)
+    assert bot._health_pnl == pytest.approx(102.9)
     assert "previous_source=synthetic_fill_reconstruction_degraded" in caplog.text
+    assert "previous_counted=false" in caplog.text
+    assert "pnl_delta=+2.9" in caplog.text
+
+
+def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
+        _log_fill_event = lambda self, event: f"id={event.id}"
+
+        def __init__(self):
+            self._health_pnl = 100.0
+            self._health_counted_fill_keys = set()
+
+    previous = SimpleNamespace(
+        id="degraded-close",
+        source_ids=["trade-1"],
+        timestamp=1_700_000_000_000,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="synthetic_fill_reconstruction_degraded",
+    )
+    authoritative = SimpleNamespace(
+        id="authoritative-close",
+        source_ids=["trade-1"],
+        timestamp=previous.timestamp,
+        pnl=3.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="authoritative",
+    )
+    bot = FakeBot()
+    pb_mod.Passivbot._mark_health_fill_pnl_counted(bot, previous)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_enriched_fill_events([(previous, authoritative)])
+
+    assert bot._health_pnl == pytest.approx(98.0)
+    assert "previous_counted=true" in caplog.text
     assert "pnl_delta=-2" in caplog.text
 
 

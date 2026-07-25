@@ -4804,7 +4804,7 @@ async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
     class _RecordingFetcher(BaseFetcher):
         def __init__(self):
             self.calls: List[Tuple[Optional[int], Optional[int]]] = []
-            self.batches = [[entry, pending_close], [authoritative_close]]
+            self.batches = [[entry, pending_close], [authoritative_close], []]
 
         async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
             self.calls.append((since_ms, until_ms))
@@ -4830,6 +4830,10 @@ async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
     close = next(event for event in manager.get_events() if event.id == "close")
     assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED
     assert close.pnl_synthetic_reason == "close_exceeds_known_position"
+    previous_refresh_ms = close_ts + 2 * 60 * 60 * 1000
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = previous_refresh_ms
+    manager.cache.save_metadata(metadata)
 
     report = await manager.refresh_degraded_pnl_events(
         start_ms=entry_ts - 60_000,
@@ -4846,11 +4850,81 @@ async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
         "repaired_count": 1,
         "remaining_count": 0,
         "range_count": 1,
+        "total_range_count": 1,
+        "deferred_range_count": 0,
     }
+    assert manager.cache.load_metadata()["last_refresh_ms"] == previous_refresh_ms
     close = next(event for event in manager.get_events() if event.id == "close")
     assert close.pnl == pytest.approx(12.0)
     assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
     assert not FillEventsManager.degraded_pnl_events(manager.get_events())
+
+    overlap_ms = 60_000
+    await manager.refresh_latest(
+        overlap=20,
+        last_refresh_overlap_ms=overlap_ms,
+    )
+    assert fetcher.calls[2] == (previous_refresh_ms - overlap_ms, None)
+
+
+@pytest.mark.asyncio
+async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Path):
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=BaseFetcher(),
+        cache_path=tmp_path / "fills_degraded_repair_cap",
+    )
+    start_ms = 1_700_000_000_000
+    interval_spacing_ms = 30 * 60 * 1000
+    manager._events = [
+        types.SimpleNamespace(
+            timestamp=start_ms + index * interval_spacing_ms,
+            pnl_source=fem.PNL_SOURCE_SYNTHETIC_DEGRADED,
+        )
+        for index in range(6)
+    ]
+    manager._loaded = True
+    manager.refresh = AsyncMock()
+
+    first = await manager.refresh_degraded_pnl_events(
+        start_ms=start_ms - 60_000,
+        end_ms=start_ms + 6 * interval_spacing_ms,
+    )
+    first_calls = list(manager.refresh.await_args_list)
+
+    assert first["range_count"] == fem.DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE
+    assert first["total_range_count"] == 6
+    assert first["deferred_range_count"] == 2
+    assert len(first_calls) == 4
+    assert all(call.kwargs["mark_refreshed"] is False for call in first_calls)
+
+    manager.refresh.reset_mock()
+    second = await manager.refresh_degraded_pnl_events(
+        start_ms=start_ms - 60_000,
+        end_ms=start_ms + 6 * interval_spacing_ms,
+    )
+    second_calls = list(manager.refresh.await_args_list)
+
+    assert second["range_count"] == 2
+    assert second["total_range_count"] == 6
+    assert second["deferred_range_count"] == 0
+    assert len(second_calls) == 2
+    assert {
+        (
+            call.kwargs["start_ms"],
+            call.kwargs["end_ms"],
+        )
+        for call in first_calls
+    }.isdisjoint(
+        {
+            (
+                call.kwargs["start_ms"],
+                call.kwargs["end_ms"],
+            )
+            for call in second_calls
+        }
+    )
 
 
 @pytest.mark.asyncio

@@ -6,9 +6,12 @@ All notable user-facing changes will be documented in this file.
 
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
-  lookback. Authoritative replacements are reported as enrichment, health PnL changes
-  only by the replacement delta, and unresolved degraded rows defer risk planning with
-  exponential backoff instead of consuming the generic bot restart budget.
+  lookback. Repair-only fetches preserve the incremental checkpoint and rotate through
+  at most four disjoint ranges per authoritative cycle. Authoritative replacements are
+  reported as enrichment; uptime health adds the full authoritative PnL for cached rows
+  not previously counted by this process and applies only the replacement delta for
+  runtime-counted rows. Unresolved degraded rows defer risk planning with exponential
+  backoff instead of consuming the generic bot restart budget.
 
 - Documented Python 3.12 and 3.14 support, explicitly excluding Python 3.13 until its dependency
   set is supported and bounding package metadata to those validated minor versions, and fixed
