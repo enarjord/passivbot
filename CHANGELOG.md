@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
+  logs its normalization to Passivbot's canonical `gateio` identity, and consistently
+  selects the dedicated Gate.io connector. Standalone market loading now also
+  translates `gateio` to CCXT's renamed `gate` client without changing canonical
+  cache, broker, event, or persisted-state paths. Gate's numeric REST account UID
+  is normalized to the string required by CCXT Pro, preventing private order
+  WebSocket reconnect loops after otherwise successful startup.
+
 - Monitor `state.latest.json` snapshots now refresh from a serialized background
   maintainer at least every five seconds, independently of successful planning
   cycles. Prolonged authoritative-data or planning degradation therefore remains

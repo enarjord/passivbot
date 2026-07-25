@@ -19,6 +19,7 @@ import portalocker  # type: ignore
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
+    resolve_custom_endpoint_override_with_aliases,
 )
 
 warnings.filterwarnings(
@@ -598,6 +599,12 @@ def to_standard_exchange_name(exchange: str) -> str:
     """
     ex = (exchange or "").lower()
 
+    # CCXT 4.5.66 renamed its Gate.io client from ``gateio`` to ``gate``.
+    # Passivbot retains ``gateio`` as the canonical identity for connector
+    # routing, caches, broker attribution, events, and persisted state.
+    if ex == "gate":
+        return "gateio"
+
     # Remove known futures suffixes
     for suffix in ("usdm", "futures"):
         if ex.endswith(suffix):
@@ -638,21 +645,24 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
     The returned instance should be closed by the caller with: await cc.close()
     """
     ex = to_ccxt_exchange_id(exchange_id)
+    client_id = to_ccxt_client_id(ex)
     try:
-        cc = getattr(ccxt, ex)(
+        cc = getattr(ccxt, client_id)(
             {
                 "enableRateLimit": bool(enable_rate_limit),
                 # Default ccxt timeout can be too low for long lookbacks; raise to be tolerant.
                 "timeout": int(timeout_ms),
             }
         )
-    except Exception:
-        raise RuntimeError(f"ccxt exchange '{ex}' not available")
+    except Exception as exc:
+        raise RuntimeError(
+            f"ccxt exchange client {client_id!r} not available for canonical exchange {ex!r}"
+        ) from exc
     try:
         cc.options["defaultType"] = "swap"
-        if ex == "okx":
+        if client_id == "okx":
             cc.options["fetchMarkets"] = {"types": ["swap"]}
-        if ex == "hyperliquid":
+        if client_id == "hyperliquid":
             # Include HIP-3 stock perps from TradeXYZ
             cc.options["fetchMarkets"] = {
                 "types": ["swap", "hip3"],
@@ -662,7 +672,11 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
             }
     except Exception:
         pass
-    override = resolve_custom_endpoint_override(ex)
+    override = (
+        resolve_custom_endpoint_override_with_aliases(ex, (client_id,))
+        if client_id != ex
+        else resolve_custom_endpoint_override(ex)
+    )
     apply_rest_overrides_to_ccxt(cc, override)
     return cc
 
