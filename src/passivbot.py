@@ -11593,9 +11593,26 @@ class Passivbot:
             "fill_identity_unchanged",
             "fill_after_state_mismatch",
         }
-        anchored_candidates: list[int] = []
-        missing_anchor_cohorts: list[tuple[str, str]] = []
-        cohorts: list[tuple[str, str]] = []
+        now_ms = utc_ms()
+        try:
+            history_now_ms = int(self.get_exchange_time())
+        except Exception:
+            history_now_ms = now_ms
+        day_ms = 24 * 60 * ONE_MIN_MS
+        # Use a conservative two-year live recovery horizon. This matches
+        # Bybit's documented execution-history retention and prevents an
+        # update-only position from requesting an impossible epoch-to-now
+        # pagination walk. Older unresolved states remain fail-closed.
+        max_window_ms = 730 * day_ms
+        earliest_recovery_ms = max(1, history_now_ms - max_window_ms)
+
+        previous_state = dict(
+            getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
+        )
+        previous_cohort_states = dict(previous_state.get("cohorts", {}) or {})
+        cohort_states: dict[tuple[str, str], dict] = {}
+        attempted_cohorts: list[tuple[str, str]] = []
+        candidates: list[int] = []
         for raw_key, detail in diagnostics.items():
             if not isinstance(raw_key, tuple) or len(raw_key) != 2:
                 continue
@@ -11605,7 +11622,20 @@ class Passivbot:
             if not failed.intersection(recoverable_predicates):
                 continue
             symbol, pside = str(raw_key[0]), str(raw_key[1])
+            cohort = (symbol, pside)
+            cohort_state = dict(previous_cohort_states.get(cohort, {}) or {})
+            cohort_states[cohort] = cohort_state
+            # First satisfy the mandatory fetch generation after the position
+            # snapshot. Widen only if that recent confirmation completes and
+            # the reconstructed after-state still mismatches.
+            if "post_snapshot_fill_refresh_pending" in failed:
+                continue
+            if now_ms < int(cohort_state.get("next_retry_ms", 0) or 0):
+                continue
+
+            retry_count = int(cohort_state.get("retry_count", 0) or 0) + 1
             anchor_ts = self._position_history_anchor_timestamp_ms(symbol, pside)
+            missing_anchor = anchor_ts is None
             if anchor_ts is None:
                 try:
                     diagnostic_fill_ts = (
@@ -11613,82 +11643,86 @@ class Passivbot:
                     )
                 except (TypeError, ValueError, OverflowError):
                     diagnostic_fill_ts = None
-                missing_anchor_cohorts.append((symbol, pside))
+                base_window_ms = (
+                    max(day_ms, history_now_ms - int(age_limit))
+                    if age_limit is not None
+                    else 30 * day_ms
+                )
+                widened_window_ms = min(
+                    max_window_ms,
+                    base_window_ms * (2 ** min(retry_count, 10)),
+                )
+                candidate = max(
+                    earliest_recovery_ms,
+                    history_now_ms - widened_window_ms,
+                )
                 if diagnostic_fill_ts is not None:
-                    anchored_candidates.append(
-                        max(1, int(diagnostic_fill_ts) - 5 * ONE_MIN_MS)
+                    candidate = min(
+                        candidate,
+                        max(
+                            earliest_recovery_ms,
+                            int(diagnostic_fill_ts) - 5 * ONE_MIN_MS,
+                        ),
                     )
             else:
-                anchored_candidates.append(
-                    max(1, int(anchor_ts) - 5 * ONE_MIN_MS)
+                candidate = max(
+                    earliest_recovery_ms,
+                    int(anchor_ts) - 5 * ONE_MIN_MS,
                 )
-            cohorts.append((symbol, pside))
-        if not cohorts:
-            return None
-
-        now_ms = utc_ms()
-        recovery_key = (
-            tuple(sorted(cohorts)),
-            tuple(sorted(missing_anchor_cohorts)),
-        )
-        state = dict(
-            getattr(self, "_trailing_fill_history_recovery_state", {}) or {}
-        )
-        if state.get("key") == recovery_key and now_ms < int(
-            state.get("next_retry_ms", 0) or 0
-        ):
-            return None
-
-        retry_count = (
-            int(state.get("retry_count", 0) or 0) + 1
-            if state.get("key") == recovery_key
-            else 1
-        )
-        candidates = list(anchored_candidates)
-        if missing_anchor_cohorts:
-            try:
-                history_now_ms = int(self.get_exchange_time())
-            except Exception:
-                history_now_ms = now_ms
-            if age_limit is None:
-                # Several exchange fetchers use falsey zero to mean "no start"
-                # and replace it with a short default window. One millisecond
-                # after the Unix epoch is an explicit, portable all-history bound.
-                candidates.append(1)
+            at_history_bound = candidate <= earliest_recovery_ms
+            if at_history_bound:
+                delay_ms = 24 * 60 * ONE_MIN_MS
             else:
-                base_window_ms = max(
-                    24 * 60 * ONE_MIN_MS,
-                    history_now_ms - int(age_limit),
+                delay_ms = min(
+                    60 * ONE_MIN_MS,
+                    5 * ONE_MIN_MS * (2 ** min(retry_count - 1, 4)),
                 )
-                widened_window_ms = base_window_ms * (2**retry_count)
-                candidates.append(
-                    max(1, history_now_ms - widened_window_ms)
-                )
+            cohort_states[cohort] = {
+                "retry_count": retry_count,
+                "last_attempt_ms": now_ms,
+                "next_retry_ms": now_ms + delay_ms,
+                "start_ms": candidate,
+                "missing_anchor": missing_anchor,
+                "at_history_bound": at_history_bound,
+            }
+            candidates.append(candidate)
+            attempted_cohorts.append(cohort)
+
         if not candidates:
+            self._trailing_fill_history_recovery_state = (
+                {"cohorts": cohort_states} if cohort_states else {}
+            )
             return None
         start_ms = min(candidates)
         # `age_limit` bounds PnL accounting, not current-position
         # reconciliation. Timestamp-free positions progressively widen beyond
-        # that window; timestamped positions start before their opening anchor.
-        delay_ms = min(
-            60 * ONE_MIN_MS,
-            5 * ONE_MIN_MS * (2 ** min(retry_count - 1, 4)),
+        # that window up to the venue-history bound; timestamped positions start
+        # before their opening anchor when it remains within that bound.
+        next_retry_ms = min(
+            int(cohort_states[cohort]["next_retry_ms"])
+            for cohort in attempted_cohorts
+        )
+        retry_count = max(
+            int(cohort_states[cohort]["retry_count"])
+            for cohort in attempted_cohorts
         )
         self._trailing_fill_history_recovery_state = {
-            "key": recovery_key,
+            "cohorts": cohort_states,
             "retry_count": retry_count,
             "last_attempt_ms": now_ms,
-            "next_retry_ms": now_ms + delay_ms,
+            "next_retry_ms": next_retry_ms,
             "start_ms": start_ms,
         }
         logging.warning(
             "[fills] widening refresh for unresolved position/fill confirmation | "
             "cohorts=%s start=%s retry=%d next_retry_minutes=%.1f "
             "action=refetch_then_keep_nontradable_until_confirmed",
-            ",".join(f"{symbol}:{pside}" for symbol, pside in sorted(cohorts)),
+            ",".join(
+                f"{symbol}:{pside}" for symbol, pside in sorted(attempted_cohorts)
+            ),
             ts_to_date(start_ms)[:19],
             retry_count,
-            delay_ms / ONE_MIN_MS,
+            max(0, next_retry_ms - now_ms) / ONE_MIN_MS,
         )
         return start_ms
 

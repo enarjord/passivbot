@@ -1780,14 +1780,19 @@ def test_timestamp_free_fill_history_recovery_progressively_widens(
     assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
         now_ms - 60 * day_ms
     )
-    bot._trailing_fill_history_recovery_state["next_retry_ms"] = 0
+    cohort_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    cohort_state["next_retry_ms"] = 0
     assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
         now_ms - 120 * day_ms
     )
-    assert bot._trailing_fill_history_recovery_state["retry_count"] == 2
+    assert bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]["retry_count"] == 2
 
 
-def test_all_history_fill_recovery_uses_positive_epoch_start(monkeypatch):
+def test_all_history_fill_recovery_uses_bounded_progressive_start(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -1806,8 +1811,82 @@ def test_all_history_fill_recovery_uses_positive_epoch_start(monkeypatch):
         }
     }
 
-    assert bot._trailing_fill_history_recovery_start_ms(None) == 1
-    assert bot._trailing_fill_history_recovery_state["start_ms"] == 1
+    expected_start_ms = now_ms - 60 * 24 * 60 * 60_000
+    assert bot._trailing_fill_history_recovery_start_ms(None) == expected_start_ms
+    assert (
+        bot._trailing_fill_history_recovery_state["start_ms"]
+        == expected_start_ms
+    )
+    for _ in range(4):
+        bot._trailing_fill_history_recovery_state["cohorts"][
+            (symbol, "long")
+        ]["next_retry_ms"] = 0
+        recovery_start_ms = bot._trailing_fill_history_recovery_start_ms(None)
+    assert recovery_start_ms == now_ms - 730 * 24 * 60 * 60_000
+    bounded_state = bot._trailing_fill_history_recovery_state["cohorts"][
+        (symbol, "long")
+    ]
+    assert bounded_state["at_history_bound"] is True
+    assert bounded_state["next_retry_ms"] == now_ms + 24 * 60 * 60_000
+
+
+def test_fill_recovery_waits_for_post_snapshot_confirmation(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot._trailing_fill_confirmation_diagnostics = {
+        (symbol, "long"): {
+            "failed_predicates": [
+                "post_snapshot_fill_refresh_pending",
+                "fill_after_state_mismatch",
+            ],
+            "fill_timestamp_ms": now_ms - 30_000,
+        }
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(None) is None
+    assert bot._trailing_fill_history_recovery_state == {
+        "cohorts": {(symbol, "long"): {}}
+    }
+
+
+def test_fill_recovery_progress_survives_other_cohort_changes(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    first_symbol = _set_basic_state(bot)
+    second_symbol = "SECOND/USDT"
+    bot.positions[second_symbol] = {
+        "long": {"size": 1.0, "price": 100.0},
+        "short": {"size": 0.0, "price": 0.0},
+    }
+    now_ms = 1_800_000_000_000
+    day_ms = 24 * 60 * 60_000
+    age_limit = now_ms - 30 * day_ms
+    monkeypatch.setattr(sys.modules["passivbot"], "utc_ms", lambda: now_ms)
+    bot.get_exchange_time = lambda: now_ms
+    bot._trailing_fill_confirmation_diagnostics = {
+        (first_symbol, "long"): {"failed_predicates": ["missing_fill_anchor"]}
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 60 * day_ms
+    )
+    bot._trailing_fill_history_recovery_state["cohorts"][
+        (first_symbol, "long")
+    ]["next_retry_ms"] = 0
+    bot._trailing_fill_confirmation_diagnostics[(second_symbol, "long")] = {
+        "failed_predicates": ["missing_fill_anchor"]
+    }
+
+    assert bot._trailing_fill_history_recovery_start_ms(age_limit) == (
+        now_ms - 120 * day_ms
+    )
+    cohort_states = bot._trailing_fill_history_recovery_state["cohorts"]
+    assert cohort_states[(first_symbol, "long")]["retry_count"] == 2
+    assert cohort_states[(second_symbol, "long")]["retry_count"] == 1
 
 
 @pytest.mark.asyncio

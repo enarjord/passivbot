@@ -17,6 +17,9 @@ All notable user-facing changes will be documented in this file.
   fills use stable content-based identities rather than history-list indices. Position snapshots
   preserve distinct exchange opening times, while timestamp-free positions retry with
   progressively wider history windows and retain the fills confirmation barrier between attempts.
+  Widening starts only after the required recent post-snapshot confirmation, tracks progress per
+  coin and position side, and is capped at a two-year live recovery horizon to avoid unbounded
+  exchange pagination.
 
 - Bybit closed-PnL refreshes now cover requested history with explicit,
   contiguous sub-seven-day windows and cursor pagination inside each window.
