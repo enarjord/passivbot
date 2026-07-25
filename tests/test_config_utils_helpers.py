@@ -202,9 +202,6 @@ def test_order_replacement_churn_gate_defaults_and_validation():
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
     assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
-    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
-        0.002
-    )
     validate_config(config, verbose=False)
 
     invalid_cases = (
@@ -214,8 +211,6 @@ def test_order_replacement_churn_gate_defaults_and_validation():
         ("order_replacement_churn_gate_stability_minutes", 11.0),
         ("order_replacement_churn_gate_market_dist_pct", 1.0),
         ("order_replacement_churn_gate_market_dist_pct", -0.1),
-        ("order_replacement_churn_gate_tracking_tolerance_pct", 0.0002),
-        ("order_replacement_churn_gate_tracking_tolerance_pct", float("inf")),
     )
     for key, value in invalid_cases:
         invalid = get_template_config()
@@ -230,7 +225,6 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
         "order_replacement_churn_gate_activation_count",
         "order_replacement_churn_gate_market_dist_pct",
         "order_replacement_churn_gate_stability_minutes",
-        "order_replacement_churn_gate_tracking_tolerance_pct",
         "order_replacement_churn_gate_window_minutes",
     ):
         source["live"].pop(key)
@@ -244,15 +238,30 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
     assert live["order_replacement_churn_gate_activation_count"] == 10
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
-    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
-        0.002
-    )
     changes = prepared["_transform_log"][-1]["details"]["changes"]
     assert {
         "action": "rename",
         "from": "live.initial_entry_exec_max_market_dist_pct",
         "to": "live.order_replacement_churn_gate_market_dist_pct",
         "value": 0.005,
+    } in changes
+
+
+def test_retired_churn_tracking_tolerance_is_removed():
+    source = get_template_config()
+    source["live"]["order_replacement_churn_gate_tracking_tolerance_pct"] = 0.002
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert (
+        "order_replacement_churn_gate_tracking_tolerance_pct"
+        not in prepared["live"]
+    )
+    changes = prepared["_transform_log"][-1]["details"]["changes"]
+    assert {
+        "action": "remove",
+        "path": "live.order_replacement_churn_gate_tracking_tolerance_pct",
+        "value": 0.002,
     } in changes
 
 

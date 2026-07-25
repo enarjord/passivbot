@@ -2998,7 +2998,6 @@ def test_order_churn_emitters_use_valid_live_event_statuses():
         rolling_count=1,
         activation_count=10,
         market_distance_threshold=0.005,
-        action_headroom=None,
     )
     assert live_event_emitters.emit_order_churn_actions_accounted_event(
         bot,

@@ -338,12 +338,6 @@ class ReasonCodes:
     ORDER_CHURN_ACTION_ATTEMPT = "order_churn_action_attempt"
     ORDER_CHURN_ALLOWANCE_EXHAUSTED = "order_churn_allowance_exhausted"
     ORDER_CHURN_MARKET_DATA_UNAVAILABLE = "order_churn_market_data_unavailable"
-    ORDER_CHURN_ACTION_HEADROOM_UNAVAILABLE = (
-        "order_churn_action_headroom_unavailable"
-    )
-    ORDER_CHURN_ACTION_HEADROOM_EXHAUSTED = (
-        "order_churn_action_headroom_exhausted"
-    )
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"

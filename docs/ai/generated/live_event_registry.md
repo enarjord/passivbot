@@ -215,8 +215,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `open_tail_projection`
 - `optional_ema_dropped`
 - `order_churn_action_attempt`
-- `order_churn_action_headroom_exhausted`
-- `order_churn_action_headroom_unavailable`
 - `order_churn_admission`
 - `order_churn_allowance_exhausted`
 - `order_churn_history`

@@ -4001,7 +4001,6 @@ def emit_order_churn_admission_event(
     rolling_count: int,
     activation_count: int,
     market_distance_threshold: float,
-    action_headroom: float | int | None,
     wave: dict | None = None,
 ) -> bool:
     """Emit one bounded summary after final churn admission and priority slicing."""
@@ -4033,8 +4032,6 @@ def emit_order_churn_admission_event(
                 float(distance) * 100.0 for distance in sorted(distances)[:8]
             ],
         }
-        if action_headroom is not None and math.isfinite(float(action_headroom)):
-            data["action_headroom"] = max(0, int(action_headroom))
         emitted = bot._emit_live_event(
             EventTypes.ORDER_CHURN_ADMISSION,
             level="debug",

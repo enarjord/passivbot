@@ -8,6 +8,16 @@ All notable user-facing changes will be documented in this file.
   restricted to a host's stable public IPv4 address are not rejected when the
   host also has IPv6 connectivity.
 
+- Simplified the live order-replacement churn gate to a recent Rust-ideal
+  behavior filter. It now requires sustained monotonic price or quantity drift,
+  uses the universal 0.02% order-match tolerance, reuses the existing fresh
+  market snapshot, and performs one create-admission pass before exchange
+  configuration writes. Removed account/config/list epochs, the wider tracking
+  tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
+  and signed-action bookkeeping. Churn evidence remains economy-only: unmatched
+  actual orders are still cancelled and near-market or risk-critical orders are
+  never deferred.
+
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently
   selects the dedicated Gate.io connector. Standalone market loading now also
