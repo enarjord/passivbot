@@ -1037,6 +1037,66 @@ def test_gateio_market_settings_keep_configured_symbol_when_cap_is_unchanged():
     assert bot.already_updated_exchange_config_symbols == {symbol}
 
 
+def test_gateio_missing_leverage_metadata_is_symbol_scoped():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": None, "max": None},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot._gate_leverage_metadata_unavailable_symbols == {symbol}
+    assert symbol not in bot.max_leverage
+    assert symbol not in bot.already_updated_exchange_config_symbols
+    assert bot._order_churn_precreate_signed_action_costs({symbol}) == {}
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateio_missing_leverage_metadata_blocks_config_without_write():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot._gate_leverage_metadata_unavailable_symbols = {symbol}
+    bot._record_order_churn_allowance_attempts = lambda *_args, **_kwargs: (
+        pytest.fail("missing metadata must not consume a signed-action attempt")
+    )
+
+    with pytest.raises(ValueError, match="max leverage metadata unavailable"):
+        await bot.update_exchange_config_by_symbols([symbol])
+
+
 @pytest.mark.asyncio
 async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     calls = []

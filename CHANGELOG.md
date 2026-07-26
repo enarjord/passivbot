@@ -21,7 +21,10 @@ All notable user-facing changes will be documented in this file.
   A failed refresh blocks entries and advances the existing restart budget,
   while reduce-only closes remain eligible. Churn admission and the later
   configuration write now share one retry-eligibility timestamp so a backoff
-  expiring mid-wave cannot introduce an unreserved signed action.
+  expiring mid-wave cannot introduce an unreserved signed action. Missing or
+  invalid leverage-cap metadata is isolated to the affected symbol: entries
+  remain pending and restart-visible, but market initialization and protective
+  closes continue.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous

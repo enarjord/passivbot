@@ -65,6 +65,7 @@ class GateIOBot(CCXTBot):
 
     def set_market_specific_settings(self):
         super().set_market_specific_settings()
+        unavailable_symbols: set[str] = set()
         for symbol in self.symbols_requiring_market_sizing():
             market = self.markets_dict[symbol]
             raw_max_leverage = (market.get("limits") or {}).get("leverage", {}).get(
@@ -72,12 +73,24 @@ class GateIOBot(CCXTBot):
             )
             if raw_max_leverage is None:
                 raw_max_leverage = (market.get("info") or {}).get("leverage_max")
-            max_leverage = float(raw_max_leverage)
+            try:
+                max_leverage = float(raw_max_leverage)
+            except (TypeError, ValueError, OverflowError):
+                max_leverage = float("nan")
             if not math.isfinite(max_leverage) or max_leverage <= 0.0:
-                raise ValueError(
-                    f"{symbol}: invalid Gate.io max leverage metadata: "
-                    f"{raw_max_leverage!r}"
+                unavailable_symbols.add(symbol)
+                self.max_leverage.pop(symbol, None)
+                configured_symbols = getattr(
+                    self, "already_updated_exchange_config_symbols", None
                 )
+                if isinstance(configured_symbols, set):
+                    configured_symbols.discard(symbol)
+                logging.warning(
+                    "%s: Gate.io max leverage metadata unavailable; "
+                    "deferring exposure-increasing orders",
+                    symbol_to_coin(symbol, verbose=False) or symbol,
+                )
+                continue
             effective_max_leverage = int(max_leverage)
             previous_max_leverage = self.max_leverage.get(symbol)
             self.max_leverage[symbol] = effective_max_leverage
@@ -90,6 +103,7 @@ class GateIOBot(CCXTBot):
                 )
                 if isinstance(configured_symbols, set):
                     configured_symbols.discard(symbol)
+        self._gate_leverage_metadata_unavailable_symbols = unavailable_symbols
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance using the same parser as staged snapshots."""
@@ -215,6 +229,17 @@ class GateIOBot(CCXTBot):
     async def update_exchange_config_by_symbols(self, symbols):
         """Apply the configured leverage and margin mode through Gate's leverage endpoint."""
         for symbol in symbols:
+            if symbol in set(
+                getattr(
+                    self,
+                    "_gate_leverage_metadata_unavailable_symbols",
+                    set(),
+                )
+                or set()
+            ):
+                raise ValueError(
+                    f"{symbol}: Gate.io max leverage metadata unavailable"
+                )
             leverage = self._calc_leverage_for_symbol(symbol)
             margin_mode = self._get_margin_mode_for_symbol(symbol)
             self._record_order_churn_allowance_attempts(1, action_kind="config")
@@ -242,12 +267,21 @@ class GateIOBot(CCXTBot):
         retry_after_by_symbol = (
             getattr(self, "_exchange_config_retry_after_ms", {}) or {}
         )
+        metadata_unavailable = set(
+            getattr(
+                self,
+                "_gate_leverage_metadata_unavailable_symbols",
+                set(),
+            )
+            or set()
+        )
         if now_ms is None:
             now_ms = utc_ms()
         return {
             str(symbol): 1
             for symbol in symbols
             if str(symbol) not in configured
+            and str(symbol) not in metadata_unavailable
             and int(retry_after_by_symbol.get(str(symbol), 0) or 0) <= now_ms
         }
 

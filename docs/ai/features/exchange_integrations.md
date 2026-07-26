@@ -226,7 +226,10 @@ Handling:
    correct Gate parameter tuple without accidentally switching margin mode.
 4. Propagate configuration failures and keep exposure-increasing creations deferred
    until configuration succeeds. Existing-position reduce-only closes do not depend
-   on leverage initialization and remain eligible.
+   on leverage initialization and remain eligible. Missing or invalid leverage-cap
+   metadata is a symbol-scoped configuration failure: invalidate any prior configured
+   marker, do not guess a cap or issue `set_leverage`, and continue market initialization
+   so reduce-only closes for that symbol can still execute.
 5. Every failed cycle containing a blocked entry advances the existing execution
    error/restart budget. The failure and blocked-entry scope remain visible in
    operator logs and structured events; close-only operation must not look healthy
