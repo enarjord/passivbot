@@ -297,7 +297,8 @@ The account-wide replacement-churn policy emits structured, monitor-only summari
 - `order.churn_evidence` reports one bounded per-plan aggregation of RAM-history association
   reasons, churn-evidenced order count, tracked symbol count, generation, and RAM-history clearing.
   History starts empty and is cleared after planning failure, gate disablement, or a symbol leaving
-  the current ideal/active/order/position universe.
+  the current ideal/active/open-order/nonzero-position universe. Flat position placeholders retained
+  by account-state normalization do not keep a departed symbol's churn history alive.
 - `order.churn_admission` reports one bounded final-admission aggregation after exchange
   configuration and the final fresh-market check, including rolling create-attempt count, threshold,
   decision reasons, and sampled market distances.

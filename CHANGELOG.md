@@ -78,7 +78,8 @@ All notable user-facing changes will be documented in this file.
   tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
   and signed-action bookkeeping. Churn evidence remains economy-only: unmatched
   actual orders are still cancelled and near-market or risk-critical orders are
-  never deferred.
+  never deferred. Symbols rotated out of the active universe release their RAM
+  history even when position normalization retains flat zero-sized placeholders.
 
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently

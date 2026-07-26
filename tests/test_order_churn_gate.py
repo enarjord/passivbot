@@ -269,6 +269,12 @@ def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
     assert state.symbols_with_history() == {SYMBOL}
 
     bot.active_symbols = []
+    bot.positions = {
+        SYMBOL: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
     monkeypatch.setattr(reconciler.time, "monotonic", lambda: 1.0)
     reconciler.prepare_order_churn_evidence(
         bot, {}, generation=state.begin_generation()
@@ -276,6 +282,47 @@ def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
 
     assert state.symbols_with_history() == set()
     assert state.reset_count == 1
+
+
+def test_nonzero_position_keeps_churn_history_after_symbol_rotation(monkeypatch):
+    state = OrderChurnGateState()
+
+    class Bot:
+        _order_churn_gate_state = state
+        _order_churn_risk_active_pairs = ()
+        active_symbols = [SYMBOL]
+        open_orders = {}
+        positions = {}
+
+        @staticmethod
+        def live_value(key):
+            return {
+                "order_replacement_churn_gate_activation_count": 10,
+                "order_replacement_churn_gate_window_minutes": 10.0,
+                "order_replacement_churn_gate_stability_minutes": 2.0,
+                "order_match_tolerance_pct": 0.0002,
+                "execution_delay_seconds": 2.0,
+            }[key]
+
+    bot = Bot()
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 0.0)
+    reconciler.prepare_order_churn_evidence(
+        bot, {SYMBOL: [_order(price=100.0)]}, generation=state.begin_generation()
+    )
+
+    bot.active_symbols = []
+    bot.positions = {
+        SYMBOL: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 1.0)
+    reconciler.prepare_order_churn_evidence(
+        bot, {}, generation=state.begin_generation()
+    )
+
+    assert state.symbols_with_history() == {SYMBOL}
 
 
 def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):

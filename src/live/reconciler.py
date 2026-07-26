@@ -1104,7 +1104,11 @@ def prepare_order_churn_evidence(
     current_universe = set(ideal_orders)
     current_universe.update(getattr(bot, "active_symbols", []) or [])
     current_universe.update((getattr(bot, "open_orders", {}) or {}).keys())
-    current_universe.update((getattr(bot, "positions", {}) or {}).keys())
+    current_universe.update(
+        symbol
+        for symbol in (getattr(bot, "positions", {}) or {})
+        if _symbol_position_state(bot, symbol) != "flat"
+    )
     history_symbols = state.symbols_with_history()
     if activation_count > 0:
         for symbol in history_symbols - current_universe:
