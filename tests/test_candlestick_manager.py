@@ -2751,6 +2751,20 @@ def test_hyperliquid_recent_gap_retries_are_time_spaced(monkeypatch, tmp_path):
 
     now["ms"] += 15 * ONE_MIN_MS
     assert cm._should_retry_gap(gap, now_ms=now["ms"])
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gap = cm._get_known_gaps_enhanced(symbol)[0]
+    assert gap["retry_count"] == _GAP_MAX_RETRIES
+    assert not cm._should_retry_gap(gap, now_ms=now["ms"])
+
+    now["ms"] += 5 * ONE_MIN_MS
+    assert not cm._should_retry_gap(gap, now_ms=now["ms"])
+    now["ms"] += 10 * ONE_MIN_MS
+    assert cm._should_retry_gap(gap, now_ms=now["ms"])
 
 
 def test_hyperliquid_accelerated_retry_excludes_large_recent_ending_gap(
@@ -3268,6 +3282,65 @@ async def test_1m_force_refresh_raises_on_partial_terminal_empty_page(
 
     assert calls == [start, start + 2 * ONE_MIN_MS]
     assert exc_info.value.pages == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_overlap_splits_around_deferred_internal_gap(
+    monkeypatch, tmp_path
+):
+    fixed_now_ms = 100 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        overlap_candles=3,
+    )
+    cm._now_ms_callback = lambda: fixed_now_ms
+    symbol = "MU/USDC:USDC"
+    deferred = 95 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (94 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (96 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (97 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        deferred,
+        deferred,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.array(
+            [
+                (ts, 2.0, 2.0, 2.0, 2.0, 1.0)
+                for ts in range(since, end_exclusive, ONE_MIN_MS)
+            ],
+            dtype=CANDLE_DTYPE,
+        )
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    await cm.refresh(symbol, through_ts=fixed_now_ms - ONE_MIN_MS)
+
+    assert calls == [
+        (94 * ONE_MIN_MS, 95 * ONE_MIN_MS),
+        (96 * ONE_MIN_MS, 100 * ONE_MIN_MS),
+    ]
+    assert all(
+        not (since <= deferred < end_exclusive)
+        for since, end_exclusive in calls
+    )
 
 
 @pytest.mark.asyncio

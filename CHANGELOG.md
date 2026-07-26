@@ -20,7 +20,8 @@ All notable user-facing changes will be documented in this file.
   metadata; unresolved remainders are deferred after partial recovery. Missing
   rows remain unavailable and are never fabricated by this recovery path, and
   large deferred ranges remain interval-based rather than expanding into one
-  Python object per minute.
+  Python object per minute. Failed persistent-gap retries retain the persistent
+  retry cadence, and forced overlap refreshes split around deferred internal gaps.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous

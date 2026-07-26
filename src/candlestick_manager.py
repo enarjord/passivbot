@@ -3079,12 +3079,8 @@ class CandlestickManager:
                         gap["added_at"] = now_ms
                 elif increment_retry and retry_due:
                     # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
-                    # and avoid redundant disk writes for persistent gaps
-                    new_retry_count = (
-                        1
-                        if previous_retry_count >= _GAP_MAX_RETRIES
-                        else previous_retry_count + 1
-                    )
+                    # without reverting a persistent gap to the ordinary retry cadence.
+                    new_retry_count = previous_retry_count + 1
                     gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
                     gap["last_retry_at"] = now_ms
                     if retry_due:
@@ -8466,16 +8462,39 @@ class CandlestickManager:
                     last_refresh_ms=now_fetch,
                 )
 
-            try:
-                new_arr = await self._fetch_ohlcv_paginated(
-                    symbol,
-                    since,
-                    end_exclusive,
-                    on_batch=_persist_refresh_batch,
-                    raise_on_partial_empty_page=raise_on_partial_empty_page,
+            fetch_ranges = self._fetch_ranges_excluding_deferred_gaps(
+                symbol,
+                since,
+                end_exclusive - ONE_MIN_MS,
+                now_ms=now,
+            )
+            fetched_parts: List[np.ndarray] = []
+            for fetch_start, fetch_end in fetch_ranges:
+                fetch_end_exclusive = min(
+                    end_exclusive, int(fetch_end) + ONE_MIN_MS
                 )
-            except TypeError:
-                new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
+                if int(fetch_start) >= fetch_end_exclusive:
+                    continue
+                try:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol,
+                        int(fetch_start),
+                        fetch_end_exclusive,
+                        on_batch=_persist_refresh_batch,
+                        raise_on_partial_empty_page=raise_on_partial_empty_page,
+                    )
+                except TypeError:
+                    fetched = await self._fetch_ohlcv_paginated(
+                        symbol, int(fetch_start), fetch_end_exclusive
+                    )
+                fetched = _ensure_dtype(fetched)
+                if fetched.size:
+                    fetched_parts.append(fetched)
+            new_arr = (
+                np.concatenate(fetched_parts)
+                if fetched_parts
+                else np.empty((0,), dtype=CANDLE_DTYPE)
+            )
             new_arr = self._slice_ts_range(_ensure_dtype(new_arr), since, end_exclusive - ONE_MIN_MS)
             if new_arr.size == 0:
                 # A missing open-ended tail is not synthesized. Record the successful

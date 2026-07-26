@@ -115,8 +115,10 @@
     Large missing-basis ranges retain the ordinary persistent-gap schedule. The
     known-gap retry decision runs before refresh, ordinary present, tail-completion,
     and targeted gap fetches so a deferred tail cannot consume REST calls through
-    an earlier path. Missing rows remain unavailable until an authoritative row
-    arrives. Repeated terminal empty-page failures for a forager candle surface
+    an earlier path. Forced overlap refreshes also split around deferred internal
+    gaps. A failed retry of a persistent recent gap retains the persistent retry
+    cadence. Missing rows remain unavailable until an authoritative row arrives.
+    Repeated terminal empty-page failures for a forager candle surface
     use a bounded in-memory retry delay without converting missing data into
     candles or hiding the first error. A partial authoritative response similarly
     defers and excludes its unresolved remainder until the next eligible retry.
