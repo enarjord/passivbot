@@ -2,45 +2,16 @@ from __future__ import annotations
 
 import math
 import re
-import socket
 import time
 
-import aiohttp
 import ccxt.async_support as ccxt_async
 import ccxt.pro as ccxt_pro
 
 from config.access import require_live_value
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from exchanges.ipv4_transport import IPv4TransportMixin
 from passivbot import logging
 from utils import symbol_to_coin
-
-
-class _WeexIPv4TransportMixin:
-    """Keep WEEX traffic on the IPv4 address accepted by its API whitelist."""
-
-    def open(self):
-        if not self.own_session or self.session is not None:
-            return super().open()
-
-        # Let CCXT initialize its event loop, throttler, and SSL context without
-        # creating the default dual-stack connector.
-        self.own_session = False
-        try:
-            super().open()
-        finally:
-            self.own_session = True
-
-        self.tcp_connector = aiohttp.TCPConnector(
-            ssl=self.ssl_context,
-            loop=self.asyncio_loop,
-            enable_cleanup_closed=True,
-            family=socket.AF_INET,
-        )
-        self.session = aiohttp.ClientSession(
-            loop=self.asyncio_loop,
-            connector=self.tcp_connector,
-            trust_env=self.aiohttp_trust_env,
-        )
 
 
 class _WeexSuccessEnvelopeMixin:
@@ -81,11 +52,11 @@ class _WeexSuccessEnvelopeMixin:
         )
 
 
-class AsyncWeex(_WeexIPv4TransportMixin, _WeexSuccessEnvelopeMixin, ccxt_async.weex):
+class AsyncWeex(IPv4TransportMixin, _WeexSuccessEnvelopeMixin, ccxt_async.weex):
     pass
 
 
-class ProWeex(_WeexIPv4TransportMixin, _WeexSuccessEnvelopeMixin, ccxt_pro.weex):
+class ProWeex(IPv4TransportMixin, _WeexSuccessEnvelopeMixin, ccxt_pro.weex):
     def handle_orders(self, client, message):
         """Ignore WEEX order-channel heartbeats with no order rows.
 

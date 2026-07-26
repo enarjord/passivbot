@@ -1,19 +1,34 @@
 # Live Logging Overhaul Progress
 
-This file is the running progress ledger for `docs/plans/live_logging_overhaul_plan.md`.
-Keep the plan as the architecture and decision record; update this file as PRs
-merge, live smoke evidence changes, or new gaps are discovered.
+This file is the historical progress ledger for
+`docs/plans/live_logging_overhaul_plan.md`. It is not the active backlog or the
+resume point. Read `docs/plans/live_logging_overhaul_current_status.md` first.
+Keep this history for evidence, but do not continue the former one-entry-per-PR
+operational diary.
 
 ## Update Policy
 
-- Update this file when a logging-overhaul slice is merged to canonical
-  `master`. Entries before the v8.0.0 cutover retain their historical `v8`
-  branch wording.
-- Update it when a merged slice is deployed to VPS5 and smoke-tested.
-- Keep entries factual and compact: PR/commit, scope, validation, and remaining
-  gap.
+- Add an entry only when a logging-overhaul milestone materially changes the
+  architecture, closes a completion criterion, or records evidence needed to
+  understand a later design decision.
+- Do not append routine PR, deployment, restart, reviewer, or smoke chronology
+  here. Runtime actions still require the bounded durable record and
+  public/private evidence split defined by step 13 of
+  `live_logging_overhaul_pr_loop_workflow.md`.
+- Adjacent trading, performance, restart, process, report, and operator-tool
+  work belongs in its own plan or the live-operations backlog even when it uses
+  the event pipeline.
+- Keep any new entry factual and compact: milestone, scope, validation, and the
+  remaining finite gap.
 - Do not use this file for design churn; unresolved design details belong in the
   plan or a focused handoff doc.
+
+The entries below predate this focus rule and are retained unchanged as
+historical evidence. Their branch names, “active follow-up” language, deployment
+state, and next-slice statements are not current instructions. Unresolved
+deployment blockers remain safety evidence: revalidate them against the target
+host's exact deployed SHA, local config, and intended target delta before any
+pull or restart.
 
 ## Latest Canonical Merge, Deployment Deferred (PR #1356)
 
