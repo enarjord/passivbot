@@ -102,10 +102,7 @@ class BitgetBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Bitget provides posSide in info."""
-        if not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
-        ):
+        if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
         position_side = str(
             order.get("position_side")
