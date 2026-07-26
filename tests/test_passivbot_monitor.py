@@ -6566,6 +6566,11 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 "ETH/USDT:USDT": {"active": True},
             }
             self._orchestrator_ema_unavailable_symbols = set()
+            self._orchestrator_candidate_ema_unavailable_symbols = set()
+            self._orchestrator_ema_unavailable_reasons = {}
+            self._forager_rank_feature_unavailable_by_side = {
+                "long": {"ETH/USDT:USDT"}
+            }
             self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
             self._orchestrator_trailing_unavailable_reasons = {
                 "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
@@ -6868,6 +6873,20 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "long"
     ]["minimum_fill_refresh_generation"] == 3
     assert snapshot["market"]["ETH/USDT:USDT"]["tradable"] is True
+    assert snapshot["market"]["BTC/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": True,
+        "rankability_reasons": [],
+        "ranking_feature_unavailable_psides": [],
+        "ema_unavailable_reasons": [],
+    }
+    assert snapshot["market"]["ETH/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": False,
+        "rankability_reasons": ["ranking_features_unavailable"],
+        "ranking_feature_unavailable_psides": ["long"],
+        "ema_unavailable_reasons": [],
+    }
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
         0.0

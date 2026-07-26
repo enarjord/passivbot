@@ -409,6 +409,7 @@ class _BundleReproBot:
             None if cached_log_range_ema is None else dict(cached_log_range_ema)
         )
         self.cached_metric_calls = []
+        self.projection_metric_requests = []
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
@@ -512,6 +513,12 @@ class _BundleReproBot:
                 max_tail_gap_ms,
             ):
                 self.outer.projected_open_tail_called = True
+                self.outer.projection_metric_requests.append(
+                    {
+                        key: list(value)
+                        for key, value in spans_by_metric.items()
+                    }
+                )
                 if self.outer.projection_error is not None:
                     raise self.outer.projection_error
                 qv = (
@@ -1229,6 +1236,7 @@ async def test_active_forager_open_tail_uses_cached_ranking_not_projected_values
     assert bot._orchestrator_ema_unavailable_symbols == set()
     assert bot._orchestrator_ema_projection_symbols == {symbol}
     assert {call["timeframe"] for call in bot.cached_metric_calls} == {"1m"}
+    assert set(bot.projection_metric_requests[0]) == {"close"}
 
 
 @pytest.mark.asyncio

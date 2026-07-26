@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Forager monitor health now distinguishes approved candidates that are
+  temporarily unrankable because volume/log-range or required candidate EMA
+  inputs are unavailable from active-symbol trading degradation. Open-tail
+  forager projection now computes only close EMAs because ranking metrics must
+  come from real candles, and latest-value EMA calculations avoid allocating an
+  unused full series.
+
 - Live trailing fill confirmation can now recover from a polluted historical
   `psize`/`pprice` residue when the exchange supplies an explicit position
   opening timestamp. Recovery is restricted to a single identified opening fill

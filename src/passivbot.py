@@ -9511,6 +9511,14 @@ class Passivbot:
         # filter coins by min effective cost
         # filter coins by relative volume
         # filter coins by log range
+        if self.is_forager_mode(pside):
+            unavailable_by_side = getattr(
+                self, "_forager_rank_feature_unavailable_by_side", None
+            )
+            if not isinstance(unavailable_by_side, dict):
+                unavailable_by_side = {}
+            unavailable_by_side[pside] = set()
+            self._forager_rank_feature_unavailable_by_side = unavailable_by_side
         if self.get_forced_PB_mode(pside):
             return []
         candidates = self.approved_coins_minus_ignored_coins[pside]
@@ -9599,6 +9607,9 @@ class Passivbot:
             ]
             if feature_unavailable:
                 feature_unavailable_count = len(feature_unavailable)
+                self._forager_rank_feature_unavailable_by_side[pside] = set(
+                    feature_unavailable
+                )
                 Passivbot._emit_forager_feature_unavailable_event(
                     self,
                     pside=pside,
@@ -17639,14 +17650,20 @@ class Passivbot:
             dict[float, float] | None,
             dict[float, float] | None,
         ]:
+            projection_metrics = {
+                "close": sorted(need_close_spans[sym]),
+            }
+            if not is_forager_mode():
+                projection_metrics.update(
+                    {
+                        "qv": m1_volume_spans,
+                        "log_range": requested_m1_lr_spans,
+                    }
+                )
             try:
                 projected = await self.cm.get_projected_open_tail_ema_metrics(
                     sym,
-                    {
-                        "close": sorted(need_close_spans[sym]),
-                        "qv": m1_volume_spans,
-                        "log_range": requested_m1_lr_spans,
-                    },
+                    projection_metrics,
                     latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
                     last_cached_ts=int(projection_ctx["last_cached_ts"]),
                     max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
@@ -17665,16 +17682,20 @@ class Passivbot:
                 )
                 raise
             close = dict(projected.get("close", {}))
-            vol = projected_optional_map(
-                sym, projected, "qv", m1_volume_spans, "m1_volume"
-            )
-            lr1m = projected_optional_map(
-                sym,
-                projected,
-                "log_range",
-                requested_m1_lr_spans,
-                "m1_log_range",
-            )
+            if is_forager_mode():
+                vol = None
+                lr1m = None
+            else:
+                vol = projected_optional_map(
+                    sym, projected, "qv", m1_volume_spans, "m1_volume"
+                )
+                lr1m = projected_optional_map(
+                    sym,
+                    projected,
+                    "log_range",
+                    requested_m1_lr_spans,
+                    "m1_log_range",
+                )
             missing_close = [
                 span
                 for span in sorted(need_close_spans[sym])
@@ -17685,13 +17706,7 @@ class Passivbot:
                     "[ema] projected open-tail close EMA incomplete for "
                     f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                 )
-            if is_forager_mode():
-                # In forager mode, open-tail projection is valid for close EMA
-                # readiness only. Quote-volume and log-range ranking inputs must
-                # use current or cached real-candle EMA values.
-                vol = None
-                lr1m = None
-            else:
+            if not is_forager_mode():
                 missing_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
@@ -18186,6 +18201,30 @@ class Passivbot:
             if lr_span_long in m1_log_range_emas[s]
         }
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
+        candidate_reason_names = {
+            reason
+            for reason in ema_unavailable_reasons
+            if reason
+            in {
+                "cache_only_fetch_failed",
+                "candidate_required_ema_unavailable",
+                "never_fetched_cache_only",
+            }
+            or str(reason).startswith("missing_required_forager_")
+        }
+        self._orchestrator_candidate_ema_unavailable_symbols = {
+            symbol
+            for items in candidate_ema_unavailable_details.values()
+            for symbol, _error_type, _ema_types, _spans in items
+        } | {
+            symbol
+            for reason in candidate_reason_names
+            for symbol in ema_unavailable_reasons.get(reason, [])
+        }
+        self._orchestrator_ema_unavailable_reasons = {
+            str(reason): set(reason_symbols)
+            for reason, reason_symbols in ema_unavailable_reasons.items()
+        }
         Passivbot._emit_ema_bundle_completed_event(
             self,
             symbols=symbols,

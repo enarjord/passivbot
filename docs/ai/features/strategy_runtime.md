@@ -69,6 +69,23 @@ for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
 `forager_volatility_ema_span_1m`. Generic strategy EMA spans such as `ema_span_0` and `ema_span_1`
 remain unsuffixed because their timeframe comes from the strategy's base candle stream.
 
+## Forager Readiness Stages
+
+Live health distinguishes three stages:
+
+1. The candidate universe contains approved, age-eligible, cost-eligible symbols.
+2. A rankable candidate has the required real-candle quote-volume and log-range
+   features.
+3. A Rust-tradable symbol also has every strategy, trailing, and risk input
+   needed for its current mode.
+
+A flat candidate with unavailable ranking features remains visible as a forager
+candidate but is marked `forager.rankable=false`; this is distinct from an
+active symbol losing a required strategy input. The Rust payload still fails
+closed for an unrankable candidate. Monitor health must preserve that stage
+distinction so operators do not mistake a bounded candidate-ranking exclusion
+for an exchange market becoming intrinsically nontradable.
+
 ## Trailing Martingale Semantics
 
 Entries and closes use threshold/retracement fields.
