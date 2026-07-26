@@ -120,7 +120,12 @@
     cadence, and all retry metadata uses the manager's active live/replay clock.
     Missing rows remain unavailable until an authoritative row arrives, and a
     dependent 1m EMA window remains unavailable while it intersects an unresolved
-    unknown gap rather than computing over a sparse sequence. Historical pagination
+    unknown gap rather than computing over a sparse sequence. Complete rows in the
+    supplied EMA window remain authoritative even if stale known-gap metadata still
+    names their timestamps. Recording or extending a 1m gap invalidates cached 1m
+    EMA and open-tail projection values. An overlap refresh which retries a due gap
+    stamps every unresolved remainder before later repair stages run, preventing a
+    second attempt in the same request. Historical pagination
     flushes deferred partial-page index writes before propagating terminal-empty
     failure.
     Repeated terminal empty-page failures for a forager candle surface

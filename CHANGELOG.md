@@ -25,6 +25,10 @@ All notable user-facing changes will be documented in this file.
   deferred internal gaps. Gap retry metadata follows the manager's replay/live
   clock, partial historical pages flush their deferred index before propagating
   failure, and unresolved internal gaps keep dependent EMA windows unavailable.
+  Overlap refreshes now stamp any attempted-but-unresolved known-gap remainder
+  before later repair stages can retry it in the same request. Newly recorded
+  1m gaps invalidate affected EMA/projection caches, while complete authoritative
+  rows remain usable if stale gap metadata has not yet been trimmed.
 
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA

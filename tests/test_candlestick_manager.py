@@ -1116,6 +1116,48 @@ async def test_latest_ema_helpers_reject_unverified_hyperliquid_gap(
 
 
 @pytest.mark.asyncio
+async def test_latest_ema_accepts_complete_rows_despite_stale_gap_metadata(
+    tmp_path, monkeypatch
+):
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "RECOVERED/USDC:USDC"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    recovered_ts = start_ts + ONE_MIN_MS
+    complete = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (recovered_ts, 11.0, 12.0, 10.0, 11.0, 1.0),
+            (end_ts, 12.0, 13.0, 11.0, 12.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        recovered_ts,
+        recovered_ts,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return complete
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    result = await cm.get_latest_ema_close(symbol, span)
+
+    assert math.isfinite(result)
+    assert ("close", span, str(ONE_MIN_MS)) in cm._ema_cache[symbol]
+
+
+@pytest.mark.asyncio
 async def test_fake_live_ema_helpers_accept_authoritative_sparse_timeline(
     tmp_path, monkeypatch
 ):
@@ -2793,6 +2835,33 @@ def test_persisted_rows_trim_known_gaps_and_preserve_metadata(tmp_path):
     assert cm._get_known_gaps_enhanced(symbol) == []
 
 
+def test_adding_known_gap_invalidates_1m_ema_and_projection_caches(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "TEST/USDC:USDC"
+    m1_key = ("close", 5.0, str(ONE_MIN_MS))
+    h1_key = ("close", 5.0, str(60 * ONE_MIN_MS))
+    cm._ema_cache[symbol] = {
+        m1_key: (1.0, 1_000_000, 1_000_000),
+        h1_key: (2.0, 1_000_000, 1_000_000),
+    }
+    cm._projected_open_tail_ema_cache[symbol] = {("cached",): {"close": 1.0}}
+
+    cm._add_known_gap(
+        symbol,
+        1_000_000,
+        1_000_000,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    assert m1_key not in cm._ema_cache[symbol]
+    assert h1_key in cm._ema_cache[symbol]
+    assert symbol not in cm._projected_open_tail_ema_cache
+
+
 def test_persisted_rows_leave_unrelated_known_gap_unchanged(tmp_path):
     cm = CandlestickManager(
         exchange=None,
@@ -3557,6 +3626,76 @@ async def test_refresh_overlap_splits_around_deferred_internal_gap(
         not (since <= deferred < end_exclusive)
         for since, end_exclusive in calls
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_stamps_due_gap_remainder_before_targeted_repair(
+    monkeypatch, tmp_path
+):
+    fixed_now_ms = 100 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        overlap_candles=3,
+    )
+    cm._now_ms_callback = lambda: fixed_now_ms
+    symbol = "MU/USDC:USDC"
+    start = 94 * ONE_MIN_MS
+    missing = 95 * ONE_MIN_MS
+    end = 99 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (96 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (97 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        missing,
+        missing,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    gaps[0]["last_retry_at"] = fixed_now_ms - 5 * ONE_MIN_MS
+    cm._save_known_gaps_enhanced(symbol, gaps)
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.array(
+            [
+                (ts, 2.0, 2.0, 2.0, 2.0, 1.0)
+                for ts in range(since, end_exclusive, ONE_MIN_MS)
+                if ts != missing
+            ],
+            dtype=CANDLE_DTYPE,
+        )
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        max_age_ms=0,
+        fill_trailing_gaps=False,
+    )
+
+    assert calls == [(start, end + ONE_MIN_MS)]
+    assert missing not in set(result["ts"].astype(np.int64))
+    unresolved = cm._get_known_gaps_enhanced(symbol)
+    assert [(gap["start_ts"], gap["end_ts"]) for gap in unresolved] == [
+        (missing, missing)
+    ]
+    assert unresolved[0]["last_retry_at"] == fixed_now_ms
 
 
 @pytest.mark.asyncio

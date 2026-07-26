@@ -3172,6 +3172,11 @@ class CandlestickManager:
                     )
 
         self._save_known_gaps_enhanced(symbol, gaps)
+        # A newly recorded or expanded 1m gap changes whether EMA inputs are
+        # authoritative even when the candle tail/end timestamp is unchanged.
+        # Do not let values computed before that evidence survive in RAM.
+        self._invalidate_ema_cache(symbol, timeframe="1m")
+        self._projected_open_tail_ema_cache.pop(symbol, None)
 
     def _record_verified_gap(
         self,
@@ -3286,6 +3291,60 @@ class CandlestickManager:
             if overlap_start <= overlap_end:
                 ranges.append((overlap_start, overlap_end))
         return ranges
+
+    def _due_unverified_gap_ranges(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> List[Tuple[int, int]]:
+        """Return retry-due unknown-gap intersections for one attempted range."""
+        if now_ms is None:
+            now_ms = self._now_ms()
+        ranges: List[Tuple[int, int]] = []
+        for gap in self._get_known_gaps_enhanced(symbol):
+            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                GAP_REASON_AUTO,
+                GAP_REASON_FETCH_FAILED,
+            }:
+                continue
+            if not self._should_retry_gap(gap, now_ms=now_ms):
+                continue
+            overlap_start = max(int(start_ts), int(gap["start_ts"]))
+            overlap_end = min(int(end_ts), int(gap["end_ts"]))
+            if overlap_start <= overlap_end:
+                ranges.append((overlap_start, overlap_end))
+        return ranges
+
+    def _stamp_unresolved_gap_attempts(
+        self,
+        symbol: str,
+        attempted_ranges: List[Tuple[int, int]],
+    ) -> None:
+        """Record retry time for every still-missing minute in attempted known gaps."""
+        if not attempted_ranges:
+            return
+        cached = _ensure_dtype(
+            self._cache.get(symbol, np.empty((0,), dtype=CANDLE_DTYPE))
+        )
+        for start_ts, end_ts in attempted_ranges:
+            present = (
+                self._slice_ts_range(cached, int(start_ts), int(end_ts))
+                if cached.size
+                else cached
+            )
+            for missing_start, missing_end in self._missing_spans(
+                present, int(start_ts), int(end_ts)
+            ):
+                self._add_known_gap(
+                    symbol,
+                    int(missing_start),
+                    int(missing_end),
+                    reason=GAP_REASON_FETCH_FAILED,
+                    increment_retry=True,
+                )
 
     def _fetch_ranges_excluding_deferred_gaps(
         self,
@@ -7851,9 +7910,19 @@ class CandlestickManager:
             period_ms == ONE_MIN_MS
             and symbol is not None
             and str(self.exchange_name or "").lower() != "fake"
-            and self._unverified_gap_ranges(symbol, start_ts, end_ts)
         ):
-            return False
+            timestamps = np.asarray(arr["ts"], dtype=np.int64)
+            for gap_start, gap_end in self._unverified_gap_ranges(
+                symbol, start_ts, end_ts
+            ):
+                mask = (timestamps >= int(gap_start)) & (timestamps <= int(gap_end))
+                if not self._candle_range_has_full_coverage(
+                    arr[mask],
+                    int(gap_start),
+                    int(gap_end),
+                    ONE_MIN_MS,
+                ):
+                    return False
         exid = str(self._ex_id or "").lower()
         if "weex" not in exid:
             return self._ema_window_has_expected_tail(arr, end_ts)
@@ -8569,6 +8638,16 @@ class CandlestickManager:
                 end_exclusive - ONE_MIN_MS,
                 now_ms=now,
             )
+            attempted_unknown_gaps: List[Tuple[int, int]] = []
+            for fetch_start, fetch_end in fetch_ranges:
+                attempted_unknown_gaps.extend(
+                    self._due_unverified_gap_ranges(
+                        symbol,
+                        int(fetch_start),
+                        int(fetch_end),
+                        now_ms=now,
+                    )
+                )
             fetched_parts: List[np.ndarray] = []
             for fetch_start, fetch_end in fetch_ranges:
                 fetch_end_exclusive = min(
@@ -8597,6 +8676,10 @@ class CandlestickManager:
                 else np.empty((0,), dtype=CANDLE_DTYPE)
             )
             new_arr = self._slice_ts_range(_ensure_dtype(new_arr), since, end_exclusive - ONE_MIN_MS)
+            self._stamp_unresolved_gap_attempts(
+                symbol,
+                attempted_unknown_gaps,
+            )
             if new_arr.size == 0:
                 # A missing open-ended tail is not synthesized. Record the successful
                 # empty poll to avoid repeated immediate refetches; future real candles
