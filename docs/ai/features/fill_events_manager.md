@@ -29,7 +29,16 @@
    match the authoritative exchange position remains nontradable. Live orchestration
    retries from the position/fill anchor with bounded in-memory backoff. Direction,
    quantity, and price alone do not prove a flat-to-position transition when truncated
-   history has polluted reconstructed `psize`/`pprice`.
+   history has polluted reconstructed `psize`/`pprice`. An explicit exchange position
+   opening timestamp may prove a zero-state boundary only for a singleton opening-fill
+   cohort: after a successful post-snapshot fill refresh, require the exact identified
+   fill timestamp to equal both the opening timestamp and the authoritative latest
+   position-update timestamp, then require its zero-state replay to match the
+   authoritative position. Multi-fill cohorts and later position updates remain pending
+   because final size/VWAP equality cannot prove omitted round trips are absent. Generic
+   and update-only position timestamps do not establish this boundary. Successful use
+   emits a warning and a structured fallback diagnostic only after every confirmation
+   predicate, including the required post-snapshot fill generation, has cleared.
 10. A degraded synthetic PnL row inside the configured live risk lookback is not
     authoritative merely because cache metadata proves time coverage. Refetch bounded
     windows around each such row, preserving the pre-repair incremental checkpoint and
