@@ -3,6 +3,7 @@ from live.diagnostic_safety import (
     bounded_exception_status,
     bounded_exception_type,
     bounded_exchange_error_context,
+    bounded_exchange_error_context_from_mapping,
     exception_text_contains,
     exception_type_name_contains,
 )
@@ -66,6 +67,26 @@ def test_bounded_exchange_error_context_extracts_payload_status():
     assert bounded_exchange_error_context(error) == {
         "error_status": "429",
         "error_reason": "too many requests",
+    }
+
+
+def test_bounded_exchange_error_context_extracts_rejected_result_mapping():
+    result = {
+        "status": "rejected",
+        "info": {
+            "status": 400,
+            "retCode": 10001,
+            "label": "INVALID_PARAM_VALUE",
+            "message": "bad client id abcdefghijklmnopqrstuvwxyz012345",
+            "raw": {"apiKey": "must-not-leak"},
+        },
+    }
+
+    assert bounded_exchange_error_context_from_mapping(result) == {
+        "error_status": "400",
+        "error_code": "10001",
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "bad client id <redacted>",
     }
 
 

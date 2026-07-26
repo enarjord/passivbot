@@ -960,6 +960,83 @@ def test_gateio_market_settings_capture_current_max_leverage():
     assert bot.max_leverage[symbol] == 75
 
 
+def test_gateio_market_settings_invalidate_configured_symbol_when_cap_changes():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": 1.0, "max": 50.0},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {"leverage_max": "50"},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot.max_leverage[symbol] == 50
+    assert symbol not in bot.already_updated_exchange_config_symbols
+
+
+def test_gateio_market_settings_keep_configured_symbol_when_cap_is_unchanged():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": 1.0, "max": 75.0},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {"leverage_max": "75"},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot.already_updated_exchange_config_symbols == {symbol}
+
+
 @pytest.mark.asyncio
 async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     calls = []

@@ -23,8 +23,13 @@ from live.balance_composition import public_balance_composition
 from live.diagnostic_safety import (
     bounded_exception_type as _bounded_exception_type,
     bounded_exchange_error_context as _bounded_exchange_error_context,
+    bounded_exchange_error_context_from_mapping,
 )
 from candlestick_manager import sanitize_remote_fetch_diagnostic
+
+_bounded_exchange_error_context_from_mapping = (
+    bounded_exchange_error_context_from_mapping
+)
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -4448,6 +4453,7 @@ def emit_execution_order_event(
                     ),
                 }
             )
+            data.update(_bounded_exchange_error_context_from_mapping(result))
         elif isinstance(result, BaseException):
             error = result
         if error is not None:

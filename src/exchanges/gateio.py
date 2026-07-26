@@ -78,7 +78,18 @@ class GateIOBot(CCXTBot):
                     f"{symbol}: invalid Gate.io max leverage metadata: "
                     f"{raw_max_leverage!r}"
                 )
-            self.max_leverage[symbol] = int(max_leverage)
+            effective_max_leverage = int(max_leverage)
+            previous_max_leverage = self.max_leverage.get(symbol)
+            self.max_leverage[symbol] = effective_max_leverage
+            if (
+                previous_max_leverage is not None
+                and previous_max_leverage != effective_max_leverage
+            ):
+                configured_symbols = getattr(
+                    self, "already_updated_exchange_config_symbols", None
+                )
+                if isinstance(configured_symbols, set):
+                    configured_symbols.discard(symbol)
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance using the same parser as staged snapshots."""

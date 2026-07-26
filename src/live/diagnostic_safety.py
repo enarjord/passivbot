@@ -298,6 +298,54 @@ def _bounded_payload_scalar(
     return None
 
 
+def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]:
+    """Extract bounded diagnostics from a CCXT result mapping.
+
+    Only the normalized result and its exact ``info`` mapping are inspected.
+    Raw payloads are never retained.
+    """
+    result: dict[str, str] = {}
+    if type(payload) is not dict:
+        return result
+    info = payload.get("info")
+    payloads = (payload, info) if type(info) is dict else (payload,)
+    for candidate in payloads:
+        status = _bounded_payload_scalar(
+            candidate,
+            ("http_status", "status", "status_code", "statusCode"),
+            _EXCEPTION_STATUS_RE,
+        )
+        if status is not None:
+            result["error_status"] = status
+            break
+    for candidate in payloads:
+        code = _bounded_payload_scalar(
+            candidate,
+            ("code", "exact", "error_code", "retCode", "errorCode"),
+            _EXCEPTION_CODE_RE,
+        )
+        if code is not None:
+            result["error_code"] = code
+            break
+    for candidate in payloads:
+        for key in ("label", "error", "name"):
+            label = _bounded_exchange_error_label(candidate.get(key))
+            if label is not None:
+                result["error_label"] = label
+                break
+        if "error_label" in result:
+            break
+    for candidate in payloads:
+        for key in ("message", "msg", "retMsg", "detail", "reason"):
+            reason = _bounded_exchange_error_reason(candidate.get(key))
+            if reason is not None:
+                result["error_reason"] = reason
+                break
+        if "error_reason" in result:
+            break
+    return result
+
+
 def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     """Extract only bounded, sanitized fields from a structured exchange error."""
     result: dict[str, str] = {}
@@ -310,30 +358,6 @@ def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     payload = _exception_payload_mapping(exc)
     if payload is None:
         return result
-    if "error_status" not in result:
-        status = _bounded_payload_scalar(
-            payload,
-            ("http_status", "status", "status_code", "statusCode"),
-            _EXCEPTION_STATUS_RE,
-        )
-        if status is not None:
-            result["error_status"] = status
-    if "error_code" not in result:
-        code = _bounded_payload_scalar(
-            payload,
-            ("code", "exact", "error_code", "retCode", "errorCode"),
-            _EXCEPTION_CODE_RE,
-        )
-        if code is not None:
-            result["error_code"] = code
-    for key in ("label", "error", "name"):
-        label = _bounded_exchange_error_label(payload.get(key))
-        if label is not None:
-            result["error_label"] = label
-            break
-    for key in ("message", "msg", "retMsg", "detail", "reason"):
-        reason = _bounded_exchange_error_reason(payload.get(key))
-        if reason is not None:
-            result["error_reason"] = reason
-            break
+    for key, value in bounded_exchange_error_context_from_mapping(payload).items():
+        result.setdefault(key, value)
     return result

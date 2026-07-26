@@ -5594,6 +5594,74 @@ def test_execution_failure_event_redacts_hostile_exception_metadata():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_rejection_event_sanitizes_structured_result_mapping():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gate_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ()
+            self._live_event_current_cycle_id = "cy_execution_rejection"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    order = {
+        "symbol": "DOGE/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "type": "limit",
+        "pb_order_type": "entry_initial_normal_long",
+        "qty": 1.0,
+        "price": 0.1,
+        "reduce_only": False,
+    }
+    result = {
+        "status": "rejected",
+        "info": {
+            "status": 400,
+            "code": -1013,
+            "label": "INVALID_PARAM_VALUE",
+            "message": "bad client id abcdefghijklmnopqrstuvwxyz012345",
+            "apiKey": "must-not-leak",
+        },
+    }
+
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_REJECTED,
+        order=order,
+        action="create",
+        status="failed",
+        reason_code="terminal_rejection",
+        level="warning",
+        index=0,
+        wave={"id": 25, "event_id": "ow_25"},
+        result=result,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.data["result_status"] == "rejected"
+    assert event.data["error_status"] == "400"
+    assert event.data["error_code"] == "-1013"
+    assert event.data["error_label"] == "INVALID_PARAM_VALUE"
+    assert event.data["error_reason"] == "bad client id <redacted>"
+    serialized = json.dumps(event.to_dict(), sort_keys=True)
+    assert "must-not-leak" not in serialized
+    assert "abcdefghijklmnopqrstuvwxyz012345" not in serialized
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     import passivbot as pb_mod
 
