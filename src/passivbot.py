@@ -8500,7 +8500,10 @@ class Passivbot:
         c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
         position_size_in_fill_units = abs(position_size) * c_mult
         qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
-        price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
+        strict_price_tolerance = max(
+            price_step * 0.5, abs(position_price) * 1e-9, 1e-12
+        )
+        price_tolerance = max(price_step, abs(position_price) * 1e-9, 1e-12)
         if "psize" in anchor and "pprice" in anchor:
             fill_size = abs(float(anchor["psize"]))
             fill_price = float(anchor["pprice"])
@@ -8508,9 +8511,12 @@ class Passivbot:
                 math.isfinite(fill_size)
                 and math.isfinite(fill_price)
                 and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
-                and abs(fill_price - position_price) <= price_tolerance
             ):
-                return "recorded_after_state"
+                price_delta = abs(fill_price - position_price)
+                if price_delta <= strict_price_tolerance:
+                    return "recorded_after_state"
+                if price_delta <= price_tolerance:
+                    return "recorded_after_state_price_tolerance"
 
         if self._position_open_fill_replay_matches_state(
             symbol,
@@ -8697,6 +8703,34 @@ class Passivbot:
                 symbol=symbol,
                 pside=pside,
             ),
+        )
+
+    def _log_bounded_fill_position_price_discrepancy(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+    ) -> None:
+        """Report exchange rounding accepted only after confirmation clears."""
+        exchange_price = float(state[1])
+        reconstructed_price = float(anchor["pprice"])
+        price_step = abs(
+            float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
+        )
+        price_delta = abs(reconstructed_price - exchange_price)
+        delta_ticks = price_delta / price_step if price_step > 0.0 else 0.0
+        logging.warning(
+            "[fills] accepted bounded reconstructed position-price discrepancy | "
+            "symbol=%s pside=%s exchange_price=%.12g reconstructed_price=%.12g "
+            "delta=%.12g ticks=%.6g tolerance=%.12g",
+            self._log_symbol(symbol),
+            pside,
+            exchange_price,
+            reconstructed_price,
+            price_delta,
+            delta_ticks,
+            max(price_step, abs(exchange_price) * 1e-9, 1e-12),
         )
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
@@ -8921,6 +8955,16 @@ class Passivbot:
                     if position_match_kind == "position_open_boundary":
                         self._emit_position_open_fill_recovery_used(
                             symbol, pside, anchor
+                        )
+                    elif (
+                        position_match_kind
+                        == "recorded_after_state_price_tolerance"
+                    ):
+                        self._log_bounded_fill_position_price_discrepancy(
+                            symbol,
+                            pside,
+                            expected_position_state,
+                            anchor,
                         )
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)

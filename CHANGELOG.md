@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live trailing fill confirmation now accepts reconstructed position-price
+  differences of at most one exchange price tick to accommodate exchange
+  rounding or truncation of sub-tick VWAPs. Fill identity and reconstructed
+  position size remain strict, larger discrepancies remain fail-closed, and
+  acceptance beyond the ordinary half-tick comparison emits one warning when
+  confirmation clears.
+
 - Live trailing fill confirmation can now recover from a polluted historical
   `psize`/`pprice` residue when the exchange supplies an explicit position
   opening timestamp. Recovery is restricted to a single identified opening fill

@@ -39,6 +39,11 @@
    and update-only position timestamps do not establish this boundary. Successful use
    emits a warning and a structured fallback diagnostic only after every confirmation
    predicate, including the required post-snapshot fill generation, has cleared.
+   Ordinary recorded after-state price comparison accepts at most one exchange price
+   tick because exchanges may round or truncate a sub-tick reconstructed VWAP. Quantity
+   and fill identity remain strict. Acceptance outside the ordinary half-tick comparison
+   but within one full tick emits one warning after confirmation clears; discrepancies
+   larger than one tick remain pending.
 10. A degraded synthetic PnL row inside the configured live risk lookback is not
     authoritative merely because cache metadata proves time coverage. Refetch bounded
     windows around each such row, preserving the pre-repair incremental checkpoint and
