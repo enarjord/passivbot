@@ -8610,6 +8610,13 @@ class Passivbot:
         latest_id = str(getattr(latest_event, "id", "") or "")
         if not latest_id:
             return False
+        source_ids = [
+            str(source_id)
+            for source_id in (getattr(latest_event, "source_ids", None) or [])
+            if source_id
+        ]
+        if len(source_ids) != 1:
+            return False
         if self._fill_position_change_epoch(latest_event) != str(
             anchor.get("epoch") or ""
         ):
@@ -8677,7 +8684,7 @@ class Passivbot:
         emit_diagnostic_event(
             self,
             DiagnosticEvent.build(
-                "fill.position_open_boundary_recovery_used",
+                EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
                 ("diagnostic", "fills", "recovery", "fallback"),
                 {
                     "recovery": "position_open_single_fill",

@@ -235,6 +235,9 @@ class EventTypes:
     FILLS_REFRESH_SUMMARY = "fills.refresh_summary"
     FILL_INGESTED = "fill.ingested"
     FILLS_INGESTED_SUMMARY = "fills.ingested_summary"
+    FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED = (
+        "fill.position_open_boundary_recovery_used"
+    )
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
     RISK_MODE_CHANGED = "risk.mode_changed"
@@ -578,6 +581,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.FILLS_REFRESH_SUMMARY,
     EventTypes.FILL_INGESTED,
     EventTypes.FILLS_INGESTED_SUMMARY,
+    EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
     EventTypes.RISK_MODE_CHANGED,
@@ -1395,6 +1399,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.FILLS_REFRESH_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.FILL_INGESTED: EventRoute(console=True, text=True),
     EventTypes.FILLS_INGESTED_SUMMARY: EventRoute(console=True, text=True),
+    EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED: EventRoute(
+        console=True, text=True
+    ),
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),

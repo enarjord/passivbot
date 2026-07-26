@@ -1756,6 +1756,7 @@ def test_explicit_position_open_time_rebases_polluted_fill_after_state():
         pprice=59.44296,
         qty=3.0,
         price=60.442,
+        source_ids=["opening-fill"],
         c_mult=0.1,
     )
     bot._pnls_manager = _DummyPnlsManager(
@@ -1780,6 +1781,35 @@ def test_explicit_position_open_time_rebases_polluted_fill_after_state():
         symbol, "long", (3.0, 60.442), anchor
     )
     assert diagnostic_events == []
+
+
+def test_position_open_recovery_rejects_coalesced_multi_source_fill():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {
+        "size": 1.0,
+        "price": 100.0,
+        "openTime": 180_000,
+        "lastUpdateTimestamp": 180_000,
+    }
+    coalesced_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        180_000,
+        "fill-a+fill-b",
+        psize=9.0,
+        pprice=90.0,
+        qty=1.0,
+        price=100.0,
+        source_ids=["fill-a", "fill-b"],
+    )
+    bot._pnls_manager = _DummyPnlsManager([coalesced_fill])
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert not bot._fill_anchor_matches_position_state(
+        symbol, "long", (1.0, 100.0), anchor
+    )
 
 
 def test_generic_or_distant_position_time_cannot_rebase_fill_after_state():
@@ -1911,6 +1941,7 @@ async def test_restart_confirms_trailing_from_explicit_position_open_replay(capl
                 pprice=59.44296,
                 qty=3.0,
                 price=60.442,
+                source_ids=["opening-fill"],
                 c_mult=0.1,
             ),
         ]
