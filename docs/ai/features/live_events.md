@@ -412,6 +412,16 @@ profiles. When an outcome carries an exception object or result, its payload ret
 raw responses, and tracebacks. This diagnostic redaction does not alter event routing, emitter
 isolation, executor retries or re-raises, exchange calls, or trading behavior.
 
+## Fill Confirmation Fallbacks
+
+`fill.position_price_tolerance_used` records the accepted bounded numeric difference
+between a reconstructed fill after-state price and the authoritative exchange position
+price. It includes the effective connector-aware price tick, absolute delta, delta in
+ticks, and applied tolerance; it contains no raw fill or exchange payload. The event is
+published only after identity, size, refresh-generation, and price predicates clear.
+The existing warning remains the console/text projection, so the structured event itself
+does not produce a second console line.
+
 ## HSL Replay Timing
 
 For coin-mode `hsl.replay.completed`, `full_elapsed_s` is total replay time;
