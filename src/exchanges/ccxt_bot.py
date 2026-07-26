@@ -144,6 +144,77 @@ class CCXTBot(Passivbot):
         order["qty"] = order["amount"]
         return order
 
+    def _sparse_ws_order_has_emitted_identity(self, order: dict) -> bool:
+        """Return whether a sparse WS row identifies an order emitted by this process.
+
+        Every supplied exchange/client identity alias must agree with the same
+        emitted record. A Passivbot type marker or an order-shape fingerprint
+        is not ownership evidence because another bot process on the same
+        account may emit the same type and shape.
+        """
+        if not isinstance(order, dict):
+            return False
+        try:
+            now_ts = int(self.get_exchange_time())
+            self._prune_emitted_order_custom_ids(now_ts)
+            exchange_ids = self._sparse_ws_order_identity_aliases(
+                order,
+                ("id", "order_id", "orderId", "orderID", "ordId"),
+            )
+            custom_ids = {
+                self._canonical_passivbot_custom_id(value)
+                for value in self._sparse_ws_order_identity_aliases(
+                    order,
+                    (
+                        "custom_id",
+                        "customId",
+                        "client_order_id",
+                        "clientOrderId",
+                        "client_oid",
+                        "clientOid",
+                        "order_link_id",
+                        "orderLinkId",
+                        "clOrdId",
+                        "cloid",
+                        "text",
+                    ),
+                )
+            }
+            custom_ids.discard("")
+            if not exchange_ids and not custom_ids:
+                return False
+            for record in self._emitted_order_records():
+                record_exchange_id = str(record.get("exchange_id") or "")
+                record_custom_id = str(record.get("canonical_custom_id") or "")
+                exchange_ids_match = not exchange_ids or bool(
+                    record_exchange_id
+                    and exchange_ids == {record_exchange_id}
+                )
+                custom_ids_match = not custom_ids or bool(
+                    record_custom_id
+                    and custom_ids == {record_custom_id}
+                )
+                if exchange_ids_match and custom_ids_match:
+                    return True
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return False
+
+    @staticmethod
+    def _sparse_ws_order_identity_aliases(
+        order: dict, candidates: tuple[str, ...]
+    ) -> set[str]:
+        """Collect every nonempty identity alias from unified and raw payloads."""
+        values: set[str] = set()
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value not in (None, ""):
+                    values.add(str(value))
+        return values
+
     def _get_position_side_for_order(self, order: dict) -> str:
         """Hook: Derive position_side from order data.
 

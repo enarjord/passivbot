@@ -529,22 +529,53 @@ def emitted_order_records(bot) -> list[dict]:
     return records
 
 
+def _emitted_record_matches_open_order(record: dict, order: dict) -> bool:
+    """Return whether overlapping durable identities agree for an open order."""
+    if not isinstance(record, dict) or not isinstance(order, dict):
+        return False
+    record_exchange_id = str(record.get("exchange_id") or "")
+    record_custom_id = str(record.get("canonical_custom_id") or "")
+    order_exchange_id = extract_order_exchange_id(order)
+    order_custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    comparisons = []
+    if record_exchange_id and order_exchange_id:
+        comparisons.append(record_exchange_id == order_exchange_id)
+    if record_custom_id and order_custom_id:
+        comparisons.append(record_custom_id == order_custom_id)
+    return bool(comparisons) and all(comparisons)
+
+
 def prune_emitted_order_custom_ids(bot, now_ts: int) -> None:
-    """Drop emitted order records outside the foreign-writer lookback window."""
+    """Drop expired emitted records while retaining identities of open orders."""
     now_ts = int(now_ts)
     acknowledged_cutoff_ts = now_ts - _pb_const("FOREIGN_PASSIVBOT_LOOKBACK_MS")
     ambiguous_cutoff_ts = now_ts - _pb_const(
         "FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS"
     )
     short_lived_statuses = {"submitted", "create_error_ambiguous"}
+    open_orders_by_symbol = getattr(bot, "open_orders", {}) or {}
+    active_open_orders = []
+    if isinstance(open_orders_by_symbol, dict):
+        active_open_orders = [
+            order
+            for orders in open_orders_by_symbol.values()
+            if isinstance(orders, list)
+            for order in orders
+            if isinstance(order, dict)
+        ]
     kept = []
     for record in emitted_order_records(bot):
+        status = str(record.get("status") or "")
         cutoff_ts = (
             ambiguous_cutoff_ts
-            if record.get("status") in short_lived_statuses
+            if status in short_lived_statuses
             else acknowledged_cutoff_ts
         )
-        if int(record.get("timestamp", 0)) >= cutoff_ts:
+        still_open = status not in short_lived_statuses and any(
+            _emitted_record_matches_open_order(record, order)
+            for order in active_open_orders
+        )
+        if int(record.get("timestamp", 0)) >= cutoff_ts or still_open:
             kept.append(record)
     bot.orders_emitted_to_exchange = kept
 

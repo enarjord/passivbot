@@ -85,6 +85,238 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_websocket_order_update_uses_passivbot_client_pside(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": {},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["position_side"] == "long"
+    assert normalized["qty"] == 0.1
+    assert normalized["_pb_order_update_requires_authoritative_refresh"] is True
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_non_passivbot_websocket_order_update_remains_rejected(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": "user-order",
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_foreign_passivbot_websocket_order_update_remains_rejected(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(
+                _client_id("entry_grid_normal_long") + "-ours"
+            ),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": _client_id("entry_grid_normal_long") + "-foreign",
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_one_way_websocket_order_update_does_not_use_marker_recovery(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = False
+    bot.hedge_mode = False
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": {},
+    }
+
+    with pytest.raises(ValueError):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_ws_recovery_uses_actual_exchange_hedge_mode(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = False
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": {},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["position_side"] == "long"
+    assert normalized["_pb_order_update_requires_authoritative_refresh"] is True
+
+
+@pytest.mark.parametrize(
+    ("bot_cls", "info"),
+    [
+        (BinanceBot, {"ps": "BOTH"}),
+        (KucoinBot, {"positionSide": "BOTH"}),
+    ],
+)
+def test_sparse_ws_recovery_rejects_explicit_native_one_way_metadata(bot_cls, info):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": info,
+    }
+
+    with pytest.raises(ValueError):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_ws_recovery_rejects_conflicting_emitted_identities(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    owned_client_id = _client_id("entry_grid_normal_long") + "-ours"
+    foreign_client_id = _client_id("entry_grid_normal_short") + "-foreign"
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "owned-exchange-id",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(
+                owned_client_id
+            ),
+        }
+    ]
+    order = {
+        "id": "owned-exchange-id",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": foreign_client_id,
+        "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+@pytest.mark.parametrize(
+    ("top_level", "raw_info"),
+    [
+        (
+            {"id": "owned-exchange-id"},
+            {"orderId": "foreign-exchange-id"},
+        ),
+        (
+            {"clientOrderId": _client_id("entry_grid_normal_long") + "-ours"},
+            {"clientOid": _client_id("entry_grid_normal_short") + "-foreign"},
+        ),
+    ],
+)
+def test_sparse_ws_recovery_rejects_conflicting_duplicate_identity_aliases(
+    bot_cls, top_level, raw_info
+):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    owned_client_id = _client_id("entry_grid_normal_long") + "-ours"
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "owned-exchange-id",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(
+                owned_client_id
+            ),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "info": raw_info,
+        **top_level,
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
 @pytest.mark.parametrize(
     ("side", "position_side", "reported_reduce_only", "expected_close"),
     [

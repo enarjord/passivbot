@@ -99,6 +99,34 @@ class BinanceBot(CCXTBot):
             return normalized_side
         raise ValueError("binance order missing authoritative position-side semantics")
 
+    def _normalize_order_update(self, order: dict) -> dict:
+        """Recover owned hedge-mode websocket rows with sparse pside metadata."""
+        try:
+            return super()._normalize_order_update(order)
+        except ValueError:
+            if not bool(getattr(self, "hedge_mode", True)):
+                raise
+            info = order.get("info") or {}
+            if any(
+                value not in (None, "")
+                for value in (
+                    order.get("position_side"),
+                    order.get("positionSide"),
+                    info.get("positionSide"),
+                    info.get("ps"),
+                )
+            ):
+                raise
+            if not self._sparse_ws_order_has_emitted_identity(order):
+                raise
+            position_side = self._durable_order_position_side(order)
+            if position_side not in {"long", "short"}:
+                raise
+            order["position_side"] = position_side
+            order["qty"] = order["amount"]
+            order["_pb_order_update_requires_authoritative_refresh"] = True
+            return order
+
     def _canonical_open_order_reduce_only(self, order: dict) -> bool:
         """Normalize Binance hedge action semantics; reduceOnly is not submitted in hedge mode."""
         info = order.get("info") or {}
