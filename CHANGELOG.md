@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live trailing fill confirmation now accepts reconstructed position-price
+  differences of at most one effective executable price tick to accommodate
+  exchange rounding or truncation of sub-tick VWAPs, including Hyperliquid's
+  significant-digit price ladder and its asymmetric spacing across powers of
+  ten. Fill identity and reconstructed position size remain strict, the explicit
+  position-opening replay retains its ordinary half-tick requirement, larger
+  discrepancies remain fail-closed, and acceptance beyond the ordinary half-tick
+  comparison emits one warning plus a structured diagnostic when confirmation
+  clears.
+
 - Live order-write failures now include bounded, sanitized exchange status, code,
   label, and reason fields when CCXT exposes a structured rejection payload through
   either an exception or a terminal result mapping, including OKX per-order
