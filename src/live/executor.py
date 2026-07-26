@@ -167,69 +167,6 @@ def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
     return symbol, position_side
 
 
-def _complete_terminal_signed_action_attempts(
-    bot, tokens, results, orders, *, action: str
-) -> None:
-    complete = getattr(bot, "_complete_order_churn_signed_action_attempts", None)
-    if not callable(complete):
-        return
-    token_rows = tuple(tokens or ())
-    result_rows = tuple(results or ())
-    order_rows = tuple(orders or ())
-    if len(token_rows) != len(result_rows) or len(result_rows) != len(order_rows):
-        return
-    terminal_tokens = []
-    for token, result, order in zip(token_rows, result_rows, order_rows):
-        if isinstance(result, BaseException):
-            continue
-        try:
-            acknowledged = (
-                bot.did_create_order(result)
-                if action == "create"
-                else bot.did_cancel_order(result, order)
-            )
-        except Exception:
-            acknowledged = False
-        proven_terminal_rejection = False
-        if not acknowledged and isinstance(result, dict):
-            if action == "create":
-                proven_terminal_rejection = (
-                    _create_rejection_reason(result) == "terminal_rejection"
-                )
-            else:
-                info = result.get("info")
-                status = str(result.get("status") or "").lower()
-                info_status = (
-                    str(
-                        info.get("status")
-                        or info.get("ordStatus")
-                        or info.get("state")
-                        or ""
-                    ).lower()
-                    if isinstance(info, dict)
-                    else ""
-                )
-                proven_terminal_rejection = status in {
-                    "canceled",
-                    "cancelled",
-                    "closed",
-                    "expired",
-                    "failed",
-                    "rejected",
-                } or info_status in {
-                    "canceled",
-                    "cancelled",
-                    "closed",
-                    "expired",
-                    "failed",
-                    "rejected",
-                }
-        if acknowledged or proven_terminal_rejection:
-            terminal_tokens.append(token)
-    if terminal_tokens:
-        complete(tuple(terminal_tokens))
-
-
 def _filter_hsl_replay_pending_creates(
     bot, passivbot_cls, orders: list[dict], order_wave
 ) -> list[dict]:
@@ -283,13 +220,45 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
-async def _apply_order_churn_final_admission(
-    bot,
-    orders: list[dict],
-    *,
-    config_action_costs_by_order_id: dict[int, int] | None = None,
-    market_price_max_age_ms: int = 10_000,
-) -> list[dict]:
+def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
+    """Apply stable risk-first capacity after all local creation admission."""
+    if not orders:
+        return []
+    live_value = getattr(bot, "live_value", None)
+    max_batch = (
+        max(0, int(live_value("max_n_creations_per_batch")))
+        if callable(live_value)
+        else len(orders)
+    )
+    prioritized_orders = [
+        order
+        for _index, order in sorted(
+            enumerate(orders),
+            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
+        )
+    ]
+    selected = prioritized_orders[:max_batch]
+    deferred = prioritized_orders[max_batch:]
+    for order in deferred:
+        order["_churn_gate_reason"] = "batch_capacity"
+    if deferred:
+        _record_fresh_entry_orders(
+            bot, "record_blocked_orders", deferred, "batch_capacity"
+        )
+        _pb_attr("Passivbot")._emit_execution_create_filter_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+            status="deferred",
+            reason_code=ReasonCodes.BATCH_CAPACITY,
+            order_count=len(deferred),
+            symbols=_symbols_from_orders(deferred),
+            wave=getattr(bot, "_order_wave_in_progress", None),
+            data={"max_n_creations_per_batch": max_batch},
+        )
+    return selected
+
+
+def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
     if not orders:
         return []
     if not connector_supports_order_churn_gate(bot):
@@ -298,31 +267,20 @@ async def _apply_order_churn_final_admission(
     if state is None:
         return orders
     activation_count = int(bot.live_value("order_replacement_churn_gate_activation_count"))
-    max_batch = int(bot.live_value("max_n_creations_per_batch"))
-    if max_batch <= 0:
-        return []
-    prioritized = sorted(
-        enumerate(orders),
-        key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
-    )
-    prioritized_orders = [order for _index, order in prioritized]
+    admission_orders = list(orders)
     if activation_count <= 0:
-        selected = prioritized_orders[:max_batch]
-        for order in selected:
+        for order in admission_orders:
             order["_churn_gate_reason"] = "disabled"
-        for order in prioritized_orders[max_batch:]:
-            order["_churn_gate_reason"] = "batch_capacity"
         emitter = getattr(bot, "_emit_order_churn_admission_event", None)
         if callable(emitter):
             try:
                 emitter(
-                    orders=prioritized_orders,
+                    orders=admission_orders,
                     rolling_count=0,
                     activation_count=activation_count,
                     market_distance_threshold=float(
                         bot.live_value("order_replacement_churn_gate_market_dist_pct")
                     ),
-                    action_headroom=None,
                     wave=getattr(bot, "_order_wave_in_progress", None),
                 )
             except Exception as exc:
@@ -330,7 +288,7 @@ async def _apply_order_churn_final_admission(
                     "[event] order churn admission emitter failed | error_type=%s",
                     bounded_exception_type(exc),
                 )
-        return selected
+        return admission_orders
     window_seconds = (
         float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
     )
@@ -341,32 +299,8 @@ async def _apply_order_churn_final_admission(
     threshold = float(
         bot.live_value("order_replacement_churn_gate_market_dist_pct")
     )
-    churn_limit_orders = [
-        order
-        for order in prioritized_orders
-        if bool(order.get("_churn_evidence"))
-        and not bot._is_market_execution_order(order)
-        and not _order_is_risk_critical(order)
-    ]
-    market_prices = {}
-    if churn_limit_orders:
-        try:
-            market_prices = await bot._fetch_fresh_order_churn_market_prices(
-                {
-                    str(order.get("symbol"))
-                    for order in churn_limit_orders
-                    if order.get("symbol")
-                },
-                max_age_ms=market_price_max_age_ms,
-            )
-        except Exception as exc:
-            logging.warning(
-                "[order] fresh market data unavailable for churn-gate final admission | error_type=%s",
-                bounded_exception_type(exc),
-            )
-            market_prices = {}
     admission: dict[int, tuple[str, bool]] = {}
-    for order in prioritized_orders:
+    for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
         always_allowed = (
             bot._is_market_execution_order(order)
@@ -376,116 +310,32 @@ async def _apply_order_churn_final_admission(
         if always_allowed:
             admission[id(order)] = ("ready", True)
             continue
-        market_price = market_prices.get(str(order.get("symbol")))
-        if market_price is None:
-            admission[id(order)] = ("market_price_unavailable", False)
-            continue
         try:
-            market_price = float(market_price)
-            if not math.isfinite(market_price) or market_price <= 0.0:
-                raise ValueError("invalid market price")
-            signed_distance = float(
-                _pb_attr("order_market_diff")(
-                    str(order["side"]), float(order["price"]), market_price
-                )
-            )
+            signed_distance = float(order["_churn_gate_market_distance"])
             if not math.isfinite(signed_distance):
                 raise ValueError("invalid market distance")
         except (KeyError, TypeError, ValueError):
-            admission[id(order)] = ("market_price_invalid", False)
+            admission[id(order)] = ("market_distance_unavailable", False)
             continue
-        order["_churn_gate_market_distance"] = signed_distance
         admission[id(order)] = ("ready", signed_distance <= threshold)
-    config_action_costs_by_order_id = config_action_costs_by_order_id or {}
     selected: list[dict] = []
     deferred: list[dict] = []
-    capacity_deferred: list[dict] = []
-    action_headroom: float | int | None = None
-    action_headroom_checked = False
-    projected_signed_actions = 0
-    projected_config_symbols: set[str] = set()
-    for order_index, order in enumerate(prioritized_orders):
-        if len(selected) >= max_batch:
-            capacity_deferred.append(order)
-            order["_churn_gate_reason"] = "batch_capacity"
-            continue
+    for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
         admission_status, exempt = admission[id(order)]
         if admission_status != "ready":
             deferred.append(order)
             order["_churn_gate_reason"] = admission_status
             continue
-        symbol = str(order.get("symbol"))
-        config_action_cost = (
-            int(config_action_costs_by_order_id.get(id(order), 0) or 0)
-            if symbol not in projected_config_symbols
-            else 0
-        )
-        projected_attempt_cost = 1 + max(0, config_action_cost)
         if (
             activation_count > 0
             and churn_evidenced
             and not exempt
-            and projected_usage + projected_attempt_cost > activation_count
+            and projected_usage + 1 > activation_count
         ):
             deferred.append(order)
             order["_churn_gate_reason"] = "allowance_exhausted"
             continue
-        if churn_evidenced and not exempt:
-            if not action_headroom_checked:
-                action_headroom_checked = True
-                try:
-                    action_headroom = await bot._order_churn_far_create_headroom()
-                    if action_headroom is not None:
-                        normalized_headroom = float(action_headroom)
-                        if math.isnan(normalized_headroom) or normalized_headroom < 0.0:
-                            action_headroom = None
-                        else:
-                            action_headroom = normalized_headroom
-                except Exception as exc:
-                    action_headroom = None
-                    logging.warning(
-                        "[order] connector churn headroom unavailable | error_type=%s",
-                        bounded_exception_type(exc),
-                    )
-            if action_headroom is None:
-                deferred.append(order)
-                order["_churn_gate_reason"] = "action_headroom_unavailable"
-                continue
-            remaining_slots = max(0, max_batch - len(selected))
-            future_always_allowed = [
-                future
-                for future in prioritized_orders[order_index + 1 :]
-                if admission[id(future)] == ("ready", True)
-            ][:remaining_slots]
-            budgeted_orders = [order, *future_always_allowed]
-            budgeted_config_symbols = {
-                str(candidate.get("symbol"))
-                for candidate in budgeted_orders
-                if str(candidate.get("symbol")) not in projected_config_symbols
-                and int(
-                    config_action_costs_by_order_id.get(id(candidate), 0)
-                    or 0
-                )
-                > 0
-            }
-            reserved_headroom = len(budgeted_orders) + sum(
-                max(
-                    int(config_action_costs_by_order_id.get(id(candidate), 0) or 0)
-                    for candidate in budgeted_orders
-                    if str(candidate.get("symbol")) == symbol
-                )
-                for symbol in budgeted_config_symbols
-            )
-            if not math.isinf(float(action_headroom)) and (
-                float(action_headroom)
-                - projected_signed_actions
-                - reserved_headroom
-                < 0.0
-            ):
-                deferred.append(order)
-                order["_churn_gate_reason"] = "action_headroom_exhausted"
-                continue
         if not churn_evidenced:
             reason = "no_churn_evidence"
         elif bot._is_market_execution_order(order):
@@ -498,12 +348,7 @@ async def _apply_order_churn_final_admission(
             reason = "allowance"
         order["_churn_gate_reason"] = reason
         selected.append(order)
-        projected_usage += projected_attempt_cost
-        projected_signed_actions += 1
-        if symbol not in projected_config_symbols:
-            if config_action_cost > 0:
-                projected_signed_actions += config_action_cost
-                projected_config_symbols.add(symbol)
+        projected_usage += 1
     if deferred:
         rolling_count = state.action_attempt_count(
             now_monotonic=now_monotonic, window_seconds=window_seconds
@@ -536,10 +381,7 @@ async def _apply_order_churn_final_admission(
         _record_fresh_entry_orders(bot, "record_blocked_orders", deferred, "order_churn_gate")
         reason_codes = {
             "allowance_exhausted": ReasonCodes.ORDER_CHURN_ALLOWANCE_EXHAUSTED,
-            "market_price_unavailable": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
-            "market_price_invalid": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
-            "action_headroom_unavailable": ReasonCodes.ORDER_CHURN_ACTION_HEADROOM_UNAVAILABLE,
-            "action_headroom_exhausted": ReasonCodes.ORDER_CHURN_ACTION_HEADROOM_EXHAUSTED,
+            "market_distance_unavailable": ReasonCodes.ORDER_CHURN_MARKET_DATA_UNAVAILABLE,
         }
         for reason in sorted({str(order.get("_churn_gate_reason")) for order in deferred}):
             grouped = [
@@ -563,31 +405,16 @@ async def _apply_order_churn_final_admission(
                     "market_distance_threshold_pct": threshold * 100.0,
                 },
             )
-    if capacity_deferred:
-        _record_fresh_entry_orders(
-            bot, "record_blocked_orders", capacity_deferred, "batch_capacity"
-        )
-        _pb_attr("Passivbot")._emit_execution_create_filter_event(
-            bot,
-            event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
-            status="deferred",
-            reason_code=ReasonCodes.BATCH_CAPACITY,
-            order_count=len(capacity_deferred),
-            symbols=_symbols_from_orders(capacity_deferred),
-            wave=getattr(bot, "_order_wave_in_progress", None),
-            data={"max_n_creations_per_batch": max_batch},
-        )
     emitter = getattr(bot, "_emit_order_churn_admission_event", None)
     if callable(emitter):
         try:
             emitter(
-                orders=prioritized_orders,
+                orders=admission_orders,
                 rolling_count=state.action_attempt_count(
                     now_monotonic=now_monotonic, window_seconds=window_seconds
                 ),
                 activation_count=activation_count,
                 market_distance_threshold=threshold,
-                action_headroom=action_headroom if action_headroom_checked else None,
                 wave=getattr(bot, "_order_wave_in_progress", None),
             )
         except Exception as exc:
@@ -1009,64 +836,13 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
-        before_preconfig_market_filter = len(to_create_mod)
-        to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
-            bot, to_create_mod
-        )
-        if order_wave is not None:
-            order_wave["skipped_create"] += max(
-                0, before_preconfig_market_filter - len(to_create_mod)
-            )
-        config_required_orders = [
-            order
-            for order in to_create_mod
-            if _order_requires_exchange_config_before_create(bot, order)
-        ]
-        config_eligibility_now_ms = _utc_ms()
-        config_action_costs_by_order_id = {}
-        if config_required_orders and configure_creations:
-            config_cost_estimator = getattr(
-                bot, "_order_churn_precreate_signed_action_costs", None
-            )
-            if callable(config_cost_estimator):
-                config_symbols = {
-                    str(order["symbol"]) for order in config_required_orders
-                }
-                if _callable_accepts_keyword(config_cost_estimator, "now_ms"):
-                    config_action_costs_by_symbol = (
-                        config_cost_estimator(
-                            config_symbols,
-                            now_ms=config_eligibility_now_ms,
-                        )
-                        or {}
-                    )
-                else:
-                    config_action_costs_by_symbol = (
-                        config_cost_estimator(config_symbols) or {}
-                    )
-                config_action_costs_by_order_id = {
-                    id(order): int(
-                        config_action_costs_by_symbol.get(str(order["symbol"]), 0)
-                        or 0
-                    )
-                    for order in config_required_orders
-                }
-        before_churn_admission = list(to_create_mod)
-        to_create_mod = await _apply_order_churn_final_admission(
-            bot,
-            to_create_mod,
-            config_action_costs_by_order_id=config_action_costs_by_order_id,
-        )
-        if order_wave is not None:
-            order_wave["deferred_create"] += max(
-                0, len(before_churn_admission) - len(to_create_mod)
-            )
         pending_config_error_budget = False
         config_required_orders = [
             order
             for order in to_create_mod
             if _order_requires_exchange_config_before_create(bot, order)
         ]
+        config_eligibility_now_ms = _utc_ms()
         if config_required_orders and configure_creations:
             creation_symbols = sorted(
                 {order["symbol"] for order in config_required_orders}
@@ -1165,14 +941,18 @@ async def execute_order_plan(
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
             )
-        before_post_config_churn_admission = list(to_create_mod)
-        to_create_mod = await _apply_order_churn_final_admission(
-            bot, to_create_mod, market_price_max_age_ms=0
-        )
+        before_churn_admission = list(to_create_mod)
+        to_create_mod = _apply_order_churn_admission(bot, to_create_mod)
         if order_wave is not None:
             order_wave["deferred_create"] += max(
                 0,
-                len(before_post_config_churn_admission) - len(to_create_mod),
+                len(before_churn_admission) - len(to_create_mod),
+            )
+        before_capacity = len(to_create_mod)
+        to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
+        if order_wave is not None:
+            order_wave["deferred_create"] += max(
+                0, before_capacity - len(to_create_mod)
             )
         if to_create_mod:
             res = None
@@ -1268,12 +1048,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     _pb_attr("Passivbot")._record_order_churn_allowance_attempts(
         bot, len(orders), action_kind="create"
     )
-    record_signed_actions = getattr(
-        bot, "_record_order_churn_signed_action_attempts", None
-    )
-    signed_action_tokens = None
-    if callable(record_signed_actions):
-        signed_action_tokens = record_signed_actions(len(orders))
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
@@ -1360,9 +1134,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
-    _complete_terminal_signed_action_attempts(
-        bot, signed_action_tokens, res, orders, action="create"
-    )
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
@@ -1528,12 +1299,6 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         "wave": wave,
     }
     bot._execution_connector_call_context = connector_call_context
-    record_signed_actions = getattr(
-        bot, "_record_order_churn_signed_action_attempts", None
-    )
-    signed_action_tokens = None
-    if callable(record_signed_actions):
-        signed_action_tokens = record_signed_actions(len(orders))
     try:
         res = await bot.execute_cancellations(orders)
     except RestartBotException:
@@ -1583,9 +1348,6 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 len(res),
             )
         return []
-    _complete_terminal_signed_action_attempts(
-        bot, signed_action_tokens, res, orders, action="cancel"
-    )
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])

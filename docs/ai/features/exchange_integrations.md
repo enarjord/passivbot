@@ -29,6 +29,20 @@ reconciliation/tolerance path until that venue receives a connector-specific con
 separate global retirement of the old initial-entry-only distance gate does not enable the new
 churn policy there.
 
+## Private Order Websocket Normalization
+
+Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
+private websocket notifications for Passivbot-owned orders may omit native
+long/short metadata; only that hint path may recover `position_side`, only in
+effective hedge mode, and only when a valid Passivbot client-order marker has
+no conflicting native position-side field and every supplied exchange/client
+identity matches the same record in this process's emitted-order registry.
+Acknowledged emitted identities remain registered for as long as the
+corresponding order is present in the bot's authoritative open-order state,
+even beyond the normal foreign-writer lookback. Recovered rows always force an
+authoritative account refresh. Sparse foreign, explicitly one-way,
+identity-conflicting, or unmarked notifications remain rejected.
+
 ## Broker Agreement Attribution
 
 Problem:
@@ -133,11 +147,13 @@ Handling:
 2. Overlap page boundaries by 1 candle to validate inter-page gaps.
 3. For native timeframes above 1m, synthesize a flat zero-volume no-trade bucket only when the gap
    is bounded by two real candles in the same successful payload and its timestamp is absent from
-   the raw payload, and only up to `backtest.gap_tolerance_ohlcvs_minutes`. A raw bucket rejected by
-   candle validation remains unavailable and evicts any older cached sparse placeholder at that
-   timestamp. An unidentifiable rejected row invalidates cached placeholders between the accepted
-   page bounds. Do not synthesize leading, trailing, failed-fetch, oversized, or unproven
-   between-page gaps.
+   the raw payload, and only up to the fixed 120-minute live connector policy. The simulation-only
+   `backtest.gap_tolerance_ohlcvs_minutes` setting does not alter live readiness. A raw bucket
+   rejected by candle validation remains unavailable and evicts any older cached sparse placeholder
+   at that timestamp. An unidentifiable rejected row invalidates cached placeholders between the
+   accepted page bounds, or across the remaining requested range when fewer than two accepted
+   timestamps exist. Eviction recomputes the cached timeframe's derived index bounds. Do not
+   synthesize leading, trailing, failed-fetch, oversized, or unproven between-page gaps.
 
 ## Bitget Futures
 
@@ -217,7 +233,9 @@ For compatibility, `api-keys.json` may specify either `"exchange": "gateio"` or
 migration. Only CCXT REST and WebSocket client construction translates `gateio` to
 `gate`; do not add parallel `gate` identities to internal registries or state paths.
 Normalize Gate's numeric REST account `user` value to a string before assigning it
-as CCXT Pro's private futures subscription UID.
+as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
+non-string/non-integer identifiers before conversion; never cache a placeholder
+such as `"None"` as durable subscription state.
 
 ### Per-symbol leverage initializes the position risk limit
 
@@ -251,8 +269,8 @@ Handling:
 6. Reserve and debit the one-time signed leverage write in the account-wide order
    churn allowance before admitting the symbol's first entry creation. The
    reservation decision and configuration execution must use the same
-   retry-eligibility timestamp: a backoff expiring later in that creation wave
-   is deferred until the next wave rather than issuing an unreserved write.
+    retry-eligibility timestamp: a backoff expiring later in that creation wave
+    is deferred until the next wave rather than issuing an unreserved write.
 
 ### Contract order text must start with `t-`
 
@@ -276,6 +294,16 @@ Handling:
 1. Do not pass CCXT `until`; page forward by `since + limit`.
 2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
 3. Require external OHLCV source data or another candle source for older Gate.io backtests.
+
+## Hyperliquid
+
+### Delayed sparse-tail candles
+
+Hyperliquid may initially omit a recent no-trade minute and later publish an
+authoritative flat candle with zero volume for that same timestamp. Passivbot
+must not synthesize or permanently classify the initially absent row. Recent
+tail gaps use time-spaced retries, remain unavailable meanwhile, and are removed
+from `known_gaps` as soon as the authoritative row is persisted.
 
 ## WEEX Futures
 

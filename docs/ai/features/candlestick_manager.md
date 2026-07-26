@@ -66,8 +66,20 @@
    refresh lateness. Cached carry-forward requires full requested-window coverage and must not
    populate the normal active-strategy EMA cache.
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
-   and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
-   bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,
+   and internal gaps do not. A known-gap retry cooldown suppresses only the recorded missing
+   prefix; newly finalized candles after that gap and unrelated internal gaps remain fetchable,
+   while every fetch path excludes the deferred prefix. Unknown `auto_detected` and
+   `fetch_failed` rows remain absent until authoritative candles replace them, including when a
+   retry is due or the current request disallows remote fetching, and must not become synthetic
+   zero-volume continuity candles. Day-coalesced historical fetches split around deferred ranges
+   rather than contacting the venue for them. Forced 1m and native
+   higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
+   failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
+   already covers the requested end is complete, not terminal-empty. Partial authoritative
+   recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
+   compact timestamp intervals even for large historical gaps. Refresh budgets count
+   symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
+   candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
    and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
    only surfaces handled by this background
@@ -94,7 +106,33 @@
 11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
-12. Open-tail projection requests only the metrics its caller may consume.
+12. Persisting an authoritative 1m row trims that timestamp from any stale
+    `known_gaps` range, splitting partially covered ranges while preserving the
+    retained retry metadata. Hyperliquid may publish authoritative flat,
+    zero-volume candles after an initially sparse recent response. Recent
+    bounded tail-sized Hyperliquid gaps therefore retry on a time-spaced schedule
+    rather than exhausting the ordinary retry count in consecutive live cycles.
+    Large missing-basis ranges retain the ordinary persistent-gap schedule. The
+    known-gap retry decision runs before refresh, ordinary present, tail-completion,
+    and targeted gap fetches so a deferred tail cannot consume REST calls through
+    an earlier path. Forced overlap refreshes also split around deferred internal
+    gaps. A failed retry of a persistent recent gap retains the persistent retry
+    cadence, and all retry metadata uses the manager's active live/replay clock.
+    Missing rows remain unavailable until an authoritative row arrives, and a
+    dependent 1m EMA window remains unavailable while it intersects an unresolved
+    unknown gap rather than computing over a sparse sequence. Complete rows in the
+    supplied EMA window remain authoritative even if stale known-gap metadata still
+    names their timestamps. Recording or extending a 1m gap invalidates cached 1m
+    EMA and open-tail projection values. An overlap refresh which retries a due gap
+    stamps every unresolved remainder before later repair stages run, preventing a
+    second attempt in the same request. Historical pagination
+    flushes deferred partial-page index writes before propagating terminal-empty
+    failure.
+    Repeated terminal empty-page failures for a forager candle surface
+    use a bounded in-memory retry delay without converting missing data into
+    candles or hiding the first error. A partial authoritative response similarly
+    defers and excludes its unresolved remainder until the next eligible retry.
+13. Open-tail projection requests only the metrics its caller may consume.
     Forager projection requests close EMAs only; quote-volume and log-range
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
@@ -104,17 +142,21 @@
     a full output series. Full EMA series remain available to callers that need
     every intermediate value.
 13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
-    candles in the same successful payload, absent from that raw payload, and no wider than
-    `backtest.gap_tolerance_ohlcvs_minutes` are materialized as flat zero-volume candles before
-    persistence. A bucket present in the raw payload but rejected by candle validation is a
+    candles in the same successful payload, absent from that raw payload, and no wider than the
+    fixed 120-minute live connector policy are materialized as flat zero-volume candles before
+    persistence. The simulation-only `backtest.gap_tolerance_ohlcvs_minutes` setting remains owned
+    by historical data preparation and does not alter live readiness. A bucket present in the raw
+    payload but rejected by candle validation is a
     continuity barrier: it and later omitted buckets remain unavailable until another accepted real
     candle establishes the close. A rejected row whose timestamp cannot be identified disables
     synthesis for that payload page and evicts cached placeholders between the page's accepted
-    bounds. Expansion is bounded to the requested range, and a later real exchange candle always
-    overwrites a persisted synthetic bucket. If a later payload contains a rejected real row at a
-    cached sparse-placeholder timestamp, the placeholder is evicted so the bucket becomes
-    unavailable. Leading, trailing, failed-fetch, oversized, and unproven between-page gaps remain
-    unavailable. The established 1m path retains its verified-gap tracking and standardization.
+    bounds. If fewer than two accepted timestamps exist, the remaining requested range is treated as
+    unavailable. Expansion is bounded to the requested range, and a later real exchange candle
+    always overwrites a persisted synthetic bucket. If a later payload contains a rejected real row
+    at a cached sparse-placeholder timestamp, the placeholder is evicted so the bucket becomes
+    unavailable and the timeframe index bounds are recomputed from the remaining shards. Leading,
+    trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. The
+    established 1m path retains its verified-gap tracking and standardization.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
@@ -125,6 +167,8 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 2. Pagination edge behavior causing boundary gaps.
 3. Persistent lock or stale data artifacts.
 4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
+   Recently missing bounded Hyperliquid tail rows use a shorter, time-spaced live
+   retry policy because the venue may publish an authoritative no-trade row later.
 5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
    late real candles arrive.
 6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or

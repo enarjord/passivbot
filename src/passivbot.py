@@ -37,6 +37,8 @@ from cli_utils import (
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
+    OhlcvTerminalEmptyPage,
     synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
@@ -393,6 +395,7 @@ from pure_funcs import (
 )
 
 ONE_MIN_MS = 60_000
+_FORAGER_TERMINAL_EMPTY_RETRY_MS = 15 * ONE_MIN_MS
 _COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
@@ -1311,10 +1314,11 @@ class Passivbot:
             "exchange": self.cca,
             "exchange_name": self.exchange,
             "debug": self.logging_level,
-            "gap_tolerance_ohlcvs_minutes": float(
-                get_optional_config_value(
-                    config, "backtest.gap_tolerance_ohlcvs_minutes", 120.0
-                )
+            # Live KuCoin native sparse-candle continuity uses a fixed connector
+            # policy. Simulation-only backtest gap tolerance must not alter live
+            # EMA readiness.
+            "gap_tolerance_ohlcvs_minutes": (
+                DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES
             ),
         }
         if self._live_event_pipeline_records_candle_remote_fetch():
@@ -9432,16 +9436,6 @@ class Passivbot:
                     if pause_s > 0.0:
                         await asyncio.sleep(pause_s)
         return configured_symbols
-
-    def _order_churn_precreate_signed_action_costs(
-        self,
-        symbols,
-        *,
-        now_ms: int | None = None,
-    ) -> dict[str, int]:
-        """Return connector signed-action costs required before creating on symbols."""
-        del now_ms
-        return {}
 
     def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
         """Return whether this creation requires successful per-symbol setup."""
@@ -19089,27 +19083,6 @@ class Passivbot:
         """Return authoritative venue-native close-only effect for one open order."""
         return reconciler.extract_order_reduce_only(order)
 
-    async def _order_churn_far_create_headroom(self) -> float | int | None:
-        """Optional connector overlay for far churn-evidenced ordinary creates."""
-        return math.inf
-
-    async def _fetch_fresh_order_churn_market_prices(
-        self, symbols: set[str], *, max_age_ms: int = 10_000
-    ) -> dict[str, float]:
-        """Fetch final-admission prices without a completed-candle fallback."""
-        if not symbols:
-            return {}
-        return await self._get_live_last_prices(
-            symbols,
-            max_age_ms=max(0, int(max_age_ms)),
-            context="order_churn_final_admission",
-            allow_completed_candle_fallback=False,
-        )
-
-    def _record_order_churn_signed_action_attempts(self, count: int) -> None:
-        """Connector hook for action-based exchange limits; generic venues need no overlay."""
-        return None
-
     def _reconcile_symbol_orders(
         self,
         symbol: str,
@@ -19668,6 +19641,11 @@ class Passivbot:
         surface_checks = getattr(self, "_forager_surface_check_ms", None)
         if not isinstance(surface_checks, dict):
             surface_checks = {}
+        surface_failure_retry_after = getattr(
+            self, "_forager_surface_failure_retry_after_ms", None
+        )
+        if not isinstance(surface_failure_retry_after, dict):
+            surface_failure_retry_after = {}
 
         required_h1_symbols: set[str] = set()
         for pside, symbols in refreshable_by_side.items():
@@ -19710,6 +19688,11 @@ class Passivbot:
             for key, value in surface_checks.items()
             if key in eligible_surface_keys
         }
+        surface_failure_retry_after = {
+            key: int(value)
+            for key, value in surface_failure_retry_after.items()
+            if key in eligible_surface_keys and int(value) > now
+        }
         surface_specs.sort(
             key=lambda item: (
                 int(surface_checks.get((item[1], item[0]), 0) or 0),
@@ -19731,6 +19714,12 @@ class Passivbot:
             ):
                 break
             surface_key = (sym, timeframe)
+            retry_after_ms = int(
+                surface_failure_retry_after.get(surface_key, 0) or 0
+            )
+            if retry_after_ms > now:
+                surface_checks[surface_key] = int(utc_ms())
+                continue
             surface_health = Passivbot._candidate_candle_surface_health(
                 self,
                 sym,
@@ -19773,6 +19762,9 @@ class Passivbot:
         self._forager_surface_attempt_ms = surface_attempts
         self._forager_surface_success_ms = surface_successes
         self._forager_surface_check_ms = surface_checks
+        self._forager_surface_failure_retry_after_ms = (
+            surface_failure_retry_after
+        )
         if not stale:
             return
 
@@ -19896,6 +19888,10 @@ class Passivbot:
                     )
                 else:
                     refreshed = await candle_task
+                surface_failure_retry_after.pop((sym, timeframe), None)
+                self._forager_surface_failure_retry_after_ms = (
+                    surface_failure_retry_after
+                )
                 if timeframe == "1h":
                     try:
                         refreshed_rows = int(refreshed.size)
@@ -19971,10 +19967,18 @@ class Passivbot:
                     bounded_exception_type(exc),
                 )
             except Exception as exc:
+                error_type = bounded_exception_type(exc)
+                if isinstance(exc, OhlcvTerminalEmptyPage):
+                    surface_failure_retry_after[(sym, timeframe)] = int(
+                        utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
+                    )
+                    self._forager_surface_failure_retry_after_ms = (
+                        surface_failure_retry_after
+                    )
                 logging.error(
                     "error refreshing forager candles for %s | error_type=%s",
                     Passivbot._log_symbol(sym),
-                    bounded_exception_type(exc),
+                    error_type,
                 )
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)

@@ -8,6 +8,9 @@ from config.transform_log import ConfigTransformTracker
 LEGACY_DISTANCE_KEY = "initial_entry_exec_max_market_dist_pct"
 CHURN_DISTANCE_KEY = "order_replacement_churn_gate_market_dist_pct"
 CHURN_ACTIVATION_KEY = "order_replacement_churn_gate_activation_count"
+RETIRED_TRACKING_TOLERANCE_KEY = (
+    "order_replacement_churn_gate_tracking_tolerance_pct"
+)
 
 
 def _log_config(verbose: bool, level: int, message: str, *args) -> None:
@@ -43,16 +46,34 @@ def migrate_initial_entry_distance_gate(
     verbose: bool = True,
     tracker: Optional[ConfigTransformTracker] = None,
 ) -> None:
-    """Migrate the retired initial-entry-only distance gate.
+    """Migrate retired churn-gate fields.
 
     Positive legacy values map directly to the new near-market exemption distance.
     Null and non-positive values disabled the old gate, so they map to the new
     gate's explicit activation-count disable sentinel. Missing new tuning fields
-    are subsequently hydrated from the canonical template.
+    are subsequently hydrated from the canonical template. The old wider
+    historical matching tolerance is removed because churn evidence now uses the
+    universal order-match tolerance.
     """
 
     live = result.get("live")
-    if not isinstance(live, dict) or LEGACY_DISTANCE_KEY not in live:
+    if not isinstance(live, dict):
+        return
+    if RETIRED_TRACKING_TOLERANCE_KEY in live:
+        retired_value = live.pop(RETIRED_TRACKING_TOLERANCE_KEY)
+        if tracker is not None:
+            tracker.remove(
+                ["live", RETIRED_TRACKING_TOLERANCE_KEY], retired_value
+            )
+        _log_config(
+            verbose,
+            logging.INFO,
+            "removed retired live.%s=%s; churn history now uses "
+            "live.order_match_tolerance_pct",
+            RETIRED_TRACKING_TOLERANCE_KEY,
+            retired_value,
+        )
+    if LEGACY_DISTANCE_KEY not in live:
         return
 
     legacy_raw = live[LEGACY_DISTANCE_KEY]
