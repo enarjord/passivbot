@@ -409,6 +409,7 @@ class _BundleReproBot:
             None if cached_log_range_ema is None else dict(cached_log_range_ema)
         )
         self.cached_metric_calls = []
+        self.projection_metric_requests = []
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
@@ -512,6 +513,12 @@ class _BundleReproBot:
                 max_tail_gap_ms,
             ):
                 self.outer.projected_open_tail_called = True
+                self.outer.projection_metric_requests.append(
+                    {
+                        key: list(value)
+                        for key, value in spans_by_metric.items()
+                    }
+                )
                 if self.outer.projection_error is not None:
                     raise self.outer.projection_error
                 qv = (
@@ -730,6 +737,39 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": {symbol},
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_clears_stale_rank_feature_failures():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    bot._forager_rank_feature_unavailable_by_side = {
+        "long": {symbol},
+        "short": {symbol},
+    }
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": set(),
+        "short": set(),
+    }
 
 
 def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
@@ -1229,6 +1269,68 @@ async def test_active_forager_open_tail_uses_cached_ranking_not_projected_values
     assert bot._orchestrator_ema_unavailable_symbols == set()
     assert bot._orchestrator_ema_projection_symbols == {symbol}
     assert {call["timeframe"] for call in bot.cached_metric_calls} == {"1m"}
+    assert set(bot.projection_metric_requests[0]) == {"close"}
+
+
+@pytest.mark.asyncio
+async def test_active_forager_open_tail_projects_strategy_required_log_range():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        entry_m1_weight=1.0,
+        project_open_tail=True,
+        projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
+        projected_qv_ema={10.0: 999999.0},
+        projected_log_range_ema={10.0: 0.0099},
+        qv_mode="nan",
+        lr1m_mode="nan",
+        cached_qv_ema={10.0: 250000.0},
+        cached_log_range_ema={10.0: 0.0015},
+    )
+
+    def colliding_strategy_params(_pside, _symbol=None):
+        params = _rust_strategy_params(volatility_ema_span_1m=10.0)
+        params["entry"]["threshold_volatility_1m_weight"] = 1.0
+        return params
+
+    bot._strategy_params_to_rust_dict = colliding_strategy_params
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+
+    (
+        _m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert bot.projection_metric_requests == [
+        {
+            "close": [span0, span2, span1],
+            "log_range": [span0],
+        }
+    ]
+    assert m1_log_range_emas[symbol][span0] == pytest.approx(0.0099)
+    assert bot._orchestrator_forager_m1_log_range_emas[symbol][
+        span0
+    ] == pytest.approx(0.0015)
+    assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
+    assert volumes_long[symbol] == pytest.approx(250000.0)
+    assert _log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
 @pytest.mark.asyncio
@@ -1281,6 +1383,7 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
     assert not any(
         "missing required forager EMA HYPE" in record.message
         and "action=mark_nontradable_until_fresh" in record.message
@@ -1301,6 +1404,63 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
         and group["symbols"]["sample"] == [symbol]
         for group in event_data["unavailable_reasons"]
     )
+
+
+@pytest.mark.asyncio
+async def test_cache_only_optional_metric_gaps_are_candidate_unavailable():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    now_ms = int(time.time() * 1000)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        projected_close_ema={
+            10.0: 100.0,
+            (10.0 * 20.0) ** 0.5: 100.0,
+            20.0: 100.0,
+        },
+        qv_mode="nan",
+        lr1m_mode="nan",
+    )
+    bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
+    bot.active_symbols = []
+    bot.cm.get_last_refresh_ms = lambda _symbol: now_ms
+    bot.cm.get_last_final_ts = lambda _symbol, timeframe=None: now_ms - 60_000
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 0.0, "volatility": 0.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert m1_close_emas[symbol] == {}
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_volume+missing_log_range": {symbol}
+    }
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
 
 
 @pytest.mark.asyncio
@@ -1571,9 +1731,20 @@ async def test_open_tail_projection_missing_close_span_fails_loudly():
         project_open_tail=True,
         projected_close_ema={span0: 201.0},
     )
+    bot._orchestrator_candidate_ema_unavailable_symbols = {"STALE/USDT:USDT"}
+    bot._orchestrator_ema_unavailable_symbols = {"STALE/USDT:USDT"}
+    bot._orchestrator_ema_unavailable_reasons = {
+        "candidate_required_ema_unavailable": {"STALE/USDT:USDT"}
+    }
+    bot._orchestrator_ema_bundle_completed = True
 
     with pytest.raises(RuntimeError, match="projected open-tail close EMA incomplete"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {}
+    assert bot._orchestrator_ema_bundle_completed is False
 
 
 @pytest.mark.asyncio

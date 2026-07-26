@@ -394,6 +394,11 @@ mod core {
         pub next_candle: Option<NextCandle>,
         pub effective_min_cost: f64,
         pub emas: EmaBundle,
+        /// Optional completed-candle-only metrics for forager ranking. Live
+        /// supplies this when strategy EMAs may include an open-tail
+        /// projection; backtest and older callers fall back to `emas.m1`.
+        #[serde(default)]
+        pub forager_m1: Option<EmaTimeframeBundle>,
         pub long: SymbolSideInput,
         pub short: SymbolSideInput,
     }
@@ -2059,6 +2064,7 @@ mod core {
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
+            let forager_m1 = s.forager_m1.as_ref().unwrap_or(&s.emas.m1);
             let side = match pside {
                 PositionSide::Long => &s.long,
                 PositionSide::Short => &s.short,
@@ -2131,10 +2137,13 @@ mod core {
                 require_forager_input(
                     s.symbol_idx,
                     "forager_volume_score",
-                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span_1m)
-                        .ok_or(OrchestratorError::MissingEma {
-                            symbol_idx: s.symbol_idx,
-                        })?,
+                    ema_lookup(
+                        &forager_m1.volume,
+                        side.bot_params.filter_volume_ema_span_1m,
+                    )
+                    .ok_or(OrchestratorError::MissingEma {
+                        symbol_idx: s.symbol_idx,
+                    })?,
                 )?
             } else {
                 0.0
@@ -2144,7 +2153,7 @@ mod core {
                     s.symbol_idx,
                     "forager_volatility_score",
                     ema_lookup(
-                        &s.emas.m1.log_range,
+                        &forager_m1.log_range,
                         side.bot_params.filter_volatility_ema_span_1m,
                     )
                     .ok_or(OrchestratorError::MissingEma {
@@ -4144,6 +4153,7 @@ mod core {
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,
+                forager_m1: None,
                 long: SymbolSideInput {
                     mode: None,
                     position: Position::default(),
@@ -5602,6 +5612,71 @@ mod core {
             assert!((reducer.qty + 1.0).abs() < 1e-9);
             assert!((ordinary.qty + 0.5).abs() < 1e-9);
             assert!((closes.iter().map(|order| order.qty.abs()).sum::<f64>() - 1.5).abs() < 1e-9);
+        }
+
+        #[test]
+        fn forager_uses_explicit_completed_candle_metrics() {
+            let mut sym0 = make_basic_symbol(0);
+            let mut sym1 = make_basic_symbol(1);
+            // Strategy maps may contain projected open-tail values.
+            sym0.emas.m1.log_range = vec![(10.0, 100.0)];
+            sym1.emas.m1.log_range = vec![(10.0, 1.0)];
+            // Ranking must instead use completed-candle-only values.
+            sym0.forager_m1 = Some(EmaTimeframeBundle {
+                log_range: vec![(10.0, 1.0)],
+                volume: vec![(10.0, 1.0)],
+                ..Default::default()
+            });
+            sym1.forager_m1 = Some(EmaTimeframeBundle {
+                log_range: vec![(10.0, 10.0)],
+                volume: vec![(10.0, 1.0)],
+                ..Default::default()
+            });
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1000.0;
+            global_bp.long.n_positions = 1;
+            global_bp.long.forager_volume_drop_pct = 0.0;
+            global_bp.long.forager_score_weights.volume = 0.0;
+            global_bp.long.forager_score_weights.ema_readiness = 0.0;
+            global_bp.long.forager_score_weights.volatility = 1.0;
+            global_bp.short.total_wallet_exposure_limit = 0.0;
+            global_bp.short.n_positions = 0;
+
+            let input = OrchestratorInput {
+                balance: 1_000_000.0,
+                balance_raw: 1_000_000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let selection = out
+                .diagnostics
+                .forager_selections
+                .iter()
+                .find(|selection| selection.pside == PositionSide::Long)
+                .unwrap();
+            assert_eq!(selection.selected_symbol_indices, vec![1]);
         }
 
         #[test]

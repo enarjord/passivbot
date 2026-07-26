@@ -4849,6 +4849,14 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
     )
     cm._cache[symbol] = seed.copy()
     cm._ema_cache[symbol] = {("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)}
+    get_candles_calls = {"count": 0}
+    original_get_candles = cm.get_candles
+
+    async def counted_get_candles(*args, **kwargs):
+        get_candles_calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "get_candles", counted_get_candles)
 
     projected = await cm.get_projected_open_tail_ema_metrics(
         symbol,
@@ -4857,6 +4865,14 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         last_cached_ts=last_cached,
         max_tail_gap_ms=10 * ONE_MIN_MS,
     )
+    cached_projection = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0], "qv": [4.0], "log_range": [4.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    cached_projection["close"][4.0] = -1.0
 
     projected_rows = np.array(
         [
@@ -4880,6 +4896,8 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         ("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)
     }
     assert math.isfinite(projected["qv"][4.0])
+    assert get_candles_calls["count"] == 1
+    assert projected["close"][4.0] == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio
@@ -4916,6 +4934,7 @@ async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
         dtype=CANDLE_DTYPE,
     )
     cm._persist_batch(symbol, real_late, timeframe="1m", merge_cache=True, last_refresh_ms=t61)
+    assert symbol not in cm._projected_open_tail_ema_cache
     monkeypatch.setattr("time.time", lambda: (t61 + ONE_MIN_MS) / 1000.0)
 
     ema = await cm.get_latest_ema_close(symbol, 4.0, allow_remote_fetch=False)
