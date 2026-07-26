@@ -1116,6 +1116,52 @@ async def test_latest_ema_helpers_reject_unverified_hyperliquid_gap(
 
 
 @pytest.mark.asyncio
+async def test_fake_live_ema_helpers_accept_authoritative_sparse_timeline(
+    tmp_path, monkeypatch
+):
+    fixed_now_ms = 1725590400000
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="fake",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSE/USDT:USDT"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    missing_ts = start_ts + ONE_MIN_MS
+    sparse = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (end_ts, 12.0, 13.0, 11.0, 12.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._now_ms = lambda: fixed_now_ms
+    cm._add_known_gap(
+        symbol,
+        missing_ts,
+        missing_ts,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return sparse
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    assert math.isfinite(await cm.get_latest_ema_close(symbol, span))
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [span]},
+        latest_expected_ts=end_ts,
+        last_cached_ts=end_ts,
+        max_tail_gap_ms=5 * ONE_MIN_MS,
+    )
+    assert math.isfinite(projected["close"][span])
+
+
+@pytest.mark.asyncio
 async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
     fixed_now_ms = 1725811200000  # Sunday-style off-hours timestamp.
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)

@@ -7670,7 +7670,13 @@ class CandlestickManager:
                 f"open-tail projection unavailable for {symbol}: no local candles "
                 f"start_ts={start_ts} latest_expected_ts={latest_expected}"
             )
-        if self._unverified_gap_ranges(symbol, start_ts, latest_expected):
+        # The deterministic fake-live harness intentionally permits sparse
+        # scenario timelines.  Those rows are authoritative test inputs rather
+        # than incomplete exchange history.
+        if (
+            str(self.exchange_name or "").lower() != "fake"
+            and self._unverified_gap_ranges(symbol, start_ts, latest_expected)
+        ):
             raise RuntimeError(
                 f"open-tail projection unavailable for {symbol}: "
                 "unverified internal candle gap"
@@ -7844,6 +7850,7 @@ class CandlestickManager:
         if (
             period_ms == ONE_MIN_MS
             and symbol is not None
+            and str(self.exchange_name or "").lower() != "fake"
             and self._unverified_gap_ranges(symbol, start_ts, end_ts)
         ):
             return False
