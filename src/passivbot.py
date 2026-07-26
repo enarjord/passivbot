@@ -1312,8 +1312,8 @@ class Passivbot:
             "exchange_name": self.exchange,
             "debug": self.logging_level,
             "gap_tolerance_ohlcvs_minutes": float(
-                require_config_value(
-                    config, "backtest.gap_tolerance_ohlcvs_minutes"
+                get_optional_config_value(
+                    config, "backtest.gap_tolerance_ohlcvs_minutes", 120.0
                 )
             ),
         }
