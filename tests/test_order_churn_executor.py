@@ -7,7 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from live import executor as executor_module
-from live.executor import _apply_order_churn_admission
+from live.executor import (
+    _apply_creation_batch_capacity,
+    _apply_order_churn_admission,
+)
 from live.order_churn_gate import OrderChurnGateState
 
 
@@ -76,10 +79,10 @@ def test_allowance_blocks_only_far_churn_evidenced_ordinary_orders():
     )
 
     assert [order["name"] for order in admitted] == [
-        "critical",
         "near",
         "market",
         "stable",
+        "critical",
     ]
     assert far["_churn_gate_reason"] == "allowance_exhausted"
 
@@ -120,19 +123,28 @@ def test_missing_market_distance_defers_only_churn_evidenced_candidate():
     assert churn["_churn_gate_reason"] == "market_distance_unavailable"
 
 
-def test_disabled_gate_preserves_priority_and_batch_cap():
+def test_create_capacity_preserves_risk_priority():
     bot = _Bot()
-    bot.values["order_replacement_churn_gate_activation_count"] = 0
     bot.values["max_n_creations_per_batch"] = 2
     ordinary = _order("ordinary")
     critical = _order("critical", priority="risk_critical")
     another = _order("another")
 
-    admitted = _apply_order_churn_admission(
+    admitted = _apply_creation_batch_capacity(
         bot, [ordinary, another, critical]
     )
 
     assert [order["name"] for order in admitted] == ["critical", "ordinary"]
+    assert another["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_disabled_gate_preserves_preselected_orders():
+    bot = _Bot()
+    bot.values["order_replacement_churn_gate_activation_count"] = 0
+    orders = [_order("ordinary"), _order("critical", priority="risk_critical")]
+
+    assert _apply_order_churn_admission(bot, orders) == orders
+    assert all(order["_churn_gate_reason"] == "disabled" for order in orders)
 
 
 def test_diagnostic_emitter_failure_cannot_change_admission(caplog):

@@ -74,9 +74,13 @@ Uncertain evidence fails open: reconciliation and creation proceed normally.
 
 ## Admission model
 
-One admission pass runs after exchange-configuration writes and the final fresh
-market-snapshot guard, immediately before the connector create call. This keeps
-both the generic maximum-distance guard and the near-market churn exemption
+Stable risk-first create-batch capacity is applied before exchange-configuration
+writes, so capacity-deferred ordinary symbols cannot delay configuration of an
+admitted risk-critical order.
+
+One churn-admission pass runs after exchange-configuration writes and the final
+fresh market-snapshot guard, immediately before the connector create call. This
+keeps both the generic maximum-distance guard and the near-market churn exemption
 anchored to a snapshot which has not aged during configuration network calls.
 
 The rolling create-attempt count uses the configured churn window and activation
@@ -87,9 +91,7 @@ orders farther from market than
 The market distance is calculated by that final generic pre-create guard. The
 churn gate does not perform its own market fetch.
 
-The gate still applies the normal create batch cap and stable risk-first
-priority. Connector calls remain responsible for their own exchange rate
-limiting.
+Connector calls remain responsible for their own exchange rate limiting.
 
 ## Deliberately removed machinery
 

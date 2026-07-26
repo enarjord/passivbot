@@ -365,3 +365,32 @@ async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
     assert bot.configured == [[desired["symbol"]]]
     assert bot.created == []
     assert desired["_churn_gate_reason"] == "allowance_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_risk_first_capacity_applies_before_exchange_config_writes(
+    execution_shell,
+):
+    bot = _PlanBot()
+    bot.configured = []
+
+    def live_value(key):
+        return {
+            "max_n_creations_per_batch": 1,
+        }[key]
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot.update_exchange_configs = update_configs
+    ordinary = _order("ordinary")
+    ordinary["symbol"] = "ETH/USDT:USDT"
+    critical = _order("critical", panic=True)
+
+    await executor.execute_order_plan(bot, [], [ordinary, critical])
+
+    assert bot.configured == [[critical["symbol"]]]
+    assert bot.created == [critical]
+    assert ordinary["_churn_gate_reason"] == "batch_capacity"
