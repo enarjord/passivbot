@@ -125,7 +125,17 @@ class GateIOBot(CCXTBot):
             # Gate's REST payload currently returns ``user`` as an integer,
             # while CCXT Pro's private futures subscription treats the UID as
             # a string and calls len() on it while signing the request.
-            self.uid = str(primary["user"])
+            raw_uid = primary["user"]
+            if isinstance(raw_uid, bool) or not isinstance(raw_uid, (str, int)):
+                raise ValueError(
+                    f"{self.exchange}: fetch_balance response has invalid info[0].user"
+                )
+            uid = str(raw_uid).strip()
+            if not uid:
+                raise ValueError(
+                    f"{self.exchange}: fetch_balance response has empty info[0].user"
+                )
+            self.uid = uid
             self.cca.uid = self.uid
             if self.ccp is not None:
                 self.ccp.uid = self.uid

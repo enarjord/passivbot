@@ -1274,6 +1274,35 @@ def test_gateio_get_balance_uses_total_for_classic_margin():
     assert balance == 543.21
 
 
+@pytest.mark.parametrize("raw_uid", [None, "", "   ", True, float("nan")])
+def test_gateio_get_balance_rejects_invalid_uid_before_caching(raw_uid):
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = None
+    bot.cca = SimpleNamespace()
+    bot.ccp = SimpleNamespace()
+    bot.log_once = lambda msg: None
+
+    with pytest.raises(ValueError, match=r"info\[0\]\.user"):
+        bot._get_balance(
+            {
+                "USDT": {"total": 543.21},
+                "info": [
+                    {
+                        "user": raw_uid,
+                        "margin_mode_name": "classic",
+                        "cross_available": "724.95615",
+                    }
+                ],
+            }
+        )
+
+    assert bot.uid is None
+    assert not hasattr(bot.cca, "uid")
+    assert not hasattr(bot.ccp, "uid")
+
+
 def test_okx_order_side_uses_info_pos_side():
     bot = OKXBot.__new__(OKXBot)
     assert bot._get_position_side_for_order({"info": {"posSide": "SHORT"}}) == "short"

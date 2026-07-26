@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Binance and KuCoin private order streams now recover sparse Passivbot-owned
+  hedge-mode updates only when the encoded client-order position side has an
+  exact identity in this process's emitted-order registry, native position-side
+  metadata is absent, and all supplied order identities agree with the same
+  emitted record. Acknowledged identities remain registered while their orders
+  are open, including orders resting longer than the normal foreign-writer
+  lookback. Recovered updates force an authoritative account refresh without
+  weakening strict REST open-order reconciliation. Genuine transport failures
+  retain the existing bounded reconnect backoff.
+
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA
   inputs are unavailable from active-symbol trading degradation. Ranking-feature
@@ -86,8 +96,9 @@ All notable user-facing changes will be documented in this file.
   selects the dedicated Gate.io connector. Standalone market loading now also
   translates `gateio` to CCXT's renamed `gate` client without changing canonical
   cache, broker, event, or persisted-state paths. Gate's numeric REST account UID
-  is normalized to the string required by CCXT Pro, preventing private order
-  WebSocket reconnect loops after otherwise successful startup.
+  is normalized to the string required by CCXT Pro, while missing or invalid UIDs
+  remain unavailable instead of becoming a cached `"None"` placeholder, preventing
+  private order WebSocket reconnect loops after otherwise successful startup.
 
 - Scope cancel-first create deferral to the symbol and position side of stale-order cancellations
   in hedge mode, or the whole symbol in one-way mode, while retaining conservative account-wide

@@ -29,6 +29,20 @@ reconciliation/tolerance path until that venue receives a connector-specific con
 separate global retirement of the old initial-entry-only distance gate does not enable the new
 churn policy there.
 
+## Private Order Websocket Normalization
+
+Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
+private websocket notifications for Passivbot-owned orders may omit native
+long/short metadata; only that hint path may recover `position_side`, only in
+effective hedge mode, and only when a valid Passivbot client-order marker has
+no conflicting native position-side field and every supplied exchange/client
+identity matches the same record in this process's emitted-order registry.
+Acknowledged emitted identities remain registered for as long as the
+corresponding order is present in the bot's authoritative open-order state,
+even beyond the normal foreign-writer lookback. Recovered rows always force an
+authoritative account refresh. Sparse foreign, explicitly one-way,
+identity-conflicting, or unmarked notifications remain rejected.
+
 ## Broker Agreement Attribution
 
 Problem:
@@ -203,7 +217,9 @@ For compatibility, `api-keys.json` may specify either `"exchange": "gateio"` or
 migration. Only CCXT REST and WebSocket client construction translates `gateio` to
 `gate`; do not add parallel `gate` identities to internal registries or state paths.
 Normalize Gate's numeric REST account `user` value to a string before assigning it
-as CCXT Pro's private futures subscription UID.
+as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
+non-string/non-integer identifiers before conversion; never cache a placeholder
+such as `"None"` as durable subscription state.
 
 ### Per-symbol leverage initializes the position risk limit
 
@@ -237,8 +253,8 @@ Handling:
 6. Reserve and debit the one-time signed leverage write in the account-wide order
    churn allowance before admitting the symbol's first entry creation. The
    reservation decision and configuration execution must use the same
-   retry-eligibility timestamp: a backoff expiring later in that creation wave
-   is deferred until the next wave rather than issuing an unreserved write.
+    retry-eligibility timestamp: a backoff expiring later in that creation wave
+    is deferred until the next wave rather than issuing an unreserved write.
 
 ### Contract order text must start with `t-`
 
