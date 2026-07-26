@@ -77,8 +77,9 @@ Uncertain evidence fails open: reconciliation and creation proceed normally.
 ## Admission model
 
 Stable risk-first create-batch capacity is applied before exchange-configuration
-writes, so capacity-deferred ordinary symbols cannot delay configuration of an
-admitted risk-critical order.
+writes. Candidates which the current local snapshot already proves will be
+churn-deferred are placed after locally admissible candidates, so they cannot
+consume capacity or delay configuration of an admissible order.
 
 One churn-admission pass runs after exchange-configuration writes and the final
 fresh market-snapshot guard, immediately before the connector create call. This

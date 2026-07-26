@@ -183,6 +183,95 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
+def _prioritize_locally_admissible_creations(bot, orders: list[dict]) -> list[dict]:
+    """Place locally admissible creates before known churn deferrals."""
+    prioritized = [
+        order
+        for _index, order in sorted(
+            enumerate(orders),
+            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
+        )
+    ]
+    if not prioritized or not connector_supports_order_churn_gate(bot):
+        return prioritized
+    state = getattr(bot, "_order_churn_gate_state", None)
+    live_value = getattr(bot, "live_value", None)
+    if state is None or not callable(live_value):
+        return prioritized
+    activation_count = int(
+        live_value("order_replacement_churn_gate_activation_count")
+    )
+    if activation_count <= 0:
+        return prioritized
+    window_seconds = (
+        float(live_value("order_replacement_churn_gate_window_minutes")) * 60.0
+    )
+    projected_usage = state.action_attempt_count(
+        now_monotonic=time.monotonic(), window_seconds=window_seconds
+    )
+    threshold = float(
+        live_value("order_replacement_churn_gate_market_dist_pct")
+    )
+    planning_snapshot = getattr(bot, "_current_planning_snapshot", None)
+    planning_prices: dict[str, float] = {}
+    if planning_snapshot is not None:
+        now_ms = _utc_ms()
+        max_age_ms = int(
+            getattr(planning_snapshot, "market_snapshot_max_age_ms", 0) or 0
+        )
+        for row in getattr(planning_snapshot, "market_snapshots", ()) or ():
+            try:
+                age_ms = now_ms - int(row.fetched_ms)
+                last = float(row.last)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+            if (
+                max_age_ms > 0
+                and 0 <= age_ms <= max_age_ms
+                and math.isfinite(last)
+                and last > 0.0
+            ):
+                planning_prices[str(row.symbol)] = last
+
+    admitted: list[dict] = []
+    uncertain: list[dict] = []
+    deferred: list[dict] = []
+    order_market_diff = _pb_attr("order_market_diff")
+    for order in prioritized:
+        churn_evidenced = bool(order.get("_churn_evidence"))
+        if (
+            bot._is_market_execution_order(order)
+            or _order_is_risk_critical(order)
+            or not churn_evidenced
+        ):
+            admitted.append(order)
+            projected_usage += 1
+            continue
+        try:
+            if "_churn_gate_market_distance" in order:
+                distance = float(order["_churn_gate_market_distance"])
+            else:
+                market_price = planning_prices[str(order["symbol"])]
+                distance = float(
+                    order_market_diff(
+                        str(order["side"]),
+                        float(order["price"]),
+                        market_price,
+                    )
+                )
+            if not math.isfinite(distance):
+                raise ValueError("invalid market distance")
+        except (KeyError, TypeError, ValueError, OverflowError):
+            uncertain.append(order)
+            continue
+        if distance <= threshold or projected_usage + 1 <= activation_count:
+            admitted.append(order)
+            projected_usage += 1
+        else:
+            deferred.append(order)
+    return admitted + uncertain + deferred
+
+
 def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
     """Apply stable risk-first create capacity before exchange configuration."""
     if not orders:
@@ -193,11 +282,7 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
         if callable(live_value)
         else len(orders)
     )
-    prioritized = sorted(
-        enumerate(orders),
-        key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
-    )
-    prioritized_orders = [order for _index, order in prioritized]
+    prioritized_orders = _prioritize_locally_admissible_creations(bot, orders)
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:

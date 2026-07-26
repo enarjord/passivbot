@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -136,6 +137,59 @@ def test_create_capacity_preserves_risk_priority():
 
     assert [order["name"] for order in admitted] == ["critical", "ordinary"]
     assert another["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_capacity_does_not_starve_later_locally_admissible_order():
+    bot = _Bot()
+    bot.values["max_n_creations_per_batch"] = 1
+    bot.values["order_replacement_churn_gate_activation_count"] = 1
+    _fill_allowance(bot)
+    far_churn = _order("far_churn", distance=0.01)
+    stable = _order("stable", distance=None, churn=False)
+
+    admitted = _apply_creation_batch_capacity(bot, [far_churn, stable])
+
+    assert admitted == [stable]
+    assert far_churn["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_capacity_uses_current_planning_snapshot_for_local_admission(monkeypatch):
+    bot = _Bot()
+    bot.values["max_n_creations_per_batch"] = 1
+    bot.values["order_replacement_churn_gate_activation_count"] = 1
+    _fill_allowance(bot)
+    monkeypatch.setattr(executor_module, "_utc_ms", lambda: 1_000)
+    bot._current_planning_snapshot = SimpleNamespace(
+        market_snapshot_max_age_ms=10_000,
+        market_snapshots=(
+            SimpleNamespace(
+                symbol="BTC/USDT:USDT",
+                last=100.0,
+                fetched_ms=1_000,
+            ),
+        ),
+    )
+    far_churn = _order("far_churn", distance=None)
+    stable = _order("stable", distance=None, churn=False)
+
+    admitted = _apply_creation_batch_capacity(bot, [far_churn, stable])
+
+    assert admitted == [stable]
+    assert far_churn["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_capacity_preserves_near_market_churn_order():
+    bot = _Bot()
+    bot.values["max_n_creations_per_batch"] = 1
+    bot.values["order_replacement_churn_gate_activation_count"] = 1
+    _fill_allowance(bot)
+    near_churn = _order("near_churn", distance=0.002)
+    stable = _order("stable", distance=None, churn=False)
+
+    admitted = _apply_creation_batch_capacity(bot, [near_churn, stable])
+
+    assert admitted == [near_churn]
+    assert stable["_churn_gate_reason"] == "batch_capacity"
 
 
 def test_disabled_gate_preserves_preselected_orders():

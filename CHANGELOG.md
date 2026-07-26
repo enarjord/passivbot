@@ -27,8 +27,9 @@ All notable user-facing changes will be documented in this file.
   measures stability from the current drift run, bounds the universal
   order-match tolerance to 0% through 1% (default 0.02%), rejects malformed Rust
   ideal orders before reconciliation, reuses the existing fresh market
-  snapshot, applies risk-first batch capacity before exchange
-  configuration, and performs one final churn-admission pass afterward. Removed
+  snapshot, applies risk-first batch capacity to locally admissible candidates
+  before exchange configuration, and performs one final churn-admission pass
+  afterward. Removed
   account/config/list epochs, the wider tracking
   tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
   and signed-action bookkeeping. Churn evidence remains economy-only: unmatched

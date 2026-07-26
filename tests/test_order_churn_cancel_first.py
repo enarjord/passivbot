@@ -394,3 +394,42 @@ async def test_risk_first_capacity_applies_before_exchange_config_writes(
     assert bot.configured == [[critical["symbol"]]]
     assert bot.created == [critical]
     assert ordinary["_churn_gate_reason"] == "batch_capacity"
+
+
+@pytest.mark.asyncio
+async def test_capacity_configures_later_admissible_order_before_known_churn_deferral(
+    execution_shell,
+):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_action_attempts(
+        1, now_monotonic=executor.time.monotonic()
+    )
+    bot.configured = []
+
+    def live_value(key):
+        return {
+            "max_n_creations_per_batch": 1,
+            "order_replacement_churn_gate_activation_count": 1,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+        }[key]
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot.update_exchange_configs = update_configs
+    far_churn = _order("far_churn")
+    far_churn["symbol"] = "ETH/USDT:USDT"
+    far_churn["_churn_evidence"] = True
+    far_churn["_churn_gate_market_distance"] = 0.01
+    stable = _order("stable")
+    stable["_churn_evidence"] = False
+
+    await executor.execute_order_plan(bot, [], [far_churn, stable])
+
+    assert bot.configured == [[stable["symbol"]]]
+    assert bot.created == [stable]
+    assert far_churn["_churn_gate_reason"] == "batch_capacity"
