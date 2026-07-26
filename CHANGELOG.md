@@ -15,6 +15,20 @@ All notable user-facing changes will be documented in this file.
   with a zero risk limit. A failed refresh blocks entries and advances the existing
   restart budget, while reduce-only closes remain eligible.
 
+- Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
+  mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous
+  strategy exposure. Valid hedge-account updates no longer enter the one-way normalization path
+  and reconnect their watchers merely because native `reduceOnly` metadata is absent.
+
+- Live trailing fill confirmation can now recover from a polluted historical
+  `psize`/`pprice` residue when the exchange supplies an explicit position
+  opening timestamp. Recovery is restricted to a single identified opening fill
+  exactly matching both the opening and latest position-update timestamps, still
+  requires its zero-state after-state to match the authoritative position, and
+  emits an operator-visible fallback diagnostic only when confirmation actually
+  clears. Multi-fill cohorts, later updates, proximity-only matches, and generic
+  or update-only timestamps remain insufficient.
+
 - KuCoin REST and private WebSocket clients now use IPv4 transport so API keys
   restricted to a host's stable public IPv4 address are not rejected when the
   host also has IPv6 connectivity.

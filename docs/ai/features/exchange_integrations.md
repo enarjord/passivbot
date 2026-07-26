@@ -45,6 +45,15 @@ Handling in Passivbot:
 4. For each broker-agreement exchange, verify the actual signed CCXT/raw request includes the required broker field/header/tag.
 5. Add regression tests at the request-construction boundary when changing exchange sessions, signing, or order payload code.
 
+## Exchange Hedge Mode Versus Strategy Hedge Mode
+
+`live.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
+exchange account into one-way mode. Binance and Bitget connectors keep the exchange account in
+hedge mode. Their private order updates must therefore normalize `position_side` and close-only
+semantics from the exchange's actual mode and explicit `positionSide`/`posSide` fields even when
+the strategy setting is false. Only connectors whose `hedge_mode` capability is actually false may
+use the one-way side plus `reduceOnly` attribution path.
+
 ## Bybit
 
 ### Broker referer header
@@ -129,7 +138,9 @@ Handling:
 
 1. Treat current same-mode success as success (`code=00000`, `data.posMode=hedge_mode`).
 2. Let unknown `set_position_mode` failures raise unless a verified Bitget no-op code is added with a targeted test.
-3. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
+3. Normalize against the actual exchange account mode, not `live.hedge_mode`, which only controls
+   simultaneous strategy exposure.
+4. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 
 ### UTA / Elite hedge-mode order direction
 

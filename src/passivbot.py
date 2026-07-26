@@ -8477,11 +8477,29 @@ class Passivbot:
         anchor: dict | None,
     ) -> bool:
         """Whether a fill's recorded after-state matches an exchange position."""
+        return (
+            self._fill_anchor_position_state_match_kind(
+                symbol,
+                pside,
+                state,
+                anchor,
+            )
+            is not None
+        )
+
+    def _fill_anchor_position_state_match_kind(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict | None,
+    ) -> str | None:
+        """Return the evidence kind matching a fill anchor to exchange state."""
         if anchor is None:
-            return False
+            return None
         position_size, position_price = state
         if not all(math.isfinite(value) for value in (position_size, position_price)):
-            return False
+            return None
         qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
         price_step = abs(
             float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
@@ -8499,13 +8517,194 @@ class Passivbot:
                 and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
                 and abs(fill_price - position_price) <= price_tolerance
             ):
-                return True
+                return "recorded_after_state"
 
-        # Price and quantity alone cannot prove this fill opened the entire
-        # position: unseen reductions can produce the same live size/average.
-        # Keep the cohort pending until refreshed history reconstructs a
-        # matching post-fill state.
-        return False
+        if self._position_open_fill_replay_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+            price_tolerance=price_tolerance,
+        ):
+            return "position_open_boundary"
+        return None
+
+    def _position_open_fill_replay_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+        price_tolerance: float,
+    ) -> bool:
+        """Replay fills from an exchange-proven position opening boundary.
+
+        A cache may retain an old synthetic position residue when an exchange
+        no longer exposes the intervening close. Explicit position opening
+        timestamps (for example OKX ``cTime``) provide a safe zero-state
+        boundary after a successful post-snapshot fill refresh only when the
+        identified opening fill is also adjacent to the authoritative latest
+        position-update time. Generic timestamps and multi-fill cohorts remain
+        insufficient.
+        """
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        if (
+            open_ts is None
+            or update_ts is None
+            or anchor_ts <= 0
+            or open_ts != anchor_ts
+            or update_ts != anchor_ts
+        ):
+            return False
+        manager = getattr(self, "_pnls_manager", None)
+        if manager is None:
+            return False
+        try:
+            events = [
+                event
+                for event in manager.get_events()
+                if str(getattr(event, "symbol", "")) == symbol
+                and str(getattr(event, "position_side", "")).lower() == pside
+                and int(getattr(event, "timestamp", 0) or 0) >= open_ts - 5_000
+                and int(getattr(event, "timestamp", 0) or 0)
+                <= int(anchor.get("timestamp") or 0)
+            ]
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if not events:
+            return False
+        events.sort(key=lambda event: int(event.timestamp))
+
+        # Start at the first additive fill tied closely to the exchange's
+        # opening timestamp. A distant first event means the available history
+        # does not prove the zero-state boundary.
+        opening_index = None
+        for index, event in enumerate(events):
+            try:
+                qty = float(event.qty)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return False
+            is_add = (pside == "long" and qty > 0.0) or (
+                pside == "short" and qty < 0.0
+            )
+            if is_add:
+                if abs(int(event.timestamp) - open_ts) > 5_000:
+                    return False
+                opening_index = index
+                break
+        if opening_index is None:
+            return False
+        events = events[opening_index:]
+
+        # This fallback intentionally accepts only a singleton open cohort. A
+        # multi-fill replay can reconcile to the same final size/VWAP despite
+        # an omitted reduction/re-entry pair, while a position update time
+        # later than the opening fill proves that the opening fill is not the
+        # latest position mutation. Richer cohorts therefore remain pending.
+        if len(events) != 1:
+            return False
+
+        # The replay must end at the exact exchange fill identity selected as
+        # the current anchor. Timestamp-only equality is insufficient when an
+        # order is filled in multiple components.
+        latest_event = events[-1]
+        latest_id = str(getattr(latest_event, "id", "") or "")
+        if not latest_id:
+            return False
+        source_ids = [
+            str(source_id)
+            for source_id in (getattr(latest_event, "source_ids", None) or [])
+            if source_id
+        ]
+        if len(source_ids) != 1:
+            return False
+        if self._fill_position_change_epoch(latest_event) != str(
+            anchor.get("epoch") or ""
+        ):
+            return False
+
+        psize = 0.0
+        pprice = 0.0
+        for event in events:
+            try:
+                qty = float(event.qty)
+                price = float(event.price)
+                c_mult = float(getattr(event, "c_mult", 1.0) or 1.0)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return False
+            if (
+                not all(math.isfinite(value) for value in (qty, price, c_mult))
+                or price <= 0.0
+                or c_mult <= 0.0
+            ):
+                return False
+            effective_qty = qty * c_mult
+            if pside == "short":
+                add_amount = max(-effective_qty, 0.0)
+                reduce_amount = max(effective_qty, 0.0)
+            else:
+                add_amount = max(effective_qty, 0.0)
+                reduce_amount = max(-effective_qty, 0.0)
+            if add_amount > 0.0:
+                pprice = (
+                    price
+                    if psize <= 0.0
+                    else (psize * pprice + add_amount * price)
+                    / (psize + add_amount)
+                )
+                psize += add_amount
+            if reduce_amount > 0.0:
+                psize = max(0.0, psize - reduce_amount)
+                if psize <= 1e-12:
+                    psize = 0.0
+                    pprice = 0.0
+
+        position_size, position_price = state
+        c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
+        expected_size = abs(position_size) * c_mult
+        return (
+            abs(psize - expected_size) <= qty_tolerance
+            and abs(pprice - position_price) <= price_tolerance
+        )
+
+    def _emit_position_open_fill_recovery_used(
+        self, symbol: str, pside: str, anchor: dict
+    ) -> None:
+        """Report boundary recovery only after every confirmation predicate clears."""
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        logging.warning(
+            "[fills] recovered polluted cached after-state from explicit position "
+            "open/update boundary | symbol=%s pside=%s fill_ts=%s",
+            self._log_symbol(symbol),
+            pside,
+            anchor_ts,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "position_open_single_fill",
+                    "open_timestamp": int(open_ts),
+                    "position_update_timestamp": int(update_ts),
+                    "fill_timestamp": int(anchor_ts),
+                    "cohort_fill_count": 1,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -8668,6 +8867,7 @@ class Passivbot:
                     )
                     expected_position_state = pending_position_states.get(epoch_key)
                     failed_predicates = []
+                    position_match_kind = None
                     if current_epoch is None:
                         failed_predicates.append("missing_fill_anchor")
                     elif not current_epoch.startswith("fill:"):
@@ -8683,11 +8883,14 @@ class Passivbot:
                         current_epoch is not None
                         and current_epoch.startswith("fill:")
                         and expected_position_state is not None
-                        and not self._fill_anchor_matches_position_state(
-                            symbol, pside, expected_position_state, anchor
-                        )
                     ):
-                        failed_predicates.append("fill_after_state_mismatch")
+                        position_match_kind = (
+                            self._fill_anchor_position_state_match_kind(
+                                symbol, pside, expected_position_state, anchor
+                            )
+                        )
+                        if position_match_kind is None:
+                            failed_predicates.append("fill_after_state_mismatch")
                     if failed_predicates:
                         position_update_timestamp = self._position_update_timestamp_ms(
                             symbol, pside
@@ -8722,6 +8925,10 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
+                    if position_match_kind == "position_open_boundary":
+                        self._emit_position_open_fill_recovery_used(
+                            symbol, pside, anchor
+                        )
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)
