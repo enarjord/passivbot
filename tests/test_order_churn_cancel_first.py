@@ -74,9 +74,6 @@ class _PlanBot:
     async def update_exchange_configs(self, symbols):
         return set(symbols)
 
-    def _order_churn_precreate_signed_action_costs(self, _symbols):
-        return {}
-
 
 @pytest.fixture
 def execution_shell(monkeypatch):
@@ -326,81 +323,46 @@ async def test_local_create_deferral_consumes_no_churn_attempt(execution_shell):
 
 
 @pytest.mark.asyncio
-async def test_churn_admission_defers_before_exchange_config_writes(execution_shell):
-    bot = _PlanBot()
-    bot._order_churn_gate_state = OrderChurnGateState()
-    bot.configured: list[list[str]] = []
-
-    def live_value(key):
-        return {
-            "order_replacement_churn_gate_activation_count": 10,
-            "order_replacement_churn_gate_window_minutes": 10.0,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
-            "max_n_creations_per_batch": 20,
-        }[key]
-
-    async def fetch_prices(symbols, *, max_age_ms=10_000):
-        return {symbol: 100.0 for symbol in symbols}
-
-    async def config_plus_create_headroom_only():
-        return 1
-
-    def config_action_costs(symbols):
-        return {symbol: 1 for symbol in symbols}
-
-    async def update_configs(symbols):
-        bot.configured.append(list(symbols))
-        return set(symbols)
-
-    bot.live_value = live_value
-    bot._fetch_fresh_order_churn_market_prices = fetch_prices
-    bot._order_churn_far_create_headroom = config_plus_create_headroom_only
-    bot._order_churn_precreate_signed_action_costs = config_action_costs
-    bot.update_exchange_configs = update_configs
-    desired = _order("desired")
-    desired["price"] = 90.0
-    desired["_churn_evidence"] = True
-
-    await executor.execute_order_plan(bot, [], [desired])
-
-    assert bot.configured == []
-    assert bot.created == []
-    assert desired["_churn_gate_reason"] == "action_headroom_exhausted"
-
-
-@pytest.mark.asyncio
-async def test_config_action_reservation_consumes_generic_allowance(execution_shell):
+async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
+    execution_shell, monkeypatch
+):
     bot = _PlanBot()
     bot._order_churn_gate_state = OrderChurnGateState()
     bot._order_churn_gate_state.record_action_attempts(
-        9, now_monotonic=executor.time.monotonic()
+        1, now_monotonic=executor.time.monotonic()
     )
     bot.configured = []
 
     def live_value(key):
         return {
-            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_activation_count": 1,
             "order_replacement_churn_gate_window_minutes": 10.0,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
             "max_n_creations_per_batch": 20,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
         }[key]
 
-    async def fetch_prices(symbols, *, max_age_ms=10_000):
-        return {symbol: 100.0 for symbol in symbols}
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    async def final_market_recheck(_bot, orders):
+        assert bot.configured == [[orders[0]["symbol"]]]
+        orders[0]["_churn_gate_market_distance"] = 0.01
+        return list(orders)
 
     bot.live_value = live_value
-    bot._fetch_fresh_order_churn_market_prices = fetch_prices
-    bot._order_churn_far_create_headroom = lambda: None
-    bot._order_churn_precreate_signed_action_costs = lambda symbols: {
-        symbol: 1 for symbol in symbols
-    }
+    bot.update_exchange_configs = update_configs
+    monkeypatch.setattr(
+        Passivbot,
+        "_filter_fresh_market_snapshot_creations",
+        final_market_recheck,
+    )
     desired = _order("desired")
-    desired["price"] = 90.0
     desired["_churn_evidence"] = True
 
     await executor.execute_order_plan(bot, [], [desired])
 
-    assert bot.configured == []
+    assert bot.configured == [[desired["symbol"]]]
     assert bot.created == []
     assert desired["_churn_gate_reason"] == "allowance_exhausted"
 
@@ -412,125 +374,87 @@ async def test_exchange_config_uses_precreate_eligibility_snapshot(
     bot = _PlanBot()
     observed = {}
 
-    def config_action_costs(symbols, *, now_ms):
-        observed["estimate_now_ms"] = now_ms
-        return {symbol: 1 for symbol in symbols}
-
     async def update_configs(symbols, *, eligibility_now_ms):
-        observed["update_now_ms"] = eligibility_now_ms
+        observed["symbols"] = list(symbols)
+        observed["eligibility_now_ms"] = eligibility_now_ms
         return set(symbols)
 
     monkeypatch.setattr(executor, "_utc_ms", lambda: 12_345)
-    bot._order_churn_precreate_signed_action_costs = config_action_costs
     bot.update_exchange_configs = update_configs
-
     desired = _order("desired")
+
     await executor.execute_order_plan(bot, [], [desired])
 
     assert observed == {
-        "estimate_now_ms": 12_345,
-        "update_now_ms": 12_345,
+        "symbols": [desired["symbol"]],
+        "eligibility_now_ms": 12_345,
     }
     assert bot.created == [desired]
 
 
 @pytest.mark.asyncio
-async def test_churn_admission_rechecks_after_config_market_move(execution_shell):
-    bot = _PlanBot()
-    bot._order_churn_gate_state = OrderChurnGateState()
-    bot._order_churn_gate_state.record_action_attempts(
-        10, now_monotonic=executor.time.monotonic()
-    )
-    bot.configured = []
-    prices = iter((100.0, 101.0))
-
-    def live_value(key):
-        return {
-            "order_replacement_churn_gate_activation_count": 10,
-            "order_replacement_churn_gate_window_minutes": 10.0,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
-            "max_n_creations_per_batch": 20,
-        }[key]
-
-    requested_max_ages = []
-
-    async def fetch_prices(symbols, *, max_age_ms=10_000):
-        requested_max_ages.append(max_age_ms)
-        price = next(prices)
-        return {symbol: price for symbol in symbols}
-
-    async def unlimited_headroom():
-        return float("inf")
-
-    async def update_configs(symbols):
-        bot.configured.append(list(symbols))
-        return set(symbols)
-
-    bot.live_value = live_value
-    bot._fetch_fresh_order_churn_market_prices = fetch_prices
-    bot._order_churn_far_create_headroom = unlimited_headroom
-    bot.update_exchange_configs = update_configs
-    desired = _order("desired")
-    desired["price"] = 99.8
-    desired["_churn_evidence"] = True
-
-    await executor.execute_order_plan(bot, [], [desired])
-
-    assert bot.configured == [[desired["symbol"]]]
-    assert bot.created == []
-    assert desired["_churn_gate_reason"] == "allowance_exhausted"
-    assert requested_max_ages == [10_000, 0]
-
-
-@pytest.mark.asyncio
-async def test_batch_slice_happens_before_exchange_config_writes(execution_shell):
-    bot = _PlanBot()
-    bot._order_churn_gate_state = OrderChurnGateState()
-    bot.configured = []
-
-    def live_value(key):
-        return {
-            "order_replacement_churn_gate_activation_count": 0,
-            "max_n_creations_per_batch": 1,
-            "order_replacement_churn_gate_market_dist_pct": 0.005,
-        }[key]
-
-    async def update_configs(symbols):
-        bot.configured.append(list(symbols))
-        return set(symbols)
-
-    bot.live_value = live_value
-    bot.update_exchange_configs = update_configs
-    first = _order("first")
-    second = {**_order("second"), "symbol": "ETH/USDT:USDT"}
-
-    await executor.execute_order_plan(bot, [], [first, second])
-
-    assert bot.configured == [[first["symbol"]]]
-    assert bot.created == [first]
-
-
-@pytest.mark.asyncio
-async def test_stale_market_order_is_filtered_before_exchange_config_write(
-    execution_shell, monkeypatch
+async def test_risk_first_capacity_applies_after_exchange_config_writes(
+    execution_shell,
 ):
     bot = _PlanBot()
     bot.configured = []
 
-    async def reject_stale(_bot, _orders):
-        return []
+    def live_value(key):
+        return {
+            "max_n_creations_per_batch": 1,
+        }[key]
 
     async def update_configs(symbols):
         bot.configured.append(list(symbols))
         return set(symbols)
 
-    monkeypatch.setattr(
-        Passivbot, "_filter_fresh_market_snapshot_creations", reject_stale
-    )
+    bot.live_value = live_value
     bot.update_exchange_configs = update_configs
-    desired = _order("desired")
+    ordinary = _order("ordinary")
+    ordinary["symbol"] = "ETH/USDT:USDT"
+    critical = _order("critical", panic=True)
 
-    await executor.execute_order_plan(bot, [], [desired])
+    await executor.execute_order_plan(bot, [], [ordinary, critical])
 
-    assert bot.configured == []
-    assert bot.created == []
+    assert bot.configured == [[critical["symbol"], ordinary["symbol"]]]
+    assert bot.created == [critical]
+    assert ordinary["_churn_gate_reason"] == "batch_capacity"
+
+
+@pytest.mark.asyncio
+async def test_capacity_selects_later_admissible_order_after_churn_deferral(
+    execution_shell,
+):
+    bot = _PlanBot()
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_action_attempts(
+        1, now_monotonic=executor.time.monotonic()
+    )
+    bot.configured = []
+
+    def live_value(key):
+        return {
+            "max_n_creations_per_batch": 1,
+            "order_replacement_churn_gate_activation_count": 1,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "order_replacement_churn_gate_market_dist_pct": 0.005,
+        }[key]
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    bot.live_value = live_value
+    bot.update_exchange_configs = update_configs
+    far_churn = _order("far_churn")
+    far_churn["symbol"] = "ETH/USDT:USDT"
+    far_churn["_churn_evidence"] = True
+    far_churn["_churn_gate_market_distance"] = 0.01
+    stable = _order("stable")
+    stable["_churn_evidence"] = False
+
+    await executor.execute_order_plan(bot, [], [far_churn, stable])
+
+    assert bot.configured == [[stable["symbol"], far_churn["symbol"]]]
+    assert bot.created == [stable]
+    assert far_churn["_churn_gate_reason"] == "allowance_exhausted"

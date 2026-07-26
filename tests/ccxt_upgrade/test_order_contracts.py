@@ -1075,7 +1075,6 @@ def test_gateio_missing_leverage_metadata_is_symbol_scoped():
     assert bot._gate_leverage_metadata_unavailable_symbols == {symbol}
     assert symbol not in bot.max_leverage
     assert symbol not in bot.already_updated_exchange_config_symbols
-    assert bot._order_churn_precreate_signed_action_costs({symbol}) == {}
     assert bot._order_requires_exchange_config_before_create(
         {"reduce_only": False}
     )
@@ -1089,9 +1088,6 @@ async def test_gateio_missing_leverage_metadata_blocks_config_without_write():
     symbol = "DOGE/USDT:USDT"
     bot = GateIOBot.__new__(GateIOBot)
     bot._gate_leverage_metadata_unavailable_symbols = {symbol}
-    bot._record_order_churn_allowance_attempts = lambda *_args, **_kwargs: (
-        pytest.fail("missing metadata must not consume a signed-action attempt")
-    )
 
     with pytest.raises(ValueError, match="max leverage metadata unavailable"):
         await bot.update_exchange_config_by_symbols([symbol])
@@ -1100,7 +1096,6 @@ async def test_gateio_missing_leverage_metadata_blocks_config_without_write():
 @pytest.mark.asyncio
 async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     calls = []
-    accounted = []
 
     async def set_leverage(leverage, symbol=None, params=None):
         calls.append((leverage, symbol, params))
@@ -1115,26 +1110,17 @@ async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
     bot.cca = SimpleNamespace(set_leverage=set_leverage)
     bot._calc_leverage_for_symbol = lambda _symbol: 10
     bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
-    bot._record_order_churn_allowance_attempts = (
-        lambda count, *, action_kind: accounted.append((count, action_kind))
-    )
 
     await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
 
     assert calls == [
         (10, "DOGE/USDT:USDT", {"marginMode": "cross"}),
     ]
-    assert accounted == [(1, "config")]
 
 
-def test_gateio_reserves_config_cost_only_for_unconfigured_entry_symbols():
+def test_gateio_requires_config_only_for_entry_orders():
     bot = GateIOBot.__new__(GateIOBot)
-    bot.already_updated_exchange_config_symbols = {"BTC/USDT:USDT"}
-    bot._exchange_config_retry_after_ms = {}
 
-    assert bot._order_churn_precreate_signed_action_costs(
-        {"BTC/USDT:USDT", "DOGE/USDT:USDT"}
-    ) == {"DOGE/USDT:USDT": 1}
     assert bot._order_requires_exchange_config_before_create(
         {"reduce_only": False}
     )
@@ -1144,18 +1130,6 @@ def test_gateio_reserves_config_cost_only_for_unconfigured_entry_symbols():
     assert bot._pending_exchange_config_consumes_error_budget(
         [{"symbol": "DOGE/USDT:USDT"}]
     )
-
-
-def test_gateio_does_not_reserve_config_cost_during_retry_backoff():
-    bot = GateIOBot.__new__(GateIOBot)
-    bot.already_updated_exchange_config_symbols = set()
-    bot._exchange_config_retry_after_ms = {
-        "DOGE/USDT:USDT": 2**62,
-    }
-
-    assert bot._order_churn_precreate_signed_action_costs(
-        {"DOGE/USDT:USDT"}
-    ) == {}
 
 
 @pytest.mark.asyncio
@@ -1176,10 +1150,6 @@ async def test_gateio_retry_backoff_uses_precreate_eligibility_snapshot(
     bot.update_exchange_config_by_symbols = update_symbol_config
     monkeypatch.setattr("passivbot.utc_ms", lambda: 2_000)
 
-    assert bot._order_churn_precreate_signed_action_costs(
-        {symbol},
-        now_ms=1_000,
-    ) == {}
     configured = await bot.update_exchange_configs(
         [symbol],
         eligibility_now_ms=1_000,
