@@ -1,5 +1,6 @@
 from __future__ import annotations
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from exchanges.ipv4_transport import IPv4TransportMixin
 from passivbot import logging
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -48,7 +49,7 @@ def _add_kucoin_broker_name_header(signed: dict, options: dict) -> dict:
     return signed
 
 
-class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
+class AsyncKucoinBrokerFutures(IPv4TransportMixin, ccxt_async.kucoinfutures):
     """Asynchronous KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):
@@ -66,7 +67,7 @@ class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
         return signed
 
 
-class ProKucoinBrokerFutures(ccxt_pro.kucoinfutures):
+class ProKucoinBrokerFutures(IPv4TransportMixin, ccxt_pro.kucoinfutures):
     """Websocket-enabled KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):

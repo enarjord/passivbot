@@ -13,6 +13,27 @@ All notable user-facing changes will be documented in this file.
   clears. Multi-fill cohorts, later updates, proximity-only matches, and generic
   or update-only timestamps remain insufficient.
 
+- KuCoin REST and private WebSocket clients now use IPv4 transport so API keys
+  restricted to a host's stable public IPv4 address are not rejected when the
+  host also has IPv6 connectivity.
+
+- Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
+  logs its normalization to Passivbot's canonical `gateio` identity, and consistently
+  selects the dedicated Gate.io connector. Standalone market loading now also
+  translates `gateio` to CCXT's renamed `gate` client without changing canonical
+  cache, broker, event, or persisted-state paths. Gate's numeric REST account UID
+  is normalized to the string required by CCXT Pro, preventing private order
+  WebSocket reconnect loops after otherwise successful startup.
+
+- Scope cancel-first create deferral to the symbol and position side of stale-order cancellations
+  in hedge mode, or the whole symbol in one-way mode, while retaining conservative account-wide
+  deferral for malformed unscoped cancellations.
+
+- Monitor `state.latest.json` snapshots now refresh from a serialized background
+  maintainer at least every five seconds, independently of successful planning
+  cycles. Prolonged authoritative-data or planning degradation therefore remains
+  visible without concurrent snapshot builds or any change to trading behavior.
+
 - Live fill recovery now performs bounded historical refetches around degraded
   synthetic realized-PnL rows even when cache metadata already proves the configured
   lookback. Repair-only fetches preserve the incremental checkpoint and rotate through

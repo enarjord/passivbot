@@ -21,6 +21,7 @@ from utils import (
     date_to_ts,
     get_first_ohlcv_iteratively,
     load_ccxt_instance,
+    to_standard_exchange_name,
 )
 import sys
 import passivbot_rust as pbr
@@ -46,6 +47,8 @@ from pure_funcs import (
     sort_dict_keys,
     flatten,
 )
+
+_EXCHANGE_ALIAS_MIGRATIONS_LOGGED: set[tuple[str, str, str]] = set()
 
 
 def get_all_eligible_symbols(exchange="binance"):
@@ -176,6 +179,21 @@ def load_user_info(user: str, api_keys_path="api-keys.json") -> dict:
 
     # Overlay all fields from the user's entry (passthrough for CCXTBot)
     result.update(api_keys[user])
+
+    raw_exchange = str(result.get("exchange", "")).strip()
+    canonical_exchange = to_standard_exchange_name(raw_exchange)
+    if raw_exchange.lower() == "gate" and canonical_exchange == "gateio":
+        result["exchange"] = canonical_exchange
+        migration_key = (os.path.abspath(api_keys_path), user, raw_exchange.lower())
+        if migration_key not in _EXCHANGE_ALIAS_MIGRATIONS_LOGGED:
+            _EXCHANGE_ALIAS_MIGRATIONS_LOGGED.add(migration_key)
+            logging.info(
+                "[config] api-keys.json exchange alias %r normalized to canonical %r "
+                "for user %s",
+                raw_exchange,
+                canonical_exchange,
+                user,
+            )
 
     return result
 

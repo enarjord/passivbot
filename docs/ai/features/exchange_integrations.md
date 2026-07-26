@@ -79,6 +79,16 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+### IPv4 API-key whitelist transport
+
+Problem: A dual-stack host may select IPv6 for KuCoin REST and private
+WebSocket traffic even when the API key permits only the host's stable public
+IPv4 address. KuCoin then rejects the first authenticated request as an IP
+whitelist authentication failure.
+
+Handling: Both KuCoin REST and WebSocket CCXT clients use IPv4-only network
+connectors. Keep the host's stable public IPv4 address in the API-key whitelist.
+
 ### KuCoin hedge-mode refresh
 
 Problem:
@@ -170,6 +180,19 @@ Handling in Passivbot:
    semantics.
 
 ## Gate.io Futures
+
+### Exchange identity boundary
+
+Passivbot's canonical exchange identity is `gateio`. This identity owns connector
+routing, cache and event paths, broker attribution, and persisted state. CCXT 4.5.66
+renamed only its client class to `gate`.
+
+For compatibility, `api-keys.json` may specify either `"exchange": "gateio"` or
+`"exchange": "gate"`. Passivbot normalizes the latter to `gateio` and logs that
+migration. Only CCXT REST and WebSocket client construction translates `gateio` to
+`gate`; do not add parallel `gate` identities to internal registries or state paths.
+Normalize Gate's numeric REST account `user` value to a string before assigning it
+as CCXT Pro's private futures subscription UID.
 
 ### Contract order text must start with `t-`
 

@@ -301,8 +301,12 @@ The account-wide replacement-churn policy emits structured, monitor-only summari
 - `order.churn_actions_accounted` records the action kind and number of logical creates or required
   connector configuration writes debited immediately before each connector call, plus the resulting
   rolling count. Cancellations are excluded from the generic window.
-- `execution.cancel_first_barrier` reports account-wide create deferral after any stale-order
-  cancellation. `execution.cancel_deferred` reports cancellation batch truncation.
+- `execution.cancel_first_barrier` reports create deferral after a stale-order cancellation. In
+  effective hedge mode the scope is symbol and position side; in one-way mode it is the whole
+  symbol because long and short share one net exchange position. Unrelated scopes may continue in
+  the same wave; an unscoped cancellation conservatively defers all ordinary creates. The stable
+  `account_cancel_first_barrier` reason-code name is retained for event-consumer compatibility.
+  `execution.cancel_deferred` reports cancellation batch truncation.
 
 These events are diagnostic projections only. The causal history, rolling counter, and
 cancel-first state are updated directly in the planner and executor, and sink failure cannot alter

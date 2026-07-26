@@ -78,7 +78,10 @@ class GateIOBot(CCXTBot):
             raise KeyError(f"{self.exchange}: fetch_balance response missing info[0]")
         primary = info[0]
         if not hasattr(self, "uid") or not self.uid:
-            self.uid = primary["user"]
+            # Gate's REST payload currently returns ``user`` as an integer,
+            # while CCXT Pro's private futures subscription treats the UID as
+            # a string and calls len() on it while signing the request.
+            self.uid = str(primary["user"])
             self.cca.uid = self.uid
             if self.ccp is not None:
                 self.ccp.uid = self.uid

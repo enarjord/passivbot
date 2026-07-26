@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -1764,9 +1765,14 @@ async def _monitor_flush_snapshot(self, *, force: bool = False, ts: Optional[int
     publisher = getattr(self, "monitor_publisher", None)
     if publisher is None:
         return False
-    try:
-        snapshot = await self._build_monitor_snapshot(now_ms=ts)
-        return publisher.write_snapshot(snapshot, ts=ts, force=force)
-    except Exception as exc:
-        logging.error("[monitor] failed building monitor snapshot: %s", exc)
-        return False
+    lock = getattr(self, "_monitor_snapshot_flush_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        self._monitor_snapshot_flush_lock = lock
+    async with lock:
+        try:
+            snapshot = await self._build_monitor_snapshot(now_ms=ts)
+            return publisher.write_snapshot(snapshot, ts=ts, force=force)
+        except Exception as exc:
+            logging.error("[monitor] failed building monitor snapshot: %s", exc)
+            return False
