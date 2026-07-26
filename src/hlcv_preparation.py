@@ -306,6 +306,7 @@ class HLCVManager:
                 progress_log_interval_seconds=float(self.cm_progress_log_interval_seconds),
                 max_concurrent_requests=max_concurrent_requests,
                 remote_fetch_callback=self._remote_fetch_log,
+                gap_tolerance_ohlcvs_minutes=self.gap_tolerance_ohlcvs_minutes,
                 # Backtest HLCV preparation may share the same cache directory as live trading.
                 # Force-disable disk retention here to avoid deleting shards created/needed by other processes.
                 max_disk_candles_per_symbol_per_tf=0,

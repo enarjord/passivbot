@@ -116,6 +116,8 @@ Handling:
    `info.positionSide`/`info.posSide` in exchange hedge mode; only when the exchange capability is
    actually one-way may `position_side` be derived and verified from the authoritative order side
    plus `reduceOnly` tuple.
+5. In exchange hedge mode, derive entry/close-only effect from the authoritative buy/sell plus
+   long/short tuple when KuCoin omits native `reduceOnly`.
 
 ### OHLCV limit behavior + sparse-minute markets
 
@@ -131,8 +133,11 @@ Handling:
 2. Overlap page boundaries by 1 candle to validate inter-page gaps.
 3. For native timeframes above 1m, synthesize a flat zero-volume no-trade bucket only when the gap
    is bounded by two real candles in the same successful payload and its timestamp is absent from
-   the raw payload. A raw bucket rejected by candle validation remains unavailable. Do not
-   synthesize leading, trailing, failed-fetch, or unproven between-page gaps.
+   the raw payload, and only up to `backtest.gap_tolerance_ohlcvs_minutes`. A raw bucket rejected by
+   candle validation remains unavailable and evicts any older cached sparse placeholder at that
+   timestamp. An unidentifiable rejected row invalidates cached placeholders between the accepted
+   page bounds. Do not synthesize leading, trailing, failed-fetch, oversized, or unproven
+   between-page gaps.
 
 ## Bitget Futures
 

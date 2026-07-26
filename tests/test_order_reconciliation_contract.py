@@ -115,6 +115,32 @@ def test_weex_uses_v3_action_tuple_not_response_reduce_only_literal(
     assert bot._canonical_open_order_reduce_only(order) is expected_close
 
 
+@pytest.mark.parametrize(
+    ("side", "position_side", "expected_close"),
+    [
+        ("buy", "LONG", False),
+        ("sell", "SHORT", False),
+        ("sell", "LONG", True),
+        ("buy", "SHORT", True),
+    ],
+)
+def test_kucoin_hedge_mode_uses_side_position_tuple_without_reduce_only(
+    side, position_side, expected_close
+):
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.hedge_mode = True
+    order = {
+        "side": side,
+        "info": {
+            "side": side,
+            "positionSide": position_side,
+        },
+    }
+
+    assert bot._get_position_side_for_order(order) == position_side.lower()
+    assert bot._canonical_open_order_reduce_only(order) is expected_close
+
+
 def test_bitget_uta_uses_action_tuple_even_when_literal_reduce_only_is_false():
     bot = BitgetBot.__new__(BitgetBot)
     bot.is_uta = True

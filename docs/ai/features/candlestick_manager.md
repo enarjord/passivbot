@@ -104,16 +104,17 @@
     a full output series. Full EMA series remain available to callers that need
     every intermediate value.
 13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
-    candles in the same successful payload and absent from that raw payload are materialized as
-    flat zero-volume candles before persistence. A bucket present in the raw payload but rejected
-    by candle validation is a continuity barrier: it and later omitted buckets remain unavailable
-    until another accepted real candle establishes the close. A rejected row whose timestamp cannot
-    be identified disables synthesis for that payload page. Expansion is bounded to the requested
-    range, and a later real exchange candle always overwrites a persisted synthetic bucket. If a
-    later payload contains a rejected real row at a cached sparse-placeholder timestamp, the
-    placeholder is evicted so the bucket becomes unavailable. Leading, trailing, failed-fetch, and
-    unproven between-page gaps remain unavailable. The established 1m path retains its verified-gap
-    tracking and standardization.
+    candles in the same successful payload, absent from that raw payload, and no wider than
+    `backtest.gap_tolerance_ohlcvs_minutes` are materialized as flat zero-volume candles before
+    persistence. A bucket present in the raw payload but rejected by candle validation is a
+    continuity barrier: it and later omitted buckets remain unavailable until another accepted real
+    candle establishes the close. A rejected row whose timestamp cannot be identified disables
+    synthesis for that payload page and evicts cached placeholders between the page's accepted
+    bounds. Expansion is bounded to the requested range, and a later real exchange candle always
+    overwrites a persisted synthetic bucket. If a later payload contains a rejected real row at a
+    cached sparse-placeholder timestamp, the placeholder is evicted so the bucket becomes
+    unavailable. Leading, trailing, failed-fetch, oversized, and unproven between-page gaps remain
+    unavailable. The established 1m path retains its verified-gap tracking and standardization.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

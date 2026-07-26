@@ -736,6 +736,7 @@ class CandlestickManager:
         # Optional minimum spacing between ccxt OHLCV calls from this manager.
         remote_fetch_min_interval_ms: float | None = None,
         lock_timeout_seconds: float | None = None,
+        gap_tolerance_ohlcvs_minutes: float = 120.0,
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
@@ -761,6 +762,9 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
+        self.gap_tolerance_ohlcvs_minutes = max(
+            0.0, float(gap_tolerance_ohlcvs_minutes)
+        )
         # Archive fetching: if False, only use ccxt REST API
         self.archive_enabled = bool(archive_enabled)
         # Debug levels: 0=warnings, 1=network summaries, 2=debug, 3=trace/firehose
@@ -4422,7 +4426,8 @@ class CandlestickManager:
         symbol: str,
         *,
         timeframe: str,
-        rejected_timestamps: set[int],
+        rejected_timestamps: Optional[set[int]] = None,
+        rejected_ranges: Optional[list[tuple[int, int]]] = None,
     ) -> set[int]:
         """Remove persisted KuCoin sparse placeholders contradicted by invalid real rows.
 
@@ -4433,27 +4438,45 @@ class CandlestickManager:
         cached placeholder must become unavailable rather than survive the
         merge.
         """
-        if not rejected_timestamps:
+        rejected_timestamps = {
+            int(ts) for ts in (rejected_timestamps or set())
+        }
+        rejected_ranges = [
+            (int(start_ts), int(end_ts))
+            for start_ts, end_ts in (rejected_ranges or [])
+            if int(end_ts) >= int(start_ts)
+        ]
+        if not rejected_timestamps and not rejected_ranges:
             return set()
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
         if tf_norm == "1m":
             return set()
-        by_day: dict[str, set[int]] = {}
-        for ts in rejected_timestamps:
-            by_day.setdefault(self._date_key(int(ts)), set()).add(int(ts))
         shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+        exact_ts_arr = (
+            np.fromiter(rejected_timestamps, dtype=np.int64)
+            if rejected_timestamps
+            else np.empty((0,), dtype=np.int64)
+        )
         removed: set[int] = set()
-        for day_key, day_timestamps in by_day.items():
-            path = shard_paths.get(day_key)
+        for day_key, path in shard_paths.items():
             if not path or not os.path.exists(path):
+                continue
+            day_start, day_end = self._date_range_of_key(day_key)
+            if (
+                not any(day_start <= ts <= day_end for ts in rejected_timestamps)
+                and not any(
+                    start_ts <= day_end and end_ts >= day_start
+                    for start_ts, end_ts in rejected_ranges
+                )
+            ):
                 continue
             shard = self._load_shard(path)
             if shard.size == 0:
                 continue
-            candidate = np.isin(
-                shard["ts"].astype(np.int64, copy=False),
-                np.fromiter(day_timestamps, dtype=np.int64),
-            )
+            shard_ts = shard["ts"].astype(np.int64, copy=False)
+            candidate = np.isin(shard_ts, exact_ts_arr)
+            for start_ts, end_ts in rejected_ranges:
+                candidate |= (shard_ts >= start_ts) & (shard_ts <= end_ts)
             flat_zero = (
                 (shard["bv"] == 0.0)
                 & (shard["o"] == shard["h"])
@@ -4528,6 +4551,10 @@ class CandlestickManager:
             current_ts = int(current["ts"])
             following_ts = int(following["ts"])
             if following_ts <= current_ts + int(period_ms):
+                continue
+            missing_span_ms = following_ts - current_ts - period_ms
+            tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * ONE_MIN_MS)
+            if tolerance_ms <= 0 or missing_span_ms > tolerance_ms:
                 continue
             previous_close = float(current["c"])
             synthesis_end = min(following_ts, requested_end_exclusive)
@@ -4641,17 +4668,30 @@ class CandlestickManager:
                 if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
                 else set()
             )
-            if rejected_payload_timestamps:
-                self._evict_rejected_native_sparse_synthetics(
-                    symbol,
-                    timeframe=tf_norm,
-                    rejected_timestamps=rejected_payload_timestamps,
-                )
             has_unidentifiable_rejected_row = bool(
                 self._record_payload_gaps_as_known
                 and period_ms > ONE_MIN_MS
                 and self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
             )
+            rejected_ranges = []
+            if has_unidentifiable_rejected_row and arr.size >= 2:
+                accepted_ts = np.sort(arr["ts"].astype(np.int64, copy=False))
+                bounded_start = max(
+                    int(since_start), int(accepted_ts[0]) + period_ms
+                )
+                bounded_end = min(
+                    int(end_excl) - period_ms,
+                    int(accepted_ts[-1]) - period_ms,
+                )
+                if bounded_end >= bounded_start:
+                    rejected_ranges.append((bounded_start, bounded_end))
+            if rejected_payload_timestamps or rejected_ranges:
+                self._evict_rejected_native_sparse_synthetics(
+                    symbol,
+                    timeframe=tf_norm,
+                    rejected_timestamps=rejected_payload_timestamps,
+                    rejected_ranges=rejected_ranges,
+                )
             if arr.size == 0:
                 if raise_on_partial_empty_page and pages > 0:
                     _raise_terminal_empty_page(

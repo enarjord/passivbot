@@ -1311,6 +1311,11 @@ class Passivbot:
             "exchange": self.cca,
             "exchange_name": self.exchange,
             "debug": self.logging_level,
+            "gap_tolerance_ohlcvs_minutes": float(
+                require_config_value(
+                    config, "backtest.gap_tolerance_ohlcvs_minutes"
+                )
+            ),
         }
         if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
