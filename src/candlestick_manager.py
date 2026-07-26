@@ -3244,17 +3244,13 @@ class CandlestickManager:
             fetch_start = int(deferred_gap_end) + ONE_MIN_MS
         return None
 
-    def _deferred_unverified_gap_ranges(
+    def _unverified_gap_ranges(
         self,
         symbol: str,
         start_ts: int,
         end_ts: int,
-        *,
-        now_ms: Optional[int] = None,
     ) -> List[Tuple[int, int]]:
-        """Return non-due unknown gap ranges that must remain unavailable."""
-        if now_ms is None:
-            now_ms = int(time.time() * 1000)
+        """Return unresolved unknown gaps that must remain unavailable."""
         ranges: List[Tuple[int, int]] = []
         for gap in self._get_known_gaps_enhanced(symbol):
             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
@@ -3262,12 +3258,44 @@ class CandlestickManager:
                 GAP_REASON_FETCH_FAILED,
             }:
                 continue
-            if self._should_retry_gap(gap, now_ms=now_ms):
-                continue
             overlap_start = max(int(start_ts), int(gap["start_ts"]))
             overlap_end = min(int(end_ts), int(gap["end_ts"]))
             if overlap_start <= overlap_end:
                 ranges.append((overlap_start, overlap_end))
+        return ranges
+
+    def _fetch_ranges_excluding_deferred_gaps(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> List[Tuple[int, int]]:
+        """Split a remote range around every known gap whose retry is not due."""
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        ranges = [(int(start_ts), int(end_ts))]
+        for gap in sorted(
+            self._get_known_gaps_enhanced(symbol),
+            key=lambda item: int(item["start_ts"]),
+        ):
+            if self._should_retry_gap(gap, now_ms=now_ms):
+                continue
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            next_ranges: List[Tuple[int, int]] = []
+            for range_start, range_end in ranges:
+                if gap_end < range_start or gap_start > range_end:
+                    next_ranges.append((range_start, range_end))
+                    continue
+                if range_start < gap_start:
+                    next_ranges.append((range_start, gap_start - ONE_MIN_MS))
+                if gap_end < range_end:
+                    next_ranges.append((gap_end + ONE_MIN_MS, range_end))
+            ranges = next_ranges
+            if not ranges:
+                break
         return ranges
 
     def _should_retry_gap(
@@ -6810,13 +6838,26 @@ class CandlestickManager:
                                 except Exception:
                                     spans_to_fetch = list(unknown_after)
 
-                                # Fetch only the missing spans (not the whole historical range).
+                                # Fetch only the missing spans (not the whole historical range),
+                                # split around any known gap whose retry is still deferred.
+                                fetch_windows: List[Tuple[int, int]] = []
                                 for s, e in spans_to_fetch:
                                     s2 = max(int(s), int(adj_start_ts))
                                     e2 = int(e)
                                     if e2 < s2:
                                         continue
-                                    span_end_excl = min(e2 + ONE_MIN_MS, end_excl)
+                                    fetch_windows.extend(
+                                        self._fetch_ranges_excluding_deferred_gaps(
+                                            symbol,
+                                            s2,
+                                            e2,
+                                            now_ms=now,
+                                        )
+                                    )
+                                for s2, e2 in fetch_windows:
+                                    span_end_excl = min(
+                                        e2 + ONE_MIN_MS, end_excl
+                                    )
                                     if s2 >= span_end_excl:
                                         continue
                                     try:
@@ -7311,11 +7352,10 @@ class CandlestickManager:
             fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
-            excluded_synthetic_ranges=self._deferred_unverified_gap_ranges(
+            excluded_synthetic_ranges=self._unverified_gap_ranges(
                 symbol,
                 start_ts,
                 end_ts,
-                now_ms=now,
             ),
         )
 

@@ -11,8 +11,9 @@ All notable user-facing changes will be documented in this file.
   present and tail-completion fetches without suppressing newly finalized candles
   beyond the deferred gap or repair of unrelated internal gaps. Deferred
   unverified rows remain absent from returned candle continuity rather than
-  becoming synthetic zero-volume candles, and targeted retries skip the deferred
-  prefix. Forced 1m candidate refreshes now detect partial
+  becoming synthetic zero-volume candles even when their retry is due or remote
+  fetching is disabled. Targeted retries and day-coalesced historical fetches
+  split around deferred ranges. Forced 1m candidate refreshes now detect partial
   pagination followed by an empty terminal page, allowing repeated failures to
   use the bounded in-memory retry delay without misclassifying complete
   overlap-pagination fetches. Persisted 1m rows trim or split stale known-gap

@@ -69,8 +69,10 @@
    and internal gaps do not. A known-gap retry cooldown suppresses only the recorded missing
    prefix; newly finalized candles after that gap and unrelated internal gaps remain fetchable,
    while every fetch path excludes the deferred prefix. Unknown `auto_detected` and
-   `fetch_failed` rows remain absent while their retry is deferred and must not become synthetic
-   zero-volume continuity candles. Forced 1m and native
+   `fetch_failed` rows remain absent until authoritative candles replace them, including when a
+   retry is due or the current request disallows remote fetching, and must not become synthetic
+   zero-volume continuity candles. Day-coalesced historical fetches split around deferred ranges
+   rather than contacting the venue for them. Forced 1m and native
    higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
    failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
    already covers the requested end is complete, not terminal-empty. Partial authoritative

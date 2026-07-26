@@ -2802,7 +2802,7 @@ def test_deferred_unknown_gap_exclusions_remain_compact(monkeypatch, tmp_path):
         retry_count=_GAP_MAX_RETRIES,
     )
 
-    assert cm._deferred_unverified_gap_ranges(symbol, start, end) == [
+    assert cm._unverified_gap_ranges(symbol, start, end) == [
         (start, end)
     ]
 
@@ -3084,6 +3084,112 @@ async def test_partial_gap_recovery_defers_and_preserves_unresolved_minutes(
     repeated = await cm.get_candles(symbol, start_ts=start, end_ts=end)
     assert calls == []
     assert list(repeated["ts"]) == [start, recovered, end]
+
+
+@pytest.mark.asyncio
+async def test_due_unknown_gap_stays_unavailable_without_remote_fetch(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 70 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    start = now["ms"] - 3 * ONE_MIN_MS
+    missing = start + ONE_MIN_MS
+    end = start + 2 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (end, 2.0, 2.0, 2.0, 2.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        missing,
+        missing,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    gaps[0]["last_retry_at"] = now["ms"] - 5 * ONE_MIN_MS
+    cm._save_known_gaps_enhanced(symbol, gaps)
+    assert cm._should_retry_gap(
+        cm._get_known_gaps_enhanced(symbol)[0], now_ms=now["ms"]
+    )
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        allow_remote_fetch=False,
+    )
+
+    assert list(result["ts"]) == [start, end]
+    assert missing not in set(cm._synthetic_timestamps.get(symbol, set()))
+
+
+@pytest.mark.asyncio
+async def test_historical_fetch_splits_around_deferred_gap(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 1000 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    end = now["ms"] - 10 * ONE_MIN_MS
+    start = end - 4 * ONE_MIN_MS
+    deferred = start + ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (end, 2.0, 2.0, 2.0, 2.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        deferred,
+        deferred,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def prefetch_archives(*_args, **_kwargs):
+        return None
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        rows = [
+            (ts, 1.5, 1.5, 1.5, 1.5, 1.0)
+            for ts in range(since, end_exclusive, ONE_MIN_MS)
+        ]
+        return np.array(rows, dtype=CANDLE_DTYPE)
+
+    cm._prefetch_archives_for_range = prefetch_archives
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(symbol, start_ts=start, end_ts=end)
+
+    assert calls
+    assert all(
+        not (since <= deferred < end_exclusive)
+        for since, end_exclusive in calls
+    )
+    assert deferred not in set(result["ts"].astype(np.int64))
 
 
 def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):
