@@ -72,7 +72,10 @@
    `fetch_failed` rows remain absent while their retry is deferred and must not become synthetic
    zero-volume continuity candles. Forced 1m and native
    higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
-   failed surface refresh so the caller can apply its bounded retry delay. Refresh budgets count
+   failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
+   already covers the requested end is complete, not terminal-empty. Partial authoritative
+   recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
+   compact timestamp intervals even for large historical gaps. Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
    candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
@@ -113,7 +116,8 @@
     an earlier path. Missing rows remain unavailable until an authoritative row
     arrives. Repeated terminal empty-page failures for a forager candle surface
     use a bounded in-memory retry delay without converting missing data into
-    candles or hiding the first error.
+    candles or hiding the first error. A partial authoritative response similarly
+    defers and excludes its unresolved remainder until the next eligible retry.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

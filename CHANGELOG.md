@@ -14,9 +14,12 @@ All notable user-facing changes will be documented in this file.
   becoming synthetic zero-volume candles, and targeted retries skip the deferred
   prefix. Forced 1m candidate refreshes now detect partial
   pagination followed by an empty terminal page, allowing repeated failures to
-  use the bounded in-memory retry delay. Persisted 1m rows trim or split stale
-  known-gap metadata. Missing rows remain unavailable and are never fabricated
-  by this recovery path.
+  use the bounded in-memory retry delay without misclassifying complete
+  overlap-pagination fetches. Persisted 1m rows trim or split stale known-gap
+  metadata; unresolved remainders are deferred after partial recovery. Missing
+  rows remain unavailable and are never fabricated by this recovery path, and
+  large deferred ranges remain interval-based rather than expanding into one
+  Python object per minute.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous

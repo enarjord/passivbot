@@ -275,6 +275,40 @@ def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
     assert t1 in cm._synthetic_timestamps.get("TAIL", set())
 
 
+def test_standardize_gaps_strict_does_not_allocate_expected_minutes(
+    monkeypatch, tmp_path
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    t0 = 10 * ONE_MIN_MS
+    t2 = t0 + 2 * ONE_MIN_MS
+    candles = np.array(
+        [
+            (t0, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (t2, 2.0, 2.0, 2.0, 2.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    def fail_arange(*_args, **_kwargs):
+        raise AssertionError("strict reads must not materialize the minute range")
+
+    monkeypatch.setattr(np, "arange", fail_arange)
+
+    result = cm.standardize_gaps(
+        candles,
+        start_ts=t0,
+        end_ts=t2,
+        strict=True,
+        excluded_synthetic_ranges=[(t0 + ONE_MIN_MS, t0 + ONE_MIN_MS)],
+    )
+
+    assert list(result["ts"]) == [t0, t2]
+
+
 def test_archive_day_conversion_does_not_fill_edge_gaps(tmp_path):
     import pandas as pd
 
@@ -2749,6 +2783,30 @@ def test_hyperliquid_accelerated_retry_excludes_large_recent_ending_gap(
     assert not cm._should_retry_gap(gap, now_ms=now["ms"])
 
 
+def test_deferred_unknown_gap_exclusions_remain_compact(monkeypatch, tmp_path):
+    now = {"ms": 10_000_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "NEW/USDC:USDC"
+    start = now["ms"] - 5 * 365 * 24 * 60 * ONE_MIN_MS
+    end = now["ms"] - ONE_MIN_MS
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+
+    assert cm._deferred_unverified_gap_ranges(symbol, start, end) == [
+        (start, end)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_hyperliquid_known_tail_gap_cooldown_precedes_present_fetch(
     monkeypatch, tmp_path
@@ -2962,6 +3020,72 @@ async def test_extended_missing_tail_never_refetches_deferred_prefix(
     assert end not in set(result["ts"].astype(np.int64))
 
 
+@pytest.mark.asyncio
+async def test_partial_gap_recovery_defers_and_preserves_unresolved_minutes(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 60 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    end = _floor_minute(now["ms"]) - ONE_MIN_MS
+    start = end - 4 * ONE_MIN_MS
+    gap_start = start + ONE_MIN_MS
+    gap_end = end - ONE_MIN_MS
+    recovered = start + 2 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (end, 2.0, 2.0, 2.0, 2.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        gap_start,
+        gap_end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    gaps[0]["last_retry_at"] = now["ms"] - 5 * ONE_MIN_MS
+    cm._save_known_gaps_enhanced(symbol, gaps)
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.array(
+            [(recovered, 1.5, 1.5, 1.5, 1.5, 1.0)],
+            dtype=CANDLE_DTYPE,
+        )
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(symbol, start_ts=start, end_ts=end)
+
+    assert calls == [(gap_start, gap_end + ONE_MIN_MS)]
+    assert list(result["ts"]) == [start, recovered, end]
+    unresolved = cm._get_known_gaps_enhanced(symbol)
+    assert [(gap["start_ts"], gap["end_ts"]) for gap in unresolved] == [
+        (gap_start, gap_start),
+        (gap_end, gap_end),
+    ]
+    assert all(gap["last_retry_at"] == now["ms"] for gap in unresolved)
+
+    calls.clear()
+    repeated = await cm.get_candles(symbol, start_ts=start, end_ts=end)
+    assert calls == []
+    assert list(repeated["ts"]) == [start, recovered, end]
+
+
 def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):
     cm = CandlestickManager(
         exchange=None,
@@ -3038,6 +3162,63 @@ async def test_1m_force_refresh_raises_on_partial_terminal_empty_page(
 
     assert calls == [start, start + 2 * ONE_MIN_MS]
     assert exc_info.value.pages == 1
+
+
+@pytest.mark.asyncio
+async def test_overlap_pagination_stops_after_requested_end(tmp_path):
+    class _Ex:
+        id = "bitget"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="bitget",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._ccxt_limit_default = 2
+    cm._ccxt_page_overlap_candles = 1
+    start = 10 * ONE_MIN_MS
+    end_exclusive = start + 4 * ONE_MIN_MS
+    calls = []
+
+    async def fetch_once(
+        _symbol,
+        since_ms,
+        _limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        calls.append(since_ms)
+        if len(calls) == 1:
+            return [
+                [start, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [start + ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+            ]
+        if len(calls) == 2:
+            return [
+                [start + ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [start + 2 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [start + 3 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+            ]
+        return []
+
+    cm._ccxt_fetch_ohlcv_once = fetch_once
+
+    result = await cm._fetch_ohlcv_paginated(
+        "BTC/USDT:USDT",
+        start,
+        end_exclusive,
+        raise_on_partial_empty_page=True,
+    )
+
+    assert calls == [start - ONE_MIN_MS, start]
+    assert set(result["ts"].astype(np.int64)) == {
+        start,
+        start + ONE_MIN_MS,
+        start + 2 * ONE_MIN_MS,
+        start + 3 * ONE_MIN_MS,
+    }
 
 
 def test_gap_retry_without_increment(tmp_path):

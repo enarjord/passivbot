@@ -3244,18 +3244,18 @@ class CandlestickManager:
             fetch_start = int(deferred_gap_end) + ONE_MIN_MS
         return None
 
-    def _deferred_unverified_gap_timestamps(
+    def _deferred_unverified_gap_ranges(
         self,
         symbol: str,
         start_ts: int,
         end_ts: int,
         *,
         now_ms: Optional[int] = None,
-    ) -> set[int]:
-        """Return non-due unknown gap minutes that must remain unavailable."""
+    ) -> List[Tuple[int, int]]:
+        """Return non-due unknown gap ranges that must remain unavailable."""
         if now_ms is None:
             now_ms = int(time.time() * 1000)
-        timestamps: set[int] = set()
+        ranges: List[Tuple[int, int]] = []
         for gap in self._get_known_gaps_enhanced(symbol):
             if str(gap.get("reason", GAP_REASON_AUTO)) not in {
                 GAP_REASON_AUTO,
@@ -3267,10 +3267,8 @@ class CandlestickManager:
             overlap_start = max(int(start_ts), int(gap["start_ts"]))
             overlap_end = min(int(end_ts), int(gap["end_ts"]))
             if overlap_start <= overlap_end:
-                timestamps.update(
-                    range(overlap_start, overlap_end + ONE_MIN_MS, ONE_MIN_MS)
-                )
-        return timestamps
+                ranges.append((overlap_start, overlap_end))
+        return ranges
 
     def _should_retry_gap(
         self,
@@ -4629,6 +4627,13 @@ class CandlestickManager:
                 pages=pages,
             )
 
+        def _requested_end_is_covered() -> bool:
+            if not all_rows:
+                return False
+            return max(int(rows[-1]["ts"]) for rows in all_rows if rows.size) >= (
+                end_excl - period_ms
+            )
+
         while since < end_excl:
             self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
@@ -4645,7 +4650,11 @@ class CandlestickManager:
                 symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm
             )
             if not page:
-                if raise_on_partial_empty_page and pages > 0:
+                if (
+                    raise_on_partial_empty_page
+                    and pages > 0
+                    and not _requested_end_is_covered()
+                ):
                     _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned an empty page before reaching "
                         "the requested end"
@@ -4653,7 +4662,11 @@ class CandlestickManager:
                 break
             arr = self._normalize_ccxt_ohlcv(page)
             if arr.size == 0:
-                if raise_on_partial_empty_page and pages > 0:
+                if (
+                    raise_on_partial_empty_page
+                    and pages > 0
+                    and not _requested_end_is_covered()
+                ):
                     _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned an empty normalized page before "
                         "reaching the requested end"
@@ -4687,7 +4700,11 @@ class CandlestickManager:
             # Exclude any candles >= end_exclusive
             arr = arr[arr["ts"] < end_excl]
             if arr.size == 0:
-                if raise_on_partial_empty_page and pages > 0:
+                if (
+                    raise_on_partial_empty_page
+                    and pages > 0
+                    and not _requested_end_is_covered()
+                ):
                     _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned only out-of-range candles before "
                         "reaching the requested end"
@@ -4777,6 +4794,8 @@ class CandlestickManager:
                     )
                     break
             last_ts = int(arr[-1]["ts"])  # inclusive last
+            if last_ts >= end_excl - period_ms:
+                break
             # Throttled progress logs (INFO) for long-running paginated fetches
             try:
                 progressed = max(
@@ -4832,7 +4851,7 @@ class CandlestickManager:
         fill_trailing_gaps: bool = True,
         assume_sorted: bool = False,
         symbol: Optional[str] = None,
-        excluded_synthetic_timestamps: Optional[set[int]] = None,
+        excluded_synthetic_ranges: Optional[List[Tuple[int, int]]] = None,
     ) -> np.ndarray:
         """Return a new array with zero-candles synthesized for missing minutes.
 
@@ -4857,9 +4876,9 @@ class CandlestickManager:
             and after the gap.
         assume_sorted : bool
             If True, skip sorting (caller guarantees array is already sorted by ts).
-        excluded_synthetic_timestamps : set[int], optional
-            Missing minutes that must remain absent rather than being represented
-            by synthetic zero-volume continuity candles.
+        excluded_synthetic_ranges : list[tuple[int, int]], optional
+            Inclusive missing-minute ranges that must remain absent rather than
+            being represented by synthetic zero-volume continuity candles.
         """
         a = _ensure_dtype(candles)
         if a.size == 0:
@@ -4910,10 +4929,6 @@ class CandlestickManager:
         if effective_hi < effective_lo:
             return np.empty((0,), dtype=CANDLE_DTYPE)
 
-        expected = np.arange(effective_lo, effective_hi + ONE_MIN_MS, ONE_MIN_MS, dtype=np.int64)
-        # Map from ts to row index in a
-        pos = {int(t): i for i, t in enumerate(ts_arr)}
-
         if strict:
             # In strict mode: do not synthesize zero-candles.
             # If there are gaps, log a warning and return whatever real candles exist in range.
@@ -4949,6 +4964,38 @@ class CandlestickManager:
                 self._log_strict_gaps_summary()
             return a[i0:i1]
 
+        expected = np.arange(
+            effective_lo,
+            effective_hi + ONE_MIN_MS,
+            ONE_MIN_MS,
+            dtype=np.int64,
+        )
+        # Map from ts to row index in a
+        pos = {int(t): i for i, t in enumerate(ts_arr)}
+        excluded_ranges = sorted(
+            (
+                (max(effective_lo, int(start)), min(effective_hi, int(end)))
+                for start, end in (excluded_synthetic_ranges or [])
+                if int(start) <= effective_hi and int(end) >= effective_lo
+            ),
+            key=lambda item: item[0],
+        )
+        excluded_range_idx = 0
+
+        def excluded_from_synthesis(timestamp: int) -> bool:
+            nonlocal excluded_range_idx
+            while (
+                excluded_range_idx < len(excluded_ranges)
+                and excluded_ranges[excluded_range_idx][1] < timestamp
+            ):
+                excluded_range_idx += 1
+            return (
+                excluded_range_idx < len(excluded_ranges)
+                and excluded_ranges[excluded_range_idx][0]
+                <= timestamp
+                <= excluded_ranges[excluded_range_idx][1]
+            )
+
         out_rows = []
         prev_close: Optional[float] = None
 
@@ -4977,10 +5024,7 @@ class CandlestickManager:
                 out_rows.append(tuple(row.tolist()))
                 prev_close = float(row["c"])  # update seed
             else:
-                if (
-                    excluded_synthetic_timestamps
-                    and int(t) in excluded_synthetic_timestamps
-                ):
+                if excluded_from_synthesis(int(t)):
                     continue
                 if prev_close is None:
                     # No previous data to forward-fill from - skip this timestamp
@@ -7136,7 +7180,6 @@ class CandlestickManager:
                 attempts = 0
                 max_attempts = 10 if self._ccxt_since_exclusive else 3
                 attempted: List[Tuple[int, int]] = []
-                noresult: List[Tuple[int, int]] = []
                 for s, e in missing:
                     if attempts >= max_attempts:
                         break
@@ -7222,16 +7265,21 @@ class CandlestickManager:
                                 )
                             arr = np.sort(self._cache[symbol], order="ts")
                             sub = self._slice_ts_range(arr, start_ts, end_ts, assume_sorted=True)
-                        else:
-                            noresult.append((adjusted_gap_start, e))
                 # After attempts, recompute missing and tag remaining as known gaps
                 still_missing = self._missing_spans(sub, start_ts, inclusive_end)
-                # Only mark as known those attempted spans that still remain missing
-                for s, e in noresult:
+                # Stamp every attempted remainder, including a partially recovered
+                # gap, so it is deferred and cannot be synthesized or retried on
+                # each caller cycle.
+                for s, e in attempted:
                     # find overlapping portion with any still missing
                     for ms, me in still_missing:
                         if not (e < ms or s > me):
-                            self._add_known_gap(symbol, max(s, ms), min(e, me))
+                            self._add_known_gap(
+                                symbol,
+                                max(s, ms),
+                                min(e, me),
+                                reason=GAP_REASON_FETCH_FAILED,
+                            )
 
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.
@@ -7263,7 +7311,7 @@ class CandlestickManager:
             fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
-            excluded_synthetic_timestamps=self._deferred_unverified_gap_timestamps(
+            excluded_synthetic_ranges=self._deferred_unverified_gap_ranges(
                 symbol,
                 start_ts,
                 end_ts,
