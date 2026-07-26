@@ -685,6 +685,109 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
+    monkeypatch, caplog
+):
+    import numpy as np
+    import passivbot as pb_mod
+
+    now = {"ms": 1_000_000}
+    symbol = "EMPTY/USDC:USDC"
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now["ms"])
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: ({symbol: 10}, {symbol: 0}, {symbol: True}),
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot, "_urgent_active_candle_symbols", lambda _bot: []
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_refresh_budget",
+        lambda _bot, *args, **kwargs: 1,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_target_staleness_ms",
+        lambda _bot, *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_candidate_candle_surface_health",
+        lambda _bot, *args, **kwargs: {
+            "age_ms": 60_000,
+            "coverage_ok": False,
+            "no_basis": True,
+        },
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = 0
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls += 1
+            raise pb_mod.OhlcvTerminalEmptyPage(
+                "bounded test failure",
+                partial_rows=np.empty((0,), dtype=pb_mod.CANDLE_DTYPE),
+                terminal_start_ts=0,
+                requested_end_ts=60_000,
+                pages=1,
+            )
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 12,
+                "max_forager_candle_refresh_seconds": 0,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        start_time_ms = now["ms"]
+
+        def __init__(self):
+            self.cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def bp(self, *args, **kwargs):
+            return 0.0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
+        _forager_target_staleness_ms = (
+            pb_mod.Passivbot._forager_target_staleness_ms
+        )
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    with caplog.at_level(logging.ERROR):
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert bot.cm.calls == 1
+    assert (
+        bot._forager_surface_failure_retry_after_ms[(symbol, "1m")]
+        == now["ms"] + pb_mod._FORAGER_TERMINAL_EMPTY_RETRY_MS
+    )
+    assert caplog.text.count("error_type=OhlcvTerminalEmptyPage") == 1
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_symbols(
     monkeypatch,
 ):

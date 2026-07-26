@@ -234,11 +234,15 @@ class GapEntry(TypedDict, total=False):
     retry_count: int  # Number of fetch attempts (max 3 before marking persistent)
     reason: str  # "auto_detected", "exchange_downtime", "no_archive", "fetch_failed", "manual", "no_trades"
     added_at: int  # Timestamp when gap was first detected (ms)
+    last_retry_at: int  # Timestamp of the latest remote attempt for this gap (ms)
 
 
 # Maximum fetch attempts before marking gap as persistent
 _GAP_MAX_RETRIES = 3
 _GAP_PERSISTENT_RETRY_MS = 7 * 24 * 60 * 60 * 1000
+_HYPERLIQUID_RECENT_GAP_HORIZON_MS = 2 * 60 * 60 * 1000
+_HYPERLIQUID_RECENT_GAP_RETRY_MS = 5 * 60 * 1000
+_HYPERLIQUID_RECENT_PERSISTENT_GAP_RETRY_MS = 15 * 60 * 1000
 
 # Valid gap reasons
 GAP_REASON_AUTO = "auto_detected"
@@ -2657,6 +2661,12 @@ class CandlestickManager:
             self._check_synthetic_replacement(symbol, arr)
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+        if tf_norm == "1m":
+            self._trim_known_gaps_covered_by_rows(
+                symbol,
+                arr,
+                defer_index=defer_index,
+            )
         observer = self._persist_batch_observer
         if observer is not None:
             try:
@@ -2878,6 +2888,9 @@ class CandlestickManager:
                         "retry_count": int(it.get("retry_count", 0)),
                         "reason": str(it.get("reason", GAP_REASON_AUTO)),
                         "added_at": int(it.get("added_at", now_ms)),
+                        "last_retry_at": int(
+                            it.get("last_retry_at", it.get("added_at", now_ms))
+                        ),
                     }
                     if entry["start_ts"] <= entry["end_ts"]:
                         out.append(entry)
@@ -2892,6 +2905,7 @@ class CandlestickManager:
                                 "retry_count": _GAP_MAX_RETRIES,  # Assume old gaps are persistent
                                 "reason": GAP_REASON_AUTO,
                                 "added_at": now_ms,
+                                "last_retry_at": now_ms,
                             }
                         )
             except Exception:
@@ -2903,7 +2917,13 @@ class CandlestickManager:
         enhanced = self._get_known_gaps_enhanced(symbol)
         return [(g["start_ts"], g["end_ts"]) for g in enhanced]
 
-    def _save_known_gaps_enhanced(self, symbol: str, gaps: List[GapEntry]) -> None:
+    def _save_known_gaps_enhanced(
+        self,
+        symbol: str,
+        gaps: List[GapEntry],
+        *,
+        defer_index: bool = False,
+    ) -> None:
         """Save gaps in enhanced format, merging overlapping ranges."""
         # Sort by start_ts
         gaps = sorted(gaps, key=lambda g: g["start_ts"])
@@ -2920,6 +2940,10 @@ class CandlestickManager:
                     "retry_count": max(prev.get("retry_count", 0), gap.get("retry_count", 0)),
                     "reason": prev.get("reason", GAP_REASON_AUTO),  # Keep original reason
                     "added_at": min(prev.get("added_at", 0), gap.get("added_at", 0)),
+                    "last_retry_at": max(
+                        prev.get("last_retry_at", prev.get("added_at", 0)),
+                        gap.get("last_retry_at", gap.get("added_at", 0)),
+                    ),
                 }
         idx = self._ensure_symbol_index(symbol)
         idx["meta"]["known_gaps"] = [
@@ -2929,11 +2953,70 @@ class CandlestickManager:
                 "retry_count": int(g.get("retry_count", 0)),
                 "reason": str(g.get("reason", GAP_REASON_AUTO)),
                 "added_at": int(g.get("added_at", 0)),
+                "last_retry_at": int(
+                    g.get("last_retry_at", g.get("added_at", 0))
+                ),
             }
             for g in merged
         ]
         self._index[symbol] = idx
-        self._save_index(symbol)
+        if not defer_index:
+            self._save_index(symbol)
+
+    def _trim_known_gaps_covered_by_rows(
+        self,
+        symbol: str,
+        rows: np.ndarray,
+        *,
+        defer_index: bool = False,
+    ) -> None:
+        """Remove authoritative 1m timestamps from persisted known-gap ranges."""
+        if rows.size == 0:
+            return
+        gaps = self._get_known_gaps_enhanced(symbol)
+        if not gaps:
+            return
+        timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
+        if timestamps.size == 0:
+            return
+        retained: List[GapEntry] = []
+        changed = False
+        for gap in gaps:
+            start_ts = int(gap["start_ts"])
+            end_ts = int(gap["end_ts"])
+            left = int(np.searchsorted(timestamps, start_ts, side="left"))
+            right = int(np.searchsorted(timestamps, end_ts, side="right"))
+            covered = timestamps[left:right]
+            if covered.size == 0:
+                retained.append(gap)
+                continue
+            changed = True
+            next_start = start_ts
+            for covered_ts in covered:
+                ts = int(covered_ts)
+                if next_start <= ts - ONE_MIN_MS:
+                    retained.append(
+                        {
+                            **gap,
+                            "start_ts": next_start,
+                            "end_ts": ts - ONE_MIN_MS,
+                        }
+                    )
+                next_start = ts + ONE_MIN_MS
+            if next_start <= end_ts:
+                retained.append(
+                    {
+                        **gap,
+                        "start_ts": next_start,
+                        "end_ts": end_ts,
+                    }
+                )
+        if changed:
+            self._save_known_gaps_enhanced(
+                symbol,
+                retained,
+                defer_index=defer_index,
+            )
 
     def _save_known_gaps(self, symbol: str, gaps: List[Tuple[int, int]]) -> None:
         """Save gaps from simple tuples (backward compatibility wrapper)."""
@@ -2945,6 +3028,7 @@ class CandlestickManager:
                 "retry_count": _GAP_MAX_RETRIES,  # Assume caller-provided gaps are persistent
                 "reason": GAP_REASON_AUTO,
                 "added_at": now_ms,
+                "last_retry_at": now_ms,
             }
             for s, e in gaps
         ]
@@ -2986,16 +3070,22 @@ class CandlestickManager:
                 gap["start_ts"] = min(gap["start_ts"], int(start_ts))
                 gap["end_ts"] = max(gap["end_ts"], int(end_ts))
                 previous_retry_count = gap.get("retry_count", 0)
-                retry_due = self._persistent_gap_retry_due(gap, now_ms=now_ms)
+                retry_due = self._should_retry_gap(gap, now_ms=now_ms)
                 if retry_count is not None:
                     gap["retry_count"] = retry_count
+                    gap["last_retry_at"] = now_ms
                     if retry_count >= _GAP_MAX_RETRIES and previous_retry_count < _GAP_MAX_RETRIES:
                         gap["added_at"] = now_ms
-                elif increment_retry:
+                elif increment_retry and retry_due:
                     # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
                     # and avoid redundant disk writes for persistent gaps
-                    new_retry_count = (0 if retry_due else previous_retry_count) + 1
+                    new_retry_count = (
+                        1
+                        if previous_retry_count >= _GAP_MAX_RETRIES
+                        else previous_retry_count + 1
+                    )
                     gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
+                    gap["last_retry_at"] = now_ms
                     if retry_due:
                         gap["added_at"] = now_ms
                     elif (
@@ -3016,6 +3106,7 @@ class CandlestickManager:
                 "retry_count": initial_retry,
                 "reason": reason,
                 "added_at": now_ms,
+                "last_retry_at": now_ms,
             }
             gaps.append(new_gap)
             self._log(
@@ -3078,11 +3169,41 @@ class CandlestickManager:
             retry_count=_GAP_MAX_RETRIES,
         )
 
-    def _should_retry_gap(self, gap: GapEntry) -> bool:
+    def _is_recent_hyperliquid_gap(
+        self,
+        gap: GapEntry,
+        *,
+        now_ms: int,
+    ) -> bool:
+        exid = str(self._ex_id or "").lower()
+        reason = str(gap.get("reason", GAP_REASON_AUTO))
+        return (
+            "hyperliquid" in exid
+            and reason in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+            and int(gap.get("end_ts", 0))
+            >= int(now_ms) - _HYPERLIQUID_RECENT_GAP_HORIZON_MS
+        )
+
+    def _should_retry_gap(
+        self,
+        gap: GapEntry,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
         """Check if a gap should be retried."""
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
         if int(gap.get("retry_count", 0)) < _GAP_MAX_RETRIES:
+            if self._is_recent_hyperliquid_gap(gap, now_ms=now_ms):
+                last_retry_at = int(
+                    gap.get("last_retry_at", gap.get("added_at", now_ms))
+                )
+                return (
+                    int(now_ms) - last_retry_at
+                    >= _HYPERLIQUID_RECENT_GAP_RETRY_MS
+                )
             return True
-        return self._persistent_gap_retry_due(gap)
+        return self._persistent_gap_retry_due(gap, now_ms=now_ms)
 
     def _persistent_gap_retry_due(self, gap: GapEntry, *, now_ms: Optional[int] = None) -> bool:
         reason = str(gap.get("reason", GAP_REASON_AUTO))
@@ -3092,8 +3213,15 @@ class CandlestickManager:
             return False
         if now_ms is None:
             now_ms = int(time.time() * 1000)
-        added_at = int(gap.get("added_at", now_ms))
-        return now_ms - added_at >= _GAP_PERSISTENT_RETRY_MS
+        last_retry_at = int(
+            gap.get("last_retry_at", gap.get("added_at", now_ms))
+        )
+        retry_ms = (
+            _HYPERLIQUID_RECENT_PERSISTENT_GAP_RETRY_MS
+            if self._is_recent_hyperliquid_gap(gap, now_ms=now_ms)
+            else _GAP_PERSISTENT_RETRY_MS
+        )
+        return now_ms - last_retry_at >= retry_ms
 
     def clear_known_gaps(
         self,

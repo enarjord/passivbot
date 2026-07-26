@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hyperliquid recent candle gaps now retry on a time-spaced schedule instead of
+  exhausting the persistent-gap budget in consecutive live cycles while the
+  venue may still publish an authoritative no-trade row. Persisted 1m rows now
+  trim or split stale known-gap metadata, and repeated terminal empty-page
+  failures for a forager surface use a bounded in-memory retry delay. Missing
+  rows remain unavailable and are never fabricated by this recovery path.
+
 - Live trailing fill confirmation can now recover from a polluted historical
   `psize`/`pprice` residue when the exchange supplies an explicit position
   opening timestamp. Recovery is restricted to a single identified opening fill

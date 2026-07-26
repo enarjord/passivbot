@@ -217,6 +217,16 @@ Handling:
 2. Clip 1m historical fetches to the recent-window bound and mark older spans as `no_archive`.
 3. Require external OHLCV source data or another candle source for older Gate.io backtests.
 
+## Hyperliquid
+
+### Delayed sparse-tail candles
+
+Hyperliquid may initially omit a recent no-trade minute and later publish an
+authoritative flat candle with zero volume for that same timestamp. Passivbot
+must not synthesize or permanently classify the initially absent row. Recent
+tail gaps use time-spaced retries, remain unavailable meanwhile, and are removed
+from `known_gaps` as soon as the authoritative row is persisted.
+
 ## WEEX Futures
 
 ### V3 hedge-order contract

@@ -37,6 +37,7 @@ from cli_utils import (
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    OhlcvTerminalEmptyPage,
     synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
@@ -392,6 +393,7 @@ from pure_funcs import (
 )
 
 ONE_MIN_MS = 60_000
+_FORAGER_TERMINAL_EMPTY_RETRY_MS = 15 * ONE_MIN_MS
 _COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
@@ -19356,6 +19358,11 @@ class Passivbot:
         surface_checks = getattr(self, "_forager_surface_check_ms", None)
         if not isinstance(surface_checks, dict):
             surface_checks = {}
+        surface_failure_retry_after = getattr(
+            self, "_forager_surface_failure_retry_after_ms", None
+        )
+        if not isinstance(surface_failure_retry_after, dict):
+            surface_failure_retry_after = {}
 
         required_h1_symbols: set[str] = set()
         for pside, symbols in refreshable_by_side.items():
@@ -19398,6 +19405,11 @@ class Passivbot:
             for key, value in surface_checks.items()
             if key in eligible_surface_keys
         }
+        surface_failure_retry_after = {
+            key: int(value)
+            for key, value in surface_failure_retry_after.items()
+            if key in eligible_surface_keys and int(value) > now
+        }
         surface_specs.sort(
             key=lambda item: (
                 int(surface_checks.get((item[1], item[0]), 0) or 0),
@@ -19419,6 +19431,12 @@ class Passivbot:
             ):
                 break
             surface_key = (sym, timeframe)
+            retry_after_ms = int(
+                surface_failure_retry_after.get(surface_key, 0) or 0
+            )
+            if retry_after_ms > now:
+                surface_checks[surface_key] = int(utc_ms())
+                continue
             surface_health = Passivbot._candidate_candle_surface_health(
                 self,
                 sym,
@@ -19461,6 +19479,9 @@ class Passivbot:
         self._forager_surface_attempt_ms = surface_attempts
         self._forager_surface_success_ms = surface_successes
         self._forager_surface_check_ms = surface_checks
+        self._forager_surface_failure_retry_after_ms = (
+            surface_failure_retry_after
+        )
         if not stale:
             return
 
@@ -19584,6 +19605,10 @@ class Passivbot:
                     )
                 else:
                     refreshed = await candle_task
+                surface_failure_retry_after.pop((sym, timeframe), None)
+                self._forager_surface_failure_retry_after_ms = (
+                    surface_failure_retry_after
+                )
                 if timeframe == "1h":
                     try:
                         refreshed_rows = int(refreshed.size)
@@ -19659,10 +19684,18 @@ class Passivbot:
                     bounded_exception_type(exc),
                 )
             except Exception as exc:
+                error_type = bounded_exception_type(exc)
+                if isinstance(exc, OhlcvTerminalEmptyPage):
+                    surface_failure_retry_after[(sym, timeframe)] = int(
+                        utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
+                    )
+                    self._forager_surface_failure_retry_after_ms = (
+                        surface_failure_retry_after
+                    )
                 logging.error(
                     "error refreshing forager candles for %s | error_type=%s",
                     Passivbot._log_symbol(sym),
-                    bounded_exception_type(exc),
+                    error_type,
                 )
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)

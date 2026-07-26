@@ -17,6 +17,7 @@ import candlestick_manager
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    GAP_REASON_FETCH_FAILED,
     GAP_REASON_NO_ARCHIVE,
     ONE_MIN_MS,
     OhlcvFetchError,
@@ -2575,6 +2576,146 @@ def test_gap_retry_count_increments(tmp_path):
     gaps = cm._get_known_gaps_enhanced(symbol)
     assert gaps[0]["retry_count"] >= _GAP_MAX_RETRIES
     assert not cm._should_retry_gap(gaps[0])
+
+
+def test_persisted_rows_trim_known_gaps_and_preserve_metadata(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "TEST/USDC:USDC"
+    base = 1_000_000
+    cm._add_known_gap(
+        symbol,
+        base,
+        base + 4 * ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=2,
+    )
+    original = cm._get_known_gaps_enhanced(symbol)[0]
+    batch = np.array(
+        [
+            (
+                base + 2 * ONE_MIN_MS,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+            )
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    cm._persist_batch(symbol, batch, timeframe="1m")
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [(g["start_ts"], g["end_ts"]) for g in gaps] == [
+        (base, base + ONE_MIN_MS),
+        (base + 3 * ONE_MIN_MS, base + 4 * ONE_MIN_MS),
+    ]
+    assert all(g["retry_count"] == 2 for g in gaps)
+    assert all(g["reason"] == GAP_REASON_FETCH_FAILED for g in gaps)
+    assert all(g["added_at"] == original["added_at"] for g in gaps)
+    assert all(g["last_retry_at"] == original["last_retry_at"] for g in gaps)
+
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (base, 1.0, 1.0, 1.0, 1.0, 0.0),
+                (base + ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 0.0),
+                (base + 3 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 0.0),
+                (base + 4 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 0.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+    )
+    assert cm._get_known_gaps_enhanced(symbol) == []
+
+
+def test_persisted_rows_leave_unrelated_known_gap_unchanged(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "TEST/USDC:USDC"
+    cm._add_known_gap(symbol, 1_000_000, 1_120_000)
+    original = cm._get_known_gaps_enhanced(symbol)
+
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [(2_000_000, 1.0, 1.0, 1.0, 1.0, 0.0)],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+    )
+
+    assert cm._get_known_gaps_enhanced(symbol) == original
+
+
+def test_hyperliquid_recent_gap_retries_are_time_spaced(monkeypatch, tmp_path):
+    now = {"ms": 10_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MU/USDC:USDC"
+    start = now["ms"] - 5 * ONE_MIN_MS
+    end = now["ms"] - ONE_MIN_MS
+
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gap = cm._get_known_gaps_enhanced(symbol)[0]
+    assert gap["retry_count"] == 1
+    assert not cm._should_retry_gap(gap, now_ms=now["ms"])
+
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    assert cm._get_known_gaps_enhanced(symbol)[0]["retry_count"] == 1
+
+    now["ms"] += 5 * ONE_MIN_MS
+    gap = cm._get_known_gaps_enhanced(symbol)[0]
+    assert cm._should_retry_gap(gap, now_ms=now["ms"])
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    assert cm._get_known_gaps_enhanced(symbol)[0]["retry_count"] == 2
+
+    now["ms"] += 5 * ONE_MIN_MS
+    cm._add_known_gap(
+        symbol,
+        start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    gap = cm._get_known_gaps_enhanced(symbol)[0]
+    assert gap["retry_count"] == _GAP_MAX_RETRIES
+    assert not cm._should_retry_gap(gap, now_ms=now["ms"])
+
+    now["ms"] += 15 * ONE_MIN_MS
+    assert cm._should_retry_gap(gap, now_ms=now["ms"])
 
 
 def test_gap_retry_without_increment(tmp_path):
