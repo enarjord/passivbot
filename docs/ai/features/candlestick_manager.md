@@ -117,7 +117,12 @@
     and targeted gap fetches so a deferred tail cannot consume REST calls through
     an earlier path. Forced overlap refreshes also split around deferred internal
     gaps. A failed retry of a persistent recent gap retains the persistent retry
-    cadence. Missing rows remain unavailable until an authoritative row arrives.
+    cadence, and all retry metadata uses the manager's active live/replay clock.
+    Missing rows remain unavailable until an authoritative row arrives, and a
+    dependent 1m EMA window remains unavailable while it intersects an unresolved
+    unknown gap rather than computing over a sparse sequence. Historical pagination
+    flushes deferred partial-page index writes before propagating terminal-empty
+    failure.
     Repeated terminal empty-page failures for a forager candle surface
     use a bounded in-memory retry delay without converting missing data into
     candles or hiding the first error. A partial authoritative response similarly

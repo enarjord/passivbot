@@ -22,7 +22,9 @@ All notable user-facing changes will be documented in this file.
   large deferred ranges remain interval-based rather than expanding into one
   Python object per minute. Failed recent Hyperliquid persistent-gap retries
   retain the persistent retry cadence, and forced overlap refreshes split around
-  deferred internal gaps.
+  deferred internal gaps. Gap retry metadata follows the manager's replay/live
+  clock, partial historical pages flush their deferred index before propagating
+  failure, and unresolved internal gaps keep dependent EMA windows unavailable.
 
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA

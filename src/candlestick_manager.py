@@ -2893,7 +2893,7 @@ class CandlestickManager:
         idx = self._ensure_symbol_index(symbol)
         gaps = idx.get("meta", {}).get("known_gaps", [])
         out: List[GapEntry] = []
-        now_ms = int(time.time() * 1000)
+        now_ms = self._now_ms()
         for it in gaps:
             try:
                 # Support both old format [[start, end], ...] and new format [GapEntry, ...]
@@ -3037,7 +3037,7 @@ class CandlestickManager:
 
     def _save_known_gaps(self, symbol: str, gaps: List[Tuple[int, int]]) -> None:
         """Save gaps from simple tuples (backward compatibility wrapper)."""
-        now_ms = int(time.time() * 1000)
+        now_ms = self._now_ms()
         enhanced = [
             {
                 "start_ts": int(s),
@@ -3075,7 +3075,7 @@ class CandlestickManager:
             retry_count: If specified, set retry_count directly instead of incrementing.
                          Useful for pre-inception gaps that should be immediately persistent.
         """
-        now_ms = int(time.time() * 1000)
+        now_ms = self._now_ms()
         gaps = self._get_known_gaps_enhanced(symbol)
 
         # Check if we have an overlapping gap to update
@@ -3245,7 +3245,7 @@ class CandlestickManager:
     ) -> Optional[int]:
         """Skip only a non-due known-gap prefix and preserve any later suffix."""
         if now_ms is None:
-            now_ms = int(time.time() * 1000)
+            now_ms = self._now_ms()
         fetch_start = int(start_ts)
         fetch_end = int(end_ts)
         while fetch_start <= fetch_end:
@@ -3297,7 +3297,7 @@ class CandlestickManager:
     ) -> List[Tuple[int, int]]:
         """Split a remote range around every known gap whose retry is not due."""
         if now_ms is None:
-            now_ms = int(time.time() * 1000)
+            now_ms = self._now_ms()
         ranges = [(int(start_ts), int(end_ts))]
         for gap in sorted(
             self._get_known_gaps_enhanced(symbol),
@@ -3329,7 +3329,7 @@ class CandlestickManager:
     ) -> bool:
         """Check if a gap should be retried."""
         if now_ms is None:
-            now_ms = int(time.time() * 1000)
+            now_ms = self._now_ms()
         if int(gap.get("retry_count", 0)) < _GAP_MAX_RETRIES:
             if self._is_recent_hyperliquid_gap(gap, now_ms=now_ms):
                 last_retry_at = int(
@@ -3349,7 +3349,7 @@ class CandlestickManager:
         if int(gap.get("retry_count", 0)) < _GAP_MAX_RETRIES:
             return False
         if now_ms is None:
-            now_ms = int(time.time() * 1000)
+            now_ms = self._now_ms()
         last_retry_at = int(
             gap.get("last_retry_at", gap.get("added_at", now_ms))
         )
@@ -6813,6 +6813,27 @@ class CandlestickManager:
                                         skip_memory_retention=True,
                                     )
 
+                                def _flush_hist_deferred_index() -> None:
+                                    nonlocal deferred_index_any, flush_failed_once
+                                    if not deferred_index_any:
+                                        return
+                                    try:
+                                        self.flush_deferred_index(symbol, tf="1m")
+                                    except (
+                                        Exception
+                                    ) as exc:  # best-effort; preserve fetch failure policy
+                                        if not flush_failed_once:
+                                            self._log(
+                                                "warning",
+                                                "flush_deferred_index_failed",
+                                                symbol=symbol,
+                                                timeframe="1m",
+                                                error_type=bounded_exception_type(exc),
+                                            )
+                                            flush_failed_once = True
+                                    finally:
+                                        deferred_index_any = False
+
                                 self._log(
                                     "debug",
                                     "historical_missing_spans",
@@ -6884,35 +6905,22 @@ class CandlestickManager:
                                     if s2 >= span_end_excl:
                                         continue
                                     try:
-                                        fetched = await self._fetch_ohlcv_paginated(
-                                            symbol,
-                                            s2,
-                                            span_end_excl,
-                                            on_batch=_persist_hist_batch,
-                                            raise_on_partial_empty_page=max_age_ms == 0,
-                                        )
-                                    except TypeError:
-                                        fetched = await self._fetch_ohlcv_paginated(
-                                            symbol,
-                                            s2,
-                                            span_end_excl,
-                                        )
-                                    if deferred_index_any:
                                         try:
-                                            self.flush_deferred_index(symbol, tf="1m")
-                                        except (
-                                            Exception
-                                        ) as exc:  # best-effort; keep fetching even if index update fails
-                                            if not flush_failed_once:
-                                                self._log(
-                                                    "warning",
-                                                    "flush_deferred_index_failed",
-                                                    symbol=symbol,
-                                                    timeframe="1m",
-                                                    error_type=bounded_exception_type(exc),
-                                                )
-                                                flush_failed_once = True
-                                        deferred_index_any = False
+                                            fetched = await self._fetch_ohlcv_paginated(
+                                                symbol,
+                                                s2,
+                                                span_end_excl,
+                                                on_batch=_persist_hist_batch,
+                                                raise_on_partial_empty_page=max_age_ms == 0,
+                                            )
+                                        except TypeError:
+                                            fetched = await self._fetch_ohlcv_paginated(
+                                                symbol,
+                                                s2,
+                                                span_end_excl,
+                                            )
+                                    finally:
+                                        _flush_hist_deferred_index()
                                     if fetched.size and not persisted_batches:
                                         # Skip memory retention to preserve full historical data
                                         self._persist_batch(
@@ -6924,20 +6932,8 @@ class CandlestickManager:
                                             defer_index=True,
                                             skip_memory_retention=True,
                                         )
-                                        try:
-                                            self.flush_deferred_index(symbol, tf="1m")
-                                        except (
-                                            Exception
-                                        ) as exc:  # best-effort; keep fetching even if index update fails
-                                            if not flush_failed_once:
-                                                self._log(
-                                                    "warning",
-                                                    "flush_deferred_index_failed",
-                                                    symbol=symbol,
-                                                    timeframe="1m",
-                                                    error_type=bounded_exception_type(exc),
-                                                )
-                                                flush_failed_once = True
+                                        deferred_index_any = True
+                                        _flush_hist_deferred_index()
                             arr = (
                                 np.sort(self._cache[symbol], order="ts")
                                 if symbol in self._cache
@@ -7674,6 +7670,11 @@ class CandlestickManager:
                 f"open-tail projection unavailable for {symbol}: no local candles "
                 f"start_ts={start_ts} latest_expected_ts={latest_expected}"
             )
+        if self._unverified_gap_ranges(symbol, start_ts, latest_expected):
+            raise RuntimeError(
+                f"open-tail projection unavailable for {symbol}: "
+                "unverified internal candle gap"
+            )
         arr = np.sort(_ensure_dtype(arr), order="ts")
         newest_ts = int(arr[-1]["ts"])
         if newest_ts > latest_expected:
@@ -7831,6 +7832,7 @@ class CandlestickManager:
         start_ts: int,
         end_ts: int,
         *,
+        symbol: Optional[str] = None,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
     ) -> bool:
@@ -7838,6 +7840,13 @@ class CandlestickManager:
         # Requiring the whole window prevents a truncated warmup from looking
         # like a valid long-span EMA while preserving the established sparse
         # leading-history contract for other exchanges.
+        period_ms = _tf_to_ms(timeframe if timeframe is not None else tf)
+        if (
+            period_ms == ONE_MIN_MS
+            and symbol is not None
+            and self._unverified_gap_ranges(symbol, start_ts, end_ts)
+        ):
+            return False
         exid = str(self._ex_id or "").lower()
         if "weex" not in exid:
             return self._ema_window_has_expected_tail(arr, end_ts)
@@ -7927,7 +7936,7 @@ class CandlestickManager:
         if arr.size == 0:
             return float("nan")
         if not self._ema_window_has_required_coverage(
-            arr, start_ts, end_ts, timeframe=out_tf
+            arr, start_ts, end_ts, symbol=symbol, timeframe=out_tf
         ):
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
@@ -8165,7 +8174,7 @@ class CandlestickManager:
         if arr.size == 0:
             return float("nan")
         if not self._ema_window_has_required_coverage(
-            arr, start_ts, end_ts, timeframe=out_tf
+            arr, start_ts, end_ts, symbol=symbol, timeframe=out_tf
         ):
             return float("nan")
         if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
@@ -8245,7 +8254,7 @@ class CandlestickManager:
                 out[metric_key] = float("nan")
             return out
         if not self._ema_window_has_required_coverage(
-            raw, start_ts, end_ts, timeframe=out_tf
+            raw, start_ts, end_ts, symbol=symbol, timeframe=out_tf
         ):
             for metric_key in missing:
                 out[metric_key] = float("nan")
@@ -8302,6 +8311,7 @@ class CandlestickManager:
                 tail,
                 metric_start_ts,
                 end_ts,
+                symbol=symbol,
                 timeframe=out_tf,
             ):
                 out[metric_key] = float("nan")
