@@ -993,6 +993,7 @@ async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
 def test_gateio_reserves_config_cost_only_for_unconfigured_entry_symbols():
     bot = GateIOBot.__new__(GateIOBot)
     bot.already_updated_exchange_config_symbols = {"BTC/USDT:USDT"}
+    bot._exchange_config_retry_after_ms = {}
 
     assert bot._order_churn_precreate_signed_action_costs(
         {"BTC/USDT:USDT", "DOGE/USDT:USDT"}
@@ -1006,6 +1007,18 @@ def test_gateio_reserves_config_cost_only_for_unconfigured_entry_symbols():
     assert bot._pending_exchange_config_consumes_error_budget(
         [{"symbol": "DOGE/USDT:USDT"}]
     )
+
+
+def test_gateio_does_not_reserve_config_cost_during_retry_backoff():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.already_updated_exchange_config_symbols = set()
+    bot._exchange_config_retry_after_ms = {
+        "DOGE/USDT:USDT": 2**62,
+    }
+
+    assert bot._order_churn_precreate_signed_action_costs(
+        {"DOGE/USDT:USDT"}
+    ) == {}
 
 
 def test_ccxt_gate_cross_leverage_maps_to_documented_request_tuple():

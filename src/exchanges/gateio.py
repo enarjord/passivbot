@@ -223,10 +223,15 @@ class GateIOBot(CCXTBot):
         configured = set(
             getattr(self, "already_updated_exchange_config_symbols", set()) or set()
         )
+        retry_after_by_symbol = (
+            getattr(self, "_exchange_config_retry_after_ms", {}) or {}
+        )
+        now_ms = utc_ms()
         return {
             str(symbol): 1
             for symbol in symbols
             if str(symbol) not in configured
+            and int(retry_after_by_symbol.get(str(symbol), 0) or 0) <= now_ms
         }
 
     def _order_requires_exchange_config_before_create(self, order: dict) -> bool:

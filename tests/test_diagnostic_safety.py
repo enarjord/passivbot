@@ -51,10 +51,21 @@ def test_bounded_exchange_error_context_extracts_ccxt_native_message_keys():
     bybit = RuntimeError('bybit {"retCode":10001,"retMsg":"position idx mismatch"}')
 
     assert bounded_exchange_error_context(binance) == {
+        "error_code": "-1013",
         "error_reason": "invalid quantity",
     }
     assert bounded_exchange_error_context(bybit) == {
+        "error_code": "10001",
         "error_reason": "position idx mismatch",
+    }
+
+
+def test_bounded_exchange_error_context_extracts_payload_status():
+    error = RuntimeError('exchange {"status":429,"message":"too many requests"}')
+
+    assert bounded_exchange_error_context(error) == {
+        "error_status": "429",
+        "error_reason": "too many requests",
     }
 
 

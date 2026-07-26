@@ -280,6 +280,24 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
     return text
 
 
+def _bounded_payload_scalar(
+    payload: dict,
+    names: tuple[str, ...],
+    pattern: re.Pattern[str],
+) -> str | None:
+    for name in names:
+        text = _exact_scalar_text(payload.get(name))
+        if (
+            text is not None
+            and len(text) <= 80
+            and text.isascii()
+            and pattern.fullmatch(text)
+            and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
+        ):
+            return text
+    return None
+
+
 def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     """Extract only bounded, sanitized fields from a structured exchange error."""
     result: dict[str, str] = {}
@@ -292,6 +310,22 @@ def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     payload = _exception_payload_mapping(exc)
     if payload is None:
         return result
+    if "error_status" not in result:
+        status = _bounded_payload_scalar(
+            payload,
+            ("http_status", "status", "status_code", "statusCode"),
+            _EXCEPTION_STATUS_RE,
+        )
+        if status is not None:
+            result["error_status"] = status
+    if "error_code" not in result:
+        code = _bounded_payload_scalar(
+            payload,
+            ("code", "exact", "error_code", "retCode", "errorCode"),
+            _EXCEPTION_CODE_RE,
+        )
+        if code is not None:
+            result["error_code"] = code
     for key in ("label", "error", "name"):
         label = _bounded_exchange_error_label(payload.get(key))
         if label is not None:
