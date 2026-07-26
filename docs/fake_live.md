@@ -166,6 +166,12 @@ The fake harness supports HSL RED replay cases, including:
   `panic`, `normal`, `manual`, `tp_only`, and `graceful_stop`
 
 The harness uses fake exchange time from the scenario, not wall-clock time.
+Scenario candle rows are authoritative deterministic inputs. Timelines may
+deliberately skip minutes to accelerate an unrelated state-machine test, so the
+fake exchange does not apply real-exchange unresolved-gap readiness checks to
+EMA windows built from those rows. Tests for candle-gap degradation should use
+the candlestick-manager fixtures directly rather than relying on an incidental
+fake-live timeline jump.
 
 ## Speeding Up Scenarios Safely
 
