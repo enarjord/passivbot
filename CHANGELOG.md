@@ -8,9 +8,11 @@ All notable user-facing changes will be documented in this file.
   hedge-mode updates only when the encoded client-order position side has an
   exact identity in this process's emitted-order registry, native position-side
   metadata is absent, and all supplied order identities agree with the same
-  emitted record. Recovered updates force an authoritative account refresh
-  without weakening strict REST open-order reconciliation. Genuine transport
-  failures retain the existing bounded reconnect backoff.
+  emitted record. Acknowledged identities remain registered while their orders
+  are open, including orders resting longer than the normal foreign-writer
+  lookback. Recovered updates force an authoritative account refresh without
+  weakening strict REST open-order reconciliation. Genuine transport failures
+  retain the existing bounded reconnect backoff.
 
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA

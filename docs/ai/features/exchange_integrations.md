@@ -37,9 +37,11 @@ long/short metadata; only that hint path may recover `position_side`, only in
 effective hedge mode, and only when a valid Passivbot client-order marker has
 no conflicting native position-side field and every supplied exchange/client
 identity matches the same record in this process's emitted-order registry.
-Recovered rows always force an authoritative account refresh. Sparse foreign,
-explicitly one-way, identity-conflicting, or unmarked notifications remain
-rejected.
+Acknowledged emitted identities remain registered for as long as the
+corresponding order is present in the bot's authoritative open-order state,
+even beyond the normal foreign-writer lookback. Recovered rows always force an
+authoritative account refresh. Sparse foreign, explicitly one-way,
+identity-conflicting, or unmarked notifications remain rejected.
 
 ## Broker Agreement Attribution
 
