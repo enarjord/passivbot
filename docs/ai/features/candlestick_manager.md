@@ -94,12 +94,24 @@
 11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
-12. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
+12. Open-tail projection requests only the metrics its caller may consume.
+    Forager projection requests close EMAs only; quote-volume and log-range
+    ranking inputs continue to come from current or bounded cached real candles.
+    Identical projections within one finalized bucket reuse a bounded in-memory
+    result keyed by the candle index mtime, cached-tail timestamp, requested
+     spans, and projection horizon; local candle persistence invalidates it.
+     Latest-value EMA calculations use a scalar recurrence rather than allocating
+     a full output series. Full EMA series remain available to callers that need
+     every intermediate value.
+13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
     candles in the same successful payload and absent from that raw payload are materialized as
     flat zero-volume candles before persistence. A bucket present in the raw payload but rejected
-    by candle validation remains unavailable; it is not reclassified as a no-tick interval.
-    Leading, trailing, failed-fetch, and unproven between-page gaps remain unavailable. The
-    established 1m path retains its verified-gap tracking and standardization.
+    by candle validation is a continuity barrier: it and later omitted buckets remain unavailable
+    until another accepted real candle establishes the close. A rejected row whose timestamp cannot
+    be identified disables synthesis for that payload page. Expansion is bounded to the requested
+    range, and a later real exchange candle always overwrites a persisted synthetic bucket.
+    Leading, trailing, failed-fetch, and unproven between-page gaps remain unavailable. The established
+    1m path retains its verified-gap tracking and standardization.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

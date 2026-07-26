@@ -125,6 +125,13 @@ def test_format_exchange_config_error_is_bounded_and_value_safe():
         pb_mod.Passivbot._format_exchange_config_error(unsafe_type("SECRET"))
         == "error_type=Exception"
     )
+    structured = RuntimeError(
+        'gate {"label":"RISK_LIMIT_EXCEEDED","message":"position risk limit is zero"}'
+    )
+    assert pb_mod.Passivbot._format_exchange_config_error(structured) == (
+        "error_type=RuntimeError error_label=RISK_LIMIT_EXCEEDED "
+        "error_reason=position risk limit is zero"
+    )
 
 
 def make_defx_config_bot(cca):
@@ -615,7 +622,7 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
+async def test_execute_to_exchange_stops_after_exchange_config_shutdown(monkeypatch):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -669,6 +676,15 @@ async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
+
+    async def keep_creations(_bot, orders):
+        return orders
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_filter_fresh_market_snapshot_creations",
+        keep_creations,
+    )
     result = await pb_mod.Passivbot.execute_to_exchange(bot)
 
     assert result is None
@@ -1563,6 +1579,7 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
             )
             self.config_symbols = None
             self.created_orders = None
+            self.restart_budget_calls = 0
             self._current_planning_snapshot = FreshPlanningSnapshot()
             self.market_snapshot_provider = FreshMarketSnapshotProvider()
 
@@ -1585,6 +1602,15 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
                     "price": 1.0,
                     "qty": 1.0,
                 },
+                {
+                    "symbol": "PENDING/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "price": 1.1,
+                    "qty": 1.0,
+                    "reduce_only": True,
+                    "pb_order_type": "close_grid_long",
+                },
             ]
 
         async def execute_cancellations_parent(self, orders):
@@ -1593,6 +1619,15 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         async def update_exchange_configs(self, symbols=None):
             self.config_symbols = symbols
             return {"READY/USDT:USDT"}
+
+        def _order_requires_exchange_config_before_create(self, order):
+            return order.get("reduce_only") is not True
+
+        def _pending_exchange_config_consumes_error_budget(self, blocked_orders):
+            return bool(blocked_orders)
+
+        async def restart_bot_on_too_many_errors(self):
+            self.restart_budget_calls += 1
 
         def get_raw_balance(self):
             return 1.0
@@ -1638,7 +1673,12 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot.config_symbols == ["PENDING/USDT:USDT", "READY/USDT:USDT"]
-    assert [order["symbol"] for order in bot.created_orders] == ["READY/USDT:USDT"]
+    assert [order["symbol"] for order in bot.created_orders] == [
+        "READY/USDT:USDT",
+        "PENDING/USDT:USDT",
+    ]
+    assert bot.created_orders[1]["reduce_only"] is True
+    assert bot.restart_budget_calls == 1
     skipped_events = [
         event
         for event in bot._live_event_sink.events
@@ -1650,5 +1690,6 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
     assert skipped_events[0].reason_code == ReasonCodes.PENDING_EXCHANGE_CONFIG
     assert skipped_events[0].data["order_count"] == 1
     assert skipped_events[0].data["symbols"] == ["PENDING/USDT:USDT"]
+    assert skipped_events[0].data["protective_allowed_count"] == 1
     assert skipped_events[0].data["pending_symbols_count"] == 1
     assert bot._live_event_pipeline.close(timeout=2.0) is True

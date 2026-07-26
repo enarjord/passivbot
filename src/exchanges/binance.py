@@ -88,10 +88,7 @@ class BinanceBot(CCXTBot):
         exchange_position_side = str(
             info.get("positionSide") or info.get("ps") or ""
         ).lower()
-        if not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
-        ):
+        if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
         if exchange_position_side in {"long", "short"}:
             return exchange_position_side
@@ -109,8 +106,7 @@ class BinanceBot(CCXTBot):
             info.get("positionSide") or info.get("ps") or ""
         ).lower()
         if exchange_position_side == "both" or not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
+            getattr(self, "hedge_mode", True)
         ):
             reduce_only = self._strict_order_reduce_only_response(order)
             if not isinstance(reduce_only, bool):

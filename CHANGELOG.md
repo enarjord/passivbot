@@ -10,7 +10,67 @@ All notable user-facing changes will be documented in this file.
   watcher. KuCoin native higher-timeframe no-tick gaps are now materialized only when bounded by
   real candles and absent from one successful raw payload, restoring required 1h volatility EMA
   readiness without fabricating rejected, leading, trailing, failed-fetch, or unproven
-  between-page data.
+  between-page data. Rejected or unidentifiable rows break payload continuity, expansion is bounded
+  to the requested range, and later real candles deterministically replace persisted synthetic
+  buckets.
+
+- Forager monitor health now distinguishes approved candidates that are
+  temporarily unrankable because volume/log-range or required candidate EMA
+  inputs are unavailable from active-symbol trading degradation. Ranking-feature
+  health is populated by the active Rust-orchestrator preparation path, candidate
+  labels use the same market-age and effective-minimum-cost eligibility as live
+  selection, all EMA health is cleared before a failed replacement bundle can
+  leave stale state behind, candidates remain explicitly unrankable until a
+  bundle completes, and active-symbol EMA failures retain their active
+  degradation reason. Open-tail forager projection computes only close EMAs
+  because ranking metrics must come from real candles, and latest-value EMA
+  calculations avoid allocating an unused full series.
+
+- Live trailing fill confirmation now accepts reconstructed position-price
+  differences of at most one effective executable price tick to accommodate
+  exchange rounding or truncation of sub-tick VWAPs, including Hyperliquid's
+  significant-digit price ladder and its asymmetric spacing across powers of
+  ten. Fill identity and reconstructed position size remain strict, the explicit
+  position-opening replay retains its ordinary half-tick requirement, larger
+  discrepancies remain fail-closed, and acceptance beyond the ordinary half-tick
+  comparison emits one warning plus a structured diagnostic when confirmation
+  clears.
+
+- Live order-write failures now include bounded, sanitized exchange status, code,
+  label, and reason fields when CCXT exposes a structured rejection payload through
+  either an exception or a terminal result mapping, including OKX per-order
+  `sCode`/`sMsg` details. Successful outcomes retain ordinary result summaries
+  without misclassifying native success codes/messages as errors.
+  Sensitive-marked values and long identifier-like tokens remain redacted; the
+  existing bot restart error budget is unchanged.
+
+- Gate.io now applies the configured leverage and margin mode before a symbol's
+  first order creation. This refreshes Gate's leverage-derived position risk limit
+  after contract risk-table changes instead of repeatedly failing valid orders
+  with a zero risk limit. An hourly market refresh invalidates the configured
+  marker when the effective leverage cap changes so the next entry refreshes
+  the exchange configuration.
+  A failed refresh blocks entries and advances the existing restart budget,
+  while reduce-only closes remain eligible. Churn admission and the later
+  configuration write now share one retry-eligibility timestamp so a backoff
+  expiring mid-wave cannot introduce an unreserved signed action. Missing or
+  invalid leverage-cap metadata is isolated to the affected symbol: entries
+  remain pending and restart-visible, but market initialization and protective
+  closes continue.
+
+- Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
+  mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous
+  strategy exposure. Valid hedge-account updates no longer enter the one-way normalization path
+  and reconnect their watchers merely because native `reduceOnly` metadata is absent.
+
+- Live trailing fill confirmation can now recover from a polluted historical
+  `psize`/`pprice` residue when the exchange supplies an explicit position
+  opening timestamp. Recovery is restricted to a single identified opening fill
+  exactly matching both the opening and latest position-update timestamps, still
+  requires its zero-state after-state to match the authoritative position, and
+  emits an operator-visible fallback diagnostic only when confirmation actually
+  clears. Multi-fill cohorts, later updates, proximity-only matches, and generic
+  or update-only timestamps remain insufficient.
 
 - KuCoin REST and private WebSocket clients now use IPv4 transport so API keys
   restricted to a host's stable public IPv4 address are not rejected when the
@@ -1812,6 +1872,12 @@ All notable user-facing changes will be documented in this file.
   reasons and candidate error types in concise smoke output, making
   `cache_only_fetch_failed` vs `never_fetched_cache_only` visible without a
   separate event query.
+- Forager monitor readiness is now scoped to the exact symbols evaluated by the
+  latest EMA bundle, optional cache-only metric gaps are classified as
+  candidate health failures, and open-tail projection preserves log-range
+  inputs required by held or explicitly normal strategies. Completed-candle
+  forager ranking metrics now have a distinct Rust input channel so coincident
+  strategy and ranking spans cannot reuse projected values for coin selection.
 - `passivbot tool live-smoke-report` now reports timestamp/nonce
   `cycle.degraded` events recovered by a subsequent successful
   `exchange.time_sync` event as recovered problem events instead of hard smoke

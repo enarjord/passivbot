@@ -73,6 +73,7 @@ from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
     bounded_exception_type,
+    bounded_exchange_error_context,
     exception_text_contains,
     exception_type_name_contains,
 )
@@ -944,12 +945,18 @@ class Passivbot:
         )
         if len(symbol) > 80:
             symbol = f"{symbol[:80]}..."
+        error_context = bounded_exchange_error_context(error)
         logging.error(
-            "[order] write failed | action=%s symbol=%s type=%s error_type=%s",
+            "[order] write failed | action=%s symbol=%s type=%s error_type=%s "
+            "status=%s code=%s label=%s reason=%s",
             action,
             symbol,
             Passivbot._log_order_type(order),
-            type(error).__name__,
+            bounded_exception_type(error),
+            error_context.get("error_status", "-"),
+            error_context.get("error_code", "-"),
+            error_context.get("error_label", "-"),
+            error_context.get("error_reason", "-"),
         )
 
     @staticmethod
@@ -8470,19 +8477,63 @@ class Passivbot:
         anchor: dict | None,
     ) -> bool:
         """Whether a fill's recorded after-state matches an exchange position."""
-        if anchor is None:
-            return False
-        position_size, position_price = state
-        if not all(math.isfinite(value) for value in (position_size, position_price)):
-            return False
-        qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
-        price_step = abs(
+        return (
+            self._fill_anchor_position_state_match_kind(
+                symbol,
+                pside,
+                state,
+                anchor,
+            )
+            is not None
+        )
+
+    def _effective_position_price_tick(
+        self,
+        symbol: str,
+        price: float,
+        comparison_price: float | None = None,
+    ) -> float:
+        """Return the connector's effective executable-price increment."""
+        del price, comparison_price
+        return abs(
             float(getattr(self, "price_steps", {}).get(symbol, 0.0) or 0.0)
         )
+
+    @staticmethod
+    def _within_absolute_tolerance(
+        lhs: float, rhs: float, tolerance: float
+    ) -> bool:
+        """Compare at an inclusive float boundary with scale-aware ULP slack."""
+        if not all(math.isfinite(value) for value in (lhs, rhs, tolerance)):
+            return False
+        if tolerance < 0.0:
+            return False
+        slack = max(
+            math.ulp(lhs),
+            math.ulp(rhs),
+            math.ulp(tolerance),
+            tolerance * 1e-12,
+            1e-15,
+        )
+        return abs(lhs - rhs) <= tolerance + 4.0 * slack
+
+    def _fill_anchor_position_state_match_kind(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict | None,
+    ) -> str | None:
+        """Return the evidence kind matching a fill anchor to exchange state."""
+        if anchor is None:
+            return None
+        position_size, position_price = state
+        if not all(math.isfinite(value) for value in (position_size, position_price)):
+            return None
+        qty_step = abs(float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0))
         c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
         position_size_in_fill_units = abs(position_size) * c_mult
         qty_tolerance = max(qty_step * c_mult * 0.5, 1e-12)
-        price_tolerance = max(price_step * 0.5, abs(position_price) * 1e-9, 1e-12)
         if "psize" in anchor and "pprice" in anchor:
             fill_size = abs(float(anchor["psize"]))
             fill_price = float(anchor["pprice"])
@@ -8490,15 +8541,279 @@ class Passivbot:
                 math.isfinite(fill_size)
                 and math.isfinite(fill_price)
                 and abs(fill_size - position_size_in_fill_units) <= qty_tolerance
-                and abs(fill_price - position_price) <= price_tolerance
             ):
-                return True
+                effective_price_tick = self._effective_position_price_tick(
+                    symbol, position_price, fill_price
+                )
+                strict_price_tolerance = max(
+                    effective_price_tick * 0.5,
+                    abs(position_price) * 1e-9,
+                    1e-12,
+                )
+                price_tolerance = max(
+                    effective_price_tick,
+                    abs(position_price) * 1e-9,
+                    1e-12,
+                )
+                if self._within_absolute_tolerance(
+                    fill_price, position_price, strict_price_tolerance
+                ):
+                    return "recorded_after_state"
+                if self._within_absolute_tolerance(
+                    fill_price, position_price, price_tolerance
+                ):
+                    return "recorded_after_state_price_tolerance"
 
-        # Price and quantity alone cannot prove this fill opened the entire
-        # position: unseen reductions can produce the same live size/average.
-        # Keep the cohort pending until refreshed history reconstructs a
-        # matching post-fill state.
-        return False
+        if self._position_open_fill_replay_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+        ):
+            return "position_open_boundary"
+        return None
+
+    def _position_open_fill_replay_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+    ) -> bool:
+        """Replay fills from an exchange-proven position opening boundary.
+
+        A cache may retain an old synthetic position residue when an exchange
+        no longer exposes the intervening close. Explicit position opening
+        timestamps (for example OKX ``cTime``) provide a safe zero-state
+        boundary after a successful post-snapshot fill refresh only when the
+        identified opening fill is also adjacent to the authoritative latest
+        position-update time. Generic timestamps and multi-fill cohorts remain
+        insufficient.
+        """
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        if (
+            open_ts is None
+            or update_ts is None
+            or anchor_ts <= 0
+            or open_ts != anchor_ts
+            or update_ts != anchor_ts
+        ):
+            return False
+        manager = getattr(self, "_pnls_manager", None)
+        if manager is None:
+            return False
+        try:
+            events = [
+                event
+                for event in manager.get_events()
+                if str(getattr(event, "symbol", "")) == symbol
+                and str(getattr(event, "position_side", "")).lower() == pside
+                and int(getattr(event, "timestamp", 0) or 0) >= open_ts - 5_000
+                and int(getattr(event, "timestamp", 0) or 0)
+                <= int(anchor.get("timestamp") or 0)
+            ]
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        if not events:
+            return False
+        events.sort(key=lambda event: int(event.timestamp))
+
+        # Start at the first additive fill tied closely to the exchange's
+        # opening timestamp. A distant first event means the available history
+        # does not prove the zero-state boundary.
+        opening_index = None
+        for index, event in enumerate(events):
+            try:
+                qty = float(event.qty)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return False
+            is_add = (pside == "long" and qty > 0.0) or (
+                pside == "short" and qty < 0.0
+            )
+            if is_add:
+                if abs(int(event.timestamp) - open_ts) > 5_000:
+                    return False
+                opening_index = index
+                break
+        if opening_index is None:
+            return False
+        events = events[opening_index:]
+
+        # This fallback intentionally accepts only a singleton open cohort. A
+        # multi-fill replay can reconcile to the same final size/VWAP despite
+        # an omitted reduction/re-entry pair, while a position update time
+        # later than the opening fill proves that the opening fill is not the
+        # latest position mutation. Richer cohorts therefore remain pending.
+        if len(events) != 1:
+            return False
+
+        # The replay must end at the exact exchange fill identity selected as
+        # the current anchor. Timestamp-only equality is insufficient when an
+        # order is filled in multiple components.
+        latest_event = events[-1]
+        latest_id = str(getattr(latest_event, "id", "") or "")
+        if not latest_id:
+            return False
+        source_ids = [
+            str(source_id)
+            for source_id in (getattr(latest_event, "source_ids", None) or [])
+            if source_id
+        ]
+        if len(source_ids) != 1:
+            return False
+        if self._fill_position_change_epoch(latest_event) != str(
+            anchor.get("epoch") or ""
+        ):
+            return False
+
+        psize = 0.0
+        pprice = 0.0
+        for event in events:
+            try:
+                qty = float(event.qty)
+                price = float(event.price)
+                c_mult = float(getattr(event, "c_mult", 1.0) or 1.0)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                return False
+            if (
+                not all(math.isfinite(value) for value in (qty, price, c_mult))
+                or price <= 0.0
+                or c_mult <= 0.0
+            ):
+                return False
+            effective_qty = qty * c_mult
+            if pside == "short":
+                add_amount = max(-effective_qty, 0.0)
+                reduce_amount = max(effective_qty, 0.0)
+            else:
+                add_amount = max(effective_qty, 0.0)
+                reduce_amount = max(-effective_qty, 0.0)
+            if add_amount > 0.0:
+                pprice = (
+                    price
+                    if psize <= 0.0
+                    else (psize * pprice + add_amount * price)
+                    / (psize + add_amount)
+                )
+                psize += add_amount
+            if reduce_amount > 0.0:
+                psize = max(0.0, psize - reduce_amount)
+                if psize <= 1e-12:
+                    psize = 0.0
+                    pprice = 0.0
+
+        position_size, position_price = state
+        c_mult = abs(float(getattr(self, "c_mults", {}).get(symbol, 1.0) or 1.0))
+        expected_size = abs(position_size) * c_mult
+        effective_price_tick = self._effective_position_price_tick(
+            symbol, position_price, pprice
+        )
+        strict_price_tolerance = max(
+            effective_price_tick * 0.5,
+            abs(position_price) * 1e-9,
+            1e-12,
+        )
+        return (
+            abs(psize - expected_size) <= qty_tolerance
+            and self._within_absolute_tolerance(
+                pprice, position_price, strict_price_tolerance
+            )
+        )
+
+    def _emit_position_open_fill_recovery_used(
+        self, symbol: str, pside: str, anchor: dict
+    ) -> None:
+        """Report boundary recovery only after every confirmation predicate clears."""
+        position = self.positions.get(symbol, {}).get(pside, {})
+        open_ts = self._position_open_timestamp_from_row(position)
+        update_ts = self._position_update_timestamp_from_row(position)
+        anchor_ts = int(anchor.get("timestamp") or 0)
+        logging.warning(
+            "[fills] recovered polluted cached after-state from explicit position "
+            "open/update boundary | symbol=%s pside=%s fill_ts=%s",
+            self._log_symbol(symbol),
+            pside,
+            anchor_ts,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "position_open_single_fill",
+                    "open_timestamp": int(open_ts),
+                    "position_update_timestamp": int(update_ts),
+                    "fill_timestamp": int(anchor_ts),
+                    "cohort_fill_count": 1,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
+
+    def _emit_bounded_fill_position_price_discrepancy(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+    ) -> None:
+        """Report exchange rounding accepted only after confirmation clears."""
+        exchange_price = float(state[1])
+        reconstructed_price = float(anchor["pprice"])
+        effective_price_tick = self._effective_position_price_tick(
+            symbol, exchange_price, reconstructed_price
+        )
+        price_delta = abs(reconstructed_price - exchange_price)
+        delta_ticks = (
+            price_delta / effective_price_tick
+            if effective_price_tick > 0.0
+            else 0.0
+        )
+        price_tolerance = max(
+            effective_price_tick,
+            abs(exchange_price) * 1e-9,
+            1e-12,
+        )
+        logging.warning(
+            "[fills] accepted bounded reconstructed position-price discrepancy | "
+            "symbol=%s pside=%s exchange_price=%.12g reconstructed_price=%.12g "
+            "delta=%.12g ticks=%.6g tolerance=%.12g",
+            self._log_symbol(symbol),
+            pside,
+            exchange_price,
+            reconstructed_price,
+            price_delta,
+            delta_ticks,
+            price_tolerance,
+        )
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                EventTypes.FILL_POSITION_PRICE_TOLERANCE_USED,
+                ("diagnostic", "fills", "recovery", "fallback"),
+                {
+                    "recovery": "recorded_after_state_price_tolerance",
+                    "exchange_position_price": exchange_price,
+                    "reconstructed_position_price": reconstructed_price,
+                    "price_delta": price_delta,
+                    "effective_price_tick": effective_price_tick,
+                    "delta_ticks": delta_ticks,
+                    "price_tolerance": price_tolerance,
+                },
+                ts_ms=utc_ms(),
+                symbol=symbol,
+                pside=pside,
+            ),
+        )
 
     def _latest_fill_position_change_epochs(self) -> dict[tuple[str, str], str]:
         """Return the newest known fill identity for each symbol and position side."""
@@ -8661,6 +8976,7 @@ class Passivbot:
                     )
                     expected_position_state = pending_position_states.get(epoch_key)
                     failed_predicates = []
+                    position_match_kind = None
                     if current_epoch is None:
                         failed_predicates.append("missing_fill_anchor")
                     elif not current_epoch.startswith("fill:"):
@@ -8676,11 +8992,14 @@ class Passivbot:
                         current_epoch is not None
                         and current_epoch.startswith("fill:")
                         and expected_position_state is not None
-                        and not self._fill_anchor_matches_position_state(
-                            symbol, pside, expected_position_state, anchor
-                        )
                     ):
-                        failed_predicates.append("fill_after_state_mismatch")
+                        position_match_kind = (
+                            self._fill_anchor_position_state_match_kind(
+                                symbol, pside, expected_position_state, anchor
+                            )
+                        )
+                        if position_match_kind is None:
+                            failed_predicates.append("fill_after_state_mismatch")
                     if failed_predicates:
                         position_update_timestamp = self._position_update_timestamp_ms(
                             symbol, pside
@@ -8715,6 +9034,20 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
+                    if position_match_kind == "position_open_boundary":
+                        self._emit_position_open_fill_recovery_used(
+                            symbol, pside, anchor
+                        )
+                    elif (
+                        position_match_kind
+                        == "recorded_after_state_price_tolerance"
+                    ):
+                        self._emit_bounded_fill_position_price_discrepancy(
+                            symbol,
+                            pside,
+                            expected_position_state,
+                            anchor,
+                        )
                     pending_fill_confirmations.pop(epoch_key, None)
                     pending_fill_min_generations.pop(epoch_key, None)
                     pending_position_states.pop(epoch_key, None)
@@ -9004,7 +9337,7 @@ class Passivbot:
 
     @staticmethod
     def _format_exchange_config_error(exc: BaseException) -> str:
-        """Return a bounded error-type label without rendering exception values."""
+        """Return bounded structured exchange context without raw response text."""
         error_type = type(exc).__name__
         if (
             not error_type
@@ -9013,9 +9346,17 @@ class Passivbot:
             or not error_type.replace("_", "").isalnum()
         ):
             error_type = "Exception"
-        return f"error_type={error_type}"
+        fields = [f"error_type={error_type}"]
+        for key, value in bounded_exchange_error_context(exc).items():
+            fields.append(f"{key}={value}")
+        return " ".join(fields)
 
-    async def update_exchange_configs(self, symbols=None):
+    async def update_exchange_configs(
+        self,
+        symbols=None,
+        *,
+        eligibility_now_ms: int | None = None,
+    ):
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
@@ -9040,7 +9381,12 @@ class Passivbot:
                 retry_after_ms = int(
                     self._exchange_config_retry_after_ms.get(symbol, 0) or 0
                 )
-                if retry_after_ms > utc_ms():
+                retry_check_now_ms = (
+                    int(eligibility_now_ms)
+                    if eligibility_now_ms is not None
+                    else utc_ms()
+                )
+                if retry_after_ms > retry_check_now_ms:
                     continue
                 try:
                     await self.update_exchange_config_by_symbols([symbol])
@@ -9082,9 +9428,25 @@ class Passivbot:
                         await asyncio.sleep(pause_s)
         return configured_symbols
 
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+    def _order_churn_precreate_signed_action_costs(
+        self,
+        symbols,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
         """Return connector signed-action costs required before creating on symbols."""
+        del now_ms
         return {}
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """Return whether this creation requires successful per-symbol setup."""
+        return True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Return whether blocked creations should consume the execution error budget."""
+        return False
 
     def _is_rate_limit_like_exception(self, exc: Exception) -> bool:
         if isinstance(exc, RateLimitExceeded):
@@ -9304,6 +9666,14 @@ class Passivbot:
         # filter coins by min effective cost
         # filter coins by relative volume
         # filter coins by log range
+        if self.is_forager_mode(pside):
+            unavailable_by_side = getattr(
+                self, "_forager_rank_feature_unavailable_by_side", None
+            )
+            if not isinstance(unavailable_by_side, dict):
+                unavailable_by_side = {}
+            unavailable_by_side[pside] = set()
+            self._forager_rank_feature_unavailable_by_side = unavailable_by_side
         if self.get_forced_PB_mode(pside):
             return []
         candidates = self.approved_coins_minus_ignored_coins[pside]
@@ -9392,6 +9762,9 @@ class Passivbot:
             ]
             if feature_unavailable:
                 feature_unavailable_count = len(feature_unavailable)
+                self._forager_rank_feature_unavailable_by_side[pside] = set(
+                    feature_unavailable
+                )
                 Passivbot._emit_forager_feature_unavailable_event(
                     self,
                     pside=pside,
@@ -16084,6 +16457,9 @@ class Passivbot:
         m1_close_emas = snapshot["m1_close_emas"]
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
+        forager_m1_log_range_emas = snapshot.get(
+            "forager_m1_log_range_emas", m1_log_range_emas
+        )
         h1_log_range_emas = snapshot["h1_log_range_emas"]
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
@@ -16210,6 +16586,12 @@ class Passivbot:
                 [float(k), float(v)]
                 for k, v in sorted(m1_log_range_emas[symbol].items())
             ]
+            forager_m1_lr_pairs = [
+                [float(k), float(v)]
+                for k, v in sorted(
+                    forager_m1_log_range_emas.get(symbol, {}).items()
+                )
+            ]
             h1_lr_pairs = [
                 [float(k), float(v)]
                 for k, v in sorted(h1_log_range_emas[symbol].items())
@@ -16232,6 +16614,11 @@ class Passivbot:
                             "volume": m1_volume_pairs,
                         },
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
+                    },
+                    "forager_m1": {
+                        "close": [],
+                        "log_range": forager_m1_lr_pairs,
+                        "volume": m1_volume_pairs,
                     },
                     "long": side_input("long"),
                     "short": side_input("short"),
@@ -16362,6 +16749,16 @@ class Passivbot:
         """
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
+        self._forager_rank_feature_unavailable_by_side = {
+            "long": set(),
+            "short": set(),
+        }
+        self._orchestrator_ema_bundle_completed = False
+        self._orchestrator_ema_bundle_symbols = set()
+        self._orchestrator_forager_m1_log_range_emas = {}
+        self._orchestrator_ema_unavailable_symbols = set()
+        self._orchestrator_candidate_ema_unavailable_symbols = set()
+        self._orchestrator_ema_unavailable_reasons = {}
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17432,14 +17829,26 @@ class Passivbot:
             dict[float, float] | None,
             dict[float, float] | None,
         ]:
+            project_strategy_log_range = bool(
+                required_m1_lr_for_symbol
+                and sym not in cache_only_symbols
+            )
+            projection_metrics = {
+                "close": sorted(need_close_spans[sym]),
+            }
+            if not is_forager_mode():
+                projection_metrics.update(
+                    {
+                        "qv": m1_volume_spans,
+                        "log_range": requested_m1_lr_spans,
+                    }
+                )
+            elif project_strategy_log_range:
+                projection_metrics["log_range"] = required_m1_lr_for_symbol
             try:
                 projected = await self.cm.get_projected_open_tail_ema_metrics(
                     sym,
-                    {
-                        "close": sorted(need_close_spans[sym]),
-                        "qv": m1_volume_spans,
-                        "log_range": requested_m1_lr_spans,
-                    },
+                    projection_metrics,
                     latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
                     last_cached_ts=int(projection_ctx["last_cached_ts"]),
                     max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
@@ -17458,16 +17867,28 @@ class Passivbot:
                 )
                 raise
             close = dict(projected.get("close", {}))
-            vol = projected_optional_map(
-                sym, projected, "qv", m1_volume_spans, "m1_volume"
-            )
-            lr1m = projected_optional_map(
-                sym,
-                projected,
-                "log_range",
-                requested_m1_lr_spans,
-                "m1_log_range",
-            )
+            if is_forager_mode() and not project_strategy_log_range:
+                vol = None
+                lr1m = None
+            else:
+                vol = (
+                    None
+                    if is_forager_mode()
+                    else projected_optional_map(
+                        sym, projected, "qv", m1_volume_spans, "m1_volume"
+                    )
+                )
+                lr1m = projected_optional_map(
+                    sym,
+                    projected,
+                    "log_range",
+                    (
+                        required_m1_lr_for_symbol
+                        if is_forager_mode()
+                        else requested_m1_lr_spans
+                    ),
+                    "m1_log_range",
+                )
             missing_close = [
                 span
                 for span in sorted(need_close_spans[sym])
@@ -17478,13 +17899,7 @@ class Passivbot:
                     "[ema] projected open-tail close EMA incomplete for "
                     f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                 )
-            if is_forager_mode():
-                # In forager mode, open-tail projection is valid for close EMA
-                # readiness only. Quote-volume and log-range ranking inputs must
-                # use current or cached real-candle EMA values.
-                vol = None
-                lr1m = None
-            else:
+            if not is_forager_mode() or project_strategy_log_range:
                 missing_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
@@ -17534,11 +17949,12 @@ class Passivbot:
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             if sym in cache_only_never_fetched:
                 mark_ema_unavailable(sym, "never_fetched_cache_only")
-                return {}, {}, {}, {}
+                return {}, {}, {}, {}, {}
             required_m1_lr_for_symbol = sorted(need_m1_lr_spans[sym])
             requested_m1_lr_spans = sorted(
                 set(m1_lr_spans) | set(required_m1_lr_for_symbol)
             )
+            forager_lr1m: Optional[dict[float, float]] = None
             try:
                 projection_ctx = projection_contexts.get(sym)
                 if projection_ctx is not None:
@@ -17630,6 +18046,22 @@ class Passivbot:
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
+                elif is_forager_mode():
+                    forager_lr1m = await fetch_map(
+                        sym,
+                        m1_lr_spans,
+                        ema_lr_1m,
+                        "m1_log_range",
+                    )
+                    lr1m = {**forager_lr1m, **lr1m}
+                if forager_lr1m is None:
+                    forager_lr1m = {
+                        span: lr1m[span]
+                        for span in m1_lr_spans
+                        if span in lr1m
+                    }
+                if forager_lr1m is None:
+                    forager_lr1m = {}
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
                     raise
@@ -17654,14 +18086,13 @@ class Passivbot:
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
-                return {}, {}, {}, {}
+                return {}, {}, {}, {}, {}
             missing_required_volume = [
                 span for span in sorted(required_forager_volume_spans) if span not in vol
             ]
             missing_required_forager_lr1m = [
-                span
-                for span in sorted(required_forager_m1_lr_spans)
-                if span not in lr1m
+                span for span in sorted(required_forager_m1_lr_spans)
+                if span not in forager_lr1m
             ]
             if missing_required_volume or missing_required_forager_lr1m:
                 reasons = []
@@ -17700,7 +18131,9 @@ class Passivbot:
                 )
             if sym in cache_only_symbols:
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
-                missing_lr1m = [span for span in requested_m1_lr_spans if span not in lr1m]
+                missing_lr1m = [
+                    span for span in m1_lr_spans if span not in forager_lr1m
+                ]
                 if missing_volume or missing_lr1m:
                     missing_bits = []
                     if missing_volume:
@@ -17709,8 +18142,8 @@ class Passivbot:
                         missing_bits.append("missing_log_range")
                     mark_ema_unavailable(sym, "+".join(missing_bits) or "incomplete")
                     if not (missing_required_volume or missing_required_forager_lr1m):
-                        return {}, {}, {}, {}
-            return close, vol, lr1m, h1
+                        return {}, {}, {}, {}, {}
+            return close, vol, lr1m, h1, forager_lr1m
 
         # Ordering: symbols with open positions first (they need EMA data
         # for correct order calculation), remaining symbols shuffled to
@@ -17750,16 +18183,18 @@ class Passivbot:
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
         m1_log_range_emas: dict[str, dict[float, float]] = {}
+        forager_m1_log_range_emas: dict[str, dict[float, float]] = {}
         h1_log_range_emas: dict[str, dict[float, float]] = {}
         errors: list[tuple[str, BaseException]] = []
         for sym, res in zip(ordered_symbols, symbol_results):
             if isinstance(res, BaseException):
                 errors.append((sym, res))
                 continue
-            close, vol, lr1m, h1 = res
+            close, vol, lr1m, h1, forager_lr1m = res
             m1_close_emas[sym] = close
             m1_volume_emas[sym] = vol
             m1_log_range_emas[sym] = lr1m
+            forager_m1_log_range_emas[sym] = forager_lr1m
             h1_log_range_emas[sym] = h1
         if optional_ema_drops:
             parts = []
@@ -17974,11 +18409,76 @@ class Passivbot:
             if vol_span_long in m1_volume_emas[s]
         }
         log_ranges_long = {
-            s: m1_log_range_emas[s][lr_span_long]
+            s: forager_m1_log_range_emas[s][lr_span_long]
             for s in symbols
-            if lr_span_long in m1_log_range_emas[s]
+            if lr_span_long in forager_m1_log_range_emas[s]
         }
+        rank_feature_unavailable_by_side = {
+            "long": set(),
+            "short": set(),
+        }
+        for pside, volume_span, log_range_span in (
+            ("long", vol_span_long, lr_span_long),
+            ("short", vol_span_short, lr_span_short),
+        ):
+            if not bool(is_forager_mode(pside)):
+                continue
+            volume_required = volume_span > 0.0 and (
+                _forager_volume_drop_pct(pside) > 0.0
+                or _forager_score_weight(pside, "volume") != 0.0
+            )
+            log_range_required = (
+                log_range_span > 0.0
+                and _forager_score_weight(pside, "volatility") != 0.0
+            )
+            for symbol in symbols:
+                if (
+                    volume_required
+                    and volume_span not in m1_volume_emas.get(symbol, {})
+                ) or (
+                    log_range_required
+                    and log_range_span
+                    not in forager_m1_log_range_emas.get(symbol, {})
+                ):
+                    rank_feature_unavailable_by_side[pside].add(symbol)
+        self._forager_rank_feature_unavailable_by_side = (
+            rank_feature_unavailable_by_side
+        )
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
+        candidate_reason_names = {
+            reason
+            for reason in ema_unavailable_reasons
+            if reason
+            in {
+                "cache_only_fetch_failed",
+                "candidate_required_ema_unavailable",
+                "never_fetched_cache_only",
+                "missing_volume",
+                "missing_log_range",
+                "missing_volume+missing_log_range",
+            }
+            or str(reason).startswith("missing_required_forager_")
+        }
+        self._orchestrator_candidate_ema_unavailable_symbols = {
+            symbol
+            for reason, items in candidate_ema_unavailable_details.items()
+            if reason in candidate_reason_names
+            for symbol, _error_type, _ema_types, _spans in items
+        } | {
+            symbol
+            for reason in candidate_reason_names
+            for symbol in ema_unavailable_reasons.get(reason, [])
+        }
+        self._orchestrator_ema_unavailable_reasons = {
+            str(reason): set(reason_symbols)
+            for reason, reason_symbols in ema_unavailable_reasons.items()
+        }
+        self._orchestrator_ema_bundle_symbols = set(symbols)
+        self._orchestrator_forager_m1_log_range_emas = {
+            symbol: dict(values)
+            for symbol, values in forager_m1_log_range_emas.items()
+        }
+        self._orchestrator_ema_bundle_completed = True
         Passivbot._emit_ema_bundle_completed_event(
             self,
             symbols=symbols,
@@ -18042,6 +18542,9 @@ class Passivbot:
             self._forager_new_normal_warmup_symbols = pending
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
+        )
+        forager_m1_log_range_emas = getattr(
+            self, "_orchestrator_forager_m1_log_range_emas", {}
         )
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
@@ -18188,6 +18691,12 @@ class Passivbot:
                 [float(k), float(v)]
                 for k, v in sorted(m1_log_range_emas[symbol].items())
             ]
+            forager_m1_lr_pairs = [
+                [float(k), float(v)]
+                for k, v in sorted(
+                    forager_m1_log_range_emas.get(symbol, {}).items()
+                )
+            ]
             h1_lr_pairs = [
                 [float(k), float(v)]
                 for k, v in sorted(h1_log_range_emas[symbol].items())
@@ -18208,6 +18717,11 @@ class Passivbot:
                             "volume": m1_volume_pairs,
                         },
                         "h1": {"close": [], "log_range": h1_lr_pairs, "volume": []},
+                    },
+                    "forager_m1": {
+                        "close": [],
+                        "log_range": forager_m1_lr_pairs,
+                        "volume": m1_volume_pairs,
                     },
                     "long": side_input("long"),
                     "short": side_input("short"),

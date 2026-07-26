@@ -62,6 +62,25 @@ def test_ema_series_skips_leading_nonfinite_without_poisoning_window(tmp_path):
     assert math.isnan(float(cm._ema_series(np.asarray([float("nan")]), span=3.0)[-1]))
 
 
+@pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0])
+def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="test",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    values = np.asarray(
+        [float("nan"), 1.0, 2.0, float("nan"), -3.0, 8.0, 13.0],
+        dtype=np.float64,
+    )
+
+    assert cm._ema(values, span) == pytest.approx(
+        float(cm._ema_series(values, span)[-1]),
+        rel=0.0,
+        abs=1e-15,
+    )
+
+
 @pytest.mark.asyncio
 async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
     class _Ex:
@@ -1276,6 +1295,19 @@ def test_merge_overwrite_prefers_new_on_conflict(tmp_path):
     merged = cm._merge_overwrite(existing, new)
     assert merged.size == 1
     assert float(merged[0]["c"]) == pytest.approx(2.0)
+
+
+def test_merge_overwrite_prefers_lower_valued_new_row_on_conflict(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    ts = _floor_minute(int(time.time() * 1000))
+    existing = np.array([(ts, 300.0, 300.0, 300.0, 300.0, 0.0)], dtype=CANDLE_DTYPE)
+    new = np.array([(ts, 200.0, 201.0, 199.0, 200.0, 5.0)], dtype=CANDLE_DTYPE)
+
+    merged = cm._merge_overwrite(existing, new)
+
+    assert merged.size == 1
+    assert float(merged[0]["c"]) == pytest.approx(200.0)
+    assert float(merged[0]["bv"]) == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
@@ -2872,6 +2904,139 @@ def test_kucoin_h1_rejected_payload_bucket_remains_unavailable(
     )
 
     assert list(arr["ts"]) == [base, base + 2 * hour_ms]
+
+
+def test_kucoin_h1_unidentifiable_rejected_row_disables_page_synthesis(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    hour_ms = 60 * ONE_MIN_MS
+    base = (int(time.time() * 1000) // hour_ms) * hour_ms - 3 * hour_ms
+    pages = [
+        [
+            [base, 100.0, 101.0, 99.0, 100.0, 5.0],
+            [None, 101.0, 102.0, 100.0, 101.0, 5.0],
+            [base + 2 * hour_ms, 102.0, 103.0, 101.0, 102.0, 5.0],
+        ]
+    ]
+
+    async def fake_once(
+        symbol,
+        since_ms,
+        limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(
+        cm._fetch_ohlcv_paginated(
+            "MORPHO/USDT:USDT",
+            base,
+            base + 3 * hour_ms,
+            timeframe="1h",
+        )
+    )
+
+    assert list(arr["ts"]) == [base, base + 2 * hour_ms]
+
+
+def test_kucoin_h1_rejected_bucket_is_continuity_barrier(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    hour_ms = 60 * ONE_MIN_MS
+    base = (int(time.time() * 1000) // hour_ms) * hour_ms - 4 * hour_ms
+    pages = [
+        [
+            [base, 100.0, 101.0, 99.0, 100.0, 5.0],
+            [base + hour_ms, 100.0, float("nan"), 99.0, 100.0, 5.0],
+            [base + 3 * hour_ms, 300.0, 301.0, 299.0, 300.0, 5.0],
+        ]
+    ]
+
+    async def fake_once(
+        symbol,
+        since_ms,
+        limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(
+        cm._fetch_ohlcv_paginated(
+            "MORPHO/USDT:USDT",
+            base,
+            base + 4 * hour_ms,
+            timeframe="1h",
+        )
+    )
+
+    assert list(arr["ts"]) == [base, base + 3 * hour_ms]
+
+
+def test_kucoin_h1_sparse_expansion_is_bounded_to_requested_range(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(), exchange_name="kucoin", cache_dir=str(tmp_path / "caches")
+    )
+    hour_ms = 60 * ONE_MIN_MS
+    base = (int(time.time() * 1000) // hour_ms) * hour_ms - 2_000 * hour_ms
+    request_start = base + 1_000 * hour_ms
+    request_end = request_start + 3 * hour_ms
+    pages = [
+        [
+            [base, 100.0, 101.0, 99.0, 100.0, 5.0],
+            [base + 2_000 * hour_ms, 200.0, 201.0, 199.0, 200.0, 5.0],
+        ]
+    ]
+
+    async def fake_once(
+        symbol,
+        since_ms,
+        limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        return pages.pop(0) if pages else []
+
+    cm._ccxt_fetch_ohlcv_once = fake_once
+    arr = asyncio.run(
+        cm._fetch_ohlcv_paginated(
+            "MORPHO/USDT:USDT",
+            request_start,
+            request_end,
+            timeframe="1h",
+        )
+    )
+
+    in_range = arr[
+        (arr["ts"] >= request_start)
+        & (arr["ts"] < request_end)
+    ]
+    assert list(in_range["ts"]) == [
+        request_start,
+        request_start + hour_ms,
+        request_start + 2 * hour_ms,
+    ]
+    assert arr.shape[0] == 4
 
 
 def test_rejected_duplicate_timestamp_is_accepted_when_any_row_is_valid(tmp_path):

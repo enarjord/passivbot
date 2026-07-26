@@ -198,7 +198,13 @@ class HyperliquidBot(CCXTBot):
         finally:
             self._hl_order_churn_rate_request_started_monotonic = 0.0
 
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+    def _order_churn_precreate_signed_action_costs(
+        self,
+        symbols,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
+        del now_ms
         configured = set(
             getattr(self, "already_updated_exchange_config_symbols", set()) or set()
         )
@@ -388,6 +394,39 @@ class HyperliquidBot(CCXTBot):
             "cross_capable": cross_capable,
             "only_isolated": only_isolated,
         }
+
+    def _effective_position_price_tick(
+        self,
+        symbol: str,
+        price: float,
+        comparison_price: float | None = None,
+    ) -> float:
+        """Account for Hyperliquid's decimal and significant-digit price ladder."""
+        static_step = super()._effective_position_price_tick(
+            symbol, price, comparison_price
+        )
+        prices = [abs(float(price))]
+        if comparison_price is not None:
+            prices.append(abs(float(comparison_price)))
+        positive_prices = [
+            candidate
+            for candidate in prices
+            if math.isfinite(candidate) and candidate > 0.0
+        ]
+        if not positive_prices:
+            return static_step
+        # The significant-digit ladder changes spacing at powers of ten. The
+        # lower endpoint determines the interval crossing that boundary.
+        ladder_price = min(positive_prices)
+        decimal_places = max(0, int(getattr(self, "n_decimal_places", 6) or 6))
+        significant_figures = max(
+            1, int(getattr(self, "n_significant_figures", 5) or 5)
+        )
+        decimal_step = 10.0 ** (-decimal_places)
+        significant_step = 10.0 ** (
+            math.floor(math.log10(ladder_price)) - significant_figures + 1
+        )
+        return max(static_step, decimal_step, significant_step)
 
     def _requires_isolated_margin(self, symbol: str) -> bool:
         """Check if a symbol requires isolated margin mode.

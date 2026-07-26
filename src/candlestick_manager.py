@@ -810,6 +810,20 @@ class CandlestickManager:
             {}
         )
         self._tf_range_cache_cap = 8
+        self._projected_open_tail_ema_cache: Dict[
+            str,
+            OrderedDict[
+                Tuple[
+                    int,
+                    int,
+                    int,
+                    int,
+                    Tuple[Tuple[str, Tuple[float, ...]], ...],
+                ],
+                Dict[str, Dict[float, float]],
+            ],
+        ] = {}
+        self._projected_open_tail_ema_cache_cap = 4
         self._step_warning_keys: set[Tuple[str, str, str]] = set()
         # Deduplication for zero-candle synthesis warnings - only warn once per unique gap
         # Key: (symbol, first_ts) to identify a gap by its starting point
@@ -2633,6 +2647,8 @@ class CandlestickManager:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        if tf_norm == "1m":
+            self._projected_open_tail_ema_cache.pop(symbol, None)
 
         # Update inception_ts if this is new earliest data for 1m (defer save until end)
         if tf_norm == "1m":
@@ -2804,10 +2820,13 @@ class CandlestickManager:
             return np.sort(_ensure_dtype(existing), order="ts")
         a = _ensure_dtype(existing)
         b = _ensure_dtype(new)
-        # Put existing first, then new; then keep last seen per ts to prefer new
+        # Put existing first, then new; then keep last seen per ts to prefer new.
+        # Sort the scalar timestamp vector rather than structured rows: NumPy
+        # may use unspecified structured fields as tie-breakers even when
+        # ``order="ts"``, which can otherwise let an older row win.
         combo = np.concatenate([a, b])
-        # Stable sort ensures that for equal timestamps, rows from `new` remain after `existing`.
-        combo = np.sort(combo, order="ts", kind="stable")
+        order = np.argsort(combo["ts"].astype(np.int64, copy=False), kind="stable")
+        combo = combo[order]
         ts = combo["ts"].astype(np.int64, copy=False)
         if combo.size <= 1:
             return combo
@@ -4389,12 +4408,24 @@ class CandlestickManager:
                 continue
         return present - accepted
 
+    def _ccxt_ohlcv_has_unidentifiable_rejected_row(self, rows: list) -> bool:
+        """Return whether a raw row cannot be attributed to a candle bucket."""
+        for row in rows:
+            try:
+                int(row[0])
+            except (IndexError, TypeError, ValueError, OverflowError):
+                return True
+        return False
+
     def _synthesize_verified_sparse_payload_gaps(
         self,
         arr: np.ndarray,
         *,
         period_ms: int,
+        start_ts: int,
+        end_exclusive_ts: int,
         rejected_timestamps: Optional[set[int]] = None,
+        has_unidentifiable_rejected_row: bool = False,
     ) -> np.ndarray:
         """Fill KuCoin higher-timeframe no-tick buckets bounded in one payload.
 
@@ -4412,8 +4443,14 @@ class CandlestickManager:
             or int(period_ms) <= ONE_MIN_MS
             or not isinstance(arr, np.ndarray)
             or arr.size < 2
+            or has_unidentifiable_rejected_row
         ):
             return arr
+        period_ms = int(period_ms)
+        first_requested_bucket = (
+            (int(start_ts) + period_ms - 1) // period_ms
+        ) * period_ms
+        requested_end_exclusive = int(end_exclusive_ts)
         arr = np.sort(_ensure_dtype(arr), order="ts")
         rows = []
         changed = False
@@ -4426,13 +4463,20 @@ class CandlestickManager:
             if following_ts <= current_ts + int(period_ms):
                 continue
             previous_close = float(current["c"])
+            synthesis_end = min(following_ts, requested_end_exclusive)
+            if rejected_timestamps:
+                barriers = [
+                    int(ts)
+                    for ts in rejected_timestamps
+                    if current_ts < int(ts) < following_ts
+                ]
+                if barriers:
+                    synthesis_end = min(synthesis_end, min(barriers))
             for ts in range(
-                current_ts + int(period_ms),
-                following_ts,
-                int(period_ms),
+                max(current_ts + period_ms, first_requested_bucket),
+                synthesis_end,
+                period_ms,
             ):
-                if rejected_timestamps and int(ts) in rejected_timestamps:
-                    continue
                 rows.append(
                     (
                         int(ts),
@@ -4530,6 +4574,11 @@ class CandlestickManager:
                 if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
                 else set()
             )
+            has_unidentifiable_rejected_row = bool(
+                self._record_payload_gaps_as_known
+                and period_ms > ONE_MIN_MS
+                and self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
+            )
             if arr.size == 0:
                 if raise_on_partial_empty_page and pages > 0:
                     _raise_terminal_empty_page(
@@ -4541,7 +4590,10 @@ class CandlestickManager:
             arr = self._synthesize_verified_sparse_payload_gaps(
                 arr,
                 period_ms=period_ms,
+                start_ts=since_start,
+                end_exclusive_ts=end_excl,
                 rejected_timestamps=rejected_payload_timestamps,
+                has_unidentifiable_rejected_row=has_unidentifiable_rejected_row,
             )
             if int(arr.size) > raw_arr_size:
                 verified_sparse_synthetic_count += int(arr.size) - raw_arr_size
@@ -7072,7 +7124,32 @@ class CandlestickManager:
     # ----- EMA helpers -----
 
     def _ema(self, values: np.ndarray, span: float) -> float:
-        return float(self._ema_series(values, span)[-1])
+        """Return the final bias-corrected EMA without allocating a full series."""
+        n = int(values.shape[0])
+        if n == 0:
+            return float("nan")
+        span = float(span)
+        alpha = 2.0 / (span + 1.0)
+        one_minus = 1.0 - alpha
+        first_finite_idx = None
+        for i in range(n):
+            if np.isfinite(float(values[i])):
+                first_finite_idx = i
+                break
+        if first_finite_idx is None:
+            return float("nan")
+        num = float(values[first_finite_idx])
+        den = 1.0
+        for i in range(first_finite_idx + 1, n):
+            value = float(values[i])
+            if not np.isfinite(value):
+                continue
+            num = alpha * value + one_minus * num
+            den = alpha + one_minus * den
+            if den <= np.finfo(np.float64).tiny:
+                num = alpha * value
+                den = alpha
+        return float(num / den)
 
     def _ema_series(self, values: np.ndarray, span: float) -> np.ndarray:
         """Return bias-corrected EMA (pandas ewm adjust=True) over `values`."""
@@ -7203,6 +7280,32 @@ class CandlestickManager:
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
             return {}
+        try:
+            index_mtime_ns = int(
+                os.stat(self._index_path(symbol, timeframe="1m")).st_mtime_ns
+            )
+        except (FileNotFoundError, OSError):
+            index_mtime_ns = 0
+        cache_key = (
+            int(latest_expected),
+            int(last_cached),
+            int(max_tail_gap),
+            index_mtime_ns,
+            tuple(
+                (metric_key, tuple(float(span) for span in spans))
+                for metric_key, spans in sorted(normalized.items())
+            ),
+        )
+        projection_cache = self._projected_open_tail_ema_cache.setdefault(
+            symbol, OrderedDict()
+        )
+        cached = projection_cache.get(cache_key)
+        if cached is not None:
+            projection_cache.move_to_end(cache_key)
+            return {
+                metric_key: dict(values)
+                for metric_key, values in cached.items()
+            }
         max_span = max(span for spans in normalized.values() for span in spans)
         window_candles = max(1, int(math.ceil(max_span)))
         start_ts = min(
@@ -7274,6 +7377,12 @@ class CandlestickManager:
                 else:
                     metric_out[span] = float(self._ema(tail, span))
             out[metric_key] = metric_out
+        projection_cache[cache_key] = {
+            metric_key: dict(values) for metric_key, values in out.items()
+        }
+        projection_cache.move_to_end(cache_key)
+        while len(projection_cache) > self._projected_open_tail_ema_cache_cap:
+            projection_cache.popitem(last=False)
         return out
 
     async def get_latest_cached_ema_metrics(

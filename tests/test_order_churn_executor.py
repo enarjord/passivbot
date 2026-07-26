@@ -174,7 +174,7 @@ async def test_far_candidate_reserves_required_config_action_with_create():
     admitted = await _apply_order_churn_final_admission(
         bot,
         [far],
-        config_action_costs_by_symbol={far["symbol"]: 1},
+        config_action_costs_by_order_id={id(far): 1},
     )
 
     assert admitted == []
@@ -184,9 +184,25 @@ async def test_far_candidate_reserves_required_config_action_with_create():
     admitted = await _apply_order_churn_final_admission(
         bot,
         [far],
-        config_action_costs_by_symbol={far["symbol"]: 1},
+        config_action_costs_by_order_id={id(far): 1},
     )
     assert admitted == [far]
+
+
+@pytest.mark.asyncio
+async def test_protective_order_does_not_inherit_same_symbol_config_cost():
+    bot = _Bot()
+    bot.action_headroom = 1
+    protective = _order("protective", price=99.0)
+    entry = _order("entry", price=99.0)
+
+    admitted = await _apply_order_churn_final_admission(
+        bot,
+        [protective],
+        config_action_costs_by_order_id={id(entry): 1},
+    )
+
+    assert admitted == [protective]
 
 
 def test_signed_action_tokens_complete_only_for_acknowledged_members():
