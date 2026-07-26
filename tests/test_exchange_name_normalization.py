@@ -6,6 +6,8 @@ import ccxt.pro as ccxt_pro
 import pytest
 
 import exchanges.gateio as gateio_module
+import passivbot
+import procedures
 import utils
 from candlestick_manager import CandlestickManager, ONE_MIN_MS
 from exchanges.ccxt_bot import CCXTBot
@@ -37,6 +39,97 @@ def test_gateio_session_boundary_resolves_current_rest_and_pro_clients(monkeypat
     assert utils.to_ccxt_client_id("gateio") == "gate"
     assert utils.to_ccxt_exchange_id("gateio") == "gateio"
     assert utils.to_standard_exchange_name("gateio") == "gateio"
+    assert utils.to_standard_exchange_name("gate") == "gateio"
+
+
+def test_gate_api_key_alias_normalizes_to_canonical_identity(tmp_path, caplog):
+    api_keys_path = tmp_path / "api-keys.json"
+    api_keys_path.write_text(
+        '{"gate_user": {"exchange": "gate", "key": "redacted", "secret": "redacted"}}',
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("INFO"):
+        user_info = procedures.load_user_info(
+            "gate_user", api_keys_path=str(api_keys_path)
+        )
+
+    assert user_info["exchange"] == "gateio"
+    assert "exchange alias 'gate' normalized to canonical 'gateio'" in caplog.text
+
+
+def test_gate_api_key_alias_log_is_emitted_once_per_process(tmp_path, caplog):
+    api_keys_path = tmp_path / "api-keys.json"
+    api_keys_path.write_text(
+        '{"gate_user": {"exchange": "gate", "key": "redacted", "secret": "redacted"}}',
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("INFO"):
+        procedures.load_user_info("gate_user", api_keys_path=str(api_keys_path))
+        procedures.load_user_info("gate_user", api_keys_path=str(api_keys_path))
+
+    assert caplog.text.count("exchange alias 'gate' normalized") == 1
+
+
+def test_gateio_api_key_identity_remains_canonical_without_alias_log(tmp_path, caplog):
+    api_keys_path = tmp_path / "api-keys.json"
+    api_keys_path.write_text(
+        '{"gate_user": {"exchange": "gateio", "key": "redacted", "secret": "redacted"}}',
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("INFO"):
+        user_info = procedures.load_user_info(
+            "gate_user", api_keys_path=str(api_keys_path)
+        )
+
+    assert user_info["exchange"] == "gateio"
+    assert "exchange alias" not in caplog.text
+
+
+def test_gate_api_key_alias_selects_dedicated_gateio_connector(tmp_path, monkeypatch):
+    api_keys_path = tmp_path / "api-keys.json"
+    api_keys_path.write_text(
+        '{"gate_user": {"exchange": "gate", "key": "redacted", "secret": "redacted"}}',
+        encoding="utf-8",
+    )
+    def load_alias_user(user):
+        return procedures.load_user_info(user, api_keys_path=str(api_keys_path))
+
+    bot = SimpleNamespace()
+
+    monkeypatch.setattr(passivbot, "load_user_info", load_alias_user)
+    monkeypatch.setattr(gateio_module, "GateIOBot", lambda _config: bot)
+
+    result = passivbot.setup_bot({"live": {"user": "gate_user"}})
+
+    assert result is bot
+    assert result._order_churn_gate_enabled_for_connector is True
+
+
+def test_gateio_standalone_ccxt_loader_uses_gate_client(monkeypatch):
+    constructed = []
+
+    class GateClient:
+        def __init__(self, config):
+            constructed.append(config)
+            self.options = {}
+
+    monkeypatch.setattr(utils.ccxt, "gate", GateClient)
+    monkeypatch.setattr(
+        utils,
+        "resolve_custom_endpoint_override_with_aliases",
+        lambda exchange_id, aliases: (
+            None if (exchange_id, aliases) == ("gateio", ("gate",)) else "unexpected"
+        ),
+    )
+
+    client = utils.load_ccxt_instance("gateio")
+
+    assert isinstance(client, GateClient)
+    assert client.options["defaultType"] == "swap"
+    assert constructed == [{"enableRateLimit": True, "timeout": 60_000}]
 
 
 def test_gateio_session_boundary_accepts_gate_endpoint_override(monkeypatch):

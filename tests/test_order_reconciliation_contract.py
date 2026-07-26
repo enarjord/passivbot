@@ -184,6 +184,34 @@ def test_sparse_one_way_websocket_order_update_does_not_use_marker_recovery(bot_
         bot._normalize_order_update(order)
 
 
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+def test_sparse_ws_recovery_uses_actual_exchange_hedge_mode(bot_cls):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = False
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    client_id = _client_id("entry_grid_normal_long")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(client_id),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "clientOrderId": client_id,
+        "info": {},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["position_side"] == "long"
+    assert normalized["_pb_order_update_requires_authoritative_refresh"] is True
+
+
 @pytest.mark.parametrize(
     ("bot_cls", "info"),
     [
@@ -240,6 +268,49 @@ def test_sparse_ws_recovery_rejects_conflicting_emitted_identities(bot_cls):
         "amount": 0.1,
         "clientOrderId": foreign_client_id,
         "info": {},
+    }
+
+    with pytest.raises(ValueError, match="missing"):
+        bot._normalize_order_update(order)
+
+
+@pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
+@pytest.mark.parametrize(
+    ("top_level", "raw_info"),
+    [
+        (
+            {"id": "owned-exchange-id"},
+            {"orderId": "foreign-exchange-id"},
+        ),
+        (
+            {"clientOrderId": _client_id("entry_grid_normal_long") + "-ours"},
+            {"clientOid": _client_id("entry_grid_normal_short") + "-foreign"},
+        ),
+    ],
+)
+def test_sparse_ws_recovery_rejects_conflicting_duplicate_identity_aliases(
+    bot_cls, top_level, raw_info
+):
+    bot = bot_cls.__new__(bot_cls)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.get_exchange_time = lambda: 1_000
+    owned_client_id = _client_id("entry_grid_normal_long") + "-ours"
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 900,
+            "exchange_id": "owned-exchange-id",
+            "canonical_custom_id": bot._canonical_passivbot_custom_id(
+                owned_client_id
+            ),
+        }
+    ]
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 0.1,
+        "info": raw_info,
+        **top_level,
     }
 
     with pytest.raises(ValueError, match="missing"):
@@ -341,9 +412,9 @@ def test_bybit_rejects_noncanonical_position_idx(raw_position_idx):
 @pytest.mark.parametrize(
     ("bot_cls", "info", "extra_attrs"),
     [
-        (BinanceBot, {"positionSide": "BOTH"}, {}),
+        (BinanceBot, {"positionSide": "BOTH"}, {"hedge_mode": False}),
         (BybitBot, {"positionIdx": 0}, {}),
-        (BitgetBot, {}, {"is_uta": False}),
+        (BitgetBot, {}, {"is_uta": False, "hedge_mode": False}),
         (HyperliquidBot, {}, {}),
         (GateIOBot, {}, {}),
         (KucoinBot, {}, {}),
@@ -381,9 +452,9 @@ def test_effective_one_way_orders_cover_all_side_close_only_tuples(
 @pytest.mark.parametrize(
     ("bot_cls", "info", "extra_attrs"),
     [
-        (BinanceBot, {"positionSide": "BOTH"}, {}),
+        (BinanceBot, {"positionSide": "BOTH"}, {"hedge_mode": False}),
         (BybitBot, {"positionIdx": 0}, {}),
-        (BitgetBot, {}, {"is_uta": False}),
+        (BitgetBot, {}, {"is_uta": False, "hedge_mode": False}),
         (HyperliquidBot, {}, {}),
         (GateIOBot, {}, {}),
         (KucoinBot, {}, {}),
@@ -461,6 +532,20 @@ def test_binance_one_way_open_order_normalizer_uses_action_tuple():
     assert normalized["position_side"] == "short"
 
 
+def test_binance_exchange_hedge_order_ignores_strategy_one_way_setting():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot._config_hedge_mode = False
+    bot.hedge_mode = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "sell",
+        "info": {"positionSide": "LONG"},
+    }
+
+    assert bot._get_position_side_for_order(order) == "long"
+    assert bot._canonical_open_order_reduce_only(order) is True
+
+
 def test_bitget_one_way_open_order_normalizer_uses_action_tuple():
     bot = BitgetBot.__new__(BitgetBot)
     bot.is_uta = False
@@ -482,6 +567,21 @@ def test_bitget_one_way_open_order_normalizer_uses_action_tuple():
 
     assert normalized["position_side"] == "short"
     assert normalized["side"] == "sell"
+
+
+def test_bitget_exchange_hedge_order_ignores_strategy_one_way_setting():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = False
+    bot._config_hedge_mode = False
+    bot.hedge_mode = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "sell",
+        "info": {"side": "sell", "posSide": "long", "tradeSide": "close"},
+    }
+
+    assert bot._get_position_side_for_order(order) == "long"
+    assert bot._canonical_open_order_reduce_only(order) is True
 
 
 @pytest.mark.parametrize(

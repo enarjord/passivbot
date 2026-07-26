@@ -57,6 +57,15 @@ Handling in Passivbot:
 4. For each broker-agreement exchange, verify the actual signed CCXT/raw request includes the required broker field/header/tag.
 5. Add regression tests at the request-construction boundary when changing exchange sessions, signing, or order payload code.
 
+## Exchange Hedge Mode Versus Strategy Hedge Mode
+
+`live.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
+exchange account into one-way mode. Binance and Bitget connectors keep the exchange account in
+hedge mode. Their private order updates must therefore normalize `position_side` and close-only
+semantics from the exchange's actual mode and explicit `positionSide`/`posSide` fields even when
+the strategy setting is false. Only connectors whose `hedge_mode` capability is actually false may
+use the one-way side plus `reduceOnly` attribution path.
+
 ## Bybit
 
 ### Broker referer header
@@ -90,6 +99,16 @@ Handling in Passivbot:
 Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_history`).
 
 ## KuCoin Futures
+
+### IPv4 API-key whitelist transport
+
+Problem: A dual-stack host may select IPv6 for KuCoin REST and private
+WebSocket traffic even when the API key permits only the host's stable public
+IPv4 address. KuCoin then rejects the first authenticated request as an IP
+whitelist authentication failure.
+
+Handling: Both KuCoin REST and WebSocket CCXT clients use IPv4-only network
+connectors. Keep the host's stable public IPv4 address in the API-key whitelist.
 
 ### KuCoin hedge-mode refresh
 
@@ -131,7 +150,9 @@ Handling:
 
 1. Treat current same-mode success as success (`code=00000`, `data.posMode=hedge_mode`).
 2. Let unknown `set_position_mode` failures raise unless a verified Bitget no-op code is added with a targeted test.
-3. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
+3. Normalize against the actual exchange account mode, not `live.hedge_mode`, which only controls
+   simultaneous strategy exposure.
+4. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 
 ### UTA / Elite hedge-mode order direction
 
@@ -183,14 +204,55 @@ Handling in Passivbot:
 
 ## Gate.io Futures
 
-### Private websocket account UID
+### Exchange identity boundary
 
-Problem: Gate.io REST balance payloads may encode `user` as a number, while
-CCXT Pro's private subscription requires a string UID and checks its length.
+Passivbot's canonical exchange identity is `gateio`. This identity owns connector
+routing, cache and event paths, broker attribution, and persisted state. CCXT 4.5.66
+renamed only its client class to `gate`.
 
-Handling: normalize the account UID to a string before assigning it to either
-CCXT client. This is identifier normalization only; it must not numerically
-transform the value.
+For compatibility, `api-keys.json` may specify either `"exchange": "gateio"` or
+`"exchange": "gate"`. Passivbot normalizes the latter to `gateio` and logs that
+migration. Only CCXT REST and WebSocket client construction translates `gateio` to
+`gate`; do not add parallel `gate` identities to internal registries or state paths.
+Normalize Gate's numeric REST account `user` value to a string before assigning it
+as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
+non-string/non-integer identifiers before conversion; never cache a placeholder
+such as `"None"` as durable subscription state.
+
+### Per-symbol leverage initializes the position risk limit
+
+Problem:
+
+1. Gate derives a position's current risk limit from its configured leverage.
+2. A contract risk-table update can leave a previously configured leverage above
+   the new maximum. Gate then reports a zero risk limit and rejects every opening
+   order with `RISK_LIMIT_EXCEEDED`.
+3. Gate's leverage endpoint also controls margin mode: nonzero `leverage` selects
+   isolated mode, while cross mode requires `leverage=0` plus
+   `cross_leverage_limit`.
+
+Handling:
+
+1. Configure every symbol before its first order creation in a bot process.
+2. Use the leverage capped by current market metadata and the configured margin
+   preference.
+3. Call CCXT `set_leverage` with an explicit `marginMode`; CCXT then produces the
+   correct Gate parameter tuple without accidentally switching margin mode.
+4. Propagate configuration failures and keep exposure-increasing creations deferred
+   until configuration succeeds. Existing-position reduce-only closes do not depend
+   on leverage initialization and remain eligible. Missing or invalid leverage-cap
+   metadata is a symbol-scoped configuration failure: invalidate any prior configured
+   marker, do not guess a cap or issue `set_leverage`, and continue market initialization
+   so reduce-only closes for that symbol can still execute.
+5. Every failed cycle containing a blocked entry advances the existing execution
+   error/restart budget. The failure and blocked-entry scope remain visible in
+   operator logs and structured events; close-only operation must not look healthy
+   while entries are failing.
+6. Reserve and debit the one-time signed leverage write in the account-wide order
+   churn allowance before admitting the symbol's first entry creation. The
+   reservation decision and configuration execution must use the same
+    retry-eligibility timestamp: a backoff expiring later in that creation wave
+    is deferred until the next wave rather than issuing an unreserved write.
 
 ### Contract order text must start with `t-`
 

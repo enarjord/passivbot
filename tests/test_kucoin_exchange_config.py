@@ -1,11 +1,16 @@
 import asyncio
 import logging
 import math
+import socket
 import types
 
 import pytest
 
-from exchanges.kucoin import AsyncKucoinBrokerFutures, KucoinBot
+from exchanges.kucoin import (
+    AsyncKucoinBrokerFutures,
+    KucoinBot,
+    ProKucoinBrokerFutures,
+)
 from market_snapshot import MarketSnapshotProvider
 
 
@@ -34,6 +39,19 @@ class DummyCCA:
     async def set_leverage(self, **params):
         self.leverage_calls.append(params)
         return {"symbol": params["symbol"], "leverage": params["leverage"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_class", [AsyncKucoinBrokerFutures, ProKucoinBrokerFutures]
+)
+async def test_kucoin_clients_use_ipv4_transport(client_class):
+    exchange = client_class({})
+    try:
+        exchange.open()
+        assert exchange.tcp_connector._family == socket.AF_INET
+    finally:
+        await exchange.close()
 
 
 def make_bot():

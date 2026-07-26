@@ -301,8 +301,12 @@ The account-wide replacement-churn policy emits structured, monitor-only summari
 - `order.churn_actions_accounted` records the action kind and number of logical creates or required
   connector configuration writes debited immediately before each connector call, plus the resulting
   rolling count. Cancellations are excluded from the generic window.
-- `execution.cancel_first_barrier` reports account-wide create deferral after any stale-order
-  cancellation. `execution.cancel_deferred` reports cancellation batch truncation.
+- `execution.cancel_first_barrier` reports create deferral after a stale-order cancellation. In
+  effective hedge mode the scope is symbol and position side; in one-way mode it is the whole
+  symbol because long and short share one net exchange position. Unrelated scopes may continue in
+  the same wave; an unscoped cancellation conservatively defers all ordinary creates. The stable
+  `account_cancel_first_barrier` reason-code name is retained for event-consumer compatibility.
+  `execution.cancel_deferred` reports cancellation batch truncation.
 
 These events are diagnostic projections only. The causal history, rolling counter, and
 cancel-first state are updated directly in the planner and executor, and sink failure cannot alter
@@ -403,10 +407,29 @@ The fixed fields are `action=create|cancel`,
 
 Terminal and ambiguous execution-order outcome events retain their existing envelope correlation,
 status, reason, action, bounded order metadata, result summaries, and optional bounded debug
-profiles. When an outcome carries an exception object or result, its payload retains only a bounded
-`error_type`; it omits exception text, unsafe exception class metadata, URLs, credentials, tokens,
-raw responses, and tracebacks. This diagnostic redaction does not alter event routing, emitter
-isolation, executor retries or re-raises, exchange calls, or trading behavior.
+profiles. When an outcome carries an exception object or result, its payload may retain bounded
+`error_type`, numeric status/code, a constrained exchange error label, and a bounded sanitized
+reason extracted from a structured exchange error payload. Exact top-level mappings, their
+`info` mapping, and up to eight exact OKX per-order `data` mappings use the same sanitizer;
+per-order `sCode`/`sMsg` takes precedence over a generic OKX envelope code/message. This
+structured rejection extraction applies only to failed or ambiguous/degraded outcomes; successful
+outcomes must not project connector-native success codes or messages as errors. This operator-facing reason is
+deliberately retained because the exchange's rejection explanation is often required to repair a
+live order failure. It omits raw response envelopes, unsafe exception class metadata, URLs,
+credentials, sensitive-marked values, long token-like values, and tracebacks. Live event and text
+logs remain private operational artifacts and must not be published without review. This
+diagnostic projection does not alter event routing, emitter isolation, executor retries or
+re-raises, exchange calls, or trading behavior.
+
+## Fill Confirmation Fallbacks
+
+`fill.position_price_tolerance_used` records the accepted bounded numeric difference
+between a reconstructed fill after-state price and the authoritative exchange position
+price. It includes the effective connector-aware price tick, absolute delta, delta in
+ticks, and applied tolerance; it contains no raw fill or exchange payload. The event is
+published only after identity, size, refresh-generation, and price predicates clear.
+The existing warning remains the console/text projection, so the structured event itself
+does not produce a second console line.
 
 ## HSL Replay Timing
 
@@ -435,6 +458,12 @@ terminal event.
 
 `forager.eligibility_changed` is a bounded structured/monitor-only record of approved/ignored
 membership changes. It does not retain config paths, raw sources, or full lists.
+Monitor market entries label a forager candidate only when the same live
+`is_approved` predicate admits its coin and position side, including minimum
+market age. Ranking-feature unavailability is refreshed from the active
+orchestrator EMA preparation path on every bundle load. Candidate-only EMA
+failures remain distinct from flat active/normal-symbol degradation; monitor
+tradability must not relabel the latter as a candidate-only failure.
 
 `config.market_compatibility` records configured symbols removed by existing market filters.
 Approved-symbol incompatibility is degraded; ignored-symbol incompatibility is skipped. HIP-3
