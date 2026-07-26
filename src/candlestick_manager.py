@@ -4417,6 +4417,73 @@ class CandlestickManager:
                 return True
         return False
 
+    def _evict_rejected_native_sparse_synthetics(
+        self,
+        symbol: str,
+        *,
+        timeframe: str,
+        rejected_timestamps: set[int],
+    ) -> set[int]:
+        """Remove persisted KuCoin sparse placeholders contradicted by invalid real rows.
+
+        KuCoin omits native kline buckets that have no ticks. Passivbot's
+        internally bounded placeholders are therefore identifiable on disk as
+        flat zero-volume rows. A later payload row at that timestamp proves the
+        bucket was not an omitted no-trade interval; if that row is invalid, the
+        cached placeholder must become unavailable rather than survive the
+        merge.
+        """
+        if not rejected_timestamps:
+            return set()
+        tf_norm = self._normalize_timeframe_arg(timeframe, None)
+        if tf_norm == "1m":
+            return set()
+        by_day: dict[str, set[int]] = {}
+        for ts in rejected_timestamps:
+            by_day.setdefault(self._date_key(int(ts)), set()).add(int(ts))
+        shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+        removed: set[int] = set()
+        for day_key, day_timestamps in by_day.items():
+            path = shard_paths.get(day_key)
+            if not path or not os.path.exists(path):
+                continue
+            shard = self._load_shard(path)
+            if shard.size == 0:
+                continue
+            candidate = np.isin(
+                shard["ts"].astype(np.int64, copy=False),
+                np.fromiter(day_timestamps, dtype=np.int64),
+            )
+            flat_zero = (
+                (shard["bv"] == 0.0)
+                & (shard["o"] == shard["h"])
+                & (shard["o"] == shard["l"])
+                & (shard["o"] == shard["c"])
+            )
+            remove_mask = candidate & flat_zero
+            if not bool(np.any(remove_mask)):
+                continue
+            removed.update(int(ts) for ts in shard["ts"][remove_mask])
+            kept = shard[~remove_mask]
+            if kept.size:
+                self._save_shard(symbol, day_key, kept, tf=tf_norm)
+            else:
+                os.remove(path)
+                idx = self._ensure_symbol_index(symbol, tf=tf_norm)
+                idx.setdefault("shards", {}).pop(day_key, None)
+                self._index[f"{symbol}::{tf_norm}"] = idx
+                self._save_index(symbol, tf=tf_norm)
+                self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+        if removed:
+            self._invalidate_ema_cache(symbol, timeframe=tf_norm)
+            self._invalidate_tf_range_cache(
+                symbol,
+                timeframe=tf_norm,
+                start_ts=min(removed),
+                end_ts=max(removed),
+            )
+        return removed
+
     def _synthesize_verified_sparse_payload_gaps(
         self,
         arr: np.ndarray,
@@ -4574,6 +4641,12 @@ class CandlestickManager:
                 if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
                 else set()
             )
+            if rejected_payload_timestamps:
+                self._evict_rejected_native_sparse_synthetics(
+                    symbol,
+                    timeframe=tf_norm,
+                    rejected_timestamps=rejected_payload_timestamps,
+                )
             has_unidentifiable_rejected_row = bool(
                 self._record_payload_gaps_as_known
                 and period_ms > ONE_MIN_MS
@@ -6218,6 +6291,16 @@ class CandlestickManager:
                             int(end_excl),
                             timeframe=out_tf,
                         )
+                    # The fetch may have evicted a previously persisted KuCoin
+                    # sparse placeholder after a rejected real payload row
+                    # proved that bucket unavailable. Reload before merging so
+                    # this call cannot reintroduce the stale local copy.
+                    try:
+                        disk_arr = self._load_from_disk(
+                            symbol, start_ts, end_ts, timeframe=out_tf
+                        )
+                    except Exception:
+                        disk_arr = None
                     if fetched.size == 0:
                         if max_age_ms == 0:
                             sym_cache.pop(cache_key, None)

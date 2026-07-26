@@ -12,7 +12,8 @@ All notable user-facing changes will be documented in this file.
   readiness without fabricating rejected, leading, trailing, failed-fetch, or unproven
   between-page data. Rejected or unidentifiable rows break payload continuity, expansion is bounded
   to the requested range, and later real candles deterministically replace persisted synthetic
-  buckets.
+  buckets. A later rejected real payload row evicts a cached sparse placeholder at the same
+  timestamp so corrupt required input remains unavailable.
 
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA
