@@ -160,6 +160,9 @@ class TestHyperliquidBotHIP3:
         assert bot._effective_position_price_tick(
             "PENNY/USDC:USDC", 0.00012345
         ) == pytest.approx(1e-6)
+        assert bot._effective_position_price_tick(
+            "BTC/USDC:USDC", 100_000.0, 99_990.0
+        ) == pytest.approx(1.0)
 
     def test_requires_isolated_margin_uses_market_metadata(self, bot_class):
         """HIP-3 isolated requirement must come from market metadata, not just prefix."""

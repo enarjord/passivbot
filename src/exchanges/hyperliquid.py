@@ -389,19 +389,36 @@ class HyperliquidBot(CCXTBot):
             "only_isolated": only_isolated,
         }
 
-    def _effective_position_price_tick(self, symbol: str, price: float) -> float:
+    def _effective_position_price_tick(
+        self,
+        symbol: str,
+        price: float,
+        comparison_price: float | None = None,
+    ) -> float:
         """Account for Hyperliquid's decimal and significant-digit price ladder."""
-        static_step = super()._effective_position_price_tick(symbol, price)
-        price = abs(float(price))
-        if not math.isfinite(price) or price <= 0.0:
+        static_step = super()._effective_position_price_tick(
+            symbol, price, comparison_price
+        )
+        prices = [abs(float(price))]
+        if comparison_price is not None:
+            prices.append(abs(float(comparison_price)))
+        positive_prices = [
+            candidate
+            for candidate in prices
+            if math.isfinite(candidate) and candidate > 0.0
+        ]
+        if not positive_prices:
             return static_step
+        # The significant-digit ladder changes spacing at powers of ten. The
+        # lower endpoint determines the interval crossing that boundary.
+        ladder_price = min(positive_prices)
         decimal_places = max(0, int(getattr(self, "n_decimal_places", 6) or 6))
         significant_figures = max(
             1, int(getattr(self, "n_significant_figures", 5) or 5)
         )
         decimal_step = 10.0 ** (-decimal_places)
         significant_step = 10.0 ** (
-            math.floor(math.log10(price)) - significant_figures + 1
+            math.floor(math.log10(ladder_price)) - significant_figures + 1
         )
         return max(static_step, decimal_step, significant_step)
 

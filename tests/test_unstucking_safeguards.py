@@ -1852,6 +1852,37 @@ def test_fill_after_state_position_price_tolerance_is_one_tick():
     )
 
 
+def test_hyperliquid_fill_price_tolerance_uses_discrepancy_side_tick():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._effective_position_price_tick = (
+        lambda _symbol, price, comparison_price=None: 1.0
+        if comparison_price is not None
+        and min(abs(price), abs(comparison_price)) < 100_000.0
+        else 10.0
+    )
+
+    assert (
+        bot._fill_anchor_position_state_match_kind(
+            symbol,
+            "long",
+            (1.0, 100_000.0),
+            {"psize": 1.0, "pprice": 99_999.0},
+        )
+        == "recorded_after_state_price_tolerance"
+    )
+    assert (
+        bot._fill_anchor_position_state_match_kind(
+            symbol,
+            "long",
+            (1.0, 100_000.0),
+            {"psize": 1.0, "pprice": 99_990.0},
+        )
+        is None
+    )
+
+
 def test_position_open_replay_retains_strict_half_tick_price_tolerance():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
