@@ -479,3 +479,29 @@ async def test_batch_slice_happens_before_exchange_config_writes(execution_shell
 
     assert bot.configured == [[first["symbol"]]]
     assert bot.created == [first]
+
+
+@pytest.mark.asyncio
+async def test_stale_market_order_is_filtered_before_exchange_config_write(
+    execution_shell, monkeypatch
+):
+    bot = _PlanBot()
+    bot.configured = []
+
+    async def reject_stale(_bot, _orders):
+        return []
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", reject_stale
+    )
+    bot.update_exchange_configs = update_configs
+    desired = _order("desired")
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.configured == []
+    assert bot.created == []

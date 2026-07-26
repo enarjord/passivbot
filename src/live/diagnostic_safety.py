@@ -297,7 +297,7 @@ def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
         if label is not None:
             result["error_label"] = label
             break
-    for key in ("message", "detail", "reason"):
+    for key in ("message", "msg", "retMsg", "detail", "reason"):
         reason = _bounded_exchange_error_reason(payload.get(key))
         if reason is not None:
             result["error_reason"] = reason

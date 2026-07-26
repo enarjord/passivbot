@@ -266,7 +266,7 @@ async def _apply_order_churn_final_admission(
     bot,
     orders: list[dict],
     *,
-    config_action_costs_by_symbol: dict[str, int] | None = None,
+    config_action_costs_by_order_id: dict[int, int] | None = None,
     market_price_max_age_ms: int = 10_000,
 ) -> list[dict]:
     if not orders:
@@ -375,7 +375,7 @@ async def _apply_order_churn_final_admission(
             continue
         order["_churn_gate_market_distance"] = signed_distance
         admission[id(order)] = ("ready", signed_distance <= threshold)
-    config_action_costs_by_symbol = config_action_costs_by_symbol or {}
+    config_action_costs_by_order_id = config_action_costs_by_order_id or {}
     selected: list[dict] = []
     deferred: list[dict] = []
     capacity_deferred: list[dict] = []
@@ -396,7 +396,7 @@ async def _apply_order_churn_final_admission(
             continue
         symbol = str(order.get("symbol"))
         config_action_cost = (
-            int(config_action_costs_by_symbol.get(symbol, 0) or 0)
+            int(config_action_costs_by_order_id.get(id(order), 0) or 0)
             if symbol not in projected_config_symbols
             else 0
         )
@@ -443,15 +443,17 @@ async def _apply_order_churn_final_admission(
                 for candidate in budgeted_orders
                 if str(candidate.get("symbol")) not in projected_config_symbols
                 and int(
-                    config_action_costs_by_symbol.get(
-                        str(candidate.get("symbol")), 0
-                    )
+                    config_action_costs_by_order_id.get(id(candidate), 0)
                     or 0
                 )
                 > 0
             }
             reserved_headroom = len(budgeted_orders) + sum(
-                int(config_action_costs_by_symbol[symbol])
+                max(
+                    int(config_action_costs_by_order_id.get(id(candidate), 0) or 0)
+                    for candidate in budgeted_orders
+                    if str(candidate.get("symbol")) == symbol
+                )
                 for symbol in budgeted_config_symbols
             )
             if not math.isinf(float(action_headroom)) and (
@@ -986,12 +988,20 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
+        before_preconfig_market_filter = len(to_create_mod)
+        to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
+            bot, to_create_mod
+        )
+        if order_wave is not None:
+            order_wave["skipped_create"] += max(
+                0, before_preconfig_market_filter - len(to_create_mod)
+            )
         config_required_orders = [
             order
             for order in to_create_mod
             if _order_requires_exchange_config_before_create(bot, order)
         ]
-        config_action_costs_by_symbol = {}
+        config_action_costs_by_order_id = {}
         if config_required_orders and configure_creations:
             config_cost_estimator = getattr(
                 bot, "_order_churn_precreate_signed_action_costs", None
@@ -1003,11 +1013,18 @@ async def execute_order_plan(
                     )
                     or {}
                 )
+                config_action_costs_by_order_id = {
+                    id(order): int(
+                        config_action_costs_by_symbol.get(str(order["symbol"]), 0)
+                        or 0
+                    )
+                    for order in config_required_orders
+                }
         before_churn_admission = list(to_create_mod)
         to_create_mod = await _apply_order_churn_final_admission(
             bot,
             to_create_mod,
-            config_action_costs_by_symbol=config_action_costs_by_symbol,
+            config_action_costs_by_order_id=config_action_costs_by_order_id,
         )
         if order_wave is not None:
             order_wave["deferred_create"] += max(

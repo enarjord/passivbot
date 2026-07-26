@@ -46,6 +46,18 @@ def test_bounded_exchange_error_context_extracts_structured_ccxt_payload():
     }
 
 
+def test_bounded_exchange_error_context_extracts_ccxt_native_message_keys():
+    binance = RuntimeError('binance {"code":-1013,"msg":"invalid quantity"}')
+    bybit = RuntimeError('bybit {"retCode":10001,"retMsg":"position idx mismatch"}')
+
+    assert bounded_exchange_error_context(binance) == {
+        "error_reason": "invalid quantity",
+    }
+    assert bounded_exchange_error_context(bybit) == {
+        "error_reason": "position idx mismatch",
+    }
+
+
 def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reasons():
     error = RuntimeError(
         'gate {"label":"INVALID_PARAM_VALUE",'
