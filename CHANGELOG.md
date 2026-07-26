@@ -8,8 +8,9 @@ All notable user-facing changes will be documented in this file.
   long/short attribution even when `live.hedge_mode=false` disables simultaneous strategy
   exposure, preventing valid updates without one-way `reduceOnly` metadata from reconnecting the
   watcher. KuCoin native higher-timeframe no-tick gaps are now materialized only when bounded by
-  real candles in one successful payload, restoring required 1h volatility EMA readiness without
-  fabricating leading, trailing, failed-fetch, or unproven between-page data.
+  real candles and absent from one successful raw payload, restoring required 1h volatility EMA
+  readiness without fabricating rejected, leading, trailing, failed-fetch, or unproven
+  between-page data.
 
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently

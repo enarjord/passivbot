@@ -111,8 +111,9 @@ Handling:
 1. Page with `limit=200`.
 2. Overlap page boundaries by 1 candle to validate inter-page gaps.
 3. For native timeframes above 1m, synthesize a flat zero-volume no-trade bucket only when the gap
-   is bounded by two real candles in the same successful payload. Do not synthesize leading,
-   trailing, failed-fetch, or unproven between-page gaps.
+   is bounded by two real candles in the same successful payload and its timestamp is absent from
+   the raw payload. A raw bucket rejected by candle validation remains unavailable. Do not
+   synthesize leading, trailing, failed-fetch, or unproven between-page gaps.
 
 ## Bitget Futures
 

@@ -95,9 +95,11 @@
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
 12. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
-    candles in the same successful payload are materialized as flat zero-volume candles before
-    persistence. Leading, trailing, failed-fetch, and unproven between-page gaps remain
-    unavailable. The established 1m path retains its verified-gap tracking and standardization.
+    candles in the same successful payload and absent from that raw payload are materialized as
+    flat zero-volume candles before persistence. A bucket present in the raw payload but rejected
+    by candle validation remains unavailable; it is not reclassified as a no-tick interval.
+    Leading, trailing, failed-fetch, and unproven between-page gaps remain unavailable. The
+    established 1m path retains its verified-gap tracking and standardization.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

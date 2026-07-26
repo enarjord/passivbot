@@ -4362,17 +4362,46 @@ class CandlestickManager:
             last = ts[i]
         return arr[keep]
 
+    def _rejected_ccxt_ohlcv_timestamps(
+        self,
+        rows: list,
+        normalized: np.ndarray,
+    ) -> set[int]:
+        """Return parseable payload timestamps discarded during normalization.
+
+        A timestamp present in any accepted duplicate is not rejected. Callers
+        use the remaining timestamps as unavailable buckets rather than treating
+        invalid exchange data as an omitted no-trade interval.
+        """
+        accepted = (
+            {int(ts) for ts in normalized["ts"]}
+            if isinstance(normalized, np.ndarray) and normalized.size
+            else set()
+        )
+        present = set()
+        for row in rows:
+            try:
+                ts = int(row[0])
+                if ts % ONE_MIN_MS != 0:
+                    ts = _floor_minute(ts)
+                present.add(ts)
+            except (IndexError, TypeError, ValueError, OverflowError):
+                continue
+        return present - accepted
+
     def _synthesize_verified_sparse_payload_gaps(
         self,
         arr: np.ndarray,
         *,
         period_ms: int,
+        rejected_timestamps: Optional[set[int]] = None,
     ) -> np.ndarray:
         """Fill KuCoin higher-timeframe no-tick buckets bounded in one payload.
 
         KuCoin documents that it omits kline buckets with no ticks.  Two real
         adjacent rows in the same successful response prove that an internal
-        missing bucket is a no-trade interval.  Leading, trailing, and
+        timestamp absent from that response is a no-trade interval. Timestamps
+        present in rejected rows remain unavailable. Leading, trailing, and
         between-page gaps remain unproven and are deliberately not filled.
 
         The established 1m path records verified gaps and standardizes them
@@ -4402,6 +4431,8 @@ class CandlestickManager:
                 following_ts,
                 int(period_ms),
             ):
+                if rejected_timestamps and int(ts) in rejected_timestamps:
+                    continue
                 rows.append(
                     (
                         int(ts),
@@ -4494,6 +4525,11 @@ class CandlestickManager:
                     )
                 break
             arr = self._normalize_ccxt_ohlcv(page)
+            rejected_payload_timestamps = (
+                self._rejected_ccxt_ohlcv_timestamps(page, arr)
+                if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
+                else set()
+            )
             if arr.size == 0:
                 if raise_on_partial_empty_page and pages > 0:
                     _raise_terminal_empty_page(
@@ -4505,6 +4541,7 @@ class CandlestickManager:
             arr = self._synthesize_verified_sparse_payload_gaps(
                 arr,
                 period_ms=period_ms,
+                rejected_timestamps=rejected_payload_timestamps,
             )
             if int(arr.size) > raw_arr_size:
                 verified_sparse_synthetic_count += int(arr.size) - raw_arr_size
