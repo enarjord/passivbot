@@ -16584,6 +16584,8 @@ class Passivbot:
             "long": set(),
             "short": set(),
         }
+        self._orchestrator_candidate_ema_unavailable_symbols = set()
+        self._orchestrator_ema_unavailable_reasons = {}
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}

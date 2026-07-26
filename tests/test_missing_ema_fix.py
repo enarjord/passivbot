@@ -1612,9 +1612,16 @@ async def test_open_tail_projection_missing_close_span_fails_loudly():
         project_open_tail=True,
         projected_close_ema={span0: 201.0},
     )
+    bot._orchestrator_candidate_ema_unavailable_symbols = {"STALE/USDT:USDT"}
+    bot._orchestrator_ema_unavailable_reasons = {
+        "candidate_required_ema_unavailable": {"STALE/USDT:USDT"}
+    }
 
     with pytest.raises(RuntimeError, match="projected open-tail close EMA incomplete"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {}
 
 
 @pytest.mark.asyncio

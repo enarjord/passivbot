@@ -6771,6 +6771,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 and symbol not in set(self.ignored_coins.get(pside, set()))
             )
 
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
         def live_value(self, key):
             if key == "forced_mode_long":
                 return ""
@@ -6976,6 +6979,9 @@ def test_monitor_forager_candidates_use_live_age_eligibility():
         def is_approved(self, pside, symbol):
             return pside == "long" and symbol == old_symbol
 
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
         def has_position(self, pside=None, symbol=None):
             return False
 
@@ -6983,6 +6989,53 @@ def test_monitor_forager_candidates_use_live_age_eligibility():
 
     assert market[old_symbol]["forager"]["candidate_psides"] == ["long"]
     assert "forager" not in market[young_symbol]
+
+
+def test_monitor_forager_candidates_use_live_min_cost_eligibility():
+    import passivbot as pb_mod
+
+    cheap_symbol = "CHEAP/USDT:USDT"
+    expensive_symbol = "EXPENSIVE/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                cheap_symbol: {"active": True},
+                expensive_symbol: {"active": True},
+            }
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long"
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return pside == "long" and symbol == cheap_symbol
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[cheap_symbol]["forager"]["candidate_psides"] == ["long"]
+    assert "forager" not in market[expensive_symbol]
 
 
 def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():

@@ -672,7 +672,13 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 age_eligible_approved = bool(self.is_approved(pside, symbol))
             except Exception:
                 age_eligible_approved = False
-            if forager_side and age_eligible_approved:
+            try:
+                min_cost_eligible = bool(
+                    self.effective_min_cost_is_low_enough(pside, symbol)
+                )
+            except Exception:
+                min_cost_eligible = False
+            if forager_side and age_eligible_approved and min_cost_eligible:
                 forager_candidate_psides.append(pside)
         if forager_candidate_psides:
             rank_feature_psides = sorted(

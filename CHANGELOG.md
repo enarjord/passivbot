@@ -8,10 +8,12 @@ All notable user-facing changes will be documented in this file.
   temporarily unrankable because volume/log-range or required candidate EMA
   inputs are unavailable from active-symbol trading degradation. Ranking-feature
   health is populated by the active Rust-orchestrator preparation path, candidate
-  labels use the same market-age eligibility as live selection, and active-symbol
-  EMA failures retain their active degradation reason. Open-tail forager projection
-  computes only close EMAs because ranking metrics must come from real candles,
-  and latest-value EMA calculations avoid allocating an unused full series.
+  labels use the same market-age and effective-minimum-cost eligibility as live
+  selection, candidate health is cleared before a failed replacement bundle can
+  leave stale state behind, and active-symbol EMA failures retain their active
+  degradation reason. Open-tail forager projection computes only close EMAs
+  because ranking metrics must come from real candles, and latest-value EMA
+  calculations avoid allocating an unused full series.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous
