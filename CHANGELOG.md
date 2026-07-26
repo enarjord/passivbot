@@ -6,10 +6,12 @@ All notable user-facing changes will be documented in this file.
 
 - Hyperliquid recent candle gaps now retry on a time-spaced schedule instead of
   exhausting the persistent-gap budget in consecutive live cycles while the
-  venue may still publish an authoritative no-trade row. Persisted 1m rows now
-  trim or split stale known-gap metadata, and repeated terminal empty-page
-  failures for a forager surface use a bounded in-memory retry delay. Missing
-  rows remain unavailable and are never fabricated by this recovery path.
+  venue may still publish an authoritative no-trade row. Accelerated retries are
+  limited to bounded tail-sized gaps, and the retry decision now precedes ordinary
+  present and tail-completion fetches. Persisted 1m rows trim or split stale
+  known-gap metadata, and repeated terminal empty-page failures for a forager
+  surface use a bounded in-memory retry delay. Missing rows remain unavailable
+  and are never fabricated by this recovery path.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous

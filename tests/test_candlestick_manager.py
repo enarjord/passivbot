@@ -2718,6 +2718,95 @@ def test_hyperliquid_recent_gap_retries_are_time_spaced(monkeypatch, tmp_path):
     assert cm._should_retry_gap(gap, now_ms=now["ms"])
 
 
+def test_hyperliquid_accelerated_retry_excludes_large_recent_ending_gap(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 20_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "NEW/USDC:USDC"
+    cm._add_known_gap(
+        symbol,
+        now["ms"] - 24 * 60 * ONE_MIN_MS,
+        now["ms"] - ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+    gap = cm._get_known_gaps_enhanced(symbol)[0]
+
+    now["ms"] += 15 * ONE_MIN_MS
+
+    assert not cm._is_recent_hyperliquid_gap(gap, now_ms=now["ms"])
+    assert not cm._should_retry_gap(gap, now_ms=now["ms"])
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_known_tail_gap_cooldown_precedes_present_fetch(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 30_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    start = _floor_minute(now["ms"]) - 3 * ONE_MIN_MS
+    gap_start = start + ONE_MIN_MS
+    end = _floor_minute(now["ms"]) - ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(start, 1.0, 1.0, 1.0, 1.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        gap_start,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def fetch_paginated(*args, **kwargs):
+        calls.append((args, kwargs))
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    await cm.get_candles(symbol, start_ts=start, end_ts=end)
+
+    assert calls == []
+
+
+def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="binance",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "TEST/USDT:USDT"
+    start = 10 * ONE_MIN_MS
+    cm._record_verified_gap(symbol, start, start)
+
+    assert cm._known_gap_retry_deferred_at(symbol, start, start)
+    assert not cm._known_gap_retry_deferred_at(
+        symbol, start, start + ONE_MIN_MS
+    )
+
+
 def test_gap_retry_without_increment(tmp_path):
     """Test that retry count doesn't increment when increment_retry=False."""
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))

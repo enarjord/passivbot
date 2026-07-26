@@ -98,11 +98,15 @@
     `known_gaps` range, splitting partially covered ranges while preserving the
     retained retry metadata. Hyperliquid may publish authoritative flat,
     zero-volume candles after an initially sparse recent response. Recent
-    Hyperliquid gaps therefore retry on a time-spaced schedule rather than
-    exhausting the ordinary retry count in consecutive live cycles; they remain
-    unavailable until an authoritative row arrives. Repeated terminal empty-page
-    failures for a forager candle surface use a bounded in-memory retry delay
-    without converting missing data into candles or hiding the first error.
+    bounded tail-sized Hyperliquid gaps therefore retry on a time-spaced schedule
+    rather than exhausting the ordinary retry count in consecutive live cycles.
+    Large missing-basis ranges retain the ordinary persistent-gap schedule. The
+    known-gap retry decision runs before refresh, ordinary present, tail-completion,
+    and targeted gap fetches so a deferred tail cannot consume REST calls through
+    an earlier path. Missing rows remain unavailable until an authoritative row
+    arrives. Repeated terminal empty-page failures for a forager candle surface
+    use a bounded in-memory retry delay without converting missing data into
+    candles or hiding the first error.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
@@ -113,8 +117,8 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 2. Pagination edge behavior causing boundary gaps.
 3. Persistent lock or stale data artifacts.
 4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
-   Recently missing Hyperliquid tail rows use a shorter, time-spaced live retry
-   policy because the venue may publish an authoritative no-trade row later.
+   Recently missing bounded Hyperliquid tail rows use a shorter, time-spaced live
+   retry policy because the venue may publish an authoritative no-trade row later.
 5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
    late real candles arrive.
 6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or
