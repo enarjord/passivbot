@@ -30,6 +30,16 @@ All notable user-facing changes will be documented in this file.
   1m gaps invalidate affected EMA/projection caches, while complete authoritative
   rows remain usable if stale gap metadata has not yet been trimmed.
 
+- Binance and KuCoin private order streams now recover sparse Passivbot-owned
+  hedge-mode updates only when the encoded client-order position side has an
+  exact identity in this process's emitted-order registry, native position-side
+  metadata is absent, and all supplied order identities agree with the same
+  emitted record. Acknowledged identities remain registered while their orders
+  are open, including orders resting longer than the normal foreign-writer
+  lookback. Recovered updates force an authoritative account refresh without
+  weakening strict REST open-order reconciliation. Genuine transport failures
+  retain the existing bounded reconnect backoff.
+
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA
   inputs are unavailable from active-symbol trading degradation. Ranking-feature
@@ -92,13 +102,29 @@ All notable user-facing changes will be documented in this file.
   restricted to a host's stable public IPv4 address are not rejected when the
   host also has IPv6 connectivity.
 
+- Simplified the live order-replacement churn gate to a recent Rust-ideal
+  behavior filter. It now requires sustained monotonic price or quantity drift,
+  measures stability from the current drift run, bounds the universal
+  order-match tolerance to 0% through 1% (default 0.02%), rejects malformed Rust
+  ideal orders before reconciliation, reuses the existing fresh market
+  snapshot, performs one final churn-admission pass after exchange configuration
+  and the fresh-market guard, then applies risk-first batch capacity only to
+  admitted candidates. Removed
+  account/config/list epochs, the wider tracking
+  tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
+  and signed-action bookkeeping. Churn evidence remains economy-only: unmatched
+  actual orders are still cancelled and near-market or risk-critical orders are
+  never deferred. Symbols rotated out of the active universe release their RAM
+  history even when position normalization retains flat zero-sized placeholders.
+
 - Gate.io live configuration now accepts CCXT's `gate` exchange label as an alias,
   logs its normalization to Passivbot's canonical `gateio` identity, and consistently
   selects the dedicated Gate.io connector. Standalone market loading now also
   translates `gateio` to CCXT's renamed `gate` client without changing canonical
   cache, broker, event, or persisted-state paths. Gate's numeric REST account UID
-  is normalized to the string required by CCXT Pro, preventing private order
-  WebSocket reconnect loops after otherwise successful startup.
+  is normalized to the string required by CCXT Pro, while missing or invalid UIDs
+  remain unavailable instead of becoming a cached `"None"` placeholder, preventing
+  private order WebSocket reconnect loops after otherwise successful startup.
 
 - Scope cancel-first create deferral to the symbol and position side of stale-order cancellations
   in hedge mode, or the whole symbol in one-way mode, while retaining conservative account-wide
@@ -293,22 +319,15 @@ All notable user-facing changes will be documented in this file.
   effect and close-only effect from position side in effective one-way mode. UTA orders with an
   explicit `posSide` now derive close-only effect directly from the authoritative `side` plus
   `posSide` tuple.
-- Fixed multi-collateral quote-value movement continuously resetting live order-churn evidence.
-  The account epoch now follows the hysteresis-snapped sizing balance plus authoritative fills,
-  realized PnL, positions, and Rust-reported risk-phase transitions instead of exact raw
-  quote-valued balance. While a Rust risk-critical order or realized-loss block is active, churn
-  admission cannot defer any order for that symbol and position side.
 - Fixed live order-churn evidence treating the execution loop's normal 30-second scheduled wait as
   a provenance gap, which could prevent the account-wide churn gate from activating for slowly
   moving EMA-based orders.
 - Fixed WEEX V3 live reconciliation rejecting valid `COMBINED`-mode close orders when the response
   reported `reduceOnly=false`; WEEX close-only effect now follows its authoritative `side` plus
   `positionSide` action tuple. WEEX account equity is also normalized to realized wallet balance by
-  excluding unrealized PnL, restoring live/backtest risk-input parity and preventing mark-to-market
-  churn-history resets. Runtime forager/mode/list changes now invalidate churn evidence only for the
-  affected symbol, so a rotating empty forager slot cannot erase unrelated history account-wide.
-  Repeated unchanged churn deferrals and history-reset diagnostics now remain durable in structured
-  events while INFO output is summarized at most every five minutes.
+  excluding unrealized PnL, restoring live/backtest risk-input parity. Repeated unchanged churn
+  deferrals and history-reset diagnostics remain durable in structured events while INFO output is
+  summarized at most every five minutes.
 - Configs using the retired `live.initial_entry_exec_max_market_dist_pct` now migrate automatically
   to the account-wide replacement-churn gate. Positive values preserve the market-distance
   threshold and hydrate the other new settings from canonical defaults; null and non-positive values
@@ -320,20 +339,18 @@ All notable user-facing changes will be documented in this file.
   after sustained create traffic, while market, risk-critical, and near-market orders remain
   allowance-exempt. On audited supported connectors, stale actual orders are removed in managed
   modes, malformed account-critical open-order snapshots block exchange writes, and any
-  cancellation forces full authoritative refresh and Rust replanning before non-panic creation.
+  cancellation requests full authoritative confirmation while deferring ordinary creates in its
+  affected symbol/position scope until Rust replans.
   One-way position-side and native close-only normalization is now deterministic across the
   supported connectors, including OKX long/short mode, KuCoin open orders, and Gate.io's native
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
-  trigger authoritative account-state refresh instead of reconnect churn. Hyperliquid admission
-  reserves required signed configuration actions with creates, and churn distance is rechecked from
-  a forced-fresh market read after configuration before any create call. A downstream churn
-  normalization failure now blocks account-wide non-panic creation when the affected symbol still
-  has actual orders or an authoritative nonzero position, while preserving only the dedicated
-  reduce-only market panic path. Missing or malformed position sides block every exchange write.
-  Hyperliquid carries ambiguous signed-action debits across `userRateLimit` refreshes, preventing
-  overlapping requests from overstating available action headroom, and failed required margin-mode
-  writes now leave dependent creates pending instead of marking the symbol configured.
+  trigger authoritative account-state refresh instead of reconnect churn. Churn distance is
+  rechecked from a still-valid cached market snapshot after configuration before any create call. Malformed
+  Rust ideal orders fail fatally before reconciliation or any exchange action; malformed
+  actual-order identity and missing or malformed position sides retain their account-critical
+  exchange-write barriers. Failed required margin-mode writes leave dependent creates pending
+  instead of marking the symbol configured.
 - Protective reducer arbitration now keeps the largest loss-admissible final absolute
   reduction among active panic, TWEL/WEL auto-reduce, and auto-unstuck intents for each position
   instead of using a fixed type priority or summing quantities. If the realized-loss gate blocks

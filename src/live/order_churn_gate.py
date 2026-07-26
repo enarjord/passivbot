@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
 import math
 from typing import Mapping, Sequence
@@ -24,11 +24,7 @@ ORDER_CHURN_CONSOLE_REPEAT_SECONDS = 5.0 * 60.0
 
 
 def connector_supports_order_churn_gate(bot) -> bool:
-    """Return the explicit setup-time rollout decision for this connector.
-
-    Test doubles and direct unit constructions predate the setup marker and remain
-    enabled by default. Production ``setup_bot()`` always installs the marker.
-    """
+    """Return the explicit setup-time rollout decision for this connector."""
     marker = getattr(bot, "_order_churn_gate_enabled_for_connector", None)
     if marker is not None:
         return bool(marker)
@@ -57,15 +53,11 @@ class IdealObservation:
 
     @property
     def stable_key(self) -> tuple:
-        # Exact duplicates are intentionally indistinguishable. Their source
-        # list position may select which identical object receives a match,
-        # but it must not affect the causal multiset of admission decisions.
         return (self.cohort, self.price, self.qty)
 
 
 @dataclass(frozen=True)
 class IdealSnapshot:
-    generation: int
     monotonic_seconds: float
     observations: tuple[IdealObservation, ...]
 
@@ -109,7 +101,9 @@ def order_cohort(order: Mapping[str, object]) -> OrderCohort:
     )
 
 
-def normalize_ideal_orders(orders: Sequence[Mapping[str, object]]) -> list[IdealObservation]:
+def normalize_ideal_orders(
+    orders: Sequence[Mapping[str, object]],
+) -> list[IdealObservation]:
     out: list[IdealObservation] = []
     for source_index, order in enumerate(orders):
         qty = abs(float(order["qty"]))
@@ -135,161 +129,116 @@ def _relative_diff(current: float, previous: float) -> float:
     return abs(previous - current) / current
 
 
-def _match_cost(current: IdealObservation, previous: IdealObservation) -> float:
-    return _relative_diff(current.price, previous.price) + _relative_diff(
-        current.qty, previous.qty
-    )
-
-
-@dataclass
-class _FlowEdge:
-    to: int
-    reverse_index: int
-    capacity: int
-    cost: int
-
-
-def _add_flow_edge(graph: list[list[_FlowEdge]], source: int, target: int, cost: int) -> int:
-    forward_index = len(graph[source])
-    reverse_index = len(graph[target])
-    graph[source].append(_FlowEdge(target, reverse_index, 1, cost))
-    graph[target].append(_FlowEdge(source, forward_index, 0, -cost))
-    return forward_index
-
-
 def deterministic_one_to_one_matches(
     current: Sequence[IdealObservation],
     previous: Sequence[IdealObservation],
     tolerance: float,
 ) -> dict[int, int]:
-    """Return maximum-cardinality, minimum-cost deterministic matches.
+    """Return deterministic maximum-cardinality matches within one tolerance.
 
-    The returned keys and values are indices into the supplied sequences. Cohort equality is exact;
-    price and quantity must both be within ``tolerance`` relative to the current observation.
+    A small augmenting-path matcher preserves the most resting orders possible
+    without the flow network and composite integer costs formerly used here.
+    Candidate ordering is stable, but no economic meaning is assigned to the
+    total matching cost.
     """
-    if not current or not previous:
-        return {}
     if not math.isfinite(tolerance) or tolerance < 0.0:
         raise ValueError("matching tolerance must be finite and non-negative")
-
-    current_order = sorted(range(len(current)), key=lambda idx: current[idx].stable_key)
-    previous_order = sorted(range(len(previous)), key=lambda idx: previous[idx].stable_key)
-    n_current = len(current_order)
-    n_previous = len(previous_order)
-    source = 0
-    current_offset = 1
-    previous_offset = current_offset + n_current
-    sink = previous_offset + n_previous
-    graph: list[list[_FlowEdge]] = [[] for _ in range(sink + 1)]
-    for local_idx in range(n_current):
-        _add_flow_edge(graph, source, current_offset + local_idx, 0)
-    for local_idx in range(n_previous):
-        _add_flow_edge(graph, previous_offset + local_idx, sink, 0)
-
-    tracked_edges: list[tuple[int, int, int, int]] = []
-    # One unit of quantized distance must dominate the complete tie-break sum
-    # across a maximum-cardinality matching, not merely one edge.
-    tie_scale = max(1, min(n_current, n_previous) * n_current * n_previous + 1)
-    for current_local, current_idx in enumerate(current_order):
-        current_observation = current[current_idx]
-        for previous_local, previous_idx in enumerate(previous_order):
-            previous_observation = previous[previous_idx]
+    candidates: list[tuple[float, tuple, tuple, int, int]] = []
+    for current_idx, current_observation in enumerate(current):
+        for previous_idx, previous_observation in enumerate(previous):
             if current_observation.cohort != previous_observation.cohort:
                 continue
-            price_diff = _relative_diff(current_observation.price, previous_observation.price)
-            qty_diff = _relative_diff(current_observation.qty, previous_observation.qty)
-            if price_diff > tolerance or qty_diff > tolerance:
-                continue
-            base_cost = int(round((price_diff + qty_diff) * 1_000_000_000_000))
-            tie_cost = current_local * n_previous + previous_local
-            edge_index = _add_flow_edge(
-                graph,
-                current_offset + current_local,
-                previous_offset + previous_local,
-                base_cost * tie_scale + tie_cost,
+            price_diff = _relative_diff(
+                current_observation.price, previous_observation.price
             )
-            tracked_edges.append((current_local, previous_local, edge_index, current_idx))
+            qty_diff = _relative_diff(
+                current_observation.qty, previous_observation.qty
+            )
+            if price_diff <= tolerance and qty_diff <= tolerance:
+                candidates.append(
+                    (
+                        price_diff + qty_diff,
+                        current_observation.stable_key,
+                        previous_observation.stable_key,
+                        current_idx,
+                        previous_idx,
+                    )
+                )
+    candidates_by_current: dict[int, list[int]] = defaultdict(list)
+    for _cost, _current_key, _previous_key, current_idx, previous_idx in sorted(
+        candidates
+    ):
+        candidates_by_current[current_idx].append(previous_idx)
 
-    node_count = len(graph)
-    while True:
-        infinity = 10**60
-        distances = [infinity] * node_count
-        predecessors: list[tuple[int, int] | None] = [None] * node_count
-        distances[source] = 0
-        for _ in range(node_count - 1):
-            changed = False
-            for node, edges in enumerate(graph):
-                if distances[node] == infinity:
-                    continue
-                for edge_index, edge in enumerate(edges):
-                    if edge.capacity <= 0:
-                        continue
-                    candidate = distances[node] + edge.cost
-                    predecessor_key = (node, edge_index)
-                    if candidate < distances[edge.to] or (
-                        candidate == distances[edge.to]
-                        and (
-                            predecessors[edge.to] is None
-                            or predecessor_key < predecessors[edge.to]
-                        )
-                    ):
-                        distances[edge.to] = candidate
-                        predecessors[edge.to] = predecessor_key
-                        changed = True
-            if not changed:
-                break
-        if predecessors[sink] is None:
-            break
-        node = sink
-        while node != source:
-            predecessor = predecessors[node]
-            if predecessor is None:
-                raise RuntimeError("broken matching augmenting path")
-            previous_node, edge_index = predecessor
-            edge = graph[previous_node][edge_index]
-            edge.capacity -= 1
-            graph[node][edge.reverse_index].capacity += 1
-            node = previous_node
+    previous_owner: dict[int, int] = {}
 
-    matches: dict[int, int] = {}
-    for current_local, previous_local, edge_index, current_idx in tracked_edges:
-        edge = graph[current_offset + current_local][edge_index]
-        if edge.capacity == 0:
-            matches[current_idx] = previous_order[previous_local]
-    return matches
+    def assign(current_idx: int, visited_previous: set[int]) -> bool:
+        for previous_idx in candidates_by_current.get(current_idx, []):
+            if previous_idx in visited_previous:
+                continue
+            visited_previous.add(previous_idx)
+            owner = previous_owner.get(previous_idx)
+            if owner is None or assign(owner, visited_previous):
+                previous_owner[previous_idx] = current_idx
+                return True
+        return False
+
+    for current_idx in range(len(current)):
+        assign(current_idx, set())
+    return {
+        current_idx: previous_idx
+        for previous_idx, current_idx in sorted(previous_owner.items())
+    }
 
 
-def _snapshot_associations(
-    current: Sequence[IdealObservation],
-    previous: Sequence[IdealObservation],
-    tight_tolerance: float,
-    wider_tolerance: float,
-) -> dict[int, str]:
-    tight = deterministic_one_to_one_matches(current, previous, tight_tolerance)
-    remaining_current_indices = [idx for idx in range(len(current)) if idx not in tight]
-    used_previous = set(tight.values())
-    remaining_previous_indices = [
-        idx for idx in range(len(previous)) if idx not in used_previous
+def _group_by_cohort(
+    observations: Sequence[IdealObservation],
+) -> dict[OrderCohort, tuple[IdealObservation, ...]]:
+    grouped: dict[OrderCohort, list[IdealObservation]] = defaultdict(list)
+    for observation in observations:
+        grouped[observation.cohort].append(observation)
+    return {
+        cohort: tuple(sorted(rows, key=lambda row: (row.price, row.qty)))
+        for cohort, rows in grouped.items()
+    }
+
+
+def _continuous_drift_start_index(
+    values: Sequence[float], tolerance: float
+) -> int | None:
+    """Return the first changed observation in the current directional run."""
+    if len(values) < 3:
+        return None
+    changed = [
+        (index, right - left)
+        for index, (left, right) in enumerate(zip(values, values[1:]), start=1)
+        if right != left
     ]
-    remaining_current = [current[idx] for idx in remaining_current_indices]
-    remaining_previous = [previous[idx] for idx in remaining_previous_indices]
-    wider_local = deterministic_one_to_one_matches(
-        remaining_current, remaining_previous, wider_tolerance
-    )
-    result = {idx: "tight" for idx in tight}
-    for current_local in wider_local:
-        result[remaining_current_indices[current_local]] = "wider"
-    return result
+    if len(changed) < 2:
+        return None
+    direction = 1 if changed[-1][1] > 0.0 else -1
+    run_start_index = changed[-1][0]
+    run_move_count = 0
+    for target_index, delta in reversed(changed):
+        if (delta > 0.0) != (direction > 0):
+            break
+        run_start_index = target_index
+        run_move_count += 1
+    if run_move_count < 2:
+        return None
+    baseline_index = run_start_index - 1
+    if _relative_diff(values[-1], values[baseline_index]) <= tolerance:
+        return None
+    return run_start_index
 
 
 class OrderChurnGateState:
     def __init__(self) -> None:
         self.history_by_symbol: dict[str, deque[IdealSnapshot]] = {}
-        self.compatibility_epoch_by_symbol: dict[str, object] = {}
         self.action_attempt_timestamps: deque[float] = deque()
         self.generation = 0
-        self.account_epoch: object | None = None
         self.reset_count = 0
+        self.history_started = False
         self.console_log_state: dict[str, dict[str, object]] = {}
 
     def should_log_console_event(
@@ -300,7 +249,7 @@ class OrderChurnGateState:
         now_monotonic: float,
         repeat_seconds: float = ORDER_CHURN_CONSOLE_REPEAT_SECONDS,
     ) -> tuple[bool, int]:
-        """Throttle repeated INFO projections without suppressing events or decisions."""
+        """Throttle repeated INFO projections without affecting decisions."""
         if not family:
             raise ValueError("console log family must be non-empty")
         if not math.isfinite(now_monotonic):
@@ -328,33 +277,18 @@ class OrderChurnGateState:
         self.generation += 1
         return self.generation
 
-    def reset_history_for_epoch(self, account_epoch: object) -> bool:
-        if self.account_epoch is None:
-            self.account_epoch = account_epoch
-            return False
-        if self.account_epoch == account_epoch:
-            return False
-        self.account_epoch = account_epoch
+    def clear_history(self) -> bool:
+        had_history = bool(self.history_by_symbol)
         self.history_by_symbol.clear()
-        self.compatibility_epoch_by_symbol.clear()
+        if had_history:
+            self.reset_count += 1
+        return had_history
+
+    def clear_symbol_history(self, symbol: str) -> bool:
+        if self.history_by_symbol.pop(str(symbol), None) is None:
+            return False
         self.reset_count += 1
         return True
-
-    def reset_history_for_symbol_epochs(
-        self, compatibility_epochs: Mapping[str, object]
-    ) -> set[str]:
-        """Clear histories whose symbol-local market or runtime policy changed."""
-        changed: set[str] = set()
-        for symbol, epoch in compatibility_epochs.items():
-            symbol = str(symbol)
-            previous = self.compatibility_epoch_by_symbol.get(symbol)
-            if previous is not None and previous != epoch:
-                self.history_by_symbol.pop(symbol, None)
-                changed.add(symbol)
-            self.compatibility_epoch_by_symbol[symbol] = epoch
-        if changed:
-            self.reset_count += 1
-        return changed
 
     def symbols_with_history(self) -> set[str]:
         return set(self.history_by_symbol)
@@ -371,16 +305,12 @@ class OrderChurnGateState:
         self,
         ideal_orders_by_symbol: Mapping[str, Sequence[Mapping[str, object]]],
         *,
-        generation: int,
         now_monotonic: float,
-        tight_tolerance: float,
-        wider_tolerance: float,
+        tolerance: float,
         stability_seconds: float,
         window_seconds: float,
-        max_generation_gap_seconds: float,
+        max_sample_gap_seconds: float,
     ) -> dict[int, ChurnDecision]:
-        if generation != self.generation:
-            raise ValueError("generation must be the current planning generation")
         current_by_symbol = {
             str(symbol): normalize_ideal_orders(list(orders))
             for symbol, orders in ideal_orders_by_symbol.items()
@@ -389,112 +319,117 @@ class OrderChurnGateState:
         for symbol, current in current_by_symbol.items():
             snapshots = self.history_by_symbol.setdefault(symbol, deque())
             self._prune_snapshots(snapshots, now_monotonic, window_seconds)
-            decisions_by_index: dict[int, ChurnDecision] = {}
-            unresolved = set(range(len(current)))
-            tight_counts = {idx: 0 for idx in unresolved}
-            oldest_tight_times = {idx: now_monotonic for idx in unresolved}
-            expected_generation = generation - 1
-            previous_time = now_monotonic
-            for snapshot in reversed(snapshots):
-                if not unresolved:
-                    break
-                if snapshot.generation != expected_generation:
-                    for current_idx in unresolved:
-                        decisions_by_index[current_idx] = ChurnDecision(
-                            False, "generation_gap"
-                        )
-                    unresolved.clear()
-                    break
-                time_gap = previous_time - snapshot.monotonic_seconds
-                if time_gap < 0.0 or time_gap > max_generation_gap_seconds:
-                    for current_idx in unresolved:
-                        decisions_by_index[current_idx] = ChurnDecision(
-                            False, "time_gap"
-                        )
-                    unresolved.clear()
-                    break
-                # Match the complete current cohort group, including candidates
-                # already resolved by newer evidence. Excluding them could let an
-                # older observation be reused for another current order.
-                association = _snapshot_associations(
-                    current,
-                    snapshot.observations,
-                    tight_tolerance,
-                    wider_tolerance,
-                )
-                resolved_now: set[int] = set()
-                for current_idx in sorted(unresolved):
-                    relation = association.get(current_idx)
-                    if relation == "tight":
-                        tight_counts[current_idx] += 1
-                        oldest_tight_times[current_idx] = snapshot.monotonic_seconds
-                        tight_seconds = max(
-                            0.0,
-                            now_monotonic - oldest_tight_times[current_idx],
-                        )
+            current_groups = _group_by_cohort(current)
+            historical_groups = [
+                (snapshot.monotonic_seconds, _group_by_cohort(snapshot.observations))
+                for snapshot in reversed(snapshots)
+            ]
+            by_source_index: dict[int, ChurnDecision] = {}
+            for cohort, current_group in current_groups.items():
+                tracks = [[observation] for observation in current_group]
+                track_times = [now_monotonic]
+                previous_time = now_monotonic
+                for snapshot_time, groups in historical_groups:
+                    time_gap = previous_time - snapshot_time
+                    previous_group = groups.get(cohort)
+                    if (
+                        time_gap < 0.0
+                        or time_gap > max_sample_gap_seconds
+                        or previous_group is None
+                        or len(previous_group) != len(current_group)
+                    ):
+                        break
+                    for index, observation in enumerate(previous_group):
+                        tracks[index].append(observation)
+                    track_times.append(snapshot_time)
+                    previous_time = snapshot_time
+
+                for observation, track in zip(current_group, tracks):
+                    current_observation = track[0]
+                    tight_count = 0
+                    oldest_tight_time = now_monotonic
+                    for index, historical in enumerate(track[1:], start=1):
                         if (
-                            tight_counts[current_idx] >= 2
-                            and tight_seconds >= stability_seconds
+                            _relative_diff(current_observation.price, historical.price)
+                            > tolerance
+                            or _relative_diff(current_observation.qty, historical.qty)
+                            > tolerance
                         ):
-                            decisions_by_index[current_idx] = ChurnDecision(
-                                False,
-                                "stable_tight_prefix",
-                                tight_prefix_count=tight_counts[current_idx],
-                                tight_prefix_seconds=tight_seconds,
-                            )
-                            resolved_now.add(current_idx)
-                        continue
-                    if relation == "wider":
-                        decisions_by_index[current_idx] = ChurnDecision(
-                            True,
-                            "wider_but_not_tight",
-                            tight_prefix_count=tight_counts[current_idx],
-                            tight_prefix_seconds=max(
-                                0.0,
-                                now_monotonic - oldest_tight_times[current_idx],
-                            ),
+                            break
+                        tight_count += 1
+                        oldest_tight_time = track_times[index]
+                    tight_seconds = max(0.0, now_monotonic - oldest_tight_time)
+                    if tight_count >= 2 and tight_seconds >= stability_seconds:
+                        decision = ChurnDecision(
+                            False,
+                            "stable_tight_prefix",
+                            tight_prefix_count=tight_count,
+                            tight_prefix_seconds=tight_seconds,
+                        )
+                    elif len(track) == 1:
+                        decision = ChurnDecision(False, "no_history")
+                    elif now_monotonic - track_times[-1] < stability_seconds:
+                        decision = ChurnDecision(
+                            False,
+                            "history_short",
+                            tight_prefix_count=tight_count,
+                            tight_prefix_seconds=tight_seconds,
                         )
                     else:
-                        decisions_by_index[current_idx] = ChurnDecision(
-                            False, "uncertain_no_association"
+                        chronological = list(reversed(track))
+                        chronological_times = list(reversed(track_times))
+                        price_drift_start = _continuous_drift_start_index(
+                            [row.price for row in chronological], tolerance
                         )
-                    resolved_now.add(current_idx)
-                unresolved.difference_update(resolved_now)
-                expected_generation -= 1
-                previous_time = snapshot.monotonic_seconds
+                        qty_drift_start = _continuous_drift_start_index(
+                            [row.qty for row in chronological], tolerance
+                        )
+                        price_drift = (
+                            price_drift_start is not None
+                            and now_monotonic
+                            - chronological_times[price_drift_start]
+                            >= stability_seconds
+                        )
+                        qty_drift = (
+                            qty_drift_start is not None
+                            and now_monotonic - chronological_times[qty_drift_start]
+                            >= stability_seconds
+                        )
+                        if price_drift and qty_drift:
+                            reason = "continuous_price_qty_drift"
+                        elif price_drift:
+                            reason = "continuous_price_drift"
+                        elif qty_drift:
+                            reason = "continuous_qty_drift"
+                        elif (
+                            price_drift_start is not None
+                            or qty_drift_start is not None
+                        ):
+                            reason = "drift_run_short"
+                        else:
+                            reason = "no_continuous_drift"
+                        decision = ChurnDecision(
+                            price_drift or qty_drift,
+                            reason,
+                            tight_prefix_count=tight_count,
+                            tight_prefix_seconds=tight_seconds,
+                        )
+                    by_source_index[observation.source_index] = decision
 
-            for current_idx in unresolved:
-                tight_count = tight_counts[current_idx]
-                tight_seconds = max(
-                    0.0, now_monotonic - oldest_tight_times[current_idx]
-                )
-                decisions_by_index[current_idx] = (
-                    ChurnDecision(
-                        False,
-                        "tight_history_short",
-                        tight_prefix_count=tight_count,
-                        tight_prefix_seconds=tight_seconds,
-                    )
-                    if tight_count
-                    else ChurnDecision(False, "no_history")
-                )
-
-            for current_idx, observation in enumerate(current):
-                decision = decisions_by_index[current_idx]
+            for observation in current:
                 source_order = ideal_orders_by_symbol[symbol][observation.source_index]
-                decisions[id(source_order)] = decision
+                decisions[id(source_order)] = by_source_index[observation.source_index]
             snapshots.append(
                 IdealSnapshot(
-                    generation=generation,
                     monotonic_seconds=now_monotonic,
                     observations=tuple(current),
                 )
             )
+
         for symbol, snapshots in list(self.history_by_symbol.items()):
             self._prune_snapshots(snapshots, now_monotonic, window_seconds)
             if not snapshots and symbol not in current_by_symbol:
                 self.history_by_symbol.pop(symbol, None)
-                self.compatibility_epoch_by_symbol.pop(symbol, None)
         return decisions
 
     def prune_action_attempts(

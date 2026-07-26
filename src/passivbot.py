@@ -9430,16 +9430,6 @@ class Passivbot:
                         await asyncio.sleep(pause_s)
         return configured_symbols
 
-    def _order_churn_precreate_signed_action_costs(
-        self,
-        symbols,
-        *,
-        now_ms: int | None = None,
-    ) -> dict[str, int]:
-        """Return connector signed-action costs required before creating on symbols."""
-        del now_ms
-        return {}
-
     def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
         """Return whether this creation requires successful per-symbol setup."""
         return True
@@ -19085,27 +19075,6 @@ class Passivbot:
     def _canonical_open_order_reduce_only(self, order: dict) -> Optional[bool]:
         """Return authoritative venue-native close-only effect for one open order."""
         return reconciler.extract_order_reduce_only(order)
-
-    async def _order_churn_far_create_headroom(self) -> float | int | None:
-        """Optional connector overlay for far churn-evidenced ordinary creates."""
-        return math.inf
-
-    async def _fetch_fresh_order_churn_market_prices(
-        self, symbols: set[str], *, max_age_ms: int = 10_000
-    ) -> dict[str, float]:
-        """Fetch final-admission prices without a completed-candle fallback."""
-        if not symbols:
-            return {}
-        return await self._get_live_last_prices(
-            symbols,
-            max_age_ms=max(0, int(max_age_ms)),
-            context="order_churn_final_admission",
-            allow_completed_candle_fallback=False,
-        )
-
-    def _record_order_churn_signed_action_attempts(self, count: int) -> None:
-        """Connector hook for action-based exchange limits; generic venues need no overlay."""
-        return None
 
     def _reconcile_symbol_orders(
         self,

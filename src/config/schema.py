@@ -430,7 +430,6 @@ def get_template_config():
                 "order_replacement_churn_gate_activation_count": 10,
                 "order_replacement_churn_gate_market_dist_pct": 0.005,
                 "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_replacement_churn_gate_tracking_tolerance_pct": 0.002,
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "pnls_max_lookback_days": 30.0,
                 "recv_window_ms": 5000,

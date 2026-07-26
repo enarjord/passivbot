@@ -295,12 +295,16 @@ When the structured console is disabled or unavailable, the same bounded count r
 The account-wide replacement-churn policy emits structured, monitor-only summaries:
 
 - `order.churn_evidence` reports one bounded per-plan aggregation of RAM-history association
-  reasons, churn-evidenced order count, tracked symbol count, generation, and epoch resets.
-- `order.churn_admission` reports one bounded final-admission aggregation, including rolling action
-  count, threshold, decision reasons, and sampled market distances.
-- `order.churn_actions_accounted` records the action kind and number of logical creates or required
-  connector configuration writes debited immediately before each connector call, plus the resulting
-  rolling count. Cancellations are excluded from the generic window.
+  reasons, churn-evidenced order count, tracked symbol count, generation, and RAM-history clearing.
+  History starts empty and is cleared after planning failure, gate disablement, or a symbol leaving
+  the current ideal/active/open-order/nonzero-position universe. Flat position placeholders retained
+  by account-state normalization do not keep a departed symbol's churn history alive.
+- `order.churn_admission` reports one bounded final-admission aggregation after exchange
+  configuration and the final fresh-market check, including rolling create-attempt count, threshold,
+  decision reasons, and sampled market distances.
+- `order.churn_actions_accounted` records logical create attempts debited immediately before the
+  connector create call, plus the resulting rolling count. Configuration writes and cancellations
+  are excluded from the window; the retained `action_kind` field is therefore `create`.
 - `execution.cancel_first_barrier` reports create deferral after a stale-order cancellation. In
   effective hedge mode the scope is symbol and position side; in one-way mode it is the whole
   symbol because long and short share one net exchange position. Unrelated scopes may continue in

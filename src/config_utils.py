@@ -272,11 +272,6 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "live.order_replacement_churn_gate_tracking_tolerance_pct": {
-        "owner": "live",
-        "consumed_by": {"live"},
-        "cli_exposed_on": {"live"},
-    },
     "live.order_replacement_churn_gate_window_minutes": {
         "owner": "live",
         "consumed_by": {"live"},
@@ -1057,19 +1052,7 @@ RESERVED_CLI_ARGS = {
         "metavar": "FLOAT",
         "commands": {"live"},
         "group": {"live": "Behavior"},
-        "help": "Newest contiguous tight-match duration required to clear older churn evidence.",
-    },
-    "live.order_replacement_churn_gate_tracking_tolerance_pct": {
-        "visible": ["--order-replacement-churn-gate-tracking-tolerance-pct"],
-        "hidden": [
-            "--live.order_replacement_churn_gate_tracking_tolerance_pct",
-            "--live_order_replacement_churn_gate_tracking_tolerance_pct",
-        ],
-        "type": float,
-        "metavar": "FLOAT",
-        "commands": {"live"},
-        "group": {"live": "Behavior"},
-        "help": "Wider price/quantity tolerance used only for historical churn evidence.",
+        "help": "Minimum sustained drift duration; the same tight-match duration clears older evidence.",
     },
     "live.order_replacement_churn_gate_window_minutes": {
         "visible": ["--order-replacement-churn-gate-window-minutes"],
@@ -1742,7 +1725,6 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.order_replacement_churn_gate_activation_count",
         "live.order_replacement_churn_gate_market_dist_pct",
         "live.order_replacement_churn_gate_stability_minutes",
-        "live.order_replacement_churn_gate_tracking_tolerance_pct",
         "live.order_replacement_churn_gate_window_minutes",
     }
     runtime = {

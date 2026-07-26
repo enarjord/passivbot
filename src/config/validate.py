@@ -151,6 +151,24 @@ def validate_config(
             "config.live.limit_order_create_max_market_dist_pct must be "
             "finite and >= 0.0 and < 1.0"
         )
+    order_match_tolerance_raw = config["live"]["order_match_tolerance_pct"]
+    if isinstance(order_match_tolerance_raw, bool):
+        raise TypeError("config.live.order_match_tolerance_pct must be numeric")
+    try:
+        order_match_tolerance = float(order_match_tolerance_raw)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "config.live.order_match_tolerance_pct must be numeric"
+        ) from exc
+    if (
+        not math.isfinite(order_match_tolerance)
+        or order_match_tolerance < 0.0
+        or order_match_tolerance > 0.01
+    ):
+        raise ValueError(
+            "config.live.order_match_tolerance_pct must be finite and between "
+            "0.0 and 0.01 inclusive"
+        )
     try:
         active_tail_gap_minutes = float(
             config["live"]["max_active_candle_tail_gap_minutes"]
@@ -207,7 +225,6 @@ def validate_config(
         "order_replacement_churn_gate_window_minutes",
         "order_replacement_churn_gate_stability_minutes",
         "order_replacement_churn_gate_market_dist_pct",
-        "order_replacement_churn_gate_tracking_tolerance_pct",
     ):
         try:
             value = float(config["live"][key])
@@ -219,8 +236,6 @@ def validate_config(
     window = churn_numeric["order_replacement_churn_gate_window_minutes"]
     stability = churn_numeric["order_replacement_churn_gate_stability_minutes"]
     distance = churn_numeric["order_replacement_churn_gate_market_dist_pct"]
-    tracking = churn_numeric["order_replacement_churn_gate_tracking_tolerance_pct"]
-    tight = float(config["live"]["order_match_tolerance_pct"])
     if activation_raw > 0 and window <= 0.0:
         raise ValueError(
             "config.live.order_replacement_churn_gate_window_minutes must be > 0 when enabled"
@@ -232,10 +247,6 @@ def validate_config(
     if distance < 0.0 or distance >= 1.0:
         raise ValueError(
             "config.live.order_replacement_churn_gate_market_dist_pct must be >= 0 and < 1"
-        )
-    if tracking <= tight or tracking >= 1.0:
-        raise ValueError(
-            "config.live.order_replacement_churn_gate_tracking_tolerance_pct must be greater than order_match_tolerance_pct and < 1"
         )
     max_cancellations = int(config["live"]["max_n_cancellations_per_batch"])
     max_creations = int(config["live"]["max_n_creations_per_batch"])

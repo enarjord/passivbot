@@ -11526,6 +11526,8 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
                 "qty": 0.01,
                 "price": 99_000.0,
                 "reduce_only": False,
+                "type": "limit",
+                "pb_order_type": "entry_grid_normal_long",
             }
         ],
         "ETH/USDT:USDT": [
@@ -11536,6 +11538,8 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
                 "qty": 0.1,
                 "price": 3_000.0,
                 "reduce_only": False,
+                "type": "limit",
+                "pb_order_type": "entry_grid_normal_long",
             }
         ],
     }
@@ -11603,6 +11607,8 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
                 "qty": 0.01,
                 "price": 99_000.0,
                 "reduce_only": False,
+                "type": "limit",
+                "pb_order_type": "entry_grid_normal_long",
             }
         ],
         "ETH/USDT:USDT": [
@@ -11613,6 +11619,8 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
                 "qty": 0.1,
                 "price": 3_000.0,
                 "reduce_only": False,
+                "type": "limit",
+                "pb_order_type": "entry_grid_normal_long",
             }
         ],
     }

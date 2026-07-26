@@ -181,6 +181,37 @@ class KucoinBot(CCXTBot):
             return str(explicit).lower()
         raise ValueError("KuCoin open order missing durable long/short attribution")
 
+    def _normalize_order_update(self, order: dict) -> dict:
+        """Recover owned hedge-mode websocket rows with sparse pside metadata."""
+        try:
+            return super()._normalize_order_update(order)
+        except ValueError:
+            # KuCoin's actual account position mode is authoritative. The
+            # strategy exposure flag may be one-way while the account remains
+            # in hedge mode and emits hedge-position metadata.
+            if not bool(getattr(self, "hedge_mode", True)):
+                raise
+            info = order.get("info") or {}
+            if any(
+                value not in (None, "")
+                for value in (
+                    order.get("position_side"),
+                    order.get("positionSide"),
+                    info.get("positionSide"),
+                    info.get("posSide"),
+                )
+            ):
+                raise
+            if not self._sparse_ws_order_has_emitted_identity(order):
+                raise
+            position_side = self._durable_order_position_side(order)
+            if position_side not in {"long", "short"}:
+                raise
+            order["position_side"] = position_side
+            order["qty"] = order["amount"]
+            order["_pb_order_update_requires_authoritative_refresh"] = True
+            return order
+
     def determine_pos_side(self, order):
         """Compatibility route for the authoritative open-order attribution hook."""
         return self._get_position_side_for_order(order)

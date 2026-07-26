@@ -3,7 +3,7 @@ import math
 from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
-from utils import symbol_to_coin, to_ccxt_client_id, ts_to_date, utc_ms
+from utils import symbol_to_coin, to_ccxt_client_id, ts_to_date
 from config.access import require_live_value
 from custom_endpoint_overrides import (
     get_custom_endpoint_source,
@@ -125,7 +125,17 @@ class GateIOBot(CCXTBot):
             # Gate's REST payload currently returns ``user`` as an integer,
             # while CCXT Pro's private futures subscription treats the UID as
             # a string and calls len() on it while signing the request.
-            self.uid = str(primary["user"])
+            raw_uid = primary["user"]
+            if isinstance(raw_uid, bool) or not isinstance(raw_uid, (str, int)):
+                raise ValueError(
+                    f"{self.exchange}: fetch_balance response has invalid info[0].user"
+                )
+            uid = str(raw_uid).strip()
+            if not uid:
+                raise ValueError(
+                    f"{self.exchange}: fetch_balance response has empty info[0].user"
+                )
+            self.uid = uid
             self.cca.uid = self.uid
             if self.ccp is not None:
                 self.ccp.uid = self.uid
@@ -242,7 +252,6 @@ class GateIOBot(CCXTBot):
                 )
             leverage = self._calc_leverage_for_symbol(symbol)
             margin_mode = self._get_margin_mode_for_symbol(symbol)
-            self._record_order_churn_allowance_attempts(1, action_kind="config")
             await self.cca.set_leverage(
                 leverage,
                 symbol=symbol,
@@ -254,36 +263,6 @@ class GateIOBot(CCXTBot):
                 margin_mode,
                 leverage,
             )
-
-    def _order_churn_precreate_signed_action_costs(
-        self,
-        symbols,
-        *,
-        now_ms: int | None = None,
-    ) -> dict[str, int]:
-        configured = set(
-            getattr(self, "already_updated_exchange_config_symbols", set()) or set()
-        )
-        retry_after_by_symbol = (
-            getattr(self, "_exchange_config_retry_after_ms", {}) or {}
-        )
-        metadata_unavailable = set(
-            getattr(
-                self,
-                "_gate_leverage_metadata_unavailable_symbols",
-                set(),
-            )
-            or set()
-        )
-        if now_ms is None:
-            now_ms = utc_ms()
-        return {
-            str(symbol): 1
-            for symbol in symbols
-            if str(symbol) not in configured
-            and str(symbol) not in metadata_unavailable
-            and int(retry_after_by_symbol.get(str(symbol), 0) or 0) <= now_ms
-        }
 
     def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
         """Gate leverage is an entry prerequisite, not a close prerequisite."""
