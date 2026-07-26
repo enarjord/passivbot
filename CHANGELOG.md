@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Forager monitor health now distinguishes approved candidates that are
+  temporarily unrankable because volume/log-range or required candidate EMA
+  inputs are unavailable from active-symbol trading degradation. Ranking-feature
+  health is populated by the active Rust-orchestrator preparation path, candidate
+  labels use the same market-age and effective-minimum-cost eligibility as live
+  selection, all EMA health is cleared before a failed replacement bundle can
+  leave stale state behind, candidates remain explicitly unrankable until a
+  bundle completes, and active-symbol EMA failures retain their active
+  degradation reason. Open-tail forager projection computes only close EMAs
+  because ranking metrics must come from real candles, and latest-value EMA
+  calculations avoid allocating an unused full series.
+
 - Live trailing fill confirmation now accepts reconstructed position-price
   differences of at most one effective executable price tick to accommodate
   exchange rounding or truncation of sub-tick VWAPs, including Hyperliquid's
@@ -1850,6 +1862,12 @@ All notable user-facing changes will be documented in this file.
   reasons and candidate error types in concise smoke output, making
   `cache_only_fetch_failed` vs `never_fetched_cache_only` visible without a
   separate event query.
+- Forager monitor readiness is now scoped to the exact symbols evaluated by the
+  latest EMA bundle, optional cache-only metric gaps are classified as
+  candidate health failures, and open-tail projection preserves log-range
+  inputs required by held or explicitly normal strategies. Completed-candle
+  forager ranking metrics now have a distinct Rust input channel so coincident
+  strategy and ranking spans cannot reuse projected values for coin selection.
 - `passivbot tool live-smoke-report` now reports timestamp/nonce
   `cycle.degraded` events recovered by a subsequent successful
   `exchange.time_sync` event as recovered problem events instead of hard smoke

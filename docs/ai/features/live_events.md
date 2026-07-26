@@ -458,6 +458,12 @@ terminal event.
 
 `forager.eligibility_changed` is a bounded structured/monitor-only record of approved/ignored
 membership changes. It does not retain config paths, raw sources, or full lists.
+Monitor market entries label a forager candidate only when the same live
+`is_approved` predicate admits its coin and position side, including minimum
+market age. Ranking-feature unavailability is refreshed from the active
+orchestrator EMA preparation path on every bundle load. Candidate-only EMA
+failures remain distinct from flat active/normal-symbol degradation; monitor
+tradability must not relabel the latter as a candidate-only failure.
 
 `config.market_compatibility` records configured symbols removed by existing market filters.
 Approved-symbol incompatibility is degraded; ignored-symbol incompatibility is skipped. HIP-3

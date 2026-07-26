@@ -1517,6 +1517,7 @@ impl<'a> Backtest<'a> {
                     next_candle,
                     effective_min_cost,
                     emas,
+                    forager_m1: None,
                     long: orchestrator::SymbolSideInput {
                         mode: mode_long,
                         position: pos_long,

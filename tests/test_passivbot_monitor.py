@@ -6688,6 +6688,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 "ETH/USDT:USDT": {"active": True},
             }
             self._orchestrator_ema_unavailable_symbols = set()
+            self._orchestrator_candidate_ema_unavailable_symbols = set()
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+            }
+            self._orchestrator_ema_unavailable_reasons = {}
+            self._forager_rank_feature_unavailable_by_side = {
+                "long": {"ETH/USDT:USDT"}
+            }
             self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
             self._orchestrator_trailing_unavailable_reasons = {
                 "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
@@ -6881,6 +6891,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 return True
             return pside == "long"
 
+        def is_approved(self, pside, symbol):
+            return (
+                symbol
+                in set(self.approved_coins_minus_ignored_coins.get(pside, set()))
+                and symbol not in set(self.ignored_coins.get(pside, set()))
+            )
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
         def live_value(self, key):
             if key == "forced_mode_long":
                 return ""
@@ -6990,6 +7010,20 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "long"
     ]["minimum_fill_refresh_generation"] == 3
     assert snapshot["market"]["ETH/USDT:USDT"]["tradable"] is True
+    assert snapshot["market"]["BTC/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": True,
+        "rankability_reasons": [],
+        "ranking_feature_unavailable_psides": [],
+        "ema_unavailable_reasons": [],
+    }
+    assert snapshot["market"]["ETH/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": False,
+        "rankability_reasons": ["ranking_features_unavailable"],
+        "ranking_feature_unavailable_psides": ["long"],
+        "ema_unavailable_reasons": [],
+    }
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
         0.0
@@ -7035,6 +7069,167 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     )
     assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
     assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
+
+
+def test_monitor_forager_candidates_use_live_age_eligibility():
+    import passivbot as pb_mod
+
+    old_symbol = "OLD/USDT:USDT"
+    young_symbol = "YOUNG/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {old_symbol, young_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {old_symbol, young_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                old_symbol: {"active": True},
+                young_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {old_symbol, young_symbol}
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long" and symbol == old_symbol
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[old_symbol]["forager"]["candidate_psides"] == ["long"]
+    assert "forager" not in market[young_symbol]
+
+
+def test_monitor_forager_candidates_use_live_min_cost_eligibility():
+    import passivbot as pb_mod
+
+    cheap_symbol = "CHEAP/USDT:USDT"
+    expensive_symbol = "EXPENSIVE/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                cheap_symbol: {"active": True},
+                expensive_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {
+                cheap_symbol,
+                expensive_symbol,
+            }
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long"
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return pside == "long" and symbol == cheap_symbol
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[cheap_symbol]["forager"]["candidate_psides"] == ["long"]
+    assert "forager" not in market[expensive_symbol]
+
+    startup_bot = FakeBot()
+    del startup_bot._orchestrator_ema_bundle_completed
+    startup_market = startup_bot._build_monitor_market_section()
+    assert startup_market[cheap_symbol]["forager"]["rankable"] is False
+    assert startup_market[cheap_symbol]["forager"]["rankability_reasons"] == [
+        "ema_bundle_unevaluated"
+    ]
+
+
+def test_monitor_new_forager_candidate_waits_for_next_ema_bundle():
+    import passivbot as pb_mod
+
+    evaluated_symbol = "EVALUATED/USDT:USDT"
+    new_symbol = "NEW/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {evaluated_symbol, new_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {evaluated_symbol, new_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                evaluated_symbol: {"active": True},
+                new_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {evaluated_symbol}
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long"
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return pside == "long"
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[evaluated_symbol]["forager"]["rankable"] is True
+    assert market[new_symbol]["forager"]["rankable"] is False
+    assert market[new_symbol]["forager"]["rankability_reasons"] == [
+        "ema_bundle_unevaluated"
+    ]
 
 
 def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():
