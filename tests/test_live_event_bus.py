@@ -2840,6 +2840,51 @@ def test_console_format_summarizes_order_write_without_raw_payload():
     )
 
 
+def test_console_format_includes_bounded_exchange_rejection_context():
+    event = LiveEvent(
+        EventTypes.EXECUTION_AMBIGUOUS,
+        status="degraded",
+        cycle_id="cy_3",
+        order_wave_id="ow_2",
+        symbol="DOGE/USDT:USDT",
+        pside="long",
+        side="buy",
+        reason_code="result_exception",
+        data={
+            "order_type": "entry_initial_normal_long",
+            "qty": 66.0,
+            "price": 0.07111,
+            "error_type": "ExchangeError",
+            "error_status": "400",
+            "error_code": "10001",
+            "error_label": "INVALID_PARAM_VALUE",
+            "error_reason": "invalid argument: size",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "error_type=ExchangeError" in rendered
+    assert "status=400" in rendered
+    assert "code=10001" in rendered
+    assert "label=INVALID_PARAM_VALUE" in rendered
+    assert "reason=invalid argument: size" in rendered
+
+
+def test_console_format_bounds_exchange_rejection_reason_length():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_REJECTED,
+        status="failed",
+        symbol="DOGE/USDT:USDT",
+        data={"error_reason": "x" * 160},
+    )
+
+    rendered = format_console_event(event)
+
+    assert "reason=" + ("x" * 93) + "..." in rendered
+    assert "x" * 97 not in rendered
+
+
 def test_console_format_marks_ambiguous_cancel_as_requiring_full_account_confirmation():
     event = LiveEvent(
         EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,

@@ -198,7 +198,13 @@ class HyperliquidBot(CCXTBot):
         finally:
             self._hl_order_churn_rate_request_started_monotonic = 0.0
 
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+    def _order_churn_precreate_signed_action_costs(
+        self,
+        symbols,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
+        del now_ms
         configured = set(
             getattr(self, "already_updated_exchange_config_symbols", set()) or set()
         )
