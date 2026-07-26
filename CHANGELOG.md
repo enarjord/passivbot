@@ -1830,6 +1830,10 @@ All notable user-facing changes will be documented in this file.
   reasons and candidate error types in concise smoke output, making
   `cache_only_fetch_failed` vs `never_fetched_cache_only` visible without a
   separate event query.
+- Forager monitor readiness is now scoped to the exact symbols evaluated by the
+  latest EMA bundle, optional cache-only metric gaps are classified as
+  candidate health failures, and open-tail projection preserves log-range
+  inputs required by held or explicitly normal strategies.
 - `passivbot tool live-smoke-report` now reports timestamp/nonce
   `cycle.degraded` events recovered by a subsequent successful
   `exchange.time_sync` event as recovered problem events instead of hard smoke

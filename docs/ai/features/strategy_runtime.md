@@ -88,7 +88,11 @@ for an exchange market becoming intrinsically nontradable. Before the current
 EMA bundle completes—or after a replacement bundle fails—eligible candidates
 remain visible with `forager.rankable=false` and
 `ema_bundle_unevaluated`; monitor health must not infer readiness from empty
-failure sets.
+failure sets. Bundle readiness is scoped to the exact evaluated symbol set, so
+a newly age- or cost-eligible candidate remains unevaluated until a subsequent
+bundle includes it. Forager candidate ranking continues to use completed-candle
+metrics; held and explicitly normal symbols nevertheless retain any open-tail
+log-range projections required by their active strategy.
 
 ## Trailing Martingale Semantics
 

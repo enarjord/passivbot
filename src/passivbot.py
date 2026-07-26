@@ -16585,6 +16585,7 @@ class Passivbot:
             "short": set(),
         }
         self._orchestrator_ema_bundle_completed = False
+        self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
@@ -17658,6 +17659,10 @@ class Passivbot:
             dict[float, float] | None,
             dict[float, float] | None,
         ]:
+            project_strategy_log_range = bool(
+                required_m1_lr_for_symbol
+                and sym not in cache_only_symbols
+            )
             projection_metrics = {
                 "close": sorted(need_close_spans[sym]),
             }
@@ -17668,6 +17673,8 @@ class Passivbot:
                         "log_range": requested_m1_lr_spans,
                     }
                 )
+            elif project_strategy_log_range:
+                projection_metrics["log_range"] = required_m1_lr_for_symbol
             try:
                 projected = await self.cm.get_projected_open_tail_ema_metrics(
                     sym,
@@ -17690,18 +17697,26 @@ class Passivbot:
                 )
                 raise
             close = dict(projected.get("close", {}))
-            if is_forager_mode():
+            if is_forager_mode() and not project_strategy_log_range:
                 vol = None
                 lr1m = None
             else:
-                vol = projected_optional_map(
-                    sym, projected, "qv", m1_volume_spans, "m1_volume"
+                vol = (
+                    None
+                    if is_forager_mode()
+                    else projected_optional_map(
+                        sym, projected, "qv", m1_volume_spans, "m1_volume"
+                    )
                 )
                 lr1m = projected_optional_map(
                     sym,
                     projected,
                     "log_range",
-                    requested_m1_lr_spans,
+                    (
+                        required_m1_lr_for_symbol
+                        if is_forager_mode()
+                        else requested_m1_lr_spans
+                    ),
                     "m1_log_range",
                 )
             missing_close = [
@@ -17714,7 +17729,7 @@ class Passivbot:
                     "[ema] projected open-tail close EMA incomplete for "
                     f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                 )
-            if not is_forager_mode():
+            if not is_forager_mode() or project_strategy_log_range:
                 missing_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
@@ -17860,6 +17875,18 @@ class Passivbot:
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
+                elif is_forager_mode():
+                    optional_lr1m = await fetch_map(
+                        sym,
+                        [
+                            span
+                            for span in m1_lr_spans
+                            if span not in lr1m
+                        ],
+                        ema_lr_1m,
+                        "m1_log_range",
+                    )
+                    lr1m = {**optional_lr1m, **lr1m}
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
                     raise
@@ -18247,6 +18274,9 @@ class Passivbot:
                 "cache_only_fetch_failed",
                 "candidate_required_ema_unavailable",
                 "never_fetched_cache_only",
+                "missing_volume",
+                "missing_log_range",
+                "missing_volume+missing_log_range",
             }
             or str(reason).startswith("missing_required_forager_")
         }
@@ -18264,6 +18294,7 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
+        self._orchestrator_ema_bundle_symbols = set(symbols)
         self._orchestrator_ema_bundle_completed = True
         Passivbot._emit_ema_bundle_completed_event(
             self,
