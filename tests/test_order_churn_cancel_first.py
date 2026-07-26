@@ -406,6 +406,35 @@ async def test_config_action_reservation_consumes_generic_allowance(execution_sh
 
 
 @pytest.mark.asyncio
+async def test_exchange_config_uses_precreate_eligibility_snapshot(
+    execution_shell, monkeypatch
+):
+    bot = _PlanBot()
+    observed = {}
+
+    def config_action_costs(symbols, *, now_ms):
+        observed["estimate_now_ms"] = now_ms
+        return {symbol: 1 for symbol in symbols}
+
+    async def update_configs(symbols, *, eligibility_now_ms):
+        observed["update_now_ms"] = eligibility_now_ms
+        return set(symbols)
+
+    monkeypatch.setattr(executor, "_utc_ms", lambda: 12_345)
+    bot._order_churn_precreate_signed_action_costs = config_action_costs
+    bot.update_exchange_configs = update_configs
+
+    desired = _order("desired")
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert observed == {
+        "estimate_now_ms": 12_345,
+        "update_now_ms": 12_345,
+    }
+    assert bot.created == [desired]
+
+
+@pytest.mark.asyncio
 async def test_churn_admission_rechecks_after_config_market_move(execution_shell):
     bot = _PlanBot()
     bot._order_churn_gate_state = OrderChurnGateState()
@@ -479,3 +508,29 @@ async def test_batch_slice_happens_before_exchange_config_writes(execution_shell
 
     assert bot.configured == [[first["symbol"]]]
     assert bot.created == [first]
+
+
+@pytest.mark.asyncio
+async def test_stale_market_order_is_filtered_before_exchange_config_write(
+    execution_shell, monkeypatch
+):
+    bot = _PlanBot()
+    bot.configured = []
+
+    async def reject_stale(_bot, _orders):
+        return []
+
+    async def update_configs(symbols):
+        bot.configured.append(list(symbols))
+        return set(symbols)
+
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", reject_stale
+    )
+    bot.update_exchange_configs = update_configs
+    desired = _order("desired")
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.configured == []
+    assert bot.created == []

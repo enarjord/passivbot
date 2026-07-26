@@ -16,6 +16,38 @@ All notable user-facing changes will be documented in this file.
   because ranking metrics must come from real candles, and latest-value EMA
   calculations avoid allocating an unused full series.
 
+- Live trailing fill confirmation now accepts reconstructed position-price
+  differences of at most one effective executable price tick to accommodate
+  exchange rounding or truncation of sub-tick VWAPs, including Hyperliquid's
+  significant-digit price ladder and its asymmetric spacing across powers of
+  ten. Fill identity and reconstructed position size remain strict, the explicit
+  position-opening replay retains its ordinary half-tick requirement, larger
+  discrepancies remain fail-closed, and acceptance beyond the ordinary half-tick
+  comparison emits one warning plus a structured diagnostic when confirmation
+  clears.
+
+- Live order-write failures now include bounded, sanitized exchange status, code,
+  label, and reason fields when CCXT exposes a structured rejection payload through
+  either an exception or a terminal result mapping, including OKX per-order
+  `sCode`/`sMsg` details. Successful outcomes retain ordinary result summaries
+  without misclassifying native success codes/messages as errors.
+  Sensitive-marked values and long identifier-like tokens remain redacted; the
+  existing bot restart error budget is unchanged.
+
+- Gate.io now applies the configured leverage and margin mode before a symbol's
+  first order creation. This refreshes Gate's leverage-derived position risk limit
+  after contract risk-table changes instead of repeatedly failing valid orders
+  with a zero risk limit. An hourly market refresh invalidates the configured
+  marker when the effective leverage cap changes so the next entry refreshes
+  the exchange configuration.
+  A failed refresh blocks entries and advances the existing restart budget,
+  while reduce-only closes remain eligible. Churn admission and the later
+  configuration write now share one retry-eligibility timestamp so a backoff
+  expiring mid-wave cannot introduce an unreserved signed action. Missing or
+  invalid leverage-cap metadata is isolated to the affected symbol: entries
+  remain pending and restart-visible, but market initialization and protective
+  closes continue.
+
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous
   strategy exposure. Valid hedge-account updates no longer enter the one-way normalization path
