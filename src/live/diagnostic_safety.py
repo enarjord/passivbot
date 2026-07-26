@@ -301,14 +301,28 @@ def _bounded_payload_scalar(
 def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]:
     """Extract bounded diagnostics from a CCXT result mapping.
 
-    Only the normalized result and its exact ``info`` mapping are inspected.
-    Raw payloads are never retained.
+    Only the normalized result, its exact ``info`` mapping, and a bounded number
+    of exact OKX per-order ``data`` mappings are inspected. Raw payloads are
+    never retained.
     """
     result: dict[str, str] = {}
     if type(payload) is not dict:
         return result
     info = payload.get("info")
-    payloads = (payload, info) if type(info) is dict else (payload,)
+    envelopes = (payload, info) if type(info) is dict else (payload,)
+    order_details: list[dict] = []
+    for envelope in envelopes:
+        data = envelope.get("data")
+        if type(data) is not list:
+            continue
+        for member in data[:8]:
+            if type(member) is dict and (
+                "sCode" in member or "sMsg" in member
+            ):
+                order_details.append(member)
+    # Prefer actionable per-order details over generic envelope values such as
+    # OKX's top-level code "1" and empty message.
+    payloads = (*order_details, *envelopes)
     for candidate in payloads:
         status = _bounded_payload_scalar(
             candidate,
@@ -321,7 +335,7 @@ def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]
     for candidate in payloads:
         code = _bounded_payload_scalar(
             candidate,
-            ("code", "exact", "error_code", "retCode", "errorCode"),
+            ("sCode", "code", "exact", "error_code", "retCode", "errorCode"),
             _EXCEPTION_CODE_RE,
         )
         if code is not None:
@@ -336,7 +350,7 @@ def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]
         if "error_label" in result:
             break
     for candidate in payloads:
-        for key in ("message", "msg", "retMsg", "detail", "reason"):
+        for key in ("sMsg", "message", "msg", "retMsg", "detail", "reason"):
             reason = _bounded_exchange_error_reason(candidate.get(key))
             if reason is not None:
                 result["error_reason"] = reason

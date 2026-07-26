@@ -90,6 +90,28 @@ def test_bounded_exchange_error_context_extracts_rejected_result_mapping():
     }
 
 
+def test_bounded_exchange_error_context_prefers_okx_per_order_details():
+    result = {
+        "status": "rejected",
+        "info": {
+            "code": "1",
+            "msg": "",
+            "data": [
+                {
+                    "ordId": "must-not-leak",
+                    "sCode": "51008",
+                    "sMsg": "Order failed. Insufficient balance.",
+                }
+            ],
+        },
+    }
+
+    assert bounded_exchange_error_context_from_mapping(result) == {
+        "error_code": "51008",
+        "error_reason": "Order failed. Insufficient balance.",
+    }
+
+
 def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reasons():
     error = RuntimeError(
         'gate {"label":"INVALID_PARAM_VALUE",'

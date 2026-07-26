@@ -409,7 +409,10 @@ Terminal and ambiguous execution-order outcome events retain their existing enve
 status, reason, action, bounded order metadata, result summaries, and optional bounded debug
 profiles. When an outcome carries an exception object or result, its payload may retain bounded
 `error_type`, numeric status/code, a constrained exchange error label, and a bounded sanitized
-reason extracted from a structured exchange error payload. This operator-facing reason is
+reason extracted from a structured exchange error payload. Exact top-level mappings, their
+`info` mapping, and up to eight exact OKX per-order `data` mappings use the same sanitizer;
+per-order `sCode`/`sMsg` takes precedence over a generic OKX envelope code/message. This
+operator-facing reason is
 deliberately retained because the exchange's rejection explanation is often required to repair a
 live order failure. It omits raw response envelopes, unsafe exception class metadata, URLs,
 credentials, sensitive-marked values, long token-like values, and tracebacks. Live event and text

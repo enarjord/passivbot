@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Live order-write failures now include bounded, sanitized exchange status, code,
   label, and reason fields when CCXT exposes a structured rejection payload through
-  either an exception or a terminal result mapping.
+  either an exception or a terminal result mapping, including OKX per-order
+  `sCode`/`sMsg` details.
   Sensitive-marked values and long identifier-like tokens remain redacted; the
   existing bot restart error budget is unchanged.
 
