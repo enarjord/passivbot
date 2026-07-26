@@ -603,6 +603,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
     rank_feature_unavailable_by_side = getattr(
         self, "_forager_rank_feature_unavailable_by_side", {}
     ) or {}
+    ema_bundle_completed = bool(
+        getattr(self, "_orchestrator_ema_bundle_completed", False)
+    )
     trailing_unavailable_symbols = set(
         getattr(self, "_orchestrator_trailing_unavailable_symbols", set()) or set()
     )
@@ -688,6 +691,8 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 in set(rank_feature_unavailable_by_side.get(pside, set()) or set())
             )
             rankability_reasons = []
+            if not ema_bundle_completed:
+                rankability_reasons.append("ema_bundle_unevaluated")
             if rank_feature_psides:
                 rankability_reasons.append("ranking_features_unavailable")
             if symbol in candidate_ema_unavailable_symbols:

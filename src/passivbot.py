@@ -16584,6 +16584,8 @@ class Passivbot:
             "long": set(),
             "short": set(),
         }
+        self._orchestrator_ema_bundle_completed = False
+        self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
@@ -18262,6 +18264,7 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
+        self._orchestrator_ema_bundle_completed = True
         Passivbot._emit_ema_bundle_completed_event(
             self,
             symbols=symbols,

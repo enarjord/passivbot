@@ -6567,6 +6567,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             }
             self._orchestrator_ema_unavailable_symbols = set()
             self._orchestrator_candidate_ema_unavailable_symbols = set()
+            self._orchestrator_ema_bundle_completed = True
             self._orchestrator_ema_unavailable_reasons = {}
             self._forager_rank_feature_unavailable_by_side = {
                 "long": {"ETH/USDT:USDT"}
@@ -6972,6 +6973,7 @@ def test_monitor_forager_candidates_use_live_age_eligibility():
                 old_symbol: {"active": True},
                 young_symbol: {"active": True},
             }
+            self._orchestrator_ema_bundle_completed = True
 
         def is_forager_mode(self, pside):
             return pside == "long"
@@ -7019,6 +7021,7 @@ def test_monitor_forager_candidates_use_live_min_cost_eligibility():
                 cheap_symbol: {"active": True},
                 expensive_symbol: {"active": True},
             }
+            self._orchestrator_ema_bundle_completed = True
 
         def is_forager_mode(self, pside):
             return pside == "long"
@@ -7036,6 +7039,14 @@ def test_monitor_forager_candidates_use_live_min_cost_eligibility():
 
     assert market[cheap_symbol]["forager"]["candidate_psides"] == ["long"]
     assert "forager" not in market[expensive_symbol]
+
+    startup_bot = FakeBot()
+    del startup_bot._orchestrator_ema_bundle_completed
+    startup_market = startup_bot._build_monitor_market_section()
+    assert startup_market[cheap_symbol]["forager"]["rankable"] is False
+    assert startup_market[cheap_symbol]["forager"]["rankability_reasons"] == [
+        "ema_bundle_unevaluated"
+    ]
 
 
 def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():

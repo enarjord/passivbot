@@ -84,7 +84,11 @@ candidate but is marked `forager.rankable=false`; this is distinct from an
 active symbol losing a required strategy input. The Rust payload still fails
 closed for an unrankable candidate. Monitor health must preserve that stage
 distinction so operators do not mistake a bounded candidate-ranking exclusion
-for an exchange market becoming intrinsically nontradable.
+for an exchange market becoming intrinsically nontradable. Before the current
+EMA bundle completes—or after a replacement bundle fails—eligible candidates
+remain visible with `forager.rankable=false` and
+`ema_bundle_unevaluated`; monitor health must not infer readiness from empty
+failure sets.
 
 ## Trailing Martingale Semantics
 

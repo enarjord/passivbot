@@ -9,8 +9,9 @@ All notable user-facing changes will be documented in this file.
   inputs are unavailable from active-symbol trading degradation. Ranking-feature
   health is populated by the active Rust-orchestrator preparation path, candidate
   labels use the same market-age and effective-minimum-cost eligibility as live
-  selection, candidate health is cleared before a failed replacement bundle can
-  leave stale state behind, and active-symbol EMA failures retain their active
+  selection, all EMA health is cleared before a failed replacement bundle can
+  leave stale state behind, candidates remain explicitly unrankable until a
+  bundle completes, and active-symbol EMA failures retain their active
   degradation reason. Open-tail forager projection computes only close EMAs
   because ranking metrics must come from real candles, and latest-value EMA
   calculations avoid allocating an unused full series.
