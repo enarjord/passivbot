@@ -9,7 +9,10 @@ All notable user-facing changes will be documented in this file.
   venue may still publish an authoritative no-trade row. Accelerated retries are
   limited to bounded tail-sized gaps, and the retry decision now precedes ordinary
   present and tail-completion fetches without suppressing newly finalized candles
-  beyond the deferred gap. Forced 1m candidate refreshes now detect partial
+  beyond the deferred gap or repair of unrelated internal gaps. Deferred
+  unverified rows remain absent from returned candle continuity rather than
+  becoming synthetic zero-volume candles, and targeted retries skip the deferred
+  prefix. Forced 1m candidate refreshes now detect partial
   pagination followed by an empty terminal page, allowing repeated failures to
   use the bounded in-memory retry delay. Persisted 1m rows trim or split stale
   known-gap metadata. Missing rows remain unavailable and are never fabricated

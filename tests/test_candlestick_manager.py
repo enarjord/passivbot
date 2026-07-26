@@ -2844,6 +2844,122 @@ async def test_hyperliquid_deferred_tail_gap_still_fetches_finalized_suffix(
     assert calls == [(end, end + ONE_MIN_MS)]
     assert int(result[-1]["ts"]) == end
     assert float(result[-1]["c"]) == pytest.approx(2.0)
+    assert gap_start not in set(result["ts"].astype(np.int64))
+    assert gap_end not in set(result["ts"].astype(np.int64))
+    assert not (
+        {gap_start, gap_end}
+        & set(cm._synthetic_timestamps.get(symbol, set()))
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_tail_does_not_block_unrelated_internal_gap_repair(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 40_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    end = _floor_minute(now["ms"]) - ONE_MIN_MS
+    start = end - 4 * ONE_MIN_MS
+    internal_gap = start + ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (start + 2 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+            (start + 3 * ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        end,
+        end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.array(
+            [(internal_gap, 2.0, 2.0, 2.0, 2.0, 2.0)],
+            dtype=CANDLE_DTYPE,
+        )
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        fill_trailing_gaps=False,
+    )
+
+    assert calls == [(internal_gap, internal_gap + ONE_MIN_MS)]
+    assert internal_gap in set(result["ts"].astype(np.int64))
+    assert end not in set(result["ts"].astype(np.int64))
+
+
+@pytest.mark.asyncio
+async def test_extended_missing_tail_never_refetches_deferred_prefix(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 50_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    end = _floor_minute(now["ms"]) - ONE_MIN_MS
+    start = end - 3 * ONE_MIN_MS
+    gap_start = start + ONE_MIN_MS
+    gap_end = end - ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(start, 1.0, 1.0, 1.0, 1.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        gap_start,
+        gap_end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        fill_trailing_gaps=False,
+    )
+
+    assert calls
+    assert all(since == end for since, _end_exclusive in calls)
+    assert gap_start not in set(result["ts"].astype(np.int64))
+    assert gap_end not in set(result["ts"].astype(np.int64))
+    assert end not in set(result["ts"].astype(np.int64))
 
 
 def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):

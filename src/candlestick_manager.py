@@ -3244,6 +3244,34 @@ class CandlestickManager:
             fetch_start = int(deferred_gap_end) + ONE_MIN_MS
         return None
 
+    def _deferred_unverified_gap_timestamps(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> set[int]:
+        """Return non-due unknown gap minutes that must remain unavailable."""
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        timestamps: set[int] = set()
+        for gap in self._get_known_gaps_enhanced(symbol):
+            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                GAP_REASON_AUTO,
+                GAP_REASON_FETCH_FAILED,
+            }:
+                continue
+            if self._should_retry_gap(gap, now_ms=now_ms):
+                continue
+            overlap_start = max(int(start_ts), int(gap["start_ts"]))
+            overlap_end = min(int(end_ts), int(gap["end_ts"]))
+            if overlap_start <= overlap_end:
+                timestamps.update(
+                    range(overlap_start, overlap_end + ONE_MIN_MS, ONE_MIN_MS)
+                )
+        return timestamps
+
     def _should_retry_gap(
         self,
         gap: GapEntry,
@@ -4804,6 +4832,7 @@ class CandlestickManager:
         fill_trailing_gaps: bool = True,
         assume_sorted: bool = False,
         symbol: Optional[str] = None,
+        excluded_synthetic_timestamps: Optional[set[int]] = None,
     ) -> np.ndarray:
         """Return a new array with zero-candles synthesized for missing minutes.
 
@@ -4828,6 +4857,9 @@ class CandlestickManager:
             and after the gap.
         assume_sorted : bool
             If True, skip sorting (caller guarantees array is already sorted by ts).
+        excluded_synthetic_timestamps : set[int], optional
+            Missing minutes that must remain absent rather than being represented
+            by synthetic zero-volume continuity candles.
         """
         a = _ensure_dtype(candles)
         if a.size == 0:
@@ -4945,6 +4977,11 @@ class CandlestickManager:
                 out_rows.append(tuple(row.tolist()))
                 prev_close = float(row["c"])  # update seed
             else:
+                if (
+                    excluded_synthetic_timestamps
+                    and int(t) in excluded_synthetic_timestamps
+                ):
+                    continue
                 if prev_close is None:
                     # No previous data to forward-fill from - skip this timestamp
                     continue
@@ -6353,7 +6390,7 @@ class CandlestickManager:
                     )
                 )
                 if adjusted_present_fetch_start is None:
-                    allow_fetch_present = False
+                    skip_initial_refresh_due_to_deferred_prefix = True
                     self._log(
                         "debug",
                         "known_gap_retry_deferred_present",
@@ -7105,6 +7142,16 @@ class CandlestickManager:
                         break
                     if span_in_persistent_gap_present(s, e):
                         continue
+                    adjusted_gap_start = (
+                        self._fetch_start_after_deferred_gap_prefix(
+                            symbol,
+                            s,
+                            e,
+                            now_ms=now,
+                        )
+                    )
+                    if adjusted_gap_start is None:
+                        continue
                     end_excl_gap = e + ONE_MIN_MS
                     async with self._acquire_fetch_lock(symbol, "1m"):
                         try:
@@ -7116,7 +7163,20 @@ class CandlestickManager:
                         )
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                         missing_now = self._missing_spans(sub, start_ts, inclusive_end)
-                        if not any(ms == s and me == e for ms, me in missing_now):
+                        if not any(
+                            ms <= adjusted_gap_start <= me
+                            for ms, me in missing_now
+                        ):
+                            continue
+                        adjusted_gap_start = (
+                            self._fetch_start_after_deferred_gap_prefix(
+                                symbol,
+                                adjusted_gap_start,
+                                e,
+                                now_ms=now,
+                            )
+                        )
+                        if adjusted_gap_start is None:
                             continue
                         persisted_batches = False
 
@@ -7137,7 +7197,7 @@ class CandlestickManager:
                         try:
                             fetched = await self._fetch_ohlcv_paginated(
                                 symbol,
-                                s,
+                                adjusted_gap_start,
                                 end_excl_gap,
                                 on_batch=_persist_gap_batch,
                                 raise_on_partial_empty_page=max_age_ms == 0,
@@ -7149,7 +7209,7 @@ class CandlestickManager:
                                 end_excl_gap,
                             )
                         attempts += 1
-                        attempted.append((s, e))
+                        attempted.append((adjusted_gap_start, e))
                         fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
                         if fetched.size:
                             if not persisted_batches:
@@ -7163,7 +7223,7 @@ class CandlestickManager:
                             arr = np.sort(self._cache[symbol], order="ts")
                             sub = self._slice_ts_range(arr, start_ts, end_ts, assume_sorted=True)
                         else:
-                            noresult.append((s, e))
+                            noresult.append((adjusted_gap_start, e))
                 # After attempts, recompute missing and tag remaining as known gaps
                 still_missing = self._missing_spans(sub, start_ts, inclusive_end)
                 # Only mark as known those attempted spans that still remain missing
@@ -7203,6 +7263,12 @@ class CandlestickManager:
             fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
+            excluded_synthetic_timestamps=self._deferred_unverified_gap_timestamps(
+                symbol,
+                start_ts,
+                end_ts,
+                now_ms=now,
+            ),
         )
 
         # Log accumulated gap summaries (throttled)

@@ -67,7 +67,10 @@
    populate the normal active-strategy EMA cache.
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
    and internal gaps do not. A known-gap retry cooldown suppresses only the recorded missing
-   prefix; newly finalized candles after that gap remain fetchable. Forced 1m and native
+   prefix; newly finalized candles after that gap and unrelated internal gaps remain fetchable,
+   while every fetch path excludes the deferred prefix. Unknown `auto_detected` and
+   `fetch_failed` rows remain absent while their retry is deferred and must not become synthetic
+   zero-volume continuity candles. Forced 1m and native
    higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
    failed surface refresh so the caller can apply its bounded retry delay. Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
