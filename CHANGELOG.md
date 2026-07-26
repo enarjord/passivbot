@@ -264,11 +264,11 @@ All notable user-facing changes will be documented in this file.
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
   trigger authoritative account-state refresh instead of reconnect churn. Churn distance is
-  rechecked from a forced-fresh market read after configuration before any create call. A churn
-  normalization failure disables only the economy evidence for that symbol; malformed actual-order
-  identity and missing or malformed position sides retain their account-critical exchange-write
-  barriers. Failed required margin-mode writes leave dependent creates pending instead of marking
-  the symbol configured.
+  rechecked from a forced-fresh market read after configuration before any create call. Malformed
+  Rust ideal orders fail fatally before reconciliation or any exchange action; malformed
+  actual-order identity and missing or malformed position sides retain their account-critical
+  exchange-write barriers. Failed required margin-mode writes leave dependent creates pending
+  instead of marking the symbol configured.
 - Protective reducer arbitration now keeps the largest loss-admissible final absolute
   reduction among active panic, TWEL/WEL auto-reduce, and auto-unstuck intents for each position
   instead of using a fixed type priority or summing quantities. If the realized-loss gate blocks
