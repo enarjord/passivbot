@@ -92,7 +92,9 @@ failure sets. Bundle readiness is scoped to the exact evaluated symbol set, so
 a newly age- or cost-eligible candidate remains unevaluated until a subsequent
 bundle includes it. Forager candidate ranking continues to use completed-candle
 metrics; held and explicitly normal symbols nevertheless retain any open-tail
-log-range projections required by their active strategy.
+log-range projections required by their active strategy. Live orchestration
+passes completed-candle forager metrics separately from strategy EMA maps so a
+shared span cannot leak a projected strategy value into coin ranking.
 
 ## Trailing Martingale Semantics
 

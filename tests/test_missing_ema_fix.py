@@ -1290,12 +1290,19 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
         project_open_tail=True,
         projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
         projected_qv_ema={10.0: 999999.0},
-        projected_log_range_ema={60.0: 0.0099},
+        projected_log_range_ema={10.0: 0.0099},
         qv_mode="nan",
         lr1m_mode="nan",
         cached_qv_ema={10.0: 250000.0},
         cached_log_range_ema={10.0: 0.0015},
     )
+
+    def colliding_strategy_params(_pside, _symbol=None):
+        params = _rust_strategy_params(volatility_ema_span_1m=10.0)
+        params["entry"]["threshold_volatility_1m_weight"] = 1.0
+        return params
+
+    bot._strategy_params_to_rust_dict = colliding_strategy_params
     _enable_forager_required_ranking(bot)
     mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
 
@@ -1313,11 +1320,13 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert bot.projection_metric_requests == [
         {
             "close": [span0, span2, span1],
-            "log_range": [60.0],
+            "log_range": [span0],
         }
     ]
-    assert m1_log_range_emas[symbol][60.0] == pytest.approx(0.0099)
-    assert m1_log_range_emas[symbol][span0] == pytest.approx(0.0015)
+    assert m1_log_range_emas[symbol][span0] == pytest.approx(0.0099)
+    assert bot._orchestrator_forager_m1_log_range_emas[symbol][
+        span0
+    ] == pytest.approx(0.0015)
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
