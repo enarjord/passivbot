@@ -27,9 +27,10 @@ authoritative for cancelling actual orders which do not match a current ideal.
 ## Non-negotiable safety boundary
 
 Actual-to-ideal matching uses `live.order_match_tolerance_pct`, whose default is
-`0.0002` (0.02%). If an actual order does not match a current Rust ideal within
-that tolerance, it is cancelled. Churn evidence never widens the tolerance and
-never preserves the stale actual order.
+`0.0002` (0.02%) and whose accepted range is 0% through 1% inclusive. If an
+actual order does not match a current Rust ideal within that tolerance, it is
+cancelled. Churn evidence never widens the tolerance and never preserves the
+stale actual order.
 
 The gate may defer only the replacement create. This distinction preserves
 live/backtest intent during sharp market movement: an obsolete resting order is
@@ -62,9 +63,10 @@ track is usable only while:
   gap.
 
 The order is churn-evidenced only when at least two consecutive price or
-quantity moves have the same direction and the observed span covers the
-configured stability interval. A one-time jump, oscillation, missing history,
-cadence gap, cohort change, or cardinality change is insufficient.
+quantity moves have the same direction and the current directional run, measured
+from its first changed observation, covers the configured stability interval. A
+one-time jump, oscillation, missing history, cadence gap, cohort change, or
+cardinality change is insufficient.
 
 Recent stability clears older drift. If the current ideal has remained within
 the universal order-match tolerance for the stability interval, it is not

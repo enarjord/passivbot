@@ -202,9 +202,15 @@ def test_order_replacement_churn_gate_defaults_and_validation():
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
     assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
+    assert live["order_match_tolerance_pct"] == pytest.approx(0.0002)
     validate_config(config, verbose=False)
 
     invalid_cases = (
+        ("order_match_tolerance_pct", True),
+        ("order_match_tolerance_pct", -0.0001),
+        ("order_match_tolerance_pct", 0.010001),
+        ("order_match_tolerance_pct", float("nan")),
+        ("order_match_tolerance_pct", float("inf")),
         ("order_replacement_churn_gate_activation_count", True),
         ("order_replacement_churn_gate_activation_count", -1),
         ("order_replacement_churn_gate_window_minutes", 0.0),
@@ -217,6 +223,11 @@ def test_order_replacement_churn_gate_defaults_and_validation():
         invalid["live"][key] = value
         with pytest.raises((TypeError, ValueError), match=key):
             validate_config(invalid, verbose=False)
+
+    for tolerance in (0.0, 0.01):
+        valid = get_template_config()
+        valid["live"]["order_match_tolerance_pct"] = tolerance
+        validate_config(valid, verbose=False)
 
 
 def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():

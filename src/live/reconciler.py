@@ -18,6 +18,7 @@ from live.order_churn_gate import (
     deterministic_one_to_one_matches,
     normalize_ideal_orders,
 )
+from passivbot_exceptions import FatalBotException
 from pure_funcs import determine_side_from_order_tuple, filter_orders, shorten_custom_id
 from utils import symbol_to_coin, ts_to_date, utc_ms as _utils_utc_ms
 
@@ -974,11 +975,34 @@ async def calc_orders_to_cancel_and_create(bot):
                 snapshot_status="skipped",
             )
         raise
+    validate_rust_ideal_orders(ideal_orders)
     if connector_enabled:
         prepare_order_churn_evidence(bot, ideal_orders, generation=generation)
     else:
         state.clear_history()
     return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+
+
+def validate_rust_ideal_orders(ideal_orders: object) -> None:
+    """Reject malformed Rust intent before reconciliation or exchange actions."""
+    if not isinstance(ideal_orders, dict):
+        raise FatalBotException("Rust ideal orders must be a symbol-to-orders mapping")
+    for symbol, orders in ideal_orders.items():
+        normalized_symbol = str(symbol)
+        if not normalized_symbol:
+            raise FatalBotException("Rust ideal orders contain an empty symbol")
+        if not isinstance(orders, list):
+            raise FatalBotException(
+                f"Rust ideal orders for {normalized_symbol} must be a list"
+            )
+        try:
+            normalize_ideal_orders(orders)
+            if any(str(order["symbol"]) != normalized_symbol for order in orders):
+                raise ValueError("ideal order symbol does not match its mapping key")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException(
+                f"Rust emitted malformed ideal orders for {normalized_symbol}"
+            ) from exc
 
 
 def order_churn_risk_active_pairs_from_rust_output(
@@ -1107,34 +1131,12 @@ def prepare_order_churn_evidence(
             symbols=complete_ideals,
         )
         return
-    valid_ideals: dict[str, list[dict]] = {}
-    unavailable_decisions: list[ChurnDecision] = []
-    for symbol, orders in complete_ideals.items():
-        try:
-            normalize_ideal_orders(orders)
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            reset = state.clear_symbol_history(symbol) or reset
-            unavailable_decisions.extend(
-                ChurnDecision(False, "normalization_unavailable") for _order in orders
-            )
-            for order in orders:
-                if isinstance(order, dict):
-                    order["_churn_evidence"] = False
-                    order["_churn_reason"] = "normalization_unavailable"
-            logging.error(
-                "[order] churn evidence unavailable for symbol; reconciliation remains "
-                "authoritative | symbol=%s | error_type=%s",
-                _pb_attr("Passivbot")._log_symbol(symbol),
-                bounded_exception_type(exc),
-            )
-            continue
-        valid_ideals[symbol] = orders
     window_seconds = float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
     stability_seconds = (
         float(bot.live_value("order_replacement_churn_gate_stability_minutes")) * 60.0
     )
     decisions = state.evaluate_and_record(
-        valid_ideals,
+        complete_ideals,
         now_monotonic=time.monotonic(),
         tolerance=float(bot.live_value("order_match_tolerance_pct")),
         stability_seconds=stability_seconds,
@@ -1144,7 +1146,7 @@ def prepare_order_churn_evidence(
     risk_active_pairs = set(
         getattr(bot, "_order_churn_risk_active_pairs", ()) or ()
     )
-    for orders in valid_ideals.values():
+    for orders in complete_ideals.values():
         for order in orders:
             decision = decisions.get(id(order), ChurnDecision(False, "unavailable"))
             pair = (str(order.get("symbol") or ""), str(order.get("position_side") or ""))
@@ -1161,7 +1163,7 @@ def prepare_order_churn_evidence(
         state=state,
         generation=generation,
         reset=reset,
-        decisions=[*decisions.values(), *unavailable_decisions],
+        decisions=decisions.values(),
         symbols=complete_ideals,
     )
 

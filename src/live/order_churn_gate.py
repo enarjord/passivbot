@@ -203,17 +203,33 @@ def _group_by_cohort(
     }
 
 
-def _continuous_drift(values: Sequence[float], tolerance: float) -> bool:
-    """Return true only for at least two same-direction moves beyond tolerance."""
-    if len(values) < 3 or _relative_diff(values[-1], values[0]) <= tolerance:
-        return False
-    deltas = [right - left for left, right in zip(values, values[1:])]
-    changed = [delta for delta in deltas if delta != 0.0]
+def _continuous_drift_start_index(
+    values: Sequence[float], tolerance: float
+) -> int | None:
+    """Return the first changed observation in the current directional run."""
+    if len(values) < 3:
+        return None
+    changed = [
+        (index, right - left)
+        for index, (left, right) in enumerate(zip(values, values[1:]), start=1)
+        if right != left
+    ]
     if len(changed) < 2:
-        return False
-    return all(delta > 0.0 for delta in changed) or all(
-        delta < 0.0 for delta in changed
-    )
+        return None
+    direction = 1 if changed[-1][1] > 0.0 else -1
+    run_start_index = changed[-1][0]
+    run_move_count = 0
+    for target_index, delta in reversed(changed):
+        if (delta > 0.0) != (direction > 0):
+            break
+        run_start_index = target_index
+        run_move_count += 1
+    if run_move_count < 2:
+        return None
+    baseline_index = run_start_index - 1
+    if _relative_diff(values[-1], values[baseline_index]) <= tolerance:
+        return None
+    return run_start_index
 
 
 class OrderChurnGateState:
@@ -361,11 +377,23 @@ class OrderChurnGateState:
                         )
                     else:
                         chronological = list(reversed(track))
-                        price_drift = _continuous_drift(
+                        chronological_times = list(reversed(track_times))
+                        price_drift_start = _continuous_drift_start_index(
                             [row.price for row in chronological], tolerance
                         )
-                        qty_drift = _continuous_drift(
+                        qty_drift_start = _continuous_drift_start_index(
                             [row.qty for row in chronological], tolerance
+                        )
+                        price_drift = (
+                            price_drift_start is not None
+                            and now_monotonic
+                            - chronological_times[price_drift_start]
+                            >= stability_seconds
+                        )
+                        qty_drift = (
+                            qty_drift_start is not None
+                            and now_monotonic - chronological_times[qty_drift_start]
+                            >= stability_seconds
                         )
                         if price_drift and qty_drift:
                             reason = "continuous_price_qty_drift"
@@ -373,6 +401,11 @@ class OrderChurnGateState:
                             reason = "continuous_price_drift"
                         elif qty_drift:
                             reason = "continuous_qty_drift"
+                        elif (
+                            price_drift_start is not None
+                            or qty_drift_start is not None
+                        ):
+                            reason = "drift_run_short"
                         else:
                             reason = "no_continuous_drift"
                         decision = ChurnDecision(

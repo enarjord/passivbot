@@ -8,6 +8,7 @@ from live.order_churn_gate import (
     deterministic_one_to_one_matches,
     normalize_ideal_orders,
 )
+from passivbot_exceptions import FatalBotException
 
 
 SYMBOL = "BTC/USDT:USDT"
@@ -64,9 +65,10 @@ def test_sustained_monotonic_price_drift_is_evidence():
     state = OrderChurnGateState()
     _evaluate(state, [_order(price=100.0)], now=0.0)
     _evaluate(state, [_order(price=100.1)], now=60.0)
-    current = _order(price=100.2)
+    _evaluate(state, [_order(price=100.2)], now=120.0)
+    current = _order(price=100.3)
 
-    decision = _evaluate(state, [current], now=120.0)[id(current)]
+    decision = _evaluate(state, [current], now=180.0)[id(current)]
 
     assert decision.churn_evidenced is True
     assert decision.reason == "continuous_price_drift"
@@ -76,12 +78,27 @@ def test_sustained_monotonic_quantity_drift_is_evidence():
     state = OrderChurnGateState()
     _evaluate(state, [_order(price=100.0, qty=1.0)], now=0.0)
     _evaluate(state, [_order(price=100.0, qty=1.001)], now=60.0)
-    current = _order(price=100.0, qty=1.002)
+    _evaluate(state, [_order(price=100.0, qty=1.002)], now=120.0)
+    current = _order(price=100.0, qty=1.003)
 
-    decision = _evaluate(state, [current], now=120.0)[id(current)]
+    decision = _evaluate(state, [current], now=180.0)[id(current)]
 
     assert decision.churn_evidenced is True
     assert decision.reason == "continuous_qty_drift"
+
+
+def test_old_stable_history_does_not_count_toward_drift_duration():
+    state = OrderChurnGateState()
+    _evaluate(state, [_order(price=100.0)], now=0.0)
+    _evaluate(state, [_order(price=100.0)], now=60.0)
+    _evaluate(state, [_order(price=100.0)], now=120.0)
+    _evaluate(state, [_order(price=100.1)], now=180.0)
+    current = _order(price=100.2)
+
+    decision = _evaluate(state, [current], now=250.0)[id(current)]
+
+    assert decision.churn_evidenced is False
+    assert decision.reason == "drift_run_short"
 
 
 def test_oscillation_and_one_time_jump_do_not_prove_continuous_drift():
@@ -203,39 +220,22 @@ def test_snapshot_and_attempt_windows_prune():
     assert snapshots[0].monotonic_seconds == 601.0
 
 
-def test_prepare_normalization_failure_is_economy_only(monkeypatch, caplog):
-    state = OrderChurnGateState()
+@pytest.mark.asyncio
+async def test_malformed_rust_ideal_is_fatal_before_reconciliation():
     invalid = _order(price=100.0)
     invalid["qty"] = float("nan")
 
     class Bot:
-        _order_churn_gate_state = state
-        _order_churn_risk_active_pairs = ()
-        active_symbols = [SYMBOL]
-        open_orders = {}
-        positions = {}
+        exchange = "fake"
 
-        @staticmethod
-        def live_value(key):
-            return {
-                "order_replacement_churn_gate_activation_count": 10,
-                "order_replacement_churn_gate_window_minutes": 10.0,
-                "order_replacement_churn_gate_stability_minutes": 2.0,
-                "order_match_tolerance_pct": 0.0002,
-                "execution_delay_seconds": 2.0,
-            }[key]
+        async def calc_ideal_orders(self):
+            return {SYMBOL: [invalid]}
 
-    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 1.0)
-    with caplog.at_level("ERROR"):
-        result = reconciler.prepare_order_churn_evidence(
-            Bot(), {SYMBOL: [invalid]}, generation=state.begin_generation()
-        )
+        def _snapshot_actual_orders(self, *_args, **_kwargs):
+            raise AssertionError("reconciliation must not inspect exchange orders")
 
-    assert result is None
-    assert invalid["_churn_evidence"] is False
-    assert invalid["_churn_reason"] == "normalization_unavailable"
-    assert state.history_by_symbol == {}
-    assert "reconciliation remains authoritative" in caplog.text
+    with pytest.raises(FatalBotException, match="malformed ideal orders"):
+        await reconciler.calc_orders_to_cancel_and_create(Bot())
 
 
 def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
