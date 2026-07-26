@@ -20,8 +20,16 @@ from live.event_bus import (
     utc_ms,
 )
 from live.balance_composition import public_balance_composition
-from live.diagnostic_safety import bounded_exception_type as _bounded_exception_type
+from live.diagnostic_safety import (
+    bounded_exception_type as _bounded_exception_type,
+    bounded_exchange_error_context as _bounded_exchange_error_context,
+    bounded_exchange_error_context_from_mapping,
+)
 from candlestick_manager import sanitize_remote_fetch_diagnostic
+
+_bounded_exchange_error_context_from_mapping = (
+    bounded_exchange_error_context_from_mapping
+)
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -4442,10 +4450,13 @@ def emit_execution_order_event(
                     ),
                 }
             )
+            if status in {"failed", "degraded"}:
+                data.update(_bounded_exchange_error_context_from_mapping(result))
         elif isinstance(result, BaseException):
             error = result
         if error is not None:
             data["error_type"] = _bounded_exception_type(error)
+            data.update(_bounded_exchange_error_context(error))
         if extra:
             data.update(extra)
         _add_execution_debug_profile(

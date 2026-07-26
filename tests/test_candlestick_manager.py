@@ -62,6 +62,25 @@ def test_ema_series_skips_leading_nonfinite_without_poisoning_window(tmp_path):
     assert math.isnan(float(cm._ema_series(np.asarray([float("nan")]), span=3.0)[-1]))
 
 
+@pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0])
+def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="test",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    values = np.asarray(
+        [float("nan"), 1.0, 2.0, float("nan"), -3.0, 8.0, 13.0],
+        dtype=np.float64,
+    )
+
+    assert cm._ema(values, span) == pytest.approx(
+        float(cm._ema_series(values, span)[-1]),
+        rel=0.0,
+        abs=1e-15,
+    )
+
+
 @pytest.mark.asyncio
 async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
     class _Ex:

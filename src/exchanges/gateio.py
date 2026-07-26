@@ -1,7 +1,9 @@
+import math
+
 from exchanges.ccxt_bot import CCXTBot
 from passivbot import logging
 
-from utils import to_ccxt_client_id, ts_to_date, utc_ms
+from utils import symbol_to_coin, to_ccxt_client_id, ts_to_date
 from config.access import require_live_value
 from custom_endpoint_overrides import (
     get_custom_endpoint_source,
@@ -60,6 +62,48 @@ class GateIOBot(CCXTBot):
         return self._normalize_one_way_position_side(order)
 
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
+
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        unavailable_symbols: set[str] = set()
+        for symbol in self.symbols_requiring_market_sizing():
+            market = self.markets_dict[symbol]
+            raw_max_leverage = (market.get("limits") or {}).get("leverage", {}).get(
+                "max"
+            )
+            if raw_max_leverage is None:
+                raw_max_leverage = (market.get("info") or {}).get("leverage_max")
+            try:
+                max_leverage = float(raw_max_leverage)
+            except (TypeError, ValueError, OverflowError):
+                max_leverage = float("nan")
+            if not math.isfinite(max_leverage) or max_leverage <= 0.0:
+                unavailable_symbols.add(symbol)
+                self.max_leverage.pop(symbol, None)
+                configured_symbols = getattr(
+                    self, "already_updated_exchange_config_symbols", None
+                )
+                if isinstance(configured_symbols, set):
+                    configured_symbols.discard(symbol)
+                logging.warning(
+                    "%s: Gate.io max leverage metadata unavailable; "
+                    "deferring exposure-increasing orders",
+                    symbol_to_coin(symbol, verbose=False) or symbol,
+                )
+                continue
+            effective_max_leverage = int(max_leverage)
+            previous_max_leverage = self.max_leverage.get(symbol)
+            self.max_leverage[symbol] = effective_max_leverage
+            if (
+                previous_max_leverage is not None
+                and previous_max_leverage != effective_max_leverage
+            ):
+                configured_symbols = getattr(
+                    self, "already_updated_exchange_config_symbols", None
+                )
+                if isinstance(configured_symbols, set):
+                    configured_symbols.discard(symbol)
+        self._gate_leverage_metadata_unavailable_symbols = unavailable_symbols
 
     async def fetch_balance(self) -> float:
         """GateIO: Fetch balance using the same parser as staged snapshots."""
@@ -183,8 +227,42 @@ class GateIOBot(CCXTBot):
             return False
 
     async def update_exchange_config_by_symbols(self, symbols):
-        """GateIO: No per-symbol configuration needed."""
-        pass
+        """Apply the configured leverage and margin mode through Gate's leverage endpoint."""
+        for symbol in symbols:
+            if symbol in set(
+                getattr(
+                    self,
+                    "_gate_leverage_metadata_unavailable_symbols",
+                    set(),
+                )
+                or set()
+            ):
+                raise ValueError(
+                    f"{symbol}: Gate.io max leverage metadata unavailable"
+                )
+            leverage = self._calc_leverage_for_symbol(symbol)
+            margin_mode = self._get_margin_mode_for_symbol(symbol)
+            await self.cca.set_leverage(
+                leverage,
+                symbol=symbol,
+                params={"marginMode": margin_mode},
+            )
+            logging.info(
+                "%s: set %s leverage to %sx",
+                symbol_to_coin(symbol, verbose=False) or symbol,
+                margin_mode,
+                leverage,
+            )
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """Gate leverage is an entry prerequisite, not a close prerequisite."""
+        return self._extract_order_reduce_only(order) is not True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Keep persistent Gate entry-configuration failures restart-visible."""
+        return bool(blocked_orders)
 
     async def update_exchange_config(self):
         """GateIO: No exchange-level configuration needed."""

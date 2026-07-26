@@ -96,7 +96,8 @@ test values on both sides; the console sink must not invent a generic threshold 
 The normal console projects an incident as a bounded signature, not a traceback:
 
 1. Emit the first occurrence immediately with component, operation, exception class, status/code
-   when safe, affected scope, action, and correlation id.
+   when safe, affected scope, action, and correlation id. Failed exchange writes may also include
+   a bounded sanitized reason extracted from the exchange's structured error payload.
 2. Aggregate equivalent repeats and emit a compact count at most every five minutes. Emit recovery
    once when the condition clears.
 3. Keep sanitized tracebacks in the protected developer text/structured diagnostic path. A terminal

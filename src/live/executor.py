@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import math
 import sys
@@ -31,6 +32,26 @@ def _utc_ms() -> int:
     if module is not None and hasattr(module, "utc_ms"):
         return int(module.utc_ms())
     return int(_utils_utc_ms())
+
+
+def _callable_accepts_keyword(fn, keyword: str) -> bool:
+    """Whether a connector/test-double callable accepts a named keyword."""
+    try:
+        parameters = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == keyword
+            and parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        )
+        for parameter in parameters
+    )
 
 
 def _live_event_console_available(bot, passivbot_cls) -> bool:
@@ -111,6 +132,22 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order)
 
 
+def _order_requires_exchange_config_before_create(bot, order: dict) -> bool:
+    checker = getattr(bot, "_order_requires_exchange_config_before_create", None)
+    if callable(checker):
+        return bool(checker(order))
+    return True
+
+
+def _pending_exchange_config_consumes_error_budget(
+    bot, blocked_orders: list[dict]
+) -> bool:
+    checker = getattr(bot, "_pending_exchange_config_consumes_error_budget", None)
+    if callable(checker):
+        return bool(checker(blocked_orders))
+    return False
+
+
 def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
     """Return the independent exchange scope affected by a stale actual order."""
     if not isinstance(order, dict):
@@ -183,97 +220,8 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
-def _prioritize_locally_admissible_creations(bot, orders: list[dict]) -> list[dict]:
-    """Place locally admissible creates before known churn deferrals."""
-    prioritized = [
-        order
-        for _index, order in sorted(
-            enumerate(orders),
-            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
-        )
-    ]
-    if not prioritized or not connector_supports_order_churn_gate(bot):
-        return prioritized
-    state = getattr(bot, "_order_churn_gate_state", None)
-    live_value = getattr(bot, "live_value", None)
-    if state is None or not callable(live_value):
-        return prioritized
-    activation_count = int(
-        live_value("order_replacement_churn_gate_activation_count")
-    )
-    if activation_count <= 0:
-        return prioritized
-    window_seconds = (
-        float(live_value("order_replacement_churn_gate_window_minutes")) * 60.0
-    )
-    projected_usage = state.action_attempt_count(
-        now_monotonic=time.monotonic(), window_seconds=window_seconds
-    )
-    threshold = float(
-        live_value("order_replacement_churn_gate_market_dist_pct")
-    )
-    planning_snapshot = getattr(bot, "_current_planning_snapshot", None)
-    planning_prices: dict[str, float] = {}
-    if planning_snapshot is not None:
-        now_ms = _utc_ms()
-        max_age_ms = int(
-            getattr(planning_snapshot, "market_snapshot_max_age_ms", 0) or 0
-        )
-        for row in getattr(planning_snapshot, "market_snapshots", ()) or ():
-            try:
-                age_ms = now_ms - int(row.fetched_ms)
-                last = float(row.last)
-            except (AttributeError, TypeError, ValueError, OverflowError):
-                continue
-            if (
-                max_age_ms > 0
-                and 0 <= age_ms <= max_age_ms
-                and math.isfinite(last)
-                and last > 0.0
-            ):
-                planning_prices[str(row.symbol)] = last
-
-    admitted: list[dict] = []
-    uncertain: list[dict] = []
-    deferred: list[dict] = []
-    order_market_diff = _pb_attr("order_market_diff")
-    for order in prioritized:
-        churn_evidenced = bool(order.get("_churn_evidence"))
-        if (
-            bot._is_market_execution_order(order)
-            or _order_is_risk_critical(order)
-            or not churn_evidenced
-        ):
-            admitted.append(order)
-            projected_usage += 1
-            continue
-        try:
-            if "_churn_gate_market_distance" in order:
-                distance = float(order["_churn_gate_market_distance"])
-            else:
-                market_price = planning_prices[str(order["symbol"])]
-                distance = float(
-                    order_market_diff(
-                        str(order["side"]),
-                        float(order["price"]),
-                        market_price,
-                    )
-                )
-            if not math.isfinite(distance):
-                raise ValueError("invalid market distance")
-        except (KeyError, TypeError, ValueError, OverflowError):
-            uncertain.append(order)
-            continue
-        if distance <= threshold or projected_usage + 1 <= activation_count:
-            admitted.append(order)
-            projected_usage += 1
-        else:
-            deferred.append(order)
-    return admitted + uncertain + deferred
-
-
 def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
-    """Apply stable risk-first create capacity before exchange configuration."""
+    """Apply stable risk-first capacity after all local creation admission."""
     if not orders:
         return []
     live_value = getattr(bot, "live_value", None)
@@ -282,7 +230,13 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
         if callable(live_value)
         else len(orders)
     )
-    prioritized_orders = _prioritize_locally_admissible_creations(bot, orders)
+    prioritized_orders = [
+        order
+        for _index, order in sorted(
+            enumerate(orders),
+            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
+        )
+    ]
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:
@@ -882,15 +836,28 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
-        before_capacity = len(to_create_mod)
-        to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
-        if order_wave is not None:
-            order_wave["deferred_create"] += max(
-                0, before_capacity - len(to_create_mod)
+        pending_config_error_budget = False
+        config_required_orders = [
+            order
+            for order in to_create_mod
+            if _order_requires_exchange_config_before_create(bot, order)
+        ]
+        config_eligibility_now_ms = _utc_ms()
+        if config_required_orders and configure_creations:
+            creation_symbols = sorted(
+                {order["symbol"] for order in config_required_orders}
             )
-        if to_create_mod and configure_creations:
-            creation_symbols = sorted({order["symbol"] for order in to_create_mod})
-            configured_symbols = await bot.update_exchange_configs(creation_symbols)
+            if _callable_accepts_keyword(
+                bot.update_exchange_configs, "eligibility_now_ms"
+            ):
+                configured_symbols = await bot.update_exchange_configs(
+                    creation_symbols,
+                    eligibility_now_ms=config_eligibility_now_ms,
+                )
+            else:
+                configured_symbols = await bot.update_exchange_configs(
+                    creation_symbols
+                )
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
                 bot._fresh_entry_eligibility_trace = None
@@ -900,11 +867,22 @@ async def execute_order_plan(
             )
             if pending_config:
                 pending_config_orders = [
-                    order for order in to_create_mod if order["symbol"] in pending_config
+                    order
+                    for order in config_required_orders
+                    if order["symbol"] in pending_config
+                ]
+                protective_config_bypasses = [
+                    order
+                    for order in to_create_mod
+                    if order["symbol"] in pending_config
+                    and not _order_requires_exchange_config_before_create(bot, order)
                 ]
                 logging.warning(
-                    "[config] skipping order creation for symbols pending exchange config: %s",
+                    "[config] skipping exposure-increasing order creation for symbols pending "
+                    "exchange config: %s | blocked=%d protective_allowed=%d",
                     passivbot_cls._log_symbols(pending_config, limit=12),
+                    len(pending_config_orders),
+                    len(protective_config_bypasses),
                 )
                 if pending_config_orders:
                     _record_fresh_entry_orders(
@@ -926,13 +904,22 @@ async def execute_order_plan(
                         data={
                             "configured_symbols_count": len(configured_symbols or set()),
                             "pending_symbols_count": len(pending_config),
+                            "protective_allowed_count": len(
+                                protective_config_bypasses
+                            ),
                         },
+                    )
+                    pending_config_error_budget = (
+                        _pending_exchange_config_consumes_error_budget(
+                            bot, pending_config_orders
+                        )
                     )
                 before_config_filter = len(to_create_mod)
                 to_create_mod = [
                     order
                     for order in to_create_mod
                     if order["symbol"] not in pending_config
+                    or not _order_requires_exchange_config_before_create(bot, order)
                 ]
                 if order_wave is not None:
                     order_wave["skipped_create"] += max(
@@ -961,6 +948,12 @@ async def execute_order_plan(
                 0,
                 len(before_churn_admission) - len(to_create_mod),
             )
+        before_capacity = len(to_create_mod)
+        to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
+        if order_wave is not None:
+            order_wave["deferred_create"] += max(
+                0, before_capacity - len(to_create_mod)
+            )
         if to_create_mod:
             res = None
             try:
@@ -983,6 +976,8 @@ async def execute_order_plan(
                         bounded_exception_type(exc),
                     )
                 await bot.restart_bot_on_too_many_errors()
+        if pending_config_error_budget:
+            await bot.restart_bot_on_too_many_errors()
     _emit_fresh_entry_eligibility(bot, passivbot_cls, order_wave)
     if to_cancel or to_create:
         bot.execution_scheduled = True

@@ -76,15 +76,13 @@ Uncertain evidence fails open: reconciliation and creation proceed normally.
 
 ## Admission model
 
-Stable risk-first create-batch capacity is applied before exchange-configuration
-writes. Candidates which the current local snapshot already proves will be
-churn-deferred are placed after locally admissible candidates, so they cannot
-consume capacity or delay configuration of an admissible order.
-
 One churn-admission pass runs after exchange-configuration writes and the final
 fresh market-snapshot guard, immediately before the connector create call. This
 keeps both the generic maximum-distance guard and the near-market churn exemption
 anchored to a snapshot which has not aged during configuration network calls.
+Stable risk-first create-batch capacity is then applied only to admitted
+candidates, so an order rejected by market freshness or churn policy cannot
+consume capacity needed by a later admissible order.
 
 The rolling create-attempt count uses the configured churn window and activation
 count. Once the allowance is exhausted, only ordinary, churn-evidenced limit

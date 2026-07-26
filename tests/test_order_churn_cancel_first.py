@@ -368,7 +368,32 @@ async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
 
 
 @pytest.mark.asyncio
-async def test_risk_first_capacity_applies_before_exchange_config_writes(
+async def test_exchange_config_uses_precreate_eligibility_snapshot(
+    execution_shell, monkeypatch
+):
+    bot = _PlanBot()
+    observed = {}
+
+    async def update_configs(symbols, *, eligibility_now_ms):
+        observed["symbols"] = list(symbols)
+        observed["eligibility_now_ms"] = eligibility_now_ms
+        return set(symbols)
+
+    monkeypatch.setattr(executor, "_utc_ms", lambda: 12_345)
+    bot.update_exchange_configs = update_configs
+    desired = _order("desired")
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert observed == {
+        "symbols": [desired["symbol"]],
+        "eligibility_now_ms": 12_345,
+    }
+    assert bot.created == [desired]
+
+
+@pytest.mark.asyncio
+async def test_risk_first_capacity_applies_after_exchange_config_writes(
     execution_shell,
 ):
     bot = _PlanBot()
@@ -391,13 +416,13 @@ async def test_risk_first_capacity_applies_before_exchange_config_writes(
 
     await executor.execute_order_plan(bot, [], [ordinary, critical])
 
-    assert bot.configured == [[critical["symbol"]]]
+    assert bot.configured == [[critical["symbol"], ordinary["symbol"]]]
     assert bot.created == [critical]
     assert ordinary["_churn_gate_reason"] == "batch_capacity"
 
 
 @pytest.mark.asyncio
-async def test_capacity_configures_later_admissible_order_before_known_churn_deferral(
+async def test_capacity_selects_later_admissible_order_after_churn_deferral(
     execution_shell,
 ):
     bot = _PlanBot()
@@ -430,6 +455,6 @@ async def test_capacity_configures_later_admissible_order_before_known_churn_def
 
     await executor.execute_order_plan(bot, [], [far_churn, stable])
 
-    assert bot.configured == [[stable["symbol"]]]
+    assert bot.configured == [[stable["symbol"], far_churn["symbol"]]]
     assert bot.created == [stable]
-    assert far_churn["_churn_gate_reason"] == "batch_capacity"
+    assert far_churn["_churn_gate_reason"] == "allowance_exhausted"

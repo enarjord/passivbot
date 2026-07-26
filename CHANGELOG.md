@@ -4,6 +4,50 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Forager monitor health now distinguishes approved candidates that are
+  temporarily unrankable because volume/log-range or required candidate EMA
+  inputs are unavailable from active-symbol trading degradation. Ranking-feature
+  health is populated by the active Rust-orchestrator preparation path, candidate
+  labels use the same market-age and effective-minimum-cost eligibility as live
+  selection, all EMA health is cleared before a failed replacement bundle can
+  leave stale state behind, candidates remain explicitly unrankable until a
+  bundle completes, and active-symbol EMA failures retain their active
+  degradation reason. Open-tail forager projection computes only close EMAs
+  because ranking metrics must come from real candles, and latest-value EMA
+  calculations avoid allocating an unused full series.
+
+- Live trailing fill confirmation now accepts reconstructed position-price
+  differences of at most one effective executable price tick to accommodate
+  exchange rounding or truncation of sub-tick VWAPs, including Hyperliquid's
+  significant-digit price ladder and its asymmetric spacing across powers of
+  ten. Fill identity and reconstructed position size remain strict, the explicit
+  position-opening replay retains its ordinary half-tick requirement, larger
+  discrepancies remain fail-closed, and acceptance beyond the ordinary half-tick
+  comparison emits one warning plus a structured diagnostic when confirmation
+  clears.
+
+- Live order-write failures now include bounded, sanitized exchange status, code,
+  label, and reason fields when CCXT exposes a structured rejection payload through
+  either an exception or a terminal result mapping, including OKX per-order
+  `sCode`/`sMsg` details. Successful outcomes retain ordinary result summaries
+  without misclassifying native success codes/messages as errors.
+  Sensitive-marked values and long identifier-like tokens remain redacted; the
+  existing bot restart error budget is unchanged.
+
+- Gate.io now applies the configured leverage and margin mode before a symbol's
+  first order creation. This refreshes Gate's leverage-derived position risk limit
+  after contract risk-table changes instead of repeatedly failing valid orders
+  with a zero risk limit. An hourly market refresh invalidates the configured
+  marker when the effective leverage cap changes so the next entry refreshes
+  the exchange configuration.
+  A failed refresh blocks entries and advances the existing restart budget,
+  while reduce-only closes remain eligible. Churn admission and the later
+  configuration write now share one retry-eligibility timestamp so a backoff
+  expiring mid-wave cannot introduce an unreserved signed action. Missing or
+  invalid leverage-cap metadata is isolated to the affected symbol: entries
+  remain pending and restart-visible, but market initialization and protective
+  closes continue.
+
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous
   strategy exposure. Valid hedge-account updates no longer enter the one-way normalization path
@@ -27,9 +71,9 @@ All notable user-facing changes will be documented in this file.
   measures stability from the current drift run, bounds the universal
   order-match tolerance to 0% through 1% (default 0.02%), rejects malformed Rust
   ideal orders before reconciliation, reuses the existing fresh market
-  snapshot, applies risk-first batch capacity to locally admissible candidates
-  before exchange configuration, and performs one final churn-admission pass
-  afterward. Removed
+  snapshot, performs one final churn-admission pass after exchange configuration
+  and the fresh-market guard, then applies risk-first batch capacity only to
+  admitted candidates. Removed
   account/config/list epochs, the wider tracking
   tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
   and signed-action bookkeeping. Churn evidence remains economy-only: unmatched
@@ -264,7 +308,7 @@ All notable user-facing changes will be documented in this file.
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
   trigger authoritative account-state refresh instead of reconnect churn. Churn distance is
-  rechecked from a forced-fresh market read after configuration before any create call. Malformed
+  rechecked from a still-valid cached market snapshot after configuration before any create call. Malformed
   Rust ideal orders fail fatally before reconciliation or any exchange action; malformed
   actual-order identity and missing or malformed position sides retain their account-critical
   exchange-write barriers. Failed required margin-mode writes leave dependent creates pending
@@ -1823,6 +1867,12 @@ All notable user-facing changes will be documented in this file.
   reasons and candidate error types in concise smoke output, making
   `cache_only_fetch_failed` vs `never_fetched_cache_only` visible without a
   separate event query.
+- Forager monitor readiness is now scoped to the exact symbols evaluated by the
+  latest EMA bundle, optional cache-only metric gaps are classified as
+  candidate health failures, and open-tail projection preserves log-range
+  inputs required by held or explicitly normal strategies. Completed-candle
+  forager ranking metrics now have a distinct Rust input channel so coincident
+  strategy and ranking spans cannot reuse projected values for coin selection.
 - `passivbot tool live-smoke-report` now reports timestamp/nonce
   `cycle.degraded` events recovered by a subsequent successful
   `exchange.time_sync` event as recovered problem events instead of hard smoke
