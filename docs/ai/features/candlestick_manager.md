@@ -66,8 +66,12 @@
    refresh lateness. Cached carry-forward requires full requested-window coverage and must not
    populate the normal active-strategy EMA cache.
    Tail-only gaps remain eligible within the configured candidate staleness window; missing basis
-   and internal gaps do not. Refresh budgets count symbol/timeframe fetches, health scans are
-   bounded and rotated across cycles, interleave each candidate's 1m and native 1h health surfaces,
+   and internal gaps do not. A known-gap retry cooldown suppresses only the recorded missing
+   prefix; newly finalized candles after that gap remain fetchable. Forced 1m and native
+   higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
+   failed surface refresh so the caller can apply its bounded retry delay. Refresh budgets count
+   symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
+   candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
    and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
    only surfaces handled by this background

@@ -21,6 +21,7 @@ from candlestick_manager import (
     GAP_REASON_NO_ARCHIVE,
     ONE_MIN_MS,
     OhlcvFetchError,
+    OhlcvTerminalEmptyPage,
     _GAP_MAX_RETRIES,
     _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
@@ -2791,6 +2792,60 @@ async def test_hyperliquid_known_tail_gap_cooldown_precedes_present_fetch(
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_hyperliquid_deferred_tail_gap_still_fetches_finalized_suffix(
+    monkeypatch, tmp_path
+):
+    now = {"ms": 30_000_000}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now["ms"]
+    symbol = "MU/USDC:USDC"
+    end = _floor_minute(now["ms"]) - ONE_MIN_MS
+    start = end - 3 * ONE_MIN_MS
+    gap_start = start + ONE_MIN_MS
+    gap_end = end - ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(start, 1.0, 1.0, 1.0, 1.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        gap_start,
+        gap_end,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    calls = []
+
+    async def fetch_paginated(_symbol, since, end_exclusive, **_kwargs):
+        calls.append((since, end_exclusive))
+        return np.array(
+            [(end, 2.0, 2.0, 2.0, 2.0, 2.0)],
+            dtype=CANDLE_DTYPE,
+        )
+
+    cm._fetch_ohlcv_paginated = fetch_paginated
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        fill_trailing_gaps=False,
+    )
+
+    assert calls == [(end, end + ONE_MIN_MS)]
+    assert int(result[-1]["ts"]) == end
+    assert float(result[-1]["c"]) == pytest.approx(2.0)
+
+
 def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):
     cm = CandlestickManager(
         exchange=None,
@@ -2805,6 +2860,68 @@ def test_nonexpiring_gap_does_not_defer_fetch_beyond_recorded_end(tmp_path):
     assert not cm._known_gap_retry_deferred_at(
         symbol, start, start + ONE_MIN_MS
     )
+    assert (
+        cm._fetch_start_after_deferred_gap_prefix(
+            symbol, start, start + ONE_MIN_MS
+        )
+        == start + ONE_MIN_MS
+    )
+
+
+@pytest.mark.asyncio
+async def test_1m_force_refresh_raises_on_partial_terminal_empty_page(
+    monkeypatch, tmp_path
+):
+    fixed_now_ms = 20 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    class _Ex:
+        id = "hyperliquid"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="hyperliquid",
+        cache_dir=str(tmp_path / "caches"),
+        default_window_candles=4,
+        overlap_candles=0,
+    )
+    cm._now_ms_callback = lambda: fixed_now_ms
+    cm._ccxt_limit_default = 2
+    cm._ccxt_page_overlap_candles = 0
+    calls = []
+
+    async def fetch_once(
+        _symbol,
+        since_ms,
+        _limit,
+        end_exclusive_ms=None,
+        timeframe=None,
+        *,
+        tf=None,
+    ):
+        calls.append(since_ms)
+        if len(calls) == 1:
+            return [
+                [since_ms, 1.0, 1.0, 1.0, 1.0, 1.0],
+                [since_ms + ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0],
+            ]
+        return []
+
+    cm._ccxt_fetch_ohlcv_once = fetch_once
+    start = fixed_now_ms - 4 * ONE_MIN_MS
+    end = fixed_now_ms - ONE_MIN_MS
+
+    with pytest.raises(OhlcvTerminalEmptyPage) as exc_info:
+        await cm.get_candles(
+            "MU/USDC:USDC",
+            start_ts=start,
+            end_ts=end,
+            max_age_ms=0,
+            max_lookback_candles=4,
+        )
+
+    assert calls == [start, start + 2 * ONE_MIN_MS]
+    assert exc_info.value.pages == 1
 
 
 def test_gap_retry_without_increment(tmp_path):

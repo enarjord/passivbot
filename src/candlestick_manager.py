@@ -3198,25 +3198,51 @@ class CandlestickManager:
     ) -> bool:
         """Whether a fetch is covered by a known gap whose retry is not due.
 
-        A bounded recent Hyperliquid tail gap gates a fetch beginning inside it
-        even when the requested present edge has advanced. Other gap classes
-        defer only ranges fully contained by their recorded bounds.
+        A range extending beyond a deferred gap is not wholly deferred; callers
+        must use ``_fetch_start_after_deferred_gap_prefix`` to skip the gap while
+        still fetching the newly finalized suffix.
         """
+        return (
+            self._fetch_start_after_deferred_gap_prefix(
+                symbol,
+                start_ts,
+                end_ts,
+                now_ms=now_ms,
+            )
+            is None
+        )
+
+    def _fetch_start_after_deferred_gap_prefix(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> Optional[int]:
+        """Skip only a non-due known-gap prefix and preserve any later suffix."""
         if now_ms is None:
             now_ms = int(time.time() * 1000)
-        for gap in self._get_known_gaps_enhanced(symbol):
-            gap_start = int(gap["start_ts"])
-            gap_end = int(gap["end_ts"])
-            if (
-                gap_start <= int(start_ts) <= gap_end
-                and not self._should_retry_gap(gap, now_ms=now_ms)
-                and (
-                    int(end_ts) <= gap_end
-                    or self._is_recent_hyperliquid_gap(gap, now_ms=now_ms)
-                )
-            ):
-                return True
-        return False
+        fetch_start = int(start_ts)
+        fetch_end = int(end_ts)
+        while fetch_start <= fetch_end:
+            deferred_gap_end = None
+            for gap in self._get_known_gaps_enhanced(symbol):
+                gap_start = int(gap["start_ts"])
+                gap_end = int(gap["end_ts"])
+                if (
+                    gap_start <= fetch_start <= gap_end
+                    and not self._should_retry_gap(gap, now_ms=now_ms)
+                ):
+                    deferred_gap_end = (
+                        gap_end
+                        if deferred_gap_end is None
+                        else max(deferred_gap_end, gap_end)
+                    )
+            if deferred_gap_end is None:
+                return fetch_start
+            fetch_start = int(deferred_gap_end) + ONE_MIN_MS
+        return None
 
     def _should_retry_gap(
         self,
@@ -6296,6 +6322,7 @@ class CandlestickManager:
         # Optionally refresh if range touches the latest finalized minute
         allow_fetch_present = True
         skip_present_fetch_due_to_ttl = False
+        skip_initial_refresh_due_to_deferred_prefix = False
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
         if not allow_remote_fetch:
             allow_fetch_present = False
@@ -6319,29 +6346,46 @@ class CandlestickManager:
                 if last_known_final
                 else int(start_ts)
             )
-            if (
-                present_fetch_start <= int(end_ts)
-                and self._known_gap_retry_deferred_at(
-                    symbol, present_fetch_start, int(end_ts), now_ms=now
+            if present_fetch_start <= int(end_ts):
+                adjusted_present_fetch_start = (
+                    self._fetch_start_after_deferred_gap_prefix(
+                        symbol, present_fetch_start, int(end_ts), now_ms=now
+                    )
                 )
-            ):
-                allow_fetch_present = False
-                self._log(
-                    "debug",
-                    "known_gap_retry_deferred_present",
-                    symbol=symbol,
-                    fetch_start=present_fetch_start,
-                    end_ts=end_ts,
-                )
+                if adjusted_present_fetch_start is None:
+                    allow_fetch_present = False
+                    self._log(
+                        "debug",
+                        "known_gap_retry_deferred_present",
+                        symbol=symbol,
+                        fetch_start=present_fetch_start,
+                        end_ts=end_ts,
+                    )
+                elif adjusted_present_fetch_start > present_fetch_start:
+                    skip_initial_refresh_due_to_deferred_prefix = True
+                    self._log(
+                        "debug",
+                        "known_gap_retry_deferred_prefix",
+                        symbol=symbol,
+                        fetch_start=present_fetch_start,
+                        adjusted_fetch_start=adjusted_present_fetch_start,
+                        end_ts=end_ts,
+                    )
         if allow_fetch_present and end_ts >= latest_finalized and self.exchange is not None:
-            if max_age_ms == 0:
+            if skip_initial_refresh_due_to_deferred_prefix:
+                pass
+            elif max_age_ms == 0:
                 self._log(
                     "debug",
                     "get_candles_force_refresh",
                     symbol=symbol,
                     end_ts=end_ts,
                 )
-                await self.refresh(symbol, through_ts=end_ts)
+                await self.refresh(
+                    symbol=symbol,
+                    through_ts=end_ts,
+                    raise_on_partial_empty_page=True,
+                )
             elif max_age_ms is not None and max_age_ms > 0:
                 last_ref = self._get_last_refresh_ms(symbol)
                 last_final = 0
@@ -6700,6 +6744,7 @@ class CandlestickManager:
                                             s2,
                                             span_end_excl,
                                             on_batch=_persist_hist_batch,
+                                            raise_on_partial_empty_page=max_age_ms == 0,
                                         )
                                     except TypeError:
                                         fetched = await self._fetch_ohlcv_paginated(
@@ -6806,12 +6851,15 @@ class CandlestickManager:
                     sub_size=int(sub.shape[0]) if sub.size else 0,
                 )
                 if need_fetch:
-                    if self._known_gap_retry_deferred_at(
-                        symbol,
-                        fetch_start,
-                        end_excl - ONE_MIN_MS,
-                        now_ms=now,
-                    ):
+                    adjusted_fetch_start = (
+                        self._fetch_start_after_deferred_gap_prefix(
+                            symbol,
+                            fetch_start,
+                            end_excl - ONE_MIN_MS,
+                            now_ms=now,
+                        )
+                    )
+                    if adjusted_fetch_start is None:
                         need_fetch = False
                         self._log(
                             "debug",
@@ -6820,6 +6868,8 @@ class CandlestickManager:
                             fetch_start=fetch_start,
                             end_ts=end_ts,
                         )
+                    else:
+                        fetch_start = adjusted_fetch_start
                 if need_fetch:
                     async with self._acquire_fetch_lock(symbol, "1m"):
                         try:
@@ -6837,23 +6887,26 @@ class CandlestickManager:
                             if sub.size
                             else start_ts
                         )
-                        if (
-                            need_fetch_inner
-                            and self._known_gap_retry_deferred_at(
-                                symbol,
-                                fetch_start_inner,
-                                end_excl - ONE_MIN_MS,
-                                now_ms=now,
+                        if need_fetch_inner:
+                            adjusted_fetch_start_inner = (
+                                self._fetch_start_after_deferred_gap_prefix(
+                                    symbol,
+                                    fetch_start_inner,
+                                    end_excl - ONE_MIN_MS,
+                                    now_ms=now,
+                                )
                             )
-                        ):
-                            need_fetch_inner = False
-                            self._log(
-                                "debug",
-                                "known_gap_retry_deferred_present",
-                                symbol=symbol,
-                                fetch_start=fetch_start_inner,
-                                end_ts=end_ts,
-                            )
+                            if adjusted_fetch_start_inner is None:
+                                need_fetch_inner = False
+                                self._log(
+                                    "debug",
+                                    "known_gap_retry_deferred_present",
+                                    symbol=symbol,
+                                    fetch_start=fetch_start_inner,
+                                    end_ts=end_ts,
+                                )
+                            else:
+                                fetch_start_inner = adjusted_fetch_start_inner
                         self._log(
                             "debug",
                             "get_candles_present_inner",
@@ -6887,6 +6940,7 @@ class CandlestickManager:
                                     fetch_start_inner,
                                     end_excl,
                                     on_batch=_persist_present_batch,
+                                    raise_on_partial_empty_page=max_age_ms == 0,
                                 )
                             except TypeError:
                                 fetched = await self._fetch_ohlcv_paginated(
@@ -6930,12 +6984,13 @@ class CandlestickManager:
                 fetch_start = last_have + ONE_MIN_MS
                 if fetch_start >= end_excl_range:
                     break
-                if self._known_gap_retry_deferred_at(
+                adjusted_fetch_start = self._fetch_start_after_deferred_gap_prefix(
                     symbol,
                     fetch_start,
                     end_excl_range - ONE_MIN_MS,
                     now_ms=now,
-                ):
+                )
+                if adjusted_fetch_start is None:
                     self._log(
                         "debug",
                         "known_gap_retry_deferred_tail_completion",
@@ -6944,6 +6999,7 @@ class CandlestickManager:
                         end_ts=end_ts,
                     )
                     break
+                fetch_start = adjusted_fetch_start
                 async with self._acquire_fetch_lock(symbol, "1m"):
                     try:
                         self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
@@ -6959,12 +7015,15 @@ class CandlestickManager:
                     fetch_start = last_have + ONE_MIN_MS
                     if fetch_start >= end_excl_range:
                         break
-                    if self._known_gap_retry_deferred_at(
-                        symbol,
-                        fetch_start,
-                        end_excl_range - ONE_MIN_MS,
-                        now_ms=now,
-                    ):
+                    adjusted_fetch_start = (
+                        self._fetch_start_after_deferred_gap_prefix(
+                            symbol,
+                            fetch_start,
+                            end_excl_range - ONE_MIN_MS,
+                            now_ms=now,
+                        )
+                    )
+                    if adjusted_fetch_start is None:
                         self._log(
                             "debug",
                             "known_gap_retry_deferred_tail_completion",
@@ -6973,6 +7032,7 @@ class CandlestickManager:
                             end_ts=end_ts,
                         )
                         break
+                    fetch_start = adjusted_fetch_start
                     persisted_batches = False
 
                     def _persist_tail_batch(batch: np.ndarray) -> None:
@@ -6995,6 +7055,7 @@ class CandlestickManager:
                             fetch_start,
                             end_excl_range,
                             on_batch=_persist_tail_batch,
+                            raise_on_partial_empty_page=max_age_ms == 0,
                         )
                     except TypeError:
                         fetched = await self._fetch_ohlcv_paginated(
@@ -7079,6 +7140,7 @@ class CandlestickManager:
                                 s,
                                 end_excl_gap,
                                 on_batch=_persist_gap_batch,
+                                raise_on_partial_empty_page=max_age_ms == 0,
                             )
                         except TypeError:
                             fetched = await self._fetch_ohlcv_paginated(
@@ -8129,7 +8191,13 @@ class CandlestickManager:
         for t in tasks:
             await t
 
-    async def refresh(self, symbol: str, through_ts: Optional[int] = None) -> None:
+    async def refresh(
+        self,
+        symbol: str,
+        through_ts: Optional[int] = None,
+        *,
+        raise_on_partial_empty_page: bool = False,
+    ) -> None:
         """Fetch new candles and merge into cache.
 
         - Overlaps by `overlap_candles`
@@ -8250,6 +8318,7 @@ class CandlestickManager:
                     since,
                     end_exclusive,
                     on_batch=_persist_refresh_batch,
+                    raise_on_partial_empty_page=raise_on_partial_empty_page,
                 )
             except TypeError:
                 new_arr = await self._fetch_ohlcv_paginated(symbol, since, end_exclusive)
