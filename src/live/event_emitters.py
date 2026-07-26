@@ -4453,7 +4453,8 @@ def emit_execution_order_event(
                     ),
                 }
             )
-            data.update(_bounded_exchange_error_context_from_mapping(result))
+            if status in {"failed", "degraded"}:
+                data.update(_bounded_exchange_error_context_from_mapping(result))
         elif isinstance(result, BaseException):
             error = result
         if error is not None:

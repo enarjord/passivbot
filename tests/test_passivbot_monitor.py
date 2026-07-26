@@ -5662,6 +5662,60 @@ def test_execution_rejection_event_sanitizes_structured_result_mapping():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_order_success_does_not_project_native_success_as_error():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ()
+            self._live_event_current_cycle_id = "cy_execution_success"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED,
+        order={
+            "symbol": "DOGE/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "type": "limit",
+            "pb_order_type": "entry_initial_normal_long",
+            "qty": 1.0,
+            "price": 0.1,
+            "reduce_only": False,
+        },
+        action="create",
+        status="succeeded",
+        reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+        result={
+            "status": "open",
+            "info": {
+                "code": "0",
+                "msg": "",
+                "data": [{"sCode": "0", "sMsg": "Order placed"}],
+            },
+        },
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.data["result_status"] == "open"
+    assert not any(key.startswith("error_") for key in event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     import passivbot as pb_mod
 

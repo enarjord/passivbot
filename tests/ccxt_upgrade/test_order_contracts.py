@@ -1098,6 +1098,37 @@ def test_gateio_does_not_reserve_config_cost_during_retry_backoff():
     ) == {}
 
 
+@pytest.mark.asyncio
+async def test_gateio_retry_backoff_uses_precreate_eligibility_snapshot(
+    monkeypatch,
+):
+    symbol = "DOGE/USDT:USDT"
+    calls = []
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.already_updated_exchange_config_symbols = set()
+    bot._exchange_config_retry_attempts = {}
+    bot._exchange_config_retry_after_ms = {symbol: 1_001}
+    bot._shutdown_requested = lambda: False
+
+    async def update_symbol_config(symbols):
+        calls.append(list(symbols))
+
+    bot.update_exchange_config_by_symbols = update_symbol_config
+    monkeypatch.setattr("passivbot.utc_ms", lambda: 2_000)
+
+    assert bot._order_churn_precreate_signed_action_costs(
+        {symbol},
+        now_ms=1_000,
+    ) == {}
+    configured = await bot.update_exchange_configs(
+        [symbol],
+        eligibility_now_ms=1_000,
+    )
+
+    assert configured == set()
+    assert calls == []
+
+
 def test_ccxt_gate_cross_leverage_maps_to_documented_request_tuple():
     exchange = ccxt.gate({"options": {"defaultType": "swap"}})
     exchange.set_markets(

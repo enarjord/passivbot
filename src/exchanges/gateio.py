@@ -230,14 +230,20 @@ class GateIOBot(CCXTBot):
                 leverage,
             )
 
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+    def _order_churn_precreate_signed_action_costs(
+        self,
+        symbols,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
         configured = set(
             getattr(self, "already_updated_exchange_config_symbols", set()) or set()
         )
         retry_after_by_symbol = (
             getattr(self, "_exchange_config_retry_after_ms", {}) or {}
         )
-        now_ms = utc_ms()
+        if now_ms is None:
+            now_ms = utc_ms()
         return {
             str(symbol): 1
             for symbol in symbols

@@ -7,7 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Live order-write failures now include bounded, sanitized exchange status, code,
   label, and reason fields when CCXT exposes a structured rejection payload through
   either an exception or a terminal result mapping, including OKX per-order
-  `sCode`/`sMsg` details.
+  `sCode`/`sMsg` details. Successful outcomes retain ordinary result summaries
+  without misclassifying native success codes/messages as errors.
   Sensitive-marked values and long identifier-like tokens remain redacted; the
   existing bot restart error budget is unchanged.
 
@@ -18,7 +19,9 @@ All notable user-facing changes will be documented in this file.
   marker when the effective leverage cap changes so the next entry refreshes
   the exchange configuration.
   A failed refresh blocks entries and advances the existing restart budget,
-  while reduce-only closes remain eligible.
+  while reduce-only closes remain eligible. Churn admission and the later
+  configuration write now share one retry-eligibility timestamp so a backoff
+  expiring mid-wave cannot introduce an unreserved signed action.
 
 - Binance and Bitget private order updates now use the connector's actual exchange hedge mode for
   mandatory long/short attribution even when `live.hedge_mode=false` disables simultaneous

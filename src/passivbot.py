@@ -9232,7 +9232,12 @@ class Passivbot:
             fields.append(f"{key}={value}")
         return " ".join(fields)
 
-    async def update_exchange_configs(self, symbols=None):
+    async def update_exchange_configs(
+        self,
+        symbols=None,
+        *,
+        eligibility_now_ms: int | None = None,
+    ):
         """Ensure exchange-specific settings are initialised for all active symbols."""
         if not hasattr(self, "already_updated_exchange_config_symbols"):
             self.already_updated_exchange_config_symbols = set()
@@ -9257,7 +9262,12 @@ class Passivbot:
                 retry_after_ms = int(
                     self._exchange_config_retry_after_ms.get(symbol, 0) or 0
                 )
-                if retry_after_ms > utc_ms():
+                retry_check_now_ms = (
+                    int(eligibility_now_ms)
+                    if eligibility_now_ms is not None
+                    else utc_ms()
+                )
+                if retry_after_ms > retry_check_now_ms:
                     continue
                 try:
                     await self.update_exchange_config_by_symbols([symbol])
@@ -9299,8 +9309,14 @@ class Passivbot:
                         await asyncio.sleep(pause_s)
         return configured_symbols
 
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
+    def _order_churn_precreate_signed_action_costs(
+        self,
+        symbols,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
         """Return connector signed-action costs required before creating on symbols."""
+        del now_ms
         return {}
 
     def _order_requires_exchange_config_before_create(self, order: dict) -> bool:

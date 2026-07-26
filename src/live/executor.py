@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import math
 import sys
@@ -31,6 +32,26 @@ def _utc_ms() -> int:
     if module is not None and hasattr(module, "utc_ms"):
         return int(module.utc_ms())
     return int(_utils_utc_ms())
+
+
+def _callable_accepts_keyword(fn, keyword: str) -> bool:
+    """Whether a connector/test-double callable accepts a named keyword."""
+    try:
+        parameters = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or (
+            parameter.name == keyword
+            and parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        )
+        for parameter in parameters
+    )
 
 
 def _live_event_console_available(bot, passivbot_cls) -> bool:
@@ -1001,18 +1022,28 @@ async def execute_order_plan(
             for order in to_create_mod
             if _order_requires_exchange_config_before_create(bot, order)
         ]
+        config_eligibility_now_ms = _utc_ms()
         config_action_costs_by_order_id = {}
         if config_required_orders and configure_creations:
             config_cost_estimator = getattr(
                 bot, "_order_churn_precreate_signed_action_costs", None
             )
             if callable(config_cost_estimator):
-                config_action_costs_by_symbol = (
-                    config_cost_estimator(
-                        {str(order["symbol"]) for order in config_required_orders}
+                config_symbols = {
+                    str(order["symbol"]) for order in config_required_orders
+                }
+                if _callable_accepts_keyword(config_cost_estimator, "now_ms"):
+                    config_action_costs_by_symbol = (
+                        config_cost_estimator(
+                            config_symbols,
+                            now_ms=config_eligibility_now_ms,
+                        )
+                        or {}
                     )
-                    or {}
-                )
+                else:
+                    config_action_costs_by_symbol = (
+                        config_cost_estimator(config_symbols) or {}
+                    )
                 config_action_costs_by_order_id = {
                     id(order): int(
                         config_action_costs_by_symbol.get(str(order["symbol"]), 0)
@@ -1040,7 +1071,17 @@ async def execute_order_plan(
             creation_symbols = sorted(
                 {order["symbol"] for order in config_required_orders}
             )
-            configured_symbols = await bot.update_exchange_configs(creation_symbols)
+            if _callable_accepts_keyword(
+                bot.update_exchange_configs, "eligibility_now_ms"
+            ):
+                configured_symbols = await bot.update_exchange_configs(
+                    creation_symbols,
+                    eligibility_now_ms=config_eligibility_now_ms,
+                )
+            else:
+                configured_symbols = await bot.update_exchange_configs(
+                    creation_symbols
+                )
             if bot._shutdown_requested():
                 bot._order_wave_in_progress = None
                 bot._fresh_entry_eligibility_trace = None

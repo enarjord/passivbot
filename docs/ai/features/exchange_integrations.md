@@ -232,7 +232,10 @@ Handling:
    operator logs and structured events; close-only operation must not look healthy
    while entries are failing.
 6. Reserve and debit the one-time signed leverage write in the account-wide order
-   churn allowance before admitting the symbol's first entry creation.
+   churn allowance before admitting the symbol's first entry creation. The
+   reservation decision and configuration execution must use the same
+   retry-eligibility timestamp: a backoff expiring later in that creation wave
+   is deferred until the next wave rather than issuing an unreserved write.
 
 ### Contract order text must start with `t-`
 
