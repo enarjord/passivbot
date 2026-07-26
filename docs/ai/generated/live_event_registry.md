@@ -51,6 +51,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `execution.create_skipped`
 - `execution.create_succeeded`
 - `fill.ingested`
+- `fill.position_open_boundary_recovery_used`
 - `fills.ingested_summary`
 - `fills.refresh_summary`
 - `forager.eligibility_changed`
