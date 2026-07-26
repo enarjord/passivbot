@@ -668,9 +668,11 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 forager_side = bool(self.is_forager_mode(pside))
             except Exception:
                 forager_side = False
-            if forager_side and symbol in set(
-                approved_minus_ignored.get(pside, set()) or set()
-            ):
+            try:
+                age_eligible_approved = bool(self.is_approved(pside, symbol))
+            except Exception:
+                age_eligible_approved = False
+            if forager_side and age_eligible_approved:
                 forager_candidate_psides.append(pside)
         if forager_candidate_psides:
             rank_feature_psides = sorted(

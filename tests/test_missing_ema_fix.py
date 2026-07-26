@@ -737,6 +737,39 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": {symbol},
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_clears_stale_rank_feature_failures():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    bot._forager_rank_feature_unavailable_by_side = {
+        "long": {symbol},
+        "short": {symbol},
+    }
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": set(),
+        "short": set(),
+    }
 
 
 def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
