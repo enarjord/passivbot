@@ -74,6 +74,7 @@ class _PlanBot:
     async def update_exchange_configs(self, symbols):
         return set(symbols)
 
+
 @pytest.fixture
 def execution_shell(monkeypatch):
     wave = {
@@ -322,15 +323,21 @@ async def test_local_create_deferral_consumes_no_churn_attempt(execution_shell):
 
 
 @pytest.mark.asyncio
-async def test_batch_slice_happens_before_exchange_config_writes(execution_shell):
+async def test_final_churn_distance_recheck_runs_after_exchange_config_writes(
+    execution_shell, monkeypatch
+):
     bot = _PlanBot()
     bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_action_attempts(
+        1, now_monotonic=executor.time.monotonic()
+    )
     bot.configured = []
 
     def live_value(key):
         return {
-            "order_replacement_churn_gate_activation_count": 0,
-            "max_n_creations_per_batch": 1,
+            "order_replacement_churn_gate_activation_count": 1,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "max_n_creations_per_batch": 20,
             "order_replacement_churn_gate_market_dist_pct": 0.005,
         }[key]
 
@@ -338,12 +345,23 @@ async def test_batch_slice_happens_before_exchange_config_writes(execution_shell
         bot.configured.append(list(symbols))
         return set(symbols)
 
+    async def final_market_recheck(_bot, orders):
+        assert bot.configured == [[orders[0]["symbol"]]]
+        orders[0]["_churn_gate_market_distance"] = 0.01
+        return list(orders)
+
     bot.live_value = live_value
     bot.update_exchange_configs = update_configs
-    first = _order("first")
-    second = {**_order("second"), "symbol": "ETH/USDT:USDT"}
+    monkeypatch.setattr(
+        Passivbot,
+        "_filter_fresh_market_snapshot_creations",
+        final_market_recheck,
+    )
+    desired = _order("desired")
+    desired["_churn_evidence"] = True
 
-    await executor.execute_order_plan(bot, [], [first, second])
+    await executor.execute_order_plan(bot, [], [desired])
 
-    assert bot.configured == [[first["symbol"]]]
-    assert bot.created == [first]
+    assert bot.configured == [[desired["symbol"]]]
+    assert bot.created == []
+    assert desired["_churn_gate_reason"] == "allowance_exhausted"

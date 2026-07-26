@@ -1082,12 +1082,14 @@ def prepare_order_churn_evidence(
     current_universe.update((getattr(bot, "open_orders", {}) or {}).keys())
     current_universe.update((getattr(bot, "positions", {}) or {}).keys())
     history_symbols = state.symbols_with_history()
-    current_universe.update(history_symbols)
+    if activation_count > 0:
+        for symbol in history_symbols - current_universe:
+            reset = state.clear_symbol_history(symbol) or reset
     complete_ideals = {
         str(symbol): list(ideal_orders.get(symbol, [])) for symbol in current_universe
     }
     if activation_count <= 0:
-        state.clear_history()
+        reset = state.clear_history() or reset
         for orders in complete_ideals.values():
             for order in orders:
                 order["_churn_evidence"] = False
@@ -1185,13 +1187,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             | set(ideal_orders if isinstance(ideal_orders, dict) else {})
             | set((getattr(bot, "open_orders", {}) or {}).keys())
             | set((getattr(bot, "positions", {}) or {}).keys())
-            | set(
-                getattr(
-                    getattr(bot, "_order_churn_gate_state", None),
-                    "symbols_with_history",
-                    lambda: set(),
-                )()
-            )
         )
     actual_orders = bot._snapshot_actual_orders(
         actual_symbols, psides_by_symbol=actual_psides_by_symbol

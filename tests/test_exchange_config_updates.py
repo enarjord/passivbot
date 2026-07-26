@@ -615,17 +615,8 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_stops_after_exchange_config_shutdown(monkeypatch):
+async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
     import passivbot as pb_mod
-
-    async def keep_creations(_bot, orders):
-        return list(orders)
-
-    monkeypatch.setattr(
-        pb_mod.Passivbot,
-        "_filter_fresh_market_snapshot_creations",
-        keep_creations,
-    )
 
     class FakeBot:
         debug_mode = False

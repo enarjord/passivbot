@@ -238,6 +238,46 @@ def test_prepare_normalization_failure_is_economy_only(monkeypatch, caplog):
     assert "reconciliation remains authoritative" in caplog.text
 
 
+def test_departed_symbol_clears_history_instead_of_refreshing_empty_snapshots(
+    monkeypatch,
+):
+    state = OrderChurnGateState()
+
+    class Bot:
+        _order_churn_gate_state = state
+        _order_churn_risk_active_pairs = ()
+        active_symbols = [SYMBOL]
+        open_orders = {}
+        positions = {}
+
+        @staticmethod
+        def live_value(key):
+            return {
+                "order_replacement_churn_gate_activation_count": 10,
+                "order_replacement_churn_gate_window_minutes": 10.0,
+                "order_replacement_churn_gate_stability_minutes": 2.0,
+                "order_match_tolerance_pct": 0.0002,
+                "execution_delay_seconds": 2.0,
+            }[key]
+
+    bot = Bot()
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 0.0)
+    current = _order(price=100.0)
+    reconciler.prepare_order_churn_evidence(
+        bot, {SYMBOL: [current]}, generation=state.begin_generation()
+    )
+    assert state.symbols_with_history() == {SYMBOL}
+
+    bot.active_symbols = []
+    monkeypatch.setattr(reconciler.time, "monotonic", lambda: 1.0)
+    reconciler.prepare_order_churn_evidence(
+        bot, {}, generation=state.begin_generation()
+    )
+
+    assert state.symbols_with_history() == set()
+    assert state.reset_count == 1
+
+
 def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):
     state = OrderChurnGateState()
 

@@ -790,21 +790,6 @@ async def execute_order_plan(
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
-        before_market_filter = len(to_create_mod)
-        to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
-            bot, to_create_mod
-        )
-        if order_wave is not None:
-            order_wave["skipped_create"] += max(
-                0, before_market_filter - len(to_create_mod)
-            )
-        before_churn_admission = list(to_create_mod)
-        to_create_mod = _apply_order_churn_admission(bot, to_create_mod)
-        if order_wave is not None:
-            order_wave["deferred_create"] += max(
-                0,
-                len(before_churn_admission) - len(to_create_mod),
-            )
         if to_create_mod and configure_creations:
             creation_symbols = sorted({order["symbol"] for order in to_create_mod})
             configured_symbols = await bot.update_exchange_configs(creation_symbols)
@@ -862,6 +847,21 @@ async def execute_order_plan(
                     sorted({order["symbol"] for order in to_create_mod}), limit=12
                 ),
                 len(to_create_mod),
+            )
+        before_market_filter = len(to_create_mod)
+        to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
+            bot, to_create_mod
+        )
+        if order_wave is not None:
+            order_wave["skipped_create"] += max(
+                0, before_market_filter - len(to_create_mod)
+            )
+        before_churn_admission = list(to_create_mod)
+        to_create_mod = _apply_order_churn_admission(bot, to_create_mod)
+        if order_wave is not None:
+            order_wave["deferred_create"] += max(
+                0,
+                len(before_churn_admission) - len(to_create_mod),
             )
         if to_create_mod:
             res = None

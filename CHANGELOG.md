@@ -11,7 +11,7 @@ All notable user-facing changes will be documented in this file.
 - Simplified the live order-replacement churn gate to a recent Rust-ideal
   behavior filter. It now requires sustained monotonic price or quantity drift,
   uses the universal 0.02% order-match tolerance, reuses the existing fresh
-  market snapshot, and performs one create-admission pass before exchange
+  market snapshot, and performs one final create-admission pass after exchange
   configuration writes. Removed account/config/list epochs, the wider tracking
   tolerance, flow-cost optimization, Hyperliquid request-budget reservations,
   and signed-action bookkeeping. Churn evidence remains economy-only: unmatched
@@ -246,20 +246,18 @@ All notable user-facing changes will be documented in this file.
   after sustained create traffic, while market, risk-critical, and near-market orders remain
   allowance-exempt. On audited supported connectors, stale actual orders are removed in managed
   modes, malformed account-critical open-order snapshots block exchange writes, and any
-  cancellation forces full authoritative refresh and Rust replanning before non-panic creation.
+  cancellation requests full authoritative confirmation while deferring ordinary creates in its
+  affected symbol/position scope until Rust replans.
   One-way position-side and native close-only normalization is now deterministic across the
   supported connectors, including OKX long/short mode, KuCoin open orders, and Gate.io's native
   `is_reduce_only` field. Supported hedge-mode adapters no longer substitute client-order metadata
   for a missing exchange-native position side, and untrusted Hyperliquid WebSocket order rows
-  trigger authoritative account-state refresh instead of reconnect churn. Hyperliquid admission
-  reserves required signed configuration actions with creates, and churn distance is rechecked from
-  a forced-fresh market read after configuration before any create call. A downstream churn
-  normalization failure now blocks account-wide non-panic creation when the affected symbol still
-  has actual orders or an authoritative nonzero position, while preserving only the dedicated
-  reduce-only market panic path. Missing or malformed position sides block every exchange write.
-  Hyperliquid carries ambiguous signed-action debits across `userRateLimit` refreshes, preventing
-  overlapping requests from overstating available action headroom, and failed required margin-mode
-  writes now leave dependent creates pending instead of marking the symbol configured.
+  trigger authoritative account-state refresh instead of reconnect churn. Churn distance is
+  rechecked from a forced-fresh market read after configuration before any create call. A churn
+  normalization failure disables only the economy evidence for that symbol; malformed actual-order
+  identity and missing or malformed position sides retain their account-critical exchange-write
+  barriers. Failed required margin-mode writes leave dependent creates pending instead of marking
+  the symbol configured.
 - Protective reducer arbitration now keeps the largest loss-admissible final absolute
   reduction among active panic, TWEL/WEL auto-reduce, and auto-unstuck intents for each position
   instead of using a fixed type priority or summing quantities. If the realized-loss gate blocks
