@@ -20,8 +20,9 @@ All notable user-facing changes will be documented in this file.
   metadata; unresolved remainders are deferred after partial recovery. Missing
   rows remain unavailable and are never fabricated by this recovery path, and
   large deferred ranges remain interval-based rather than expanding into one
-  Python object per minute. Failed persistent-gap retries retain the persistent
-  retry cadence, and forced overlap refreshes split around deferred internal gaps.
+  Python object per minute. Failed recent Hyperliquid persistent-gap retries
+  retain the persistent retry cadence, and forced overlap refreshes split around
+  deferred internal gaps.
 
 - Forager monitor health now distinguishes approved candidates that are
   temporarily unrankable because volume/log-range or required candidate EMA

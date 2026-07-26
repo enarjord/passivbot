@@ -3095,8 +3095,19 @@ class CandlestickManager:
                         gap["added_at"] = now_ms
                 elif increment_retry and retry_due:
                     # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
-                    # without reverting a persistent gap to the ordinary retry cadence.
-                    new_retry_count = previous_retry_count + 1
+                    # without reverting a recent Hyperliquid gap to the ordinary
+                    # retry cadence. Other expired persistent gaps start a fresh
+                    # retry cycle under the existing retention contract.
+                    if previous_retry_count >= _GAP_MAX_RETRIES:
+                        new_retry_count = (
+                            _GAP_MAX_RETRIES
+                            if self._is_recent_hyperliquid_gap(
+                                gap, now_ms=now_ms
+                            )
+                            else 1
+                        )
+                    else:
+                        new_retry_count = previous_retry_count + 1
                     gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
                     gap["last_retry_at"] = now_ms
                     if retry_due:
