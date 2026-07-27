@@ -255,10 +255,13 @@ Gate's `cross_available` is spendable margin, not stable account equity. Resting
 orders move value between `cross_available` and `cross_order_margin`, while open
 positions use `cross_initial_margin`. For multi-currency margin accounts, derive
 the strategy balance from the same authoritative futures-account row as
-`cross_available + cross_order_margin + cross_initial_margin`. Require all three
-finite fields. Do not feed `cross_available` alone to Rust, because ordinary
-order reservation would then resize ideal orders and create reconciliation
-churn. Classic accounts continue using CCXT's quote-currency total.
+`cross_available + cross_order_margin + cross_initial_margin -
+cross_unrealised_pnl`. Require all four finite fields. Removing unrealized PnL
+preserves wallet-balance semantics because Passivbot adds position PnL separately
+when deriving equity. Do not feed `cross_available` alone to Rust, because
+ordinary order reservation would then resize ideal orders and create
+reconciliation churn. Classic accounts continue using CCXT's quote-currency
+total.
 
 ### Per-symbol leverage initializes the position risk limit
 

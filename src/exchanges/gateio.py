@@ -150,7 +150,7 @@ class GateIOBot(CCXTBot):
             # ideal orders on every reconciliation cycle. Reconstruct the
             # stable cross-margin balance from the same authoritative account
             # payload by adding back position and resting-order initial margin.
-            balance = sum(
+            margin_balance = sum(
                 float(primary[key])
                 for key in (
                     "cross_available",
@@ -158,6 +158,10 @@ class GateIOBot(CCXTBot):
                     "cross_order_margin",
                 )
             )
+            # Margin balance includes unrealized cross-position PnL. Passivbot
+            # adds position PnL separately when deriving equity, so remove it
+            # here to retain wallet-balance semantics and avoid double-counting.
+            balance = margin_balance - float(primary["cross_unrealised_pnl"])
             if not math.isfinite(balance):
                 raise ValueError(
                     f"{self.exchange}: fetch_balance response has non-finite "
