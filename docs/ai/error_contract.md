@@ -58,7 +58,11 @@ the previous close is known, overlap repair is scheduled, and the gap is within 
 stale tails must not be persisted or treated as verified zero-volume or zero-range history. Within
 the configured active-tail bound, an explicitly supported provisional in-memory projection may use
 flat zero-volume rows for active strategy inputs while authoritative overlap repair continues.
-Forager ranking quote-volume and log-range inputs retain their narrower carry-forward contract.
+Trailing-extrema reconstruction may use the same projection only for a still-open tail after dense
+post-fill coverage; it must not bridge a missing reset boundary or internal minute, and the
+projected rows must be discarded after that read so delayed authoritative highs and lows replace
+them immediately. Forager ranking quote-volume and log-range inputs retain their narrower
+carry-forward contract.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.

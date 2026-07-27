@@ -1569,6 +1569,10 @@ class Passivbot:
         self._trailing_unavailable_warning_signature = ()
         self._trailing_unavailable_warning_last_ms = 0
         self._trailing_unavailable_warning_interval_ms = 5 * 60 * 1000
+        self._trailing_tail_projection_counts: dict[tuple[str, str], int] = {}
+        self._orchestrator_trailing_projection_contexts: dict[
+            str, dict[str, dict]
+        ] = {}
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -8144,6 +8148,11 @@ class Passivbot:
                         if no_basis
                         else int(report.get("last_cached_age_ms") or 0)
                     ),
+                    "last_cached_ts": (
+                        None
+                        if last_cached_ts is None
+                        else int(last_cached_ts)
+                    ),
                     "missing_candles": missing_candles,
                     "tail_gap_candles": tail_gap_candles,
                     "tail_only": bool(report.get("open_tail_gap"))
@@ -8164,6 +8173,7 @@ class Passivbot:
                     "tail_only": False,
                     "leading_gap_only": False,
                     "no_basis": True,
+                    "last_cached_ts": None,
                 }
         age_ms = Passivbot._candle_staleness_ms(self, symbol, now_ms=now)
         return {
@@ -8174,6 +8184,7 @@ class Passivbot:
             "tail_only": age_ms > 0,
             "leading_gap_only": False,
             "no_basis": age_ms >= now,
+            "last_cached_ts": None,
         }
 
     def _rank_symbols_by_candle_staleness(
@@ -8858,34 +8869,89 @@ class Passivbot:
 
     def _completed_trailing_candle_subset(
         self, arr: np.ndarray, changed_ts: int
-    ) -> np.ndarray | None:
-        """Return dense finalized 1m candles after a fill, or None if incomplete.
+    ) -> tuple[np.ndarray | None, dict | None]:
+        """Return dense finalized post-fill candles and optional tail projection context.
 
         CandlestickManager may synthesize only confirmed internal no-trade gaps as
         zero-volume candles. Those dense rows match backtest continuity and are
-        accepted here; missing leading minutes or an open tail are not.
+        accepted here. A still-open tail may be projected as non-persistent flat
+        zero-volume rows within the same bounded grace period used by active EMA
+        inputs; missing leading or internal minutes remain unavailable.
         """
         now_ms = self._completed_candle_health_now_ms()
         latest_finalized = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         first_eligible = (int(changed_ts) // ONE_MIN_MS + 1) * ONE_MIN_MS
         if latest_finalized < first_eligible:
-            return None
+            return None, None
         subset = arr[
             (arr["ts"] >= first_eligible) & (arr["ts"] <= latest_finalized)
         ]
         if subset.size == 0:
-            return None
+            return None, None
         subset = np.sort(subset, order="ts")
         timestamps = subset["ts"].astype(np.int64)
-        expected_count = (latest_finalized - first_eligible) // ONE_MIN_MS + 1
+        newest_ts = int(timestamps[-1])
+        expected_observed_count = (newest_ts - first_eligible) // ONE_MIN_MS + 1
         if (
-            timestamps.size != expected_count
+            timestamps.size != expected_observed_count
             or int(timestamps[0]) != first_eligible
-            or int(timestamps[-1]) != latest_finalized
             or (timestamps.size > 1 and np.any(np.diff(timestamps) != ONE_MIN_MS))
         ):
-            return None
-        return subset
+            return None, None
+        projection_context = None
+        if newest_ts < latest_finalized:
+            try:
+                max_tail_minutes = float(
+                    get_optional_live_value(
+                        self.config,
+                        "max_active_candle_tail_gap_minutes",
+                        10.0,
+                    )
+                )
+            except Exception:
+                max_tail_minutes = 10.0
+            if (
+                not math.isfinite(max_tail_minutes)
+                or max_tail_minutes <= 0.0
+                or latest_finalized - newest_ts
+                > int(max_tail_minutes * ONE_MIN_MS)
+            ):
+                return None, None
+            previous_close = float(subset[-1]["c"])
+            if not math.isfinite(previous_close) or previous_close <= 0.0:
+                return None, None
+            projected = np.array(
+                [
+                    (
+                        ts,
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        0.0,
+                    )
+                    for ts in range(
+                        newest_ts + ONE_MIN_MS,
+                        latest_finalized + ONE_MIN_MS,
+                        ONE_MIN_MS,
+                    )
+                ],
+                dtype=CANDLE_DTYPE,
+            )
+            if projected.size:
+                subset = np.concatenate([subset, projected])
+                projection_context = {
+                    "timeframe": "1m",
+                    "consumer": "trailing_extrema",
+                    "latest_expected_ts": int(latest_finalized),
+                    "last_cached_ts": int(newest_ts),
+                    "tail_gap_age_ms": int(latest_finalized - newest_ts),
+                    "tail_gap_candles": int(projected.size),
+                    "missing_candles": int(projected.size),
+                    "max_tail_gap_ms": int(max_tail_minutes * ONE_MIN_MS),
+                    "reason": "open_tail_gap_projection",
+                }
+        return subset, projection_context
 
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
@@ -8924,6 +8990,11 @@ class Passivbot:
         self._orchestrator_trailing_unavailable_symbols = set()
         self._orchestrator_trailing_unavailable_reasons = {}
         self._orchestrator_trailing_unavailable_psides = {}
+        previous_projection_counts = dict(
+            getattr(self, "_trailing_tail_projection_counts", {}) or {}
+        )
+        current_projection_counts: dict[tuple[str, str], int] = {}
+        projection_contexts: dict[str, dict[str, dict]] = defaultdict(dict)
         position_change_anchors = self._get_last_position_change_anchors()
         last_position_changes = {
             symbol: {
@@ -9133,7 +9204,11 @@ class Passivbot:
             for pside, changed_ts in last_position_changes[symbol].items():
                 if pside not in required_trailing.get(symbol, set()):
                     continue
-                subset = self._completed_trailing_candle_subset(arr, int(changed_ts))
+                subset, projection_context = (
+                    self._completed_trailing_candle_subset(
+                        arr, int(changed_ts)
+                    )
+                )
                 if subset is None:
                     unavailable_reasons[
                         "incomplete_trailing_candle_coverage"
@@ -9145,6 +9220,34 @@ class Passivbot:
                         subset["h"], subset["l"], subset["c"]
                     )
                     self.trailing_prices[symbol][pside] = bundle
+                    if projection_context is not None:
+                        projection_key = (symbol, pside)
+                        consecutive_uses = (
+                            int(
+                                previous_projection_counts.get(
+                                    projection_key, 0
+                                )
+                            )
+                            + 1
+                        )
+                        current_projection_counts[projection_key] = (
+                            consecutive_uses
+                        )
+                        projection_context = {
+                            **projection_context,
+                            "consecutive_uses": consecutive_uses,
+                        }
+                        projection_contexts[symbol][pside] = dict(
+                            projection_context
+                        )
+                        Passivbot._emit_candle_tail_projected_event(
+                            self,
+                            symbol=symbol,
+                            pside=pside,
+                            context=projection_context,
+                            reason_code="trailing_open_tail_projection",
+                            status="degraded",
+                        )
                 except Exception as e:
                     unavailable_reasons["bundle_compute_failed"].add(symbol)
                     unavailable_psides[symbol].add(pside)
@@ -9243,6 +9346,14 @@ class Passivbot:
             symbol: sorted(psides)
             for symbol, psides in sorted(unavailable_psides.items())
             if psides
+        }
+        self._trailing_tail_projection_counts = current_projection_counts
+        self._orchestrator_trailing_projection_contexts = {
+            symbol: {
+                pside: dict(context)
+                for pside, context in sorted(pside_contexts.items())
+            }
+            for symbol, pside_contexts in sorted(projection_contexts.items())
         }
 
     def symbol_is_eligible(self, symbol):
@@ -20064,7 +20175,7 @@ class Passivbot:
         except Exception:
             pass
 
-        for idx, (_priority, sym, timeframe, required_candles, _health) in enumerate(
+        for idx, (_priority, sym, timeframe, required_candles, pre_health) in enumerate(
             to_refresh, start=1
         ):
             if Passivbot._shutdown_requested(self):
@@ -20095,7 +20206,11 @@ class Passivbot:
                     sym,
                     start_ts=start_ts,
                     end_ts=end_ts,
-                    max_age_ms=0,
+                    # Background candidate refresh is best-effort. A 1ms TTL
+                    # still forces an ordinary stale read while allowing a
+                    # successful partial sparse response to reach gap repair
+                    # instead of aborting at a terminal empty page.
+                    max_age_ms=1,
                     timeframe=timeframe,
                     strict=False,
                     max_lookback_candles=int(required_candles),
@@ -20110,7 +20225,42 @@ class Passivbot:
                     )
                 else:
                     refreshed = await candle_task
-                surface_failure_retry_after.pop((sym, timeframe), None)
+                post_health = Passivbot._candidate_candle_surface_health(
+                    self,
+                    sym,
+                    timeframe,
+                    required_candles,
+                    now_ms=utc_ms(),
+                )
+                pre_last = pre_health.get("last_cached_ts")
+                post_last = post_health.get("last_cached_ts")
+                no_progress = (
+                    post_last is None
+                    or (
+                        pre_last is not None
+                        and int(post_last) <= int(pre_last)
+                    )
+                )
+                empty_or_unchanged_tail = bool(
+                    not post_health.get("coverage_ok")
+                    and no_progress
+                    and (
+                        post_health.get("no_basis")
+                        or post_health.get("tail_only")
+                    )
+                )
+                if empty_or_unchanged_tail:
+                    surface_failure_retry_after[(sym, timeframe)] = int(
+                        utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
+                    )
+                    logging.debug(
+                        "[candle] forager refresh made no tail progress | "
+                        "symbol=%s timeframe=%s action=defer_surface_retry",
+                        Passivbot._log_symbol(sym),
+                        timeframe,
+                    )
+                else:
+                    surface_failure_retry_after.pop((sym, timeframe), None)
                 self._forager_surface_failure_retry_after_ms = (
                     surface_failure_retry_after
                 )
@@ -20122,13 +20272,6 @@ class Passivbot:
                             refreshed_rows = len(refreshed)
                         except (TypeError, ValueError):
                             refreshed_rows = 0
-                    post_health = Passivbot._candidate_candle_surface_health(
-                        self,
-                        sym,
-                        timeframe,
-                        required_candles,
-                        now_ms=utc_ms(),
-                    )
                     success_key = (sym, timeframe, int(required_candles))
                     if refreshed_rows > 0 and bool(
                         post_health.get("leading_gap_only")
@@ -20197,11 +20340,20 @@ class Passivbot:
                     self._forager_surface_failure_retry_after_ms = (
                         surface_failure_retry_after
                     )
-                logging.error(
-                    "error refreshing forager candles for %s | error_type=%s",
-                    Passivbot._log_symbol(sym),
-                    error_type,
-                )
+                    logging.debug(
+                        "[candle] forager refresh reached terminal empty page | "
+                        "symbol=%s timeframe=%s action=defer_surface_retry "
+                        "error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        timeframe,
+                        error_type,
+                    )
+                else:
+                    logging.error(
+                        "error refreshing forager candles for %s | error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        error_type,
+                    )
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)
             if paused_by_cap:

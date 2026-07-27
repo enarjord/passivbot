@@ -162,6 +162,12 @@ Handling:
    accepted page bounds, or across the remaining requested range when fewer than two accepted
    timestamps exist. Eviction recomputes the cached timeframe's derived index bounds. Do not
    synthesize leading, trailing, failed-fetch, oversized, or unproven between-page gaps.
+4. For an unresolved 1m gap already bounded by cached real rows, retry with both boundary rows in
+   the requested range. Promote the exact omission to verified no-trade continuity only if one
+   successful raw payload returns both boundaries and no row inside the gap. This contextual proof
+   may repair an older persistent `fetch_failed` gap. Empty, one-sided, malformed, or partially
+   recovered responses remain unavailable, preserve persistent gap status, and restart the
+   persistent retry cooldown rather than issuing another contextual request on every candle read.
 
 ## Bitget Futures
 
@@ -245,6 +251,20 @@ as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
 non-string/non-integer identifiers before conversion; never cache a placeholder
 such as `"None"` as durable subscription state.
 
+### Multi-currency balance semantics
+
+Gate's `cross_available` is spendable margin, not stable account equity. Resting
+orders move value between `cross_available` and `cross_order_margin`, while open
+positions use `cross_initial_margin`. For multi-currency margin accounts, derive
+the strategy balance from the same authoritative futures-account row as
+`cross_available + cross_order_margin + cross_initial_margin -
+cross_unrealised_pnl`. Require all four finite fields. Removing unrealized PnL
+preserves wallet-balance semantics because Passivbot adds position PnL separately
+when deriving equity. Do not feed `cross_available` alone to Rust, because
+ordinary order reservation would then resize ideal orders and create
+reconciliation churn. Classic accounts continue using CCXT's quote-currency
+total.
+
 ### Per-symbol leverage initializes the position risk limit
 
 Problem:
@@ -312,6 +332,18 @@ authoritative flat candle with zero volume for that same timestamp. Passivbot
 must not synthesize or permanently classify the initially absent row. Recent
 tail gaps use time-spaced retries, remain unavailable meanwhile, and are removed
 from `known_gaps` as soon as the authoritative row is persisted.
+
+### Candle retention and held trailing positions
+
+Hyperliquid's `candleSnapshot` endpoint exposes only the most recent 5,000
+candles. A trailing position whose latest fill predates that 1m window therefore
+cannot reconstruct its extrema from a fresh host. Preserve and transfer the
+existing 1m candle cache when migrating such a live position. Passivbot must
+keep trailing state unavailable if the exact range from the first whole minute
+after the fill is not locally present; wider-timeframe candles or an
+earliest-available reset are not parity-safe substitutes. Once that range is
+dense, only the bounded non-persistent open-tail projection described in the
+candlestick-manager contract may bridge delayed current candles.
 
 ## WEEX Futures
 

@@ -3172,6 +3172,8 @@ def _emit_candle_tail_projected_event_unchecked(
     symbol: str,
     context: dict[str, Any] | None,
     reason_code: str = ReasonCodes.OPEN_TAIL_PROJECTION,
+    pside: str | None = None,
+    status: str = "recovered",
 ) -> None:
     ctx = dict(context or {})
     data: dict[str, Any] = {"timeframe": str(ctx.get("timeframe") or "1m")}
@@ -3182,10 +3184,14 @@ def _emit_candle_tail_projected_event_unchecked(
         "tail_gap_candles",
         "missing_candles",
         "max_tail_gap_ms",
+        "consecutive_uses",
     ):
         value = _safe_int(ctx.get(key))
         if value is not None:
             data[key] = value
+    consumer = ctx.get("consumer")
+    if consumer is not None:
+        data["consumer"] = str(consumer)
     reason = ctx.get("reason")
     if reason is not None:
         data["projection_reason"] = str(reason)
@@ -3197,10 +3203,15 @@ def _emit_candle_tail_projected_event_unchecked(
         EventTypes.CANDLE_TAIL_PROJECTED,
         level="debug",
         component="candle.tail_projection",
-        tags=(EventTags.CANDLE, EventTags.TAIL, EventTags.EMA),
+        tags=(
+            (EventTags.CANDLE, EventTags.TAIL, EventTags.TRAILING)
+            if data.get("consumer") == "trailing_extrema"
+            else (EventTags.CANDLE, EventTags.TAIL, EventTags.EMA)
+        ),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol),
-        status="recovered",
+        pside=str(pside) if pside is not None else None,
+        status=str(status),
         reason_code=str(reason_code),
         data=data,
     )

@@ -58,6 +58,13 @@
    bounds alone must not make a short residual gap unavailable.
    The open-tail age bound applies uniformly, including stock perps; venue category must not create
    an unbounded synthetic tail exception.
+   Trailing-extrema reconstruction may append the same temporary flat rows only after proving dense
+   coverage from the first whole minute following the latest fill through the last cached candle.
+   A missing reset boundary, internal minute, or tail beyond the bound remains unavailable. The
+   temporary rows never enter candle shards or manager caches, so a delayed real high or low
+   replaces the projection on the next cycle. Each trailing consumer records structured projection
+   context by symbol and position side, including the authoritative and projected bounds, projected
+   candle count, and consecutive-use count; authoritative recovery clears that runtime context.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
@@ -81,9 +88,11 @@
    retry is due or the current request disallows remote fetching, and must not become synthetic
    zero-volume continuity candles. Day-coalesced historical fetches split around deferred ranges
    rather than contacting the venue for them. Forced 1m and native higher-timeframe candidate
-   refreshes treat a terminal empty page after partial pagination as a
-   failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
-   already covers the requested end is complete, not terminal-empty. Partial authoritative
+   refreshes use best-effort stale reads so a successful partial sparse response can continue into
+   gap repair. A terminal empty page, or a successful refresh which leaves an empty or unchanged
+   open tail, applies a bounded per-surface retry delay; these expected background outcomes are
+   DEBUG diagnostics, while required active reads and unexpected refresh failures remain loud. An
+   overlap page that already covers the requested end is complete, not terminal-empty. Partial authoritative
    recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
    compact timestamp intervals even for large historical gaps.
    Live EMA reads are the deliberate exception for gaps already bounded by later authoritative
@@ -184,10 +193,12 @@
     second attempt in the same request. Historical pagination
     flushes deferred partial-page index writes before propagating terminal-empty
     failure.
-    Repeated terminal empty-page failures for a forager candle surface
-    use a bounded in-memory retry delay without converting missing data into
-    candles or hiding the first error. A partial authoritative response similarly
-    defers and excludes its unresolved remainder until the next eligible retry.
+    Repeated terminal empty-page failures and successful refreshes which make no
+    open-tail progress for a forager candle surface use a bounded in-memory retry
+    delay without converting missing data into candles. Expected background
+    sparse-tail outcomes are DEBUG diagnostics; unexpected failures remain loud.
+    A partial authoritative response similarly defers and excludes its unresolved
+    remainder until the next eligible retry.
 13. Open-tail projection requests only the metrics its caller may consume.
     Forager projection requests close EMAs only; quote-volume and log-range
     ranking inputs continue to come from current or bounded cached real candles.
@@ -198,7 +209,7 @@
     a full output series. Full EMA series remain available to callers that need
     every intermediate value. Live provisional internal-gap tolerance is separate from the
     simulation-only backtest gap tolerance.
-13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
+14. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
     candles in the same successful payload, absent from that raw payload, and no wider than the
     fixed 120-minute live connector policy are materialized as flat zero-volume candles before
     persistence. The simulation-only `backtest.gap_tolerance_ohlcvs_minutes` setting remains owned
@@ -212,8 +223,12 @@
     always overwrites a persisted synthetic bucket. If a later payload contains a rejected real row
     at a cached sparse-placeholder timestamp, the placeholder is evicted so the bucket becomes
     unavailable and the timeframe index bounds are recomputed from the remaining shards. Leading,
-    trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. The
-    established 1m path retains its verified-gap tracking and standardization.
+    trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. For 1m
+    gaps initially classified as `auto_detected` or `fetch_failed`, a targeted retry may expand to
+    the nearest cached real candle on each side. Only when one successful raw payload returns both
+    boundaries while omitting the intervening timestamps may that exact range be promoted to
+    verified `no_trades` continuity. Empty, one-sided, terminal, or rejected payloads do not prove
+    the gap.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
