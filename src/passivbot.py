@@ -19402,7 +19402,12 @@ class Passivbot:
     def _forager_target_staleness_ms(
         self, n_symbols: int, max_calls_per_minute: int
     ) -> int:
-        """Compute max acceptable staleness for forager candidates based on refresh budget."""
+        """Compute max acceptable staleness for forager candidates.
+
+        The refresh-budget cadence may lengthen this window, but must not shorten the
+        default active-tail grace period.  An explicit forager staleness cap remains an
+        operator override and may intentionally select a shorter window.
+        """
         try:
             n_syms = int(n_symbols)
         except Exception:
@@ -19411,10 +19416,24 @@ class Passivbot:
             max_calls = int(max_calls_per_minute)
         except Exception:
             max_calls = 0
+        configured_floor = get_optional_live_value(
+            self.config, "max_active_candle_tail_gap_minutes", 10.0
+        )
+        try:
+            floor_minutes = float(configured_floor)
+        except Exception:
+            floor_minutes = 10.0
+        if not math.isfinite(floor_minutes) or floor_minutes <= 0.0:
+            floor_minutes = 10.0
+        floor_ms = max(60_000, int(floor_minutes * 60_000))
         if n_syms <= 0 or max_calls <= 0:
-            return int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-        minutes = max(1.0, float(n_syms) / float(max_calls))
-        target_ms = int(minutes * 60_000)
+            target_ms = max(
+                floor_ms,
+                int(getattr(self, "inactive_coin_candle_ttl_ms", floor_ms)),
+            )
+        else:
+            minutes = max(1.0, float(n_syms) / float(max_calls))
+            target_ms = max(floor_ms, int(minutes * 60_000))
         configured_cap = get_optional_live_value(
             self.config, "max_forager_candle_staleness_minutes", None
         )

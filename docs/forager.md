@@ -146,6 +146,9 @@ forager ranking:
 - The candidate universe should be refreshed oldest-first in the background.
 - Candidates inside `live.max_forager_candle_staleness_minutes` remain rankable even if their
   latest completed candle is stale.
+- When that setting is `null`, the budget-derived window is never shorter than
+  `live.max_active_candle_tail_gap_minutes` (10 minutes by default). An explicit positive forager
+  staleness cap may intentionally shorten the window.
 - Close EMA readiness may use bounded flat-close/no-trade projection for the stale tail.
 - Quote-volume and log-range EMA inputs should use the latest known EMA value without appending
   synthetic zero-volume or zero-range tail candles.

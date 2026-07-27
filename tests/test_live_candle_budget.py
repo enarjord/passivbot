@@ -2182,13 +2182,53 @@ def test_forager_target_staleness_obeys_configured_cap():
     import passivbot as pb_mod
 
     class FakeBot:
-        config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": 10,
+            }
+        }
         inactive_coin_candle_ttl_ms = 600_000
 
     bot = FakeBot()
     target_ms = pb_mod.Passivbot._forager_target_staleness_ms(bot, 100, 2)
 
     assert target_ms == 10 * 60_000
+
+
+def test_forager_target_staleness_does_not_derive_below_active_tail_grace():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": None,
+            }
+        }
+        inactive_coin_candle_ttl_ms = 600_000
+
+    bot = FakeBot()
+
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 18, 24) == 10 * 60_000
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 100, 2) == 50 * 60_000
+
+
+def test_forager_target_staleness_explicit_cap_may_shorten_active_tail_grace():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": 5,
+            }
+        }
+        inactive_coin_candle_ttl_ms = 600_000
+
+    bot = FakeBot()
+
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 18, 24) == 5 * 60_000
 
 
 def test_required_candle_health_window_failures_are_bounded_and_keep_other_side_windows(caplog):

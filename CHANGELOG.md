@@ -17,7 +17,9 @@ All notable user-facing changes will be documented in this file.
   strict readiness for the fixed side, and a dynamically managed resting entry is still cancelled
   if close, strategy, or ranking EMA degradation changes its side to the configured manual stop
   mode. Failed or ambiguous cancellation attempts are retried without weakening ordinary manual
-  ownership.
+  ownership. Budget-derived forager ranking staleness also retains the active-tail grace period
+  (10 minutes by default), so a large refresh budget cannot make flat candidates nontradable after
+  only one or two missing completed candles.
 
 - Supported CCXT private order streams now isolate malformed semantic rows from websocket
   transport health: unnormalizable rows are discarded with a bounded warning and force an

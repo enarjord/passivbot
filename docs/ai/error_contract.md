@@ -69,6 +69,9 @@ Flat-symbol forager candidates may remain rankable within
 `live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
 projection. Quote-volume and log-range ranking inputs carry forward their latest known EMA with
 age/source metadata; they do not receive invented zero tails.
+When the forager setting is unset, its budget-derived acceptable age must not be shorter than
+`live.max_active_candle_tail_gap_minutes`; the refresh budget must not silently reduce the active
+tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
 unavailable for new entries. Do not silently rank only the subset that happened to refresh first.
