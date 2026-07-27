@@ -102,8 +102,12 @@
    even while one of its entry orders is resting. The unavailable symbol is sent to Rust as
    nontradable for that planning cycle, which removes its ideal orders and lets normal
    reconciliation cancel the resting entry. An open order alone must not promote a flat,
-   dynamically selected symbol into the account-fatal required-input path. Held positions and
-   explicitly configured normal modes retain their stricter readiness contract.
+   dynamically selected symbol into the account-fatal required-input path. This degradation is
+   side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
+   sides retain their strict readiness contract. If the unavailable result changes the dynamically
+   managed side to the configured manual stop mode, reconciliation preserves only that cycle's
+   proven forager entry cancellation. It does not weaken manual ownership for other sides, closes,
+   or creations. Held positions retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX

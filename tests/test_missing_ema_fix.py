@@ -741,10 +741,51 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     assert bot._orchestrator_ema_unavailable_reasons == {
         "flat_active_required_ema_unavailable": {symbol}
     }
+    assert bot._orchestrator_ema_entry_cancellation_pairs == set()
     assert bot._forager_rank_feature_unavailable_by_side == {
         "long": {symbol},
         "short": {symbol},
     }
+
+
+@pytest.mark.asyncio
+async def test_mixed_forager_fixed_normal_side_missing_ema_remains_strict():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "normal"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "position_side": "short",
+                "side": "sell",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    bot.is_forager_mode = lambda pside=None: pside in {None, "long"}
+    mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
+
+    with pytest.raises(
+        RuntimeError, match=r"missing required close EMA for BTC/USDT:USDT"
+    ):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], mode_overrides
+        )
+
+    assert bot._orchestrator_ema_entry_cancellation_pairs == set()
 
 
 @pytest.mark.asyncio
@@ -798,6 +839,15 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
     assert bot._orchestrator_ema_unavailable_reasons == {
         "flat_active_required_ema_unavailable": {symbol}
     }
+    assert bot._orchestrator_ema_entry_cancellation_pairs == {(symbol, "long")}
+
+    from live import reconciler
+
+    bot.PB_modes["long"][symbol] = "manual"
+    resting_entry = bot.open_orders[symbol][0]
+    assert reconciler.apply_mode_filters(
+        bot, symbol, [resting_entry], []
+    ) == ([resting_entry], [])
 
 
 @pytest.mark.asyncio

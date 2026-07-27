@@ -2134,10 +2134,24 @@ def apply_mode_filters(
     to_create: list[dict],
 ) -> tuple[list[dict], list[dict]]:
     """Apply mode-specific cancel/create filtering rules."""
+    ema_entry_cancellation_pairs = set(
+        getattr(bot, "_orchestrator_ema_entry_cancellation_pairs", set()) or set()
+    )
     for pside in ["long", "short"]:
         mode = bot.PB_modes[pside].get(symbol)
         if mode == "manual":
-            to_cancel = [x for x in to_cancel if x["position_side"] != pside]
+            if (symbol, pside) in ema_entry_cancellation_pairs:
+                # This pair was dynamically managed by forager when its required
+                # EMA became unavailable. Preserve only the already-planned
+                # entry cancellation; do not broaden manual mode to closes or
+                # creations belonging to genuinely manual sides.
+                to_cancel = [
+                    x
+                    for x in to_cancel
+                    if x["position_side"] != pside or not x["reduce_only"]
+                ]
+            else:
+                to_cancel = [x for x in to_cancel if x["position_side"] != pside]
             to_create = [x for x in to_create if x["position_side"] != pside]
         elif mode == "tp_only":
             to_cancel = [

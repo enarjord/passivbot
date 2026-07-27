@@ -10,7 +10,9 @@ All notable user-facing changes will be documented in this file.
   configured normal modes retain their strict required-input behavior. Bounded open-ended 1m gaps
   continue using provisional in-memory EMA projection even when retry metadata records the missing
   tail, so symbols remain tradable through the configured active-tail grace period and recover
-  immediately when authoritative candles arrive.
+  immediately when authoritative candles arrive. Mixed fixed/forager sides retain strict readiness
+  for the fixed side, and a dynamically managed resting entry is still cancelled if degradation
+  changes its side to the configured manual stop mode without weakening ordinary manual ownership.
 
 - Supported CCXT private order streams now isolate malformed semantic rows from websocket
   transport health: unnormalizable rows are discarded with a bounded warning and force an

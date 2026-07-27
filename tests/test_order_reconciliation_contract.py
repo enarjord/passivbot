@@ -978,6 +978,33 @@ def test_mode_scope_contract_is_management_not_order_ownership():
         ) == ([entry, close], [entry, close])
 
 
+def test_manual_stop_preserves_only_forager_ema_entry_cancellation():
+    symbol = "BTC/USDT:USDT"
+    entry = {
+        "symbol": symbol,
+        "position_side": "long",
+        "reduce_only": False,
+    }
+    close = {
+        "symbol": symbol,
+        "position_side": "long",
+        "reduce_only": True,
+    }
+
+    class Bot:
+        PB_modes = {"long": {symbol: "manual"}, "short": {}}
+        _orchestrator_ema_entry_cancellation_pairs = {(symbol, "long")}
+
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry, close], [entry, close]
+    ) == ([entry], [])
+
+    Bot._orchestrator_ema_entry_cancellation_pairs = {(symbol, "short")}
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry, close], [entry, close]
+    ) == ([], [])
+
+
 def _normalized_order(price: float) -> dict:
     return {
         "symbol": "BTC/USDT:USDT",

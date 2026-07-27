@@ -16758,6 +16758,7 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
+        self._orchestrator_ema_entry_cancellation_pairs = set()
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17168,8 +17169,9 @@ class Passivbot:
                 parts.append("projection_ctx=no")
             return " ".join(parts)
 
-        def has_normal_planning_mode(symbol: str) -> bool:
-            """Return True when the current Rust payload may place entries for symbol."""
+        def normal_planning_psides(symbol: str) -> set[str]:
+            """Return sides whose current Rust payload may place entries for symbol."""
+            normal_psides: set[str] = set()
             pb_modes = getattr(self, "PB_modes", {})
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
@@ -17180,7 +17182,7 @@ class Passivbot:
                         )
                         == "normal"
                     ):
-                        return True
+                        normal_psides.add(pside)
                     continue
                 pside_modes = (
                     pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
@@ -17194,7 +17196,7 @@ class Passivbot:
                         )
                         == "normal"
                     ):
-                        return True
+                        normal_psides.add(pside)
                     continue
                 try:
                     entries_blocked = Passivbot._pside_blocks_new_entries(self, pside)
@@ -17203,43 +17205,30 @@ class Passivbot:
                 if not entries_blocked and symbol in set(
                     getattr(self, "active_symbols", []) or []
                 ):
-                    return True
-            return False
+                    normal_psides.add(pside)
+            return normal_psides
+
+        def has_normal_planning_mode(symbol: str) -> bool:
+            return bool(normal_planning_psides(symbol))
+
+        def dynamic_forager_normal_psides(symbol: str) -> set[str]:
+            dynamic_psides: set[str] = set()
+            for pside in normal_planning_psides(symbol):
+                if (modes.get(pside, {}) or {}).get(symbol) is not None:
+                    continue
+                try:
+                    if bool(is_forager_mode(pside)):
+                        dynamic_psides.add(pside)
+                except Exception:
+                    continue
+            return dynamic_psides
 
         def has_explicit_normal_planning_mode(symbol: str) -> bool:
-            """Return True when config/runtime state explicitly selected normal."""
-            for pside in ("long", "short"):
-                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
-                if explicit_mode is not None:
-                    if (
-                        Passivbot._mode_override_to_orchestrator_mode(
-                            self, explicit_mode
-                        )
-                        == "normal"
-                    ):
-                        return True
-                    continue
-            if bool(is_forager_mode()):
-                return False
-            pb_modes = getattr(self, "PB_modes", {})
-            for pside in ("long", "short"):
-                pside_modes = (
-                    pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
-                )
-                if not isinstance(pside_modes, dict) or symbol not in pside_modes:
-                    continue
-                if (
-                    Passivbot._pb_mode_to_orchestrator_mode(
-                        self, pside_modes.get(symbol)
-                    )
-                    == "normal"
-                ):
-                    return True
-            return False
+            """Return True when any normal side is not dynamically forager-selected."""
+            normal_psides = normal_planning_psides(symbol)
+            return bool(normal_psides - dynamic_forager_normal_psides(symbol))
 
         def flat_forager_default_normal_symbol(symbol: str) -> bool:
-            if not bool(is_forager_mode()):
-                return False
             # A resting order must not promote a flat, forager-selected symbol
             # into the account-fatal required-input path. Marking it
             # nontradable lets Rust emit no ideal order, so normal
@@ -17249,7 +17238,10 @@ class Passivbot:
                 return False
             if has_explicit_normal_planning_mode(symbol):
                 return False
-            return symbol in set(getattr(self, "active_symbols", []) or [])
+            return bool(
+                symbol in set(getattr(self, "active_symbols", []) or [])
+                and dynamic_forager_normal_psides(symbol)
+            )
 
         forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
         forager_projection_max_age_by_symbol: dict[str, int] = {}
@@ -18480,6 +18472,19 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
+        for symbol in self._orchestrator_ema_unavailable_reasons.get(
+            "flat_active_required_ema_unavailable", set()
+        ):
+            managed_psides = dynamic_forager_normal_psides(symbol)
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                pside = str(order.get("position_side") or "")
+                if (
+                    pside in managed_psides
+                    and not bool(order.get("reduce_only", order.get("reduceOnly", False)))
+                ):
+                    self._orchestrator_ema_entry_cancellation_pairs.add(
+                        (str(symbol), pside)
+                    )
         self._orchestrator_ema_bundle_symbols = set(symbols)
         self._orchestrator_forager_m1_log_range_emas = {
             symbol: dict(values)
