@@ -2859,7 +2859,6 @@ async def test_restart_accepts_matching_fill_before_bybit_position_update_time_a
     "rows",
     [
         [(240_000, 100.0, 102.0, 98.0, 101.0, 1.0)],
-        [(180_000, 100.0, 101.0, 99.0, 100.0, 1.0)],
     ],
 )
 async def test_trailing_extrema_reject_incomplete_post_fill_coverage(rows):
@@ -2876,6 +2875,72 @@ async def test_trailing_extrema_reject_incomplete_post_fill_coverage(rows):
         return _make_candles(rows)
 
     bot.cm.get_candles = partial_candles
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["incomplete_trailing_candle_coverage"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_trailing_extrema_projects_bounded_open_tail_without_persisting():
+    cfg = _dummy_config()
+    cfg["live"]["max_active_candle_tail_gap_minutes"] = 10
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 301_000
+    returned = _make_candles(
+        [(180_000, 100.0, 101.0, 99.0, 100.0, 1.0)]
+    )
+
+    async def candles_with_open_tail(*args, **kwargs):
+        return returned
+
+    bot.cm.get_candles = candles_with_open_tail
+    await bot.update_trailing_data()
+
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        101.0
+    )
+    assert list(returned["ts"]) == [180_000]
+
+    # A delayed real candle replaces the prior projection on the next read.
+    returned = _make_candles(
+        [
+            (180_000, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (240_000, 100.0, 120.0, 98.0, 110.0, 2.0),
+        ]
+    )
+    await bot.update_trailing_data()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(
+        120.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_trailing_extrema_rejects_open_tail_beyond_active_bound():
+    cfg = _dummy_config()
+    cfg["live"]["max_active_candle_tail_gap_minutes"] = 1
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 421_000
+
+    async def stale_candles(*args, **kwargs):
+        return _make_candles(
+            [(180_000, 100.0, 101.0, 99.0, 100.0, 1.0)]
+        )
+
+    bot.cm.get_candles = stale_candles
     await bot.update_trailing_data()
 
     assert bot.trailing_prices[symbol]["long"] == _trailing_default()

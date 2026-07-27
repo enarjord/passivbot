@@ -162,6 +162,10 @@ Handling:
    accepted page bounds, or across the remaining requested range when fewer than two accepted
    timestamps exist. Eviction recomputes the cached timeframe's derived index bounds. Do not
    synthesize leading, trailing, failed-fetch, oversized, or unproven between-page gaps.
+4. For an unresolved 1m gap already bounded by cached real rows, retry with both boundary rows in
+   the requested range. Promote the exact omission to verified no-trade continuity only if one
+   successful raw payload returns both boundaries and no row inside the gap. This contextual proof
+   may repair an older persistent `fetch_failed` gap; empty or one-sided retries remain unavailable.
 
 ## Bitget Futures
 
@@ -244,6 +248,17 @@ Normalize Gate's numeric REST account `user` value to a string before assigning 
 as CCXT Pro's private futures subscription UID. Reject missing, null, empty, or
 non-string/non-integer identifiers before conversion; never cache a placeholder
 such as `"None"` as durable subscription state.
+
+### Multi-currency balance semantics
+
+Gate's `cross_available` is spendable margin, not stable account equity. Resting
+orders move value between `cross_available` and `cross_order_margin`, while open
+positions use `cross_initial_margin`. For multi-currency margin accounts, derive
+the strategy balance from the same authoritative futures-account row as
+`cross_available + cross_order_margin + cross_initial_margin`. Require all three
+finite fields. Do not feed `cross_available` alone to Rust, because ordinary
+order reservation would then resize ideal orders and create reconciliation
+churn. Classic accounts continue using CCXT's quote-currency total.
 
 ### Per-symbol leverage initializes the position risk limit
 

@@ -19,6 +19,7 @@ from candlestick_manager import (
     CANDLE_DTYPE,
     GAP_REASON_FETCH_FAILED,
     GAP_REASON_NO_ARCHIVE,
+    GAP_REASON_NO_TRADES,
     ONE_MIN_MS,
     OhlcvFetchError,
     OhlcvTerminalEmptyPage,
@@ -4224,6 +4225,71 @@ def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
     assert between["reason"] == "auto_detected"
     assert int(between["retry_count"]) < _GAP_MAX_RETRIES
     assert cm._should_retry_gap(between)
+
+
+@pytest.mark.asyncio
+async def test_kucoin_contextual_retry_proves_persistent_sparse_gap(tmp_path, monkeypatch):
+    """A retry must include real rows on both sides of a sparse KuCoin gap.
+
+    Querying only the absent timestamps returns an empty payload and leaves the
+    gap as fetch_failed forever. One successful payload containing both bounds
+    proves the omitted interval as no-trade continuity.
+    """
+
+    now = 25 * ONE_MIN_MS + 1_000
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    calls = []
+
+    class _Ex:
+        id = "kucoinfutures"
+
+        async def fetch_ohlcv(
+            self, symbol, timeframe=None, since=None, limit=None, params=None
+        ):
+            calls.append((symbol, timeframe, since, limit, params))
+            return [
+                [0, 100.0, 101.0, 99.0, 100.0, 5.0],
+                [23 * ONE_MIN_MS, 110.0, 111.0, 109.0, 110.0, 7.0],
+            ]
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="kucoin",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSE/USDT:USDT"
+    cm._cache[symbol] = np.array(
+        [
+            (0, 100.0, 101.0, 99.0, 100.0, 5.0),
+            (23 * ONE_MIN_MS, 110.0, 111.0, 109.0, 110.0, 7.0),
+            (24 * ONE_MIN_MS, 110.0, 112.0, 109.0, 111.0, 8.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        ONE_MIN_MS,
+        22 * ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=0,
+        end_ts=24 * ONE_MIN_MS,
+        max_age_ms=None,
+    )
+
+    assert calls
+    assert calls[0][2] == 0
+    assert list(result["ts"]) == list(range(0, 25 * ONE_MIN_MS, ONE_MIN_MS))
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert len(gaps) == 1
+    assert gaps[0]["reason"] == GAP_REASON_NO_TRADES
+    assert gaps[0]["start_ts"] == ONE_MIN_MS
+    assert gaps[0]["end_ts"] == 22 * ONE_MIN_MS
+    assert not cm._should_retry_gap(gaps[0])
 
 
 def test_kucoin_h1_payload_synthesizes_only_internally_bounded_no_trade_buckets(

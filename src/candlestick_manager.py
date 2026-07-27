@@ -7659,6 +7659,51 @@ class CandlestickManager:
                                 return True
                     return False
 
+                def span_has_unverified_gap_present(s: int, e: int) -> bool:
+                    return any(
+                        int(gap["start_ts"]) <= int(e)
+                        and int(gap["end_ts"]) >= int(s)
+                        and str(gap.get("reason", GAP_REASON_AUTO))
+                        in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+                        for gap in self._get_known_gaps_enhanced(symbol)
+                    )
+
+                def kucoin_verification_bounds(
+                    candles: np.ndarray, s: int, e: int
+                ) -> Optional[Tuple[int, int]]:
+                    """Return real rows bracketing a KuCoin sparse 1m gap.
+
+                    A retry restricted to the absent timestamps cannot prove a
+                    no-trade interval: KuCoin simply returns an empty payload.
+                    Querying the nearest real row on each side lets one
+                    successful raw payload prove the omission without treating
+                    an outage or terminal empty page as market data.
+                    """
+                    if not self._record_payload_gaps_as_known or not (
+                        isinstance(self._ex_id, str)
+                        and "kucoin" in self._ex_id.lower()
+                    ):
+                        return None
+                    if not span_has_unverified_gap_present(s, e):
+                        return None
+                    real = np.sort(_ensure_dtype(candles), order="ts")
+                    provisional = self._synthetic_timestamps.get(symbol, set())
+                    if provisional:
+                        real = real[
+                            ~np.isin(
+                                real["ts"].astype(np.int64),
+                                np.asarray(tuple(provisional), dtype=np.int64),
+                            )
+                        ]
+                    if real.size < 2:
+                        return None
+                    timestamps = real["ts"].astype(np.int64)
+                    before = timestamps[timestamps < int(s)]
+                    after = timestamps[timestamps > int(e)]
+                    if before.size == 0 or after.size == 0:
+                        return None
+                    return int(before[-1]), int(after[0])
+
                 # Attempt limited targeted fetches for unknown spans
                 attempts = 0
                 max_attempts = 10 if self._ccxt_since_exclusive else 3
@@ -7666,19 +7711,28 @@ class CandlestickManager:
                 for s, e in missing:
                     if attempts >= max_attempts:
                         break
-                    if span_in_persistent_gap_present(s, e):
+                    contextual_bounds = kucoin_verification_bounds(sub, s, e)
+                    if (
+                        span_in_persistent_gap_present(s, e)
+                        and contextual_bounds is None
+                    ):
                         continue
-                    adjusted_gap_start = (
-                        self._fetch_start_after_deferred_gap_prefix(
-                            symbol,
-                            s,
-                            e,
-                            now_ms=now,
+                    if contextual_bounds is None:
+                        adjusted_gap_start = (
+                            self._fetch_start_after_deferred_gap_prefix(
+                                symbol,
+                                s,
+                                e,
+                                now_ms=now,
+                            )
                         )
-                    )
-                    if adjusted_gap_start is None:
-                        continue
-                    end_excl_gap = e + ONE_MIN_MS
+                        if adjusted_gap_start is None:
+                            continue
+                        fetch_start = int(adjusted_gap_start)
+                        end_excl_gap = int(e) + ONE_MIN_MS
+                    else:
+                        fetch_start = int(contextual_bounds[0])
+                        end_excl_gap = int(contextual_bounds[1]) + ONE_MIN_MS
                     async with self._acquire_fetch_lock(symbol, "1m"):
                         try:
                             self._load_from_disk(symbol, start_ts, end_ts, timeframe="1m")
@@ -7690,20 +7744,27 @@ class CandlestickManager:
                         sub = self._slice_ts_range(arr, start_ts, end_ts) if arr.size else arr
                         missing_now = self._missing_spans(sub, start_ts, inclusive_end)
                         if not any(
-                            ms <= adjusted_gap_start <= me
+                            ms <= int(s) <= me
                             for ms, me in missing_now
                         ):
                             continue
-                        adjusted_gap_start = (
-                            self._fetch_start_after_deferred_gap_prefix(
-                                symbol,
-                                adjusted_gap_start,
-                                e,
-                                now_ms=now,
+                        contextual_bounds = kucoin_verification_bounds(arr, s, e)
+                        if contextual_bounds is None:
+                            adjusted_gap_start = (
+                                self._fetch_start_after_deferred_gap_prefix(
+                                    symbol,
+                                    s,
+                                    e,
+                                    now_ms=now,
+                                )
                             )
-                        )
-                        if adjusted_gap_start is None:
-                            continue
+                            if adjusted_gap_start is None:
+                                continue
+                            fetch_start = int(adjusted_gap_start)
+                            end_excl_gap = int(e) + ONE_MIN_MS
+                        else:
+                            fetch_start = int(contextual_bounds[0])
+                            end_excl_gap = int(contextual_bounds[1]) + ONE_MIN_MS
                         persisted_batches = False
 
                         def _persist_gap_batch(batch: np.ndarray) -> None:
@@ -7723,7 +7784,7 @@ class CandlestickManager:
                         try:
                             fetched = await self._fetch_ohlcv_paginated(
                                 symbol,
-                                adjusted_gap_start,
+                                fetch_start,
                                 end_excl_gap,
                                 on_batch=_persist_gap_batch,
                                 raise_on_partial_empty_page=max_age_ms == 0,
@@ -7731,11 +7792,11 @@ class CandlestickManager:
                         except TypeError:
                             fetched = await self._fetch_ohlcv_paginated(
                                 symbol,
-                                s,
+                                fetch_start,
                                 end_excl_gap,
                             )
                         attempts += 1
-                        attempted.append((adjusted_gap_start, e))
+                        attempted.append((int(s), int(e)))
                         fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
                         if fetched.size:
                             if not persisted_batches:
@@ -7756,11 +7817,18 @@ class CandlestickManager:
                 for s, e in attempted:
                     # find overlapping portion with any still missing
                     for ms, me in still_missing:
-                        if not (e < ms or s > me):
+                        unresolved_start = max(s, ms)
+                        unresolved_end = min(e, me)
+                        if (
+                            unresolved_start <= unresolved_end
+                            and span_has_unverified_gap_present(
+                                unresolved_start, unresolved_end
+                            )
+                        ):
                             self._add_known_gap(
                                 symbol,
-                                max(s, ms),
-                                min(e, me),
+                                unresolved_start,
+                                unresolved_end,
                                 reason=GAP_REASON_FETCH_FAILED,
                             )
 

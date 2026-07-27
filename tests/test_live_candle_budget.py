@@ -685,8 +685,9 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raise_terminal_empty", [False, True])
 async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
-    monkeypatch, caplog
+    monkeypatch, caplog, raise_terminal_empty
 ):
     import numpy as np
     import passivbot as pb_mod
@@ -727,16 +728,20 @@ async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
 
         def __init__(self):
             self.calls = 0
+            self.kwargs = []
 
         async def get_candles(self, symbol, **kwargs):
             self.calls += 1
-            raise pb_mod.OhlcvTerminalEmptyPage(
-                "bounded test failure",
-                partial_rows=np.empty((0,), dtype=pb_mod.CANDLE_DTYPE),
-                terminal_start_ts=0,
-                requested_end_ts=60_000,
-                pages=1,
-            )
+            self.kwargs.append(dict(kwargs))
+            if raise_terminal_empty:
+                raise pb_mod.OhlcvTerminalEmptyPage(
+                    "bounded test failure",
+                    partial_rows=np.empty((0,), dtype=pb_mod.CANDLE_DTYPE),
+                    terminal_start_ts=0,
+                    requested_end_ts=60_000,
+                    pages=1,
+                )
+            return np.empty((0,), dtype=pb_mod.CANDLE_DTYPE)
 
     class FakeBot:
         config = {
@@ -775,16 +780,22 @@ async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.DEBUG):
         await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
         await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert bot.cm.calls == 1
+    assert bot.cm.kwargs[0]["max_age_ms"] == 1
     assert (
         bot._forager_surface_failure_retry_after_ms[(symbol, "1m")]
         == now["ms"] + pb_mod._FORAGER_TERMINAL_EMPTY_RETRY_MS
     )
-    assert caplog.text.count("error_type=OhlcvTerminalEmptyPage") == 1
+    if raise_terminal_empty:
+        assert caplog.text.count("error_type=OhlcvTerminalEmptyPage") == 1
+        assert "reached terminal empty page" in caplog.text
+    else:
+        assert "forager refresh made no tail progress" in caplog.text
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -3015,7 +3026,7 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
     assert called_symbol == symbol
     assert kwargs["timeframe"] == "1h"
     assert kwargs["max_lookback_candles"] == 784
-    assert kwargs["max_age_ms"] == 0
+    assert kwargs["max_age_ms"] == 1
     assert kwargs["end_ts"] % (60 * 60_000) == 0
 
 

@@ -1221,7 +1221,7 @@ async def test_gateio_updates_isolated_leverage_explicitly():
     ]
 
 
-def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
+def test_gateio_get_balance_reconstructs_stable_multi_currency_margin_balance():
     bot = GateIOBot.__new__(GateIOBot)
     bot.exchange = "gateio"
     bot.quote = "USDT"
@@ -1238,15 +1238,73 @@ def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
                     "user": 16770081,
                     "margin_mode_name": "multi_currency",
                     "cross_available": "724.95615",
+                    "cross_initial_margin": "12.5",
+                    "cross_order_margin": "3.25",
                 }
             ],
         }
     )
 
-    assert balance == 724.95615
+    assert balance == pytest.approx(740.70615)
     assert bot.uid == "16770081"
     assert bot.cca.uid == "16770081"
     assert bot.ccp.uid == "16770081"
+
+
+def test_gateio_multi_currency_balance_is_stable_across_order_margin_reservation():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+
+    def payload(available, order_margin):
+        return {
+            "USDT": {"total": 0.0},
+            "info": [
+                {
+                    "user": 16770081,
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": str(available),
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": str(order_margin),
+                }
+            ],
+        }
+
+    assert bot._get_balance(payload(677.0, 3.0)) == pytest.approx(690.0)
+    assert bot._get_balance(payload(670.0, 10.0)) == pytest.approx(690.0)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("cross_available", "nan"),
+        ("cross_initial_margin", "inf"),
+        ("cross_order_margin", "-inf"),
+    ],
+)
+def test_gateio_multi_currency_balance_rejects_non_finite_components(field, value):
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+    primary = {
+        "user": 16770081,
+        "margin_mode_name": "multi_currency",
+        "cross_available": "680.0",
+        "cross_initial_margin": "10.0",
+        "cross_order_margin": "0.0",
+    }
+    primary[field] = value
+
+    with pytest.raises(ValueError, match="non-finite multi-currency margin balance"):
+        bot._get_balance({"USDT": {"total": 0.0}, "info": [primary]})
 
 
 def test_gateio_get_balance_uses_total_for_classic_margin():

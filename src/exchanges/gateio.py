@@ -144,7 +144,25 @@ class GateIOBot(CCXTBot):
         if margin_mode_name == "classic":
             balance = float(balance_fetched[self.quote]["total"])
         elif margin_mode_name == "multi_currency":
-            balance = float(primary["cross_available"])
+            # ``cross_available`` is spendable margin, not account equity. It
+            # falls when resting orders reserve margin and rises again when
+            # those orders are cancelled, which would make Passivbot resize its
+            # ideal orders on every reconciliation cycle. Reconstruct the
+            # stable cross-margin balance from the same authoritative account
+            # payload by adding back position and resting-order initial margin.
+            balance = sum(
+                float(primary[key])
+                for key in (
+                    "cross_available",
+                    "cross_initial_margin",
+                    "cross_order_margin",
+                )
+            )
+            if not math.isfinite(balance):
+                raise ValueError(
+                    f"{self.exchange}: fetch_balance response has non-finite "
+                    "multi-currency margin balance"
+                )
         else:
             raise Exception(f"unknown margin_mode_name {balance_fetched}")
         return balance
