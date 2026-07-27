@@ -6496,6 +6496,7 @@ class CandlestickManager:
         skip_historical_gap_fill: bool = False,
         max_lookback_candles: Optional[int] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -6520,6 +6521,10 @@ class CandlestickManager:
         - If `allow_remote_fetch` is False: serve only local memory/disk data and
           do not call exchange/archive fetchers. This is used for non-critical
           live forager candidates where cache misses should not block trading.
+        - If `allow_provisional_internal_gaps` is True: unresolved gaps already
+          bounded by later candles may be represented in this returned array by
+          non-persistent zero-volume continuity rows. Open-ended tails retain
+          the separate `fill_trailing_gaps` policy.
         """
         self._raise_if_shutdown_requested("get_candles")
         if max_age_ms is not None and max_age_ms < 0:
@@ -7714,6 +7719,15 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
+        excluded_synthetic_ranges = (
+            []
+            if allow_provisional_internal_gaps
+            else self._unverified_gap_ranges(
+                symbol,
+                start_ts,
+                end_ts,
+            )
+        )
         result = self.standardize_gaps(
             data_for_gaps,
             start_ts=start_ts,
@@ -7723,11 +7737,7 @@ class CandlestickManager:
             fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
-            excluded_synthetic_ranges=self._unverified_gap_ranges(
-                symbol,
-                start_ts,
-                end_ts,
-            ),
+            excluded_synthetic_ranges=excluded_synthetic_ranges,
         )
 
         # Log accumulated gap summaries (throttled)
@@ -7917,15 +7927,6 @@ class CandlestickManager:
             )
         raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
 
-    @staticmethod
-    def _is_stock_perp_symbol(symbol: str) -> bool:
-        try:
-            from tradfi_data import is_stock_perp_symbol
-
-            return bool(is_stock_perp_symbol(str(symbol)))
-        except Exception:
-            return False
-
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,
@@ -8005,6 +8006,7 @@ class CandlestickManager:
             max_age_ms=None,
             timeframe="1m",
             allow_remote_fetch=False,
+            allow_provisional_internal_gaps=True,
         )
         # get_candles may legitimately record bounded internal synthetic gaps.
         # Projection itself must not write EMA cache entries or open-tail synthetic timestamps.
@@ -8152,6 +8154,7 @@ class CandlestickManager:
             max_lookback_candles=max_candles,
             fill_trailing_gaps=False,
             allow_remote_fetch=False,
+            allow_provisional_internal_gaps=True,
         )
         if raw.size == 0 or not candle_range_has_full_coverage(
             raw, start_ts, int(last_cached), timeframe=timeframe
@@ -8322,7 +8325,8 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=True,
         )
         if arr.size == 0:
             return float("nan")
@@ -8560,7 +8564,8 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=True,
         )
         if arr.size == 0:
             return float("nan")
@@ -8635,10 +8640,11 @@ class CandlestickManager:
             start_ts=start_ts,
             end_ts=end_ts,
             max_age_ms=max_age_ms,
-            strict=True if period_ms == ONE_MIN_MS else False,
+            strict=False,
             timeframe=out_tf,
             max_lookback_candles=window_candles,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=True,
         )
         if raw.size == 0:
             for metric_key in missing:

@@ -49,10 +49,11 @@
    zero-volume or zero-range tail minutes. Zero volume/log-range is valid for verified no-trade
    continuity gaps, not for unknown stale tails caused by refresh budget or REST delay.
 6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
-   gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
-   Unresolved gap metadata wholly inside the configured open-tail projection interval does not
-   invalidate that projection; unresolved gaps at or before its authoritative tail anchor remain
-   unavailable.
+   gaps use the non-persistent synthetic gap path with replacement/invalidation tracking for EMA
+   reads while remaining unavailable to ordinary candle consumers. Unresolved gap metadata wholly
+   inside the configured open-tail projection interval does not invalidate that projection.
+   The open-tail age bound applies uniformly, including stock perps; venue category must not create
+   an unbounded synthetic tail exception.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
@@ -80,7 +81,13 @@
    failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
    already covers the requested end is complete, not terminal-empty. Partial authoritative
    recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
-   compact timestamp intervals even for large historical gaps. Refresh budgets count
+   compact timestamp intervals even for large historical gaps.
+   Live EMA reads are the deliberate exception for gaps already bounded by later authoritative
+   candles: they may use non-persistent zero-volume continuity rows so sparse no-trade intervals
+   do not permanently block strategy inputs. The timestamps remain unresolved and retryable;
+   delayed authoritative rows replace the provisional values and invalidate affected EMA caches.
+   Open-ended tails use the separate bounded projection policy below.
+   Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
    candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,

@@ -1204,8 +1204,10 @@ async def test_fake_live_ema_helpers_accept_authoritative_sparse_timeline(
 
 
 @pytest.mark.asyncio
-async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
-    fixed_now_ms = 1725811200000  # Sunday-style off-hours timestamp.
+async def test_stock_perp_latest_emas_do_not_bypass_open_tail_policy(
+    tmp_path, monkeypatch
+):
+    fixed_now_ms = 1725811200000
     monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
 
     cm = CandlestickManager(exchange=None, exchange_name="hyperliquid", cache_dir=str(tmp_path / "caches"))
@@ -1218,12 +1220,16 @@ async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
         dtype=CANDLE_DTYPE,
     )
 
-    close = await cm.get_latest_ema_close(symbol, 5.0, allow_remote_fetch=False)
-    log_range = await cm.get_latest_ema_log_range(symbol, 5.0, allow_remote_fetch=False)
+    close = await cm.get_latest_ema_close(
+        symbol, 5.0, allow_remote_fetch=False
+    )
+    log_range = await cm.get_latest_ema_log_range(
+        symbol, 5.0, allow_remote_fetch=False
+    )
 
-    assert close == pytest.approx(seed_close)
-    assert log_range == pytest.approx(0.0)
-    assert last_final in cm._synthetic_timestamps.get(symbol, set())
+    assert math.isnan(close)
+    assert math.isnan(log_range)
+    assert last_final not in cm._synthetic_timestamps.get(symbol, set())
 
 
 @pytest.mark.asyncio
@@ -1533,7 +1539,8 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
         fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
-        ):
+        allow_provisional_internal_gaps=False,
+    ):
         calls["n"] += 1
         return arr
 
@@ -1592,7 +1599,8 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
         fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
-        ):
+        allow_provisional_internal_gaps=False,
+    ):
         seen.update(
             {
                 "symbol": symbol_,
@@ -3384,6 +3392,85 @@ async def test_due_unknown_gap_stays_unavailable_without_remote_fetch(
 
     assert list(result["ts"]) == [start, end]
     assert missing not in set(cm._synthetic_timestamps.get(symbol, set()))
+
+
+@pytest.mark.asyncio
+async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
+    monkeypatch, tmp_path
+):
+    now = 11 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="kucoinfutures",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: now
+    symbol = "SPARSE/USDT:USDT"
+    start = 8 * ONE_MIN_MS
+    missing = 9 * ONE_MIN_MS
+    end = 10 * ONE_MIN_MS
+    authoritative = np.array(
+        [
+            (start, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (end, 120.0, 120.0, 120.0, 120.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = authoritative.copy()
+    cm._add_known_gap(
+        symbol,
+        missing,
+        missing,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    ordinary = await cm.get_candles(
+        symbol,
+        start_ts=start,
+        end_ts=end,
+        allow_remote_fetch=False,
+    )
+    assert list(ordinary["ts"]) == [start, end]
+
+    provisional = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        allow_remote_fetch=False,
+    )
+    expected_provisional = cm._ema(
+        np.asarray([100.0, 100.0, 120.0], dtype=np.float64),
+        3.0,
+    )
+    assert provisional == pytest.approx(expected_provisional)
+    assert np.array_equal(cm._cache[symbol], authoritative)
+    assert missing in cm._synthetic_timestamps[symbol]
+    assert ("close", 3.0, str(ONE_MIN_MS)) in cm._ema_cache[symbol]
+
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [(missing, 110.0, 110.0, 110.0, 110.0, 2.0)],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now,
+    )
+
+    assert missing not in cm._synthetic_timestamps.get(symbol, set())
+    assert ("close", 3.0, str(ONE_MIN_MS)) not in cm._ema_cache.get(symbol, {})
+    authoritative_ema = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        allow_remote_fetch=False,
+    )
+    expected_authoritative = cm._ema(
+        np.asarray([100.0, 110.0, 120.0], dtype=np.float64),
+        3.0,
+    )
+    assert authoritative_ema == pytest.approx(expected_authoritative)
+    assert authoritative_ema != pytest.approx(provisional)
 
 
 @pytest.mark.asyncio

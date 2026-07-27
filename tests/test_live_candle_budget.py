@@ -4962,6 +4962,68 @@ async def test_projected_open_tail_ema_allows_ten_minute_known_gap(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_projected_open_tail_ema_allows_bounded_internal_unknown_gap(
+    tmp_path, monkeypatch
+):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="kucoinfutures",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSETAIL/USDT:USDT"
+    t1 = ONE_MIN_MS
+    t2 = 2 * ONE_MIN_MS
+    t3 = 3 * ONE_MIN_MS
+    latest_expected = 5 * ONE_MIN_MS
+    monkeypatch.setattr(
+        "time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0
+    )
+    cm._cache[symbol] = np.array(
+        [
+            (t1, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t3, 110.0, 110.0, 110.0, 110.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t2,
+        t2,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    cm._add_known_gap(
+        symbol,
+        t3 + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [5.0], "qv": [5.0], "log_range": [5.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=t3,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert all(
+        math.isfinite(projected[metric][5.0])
+        for metric in ("close", "qv", "log_range")
+    )
+    assert list(cm._cache[symbol]["ts"]) == [t1, t3]
+    assert cm._synthetic_timestamps[symbol] == {t2}
+
+
+@pytest.mark.asyncio
 async def test_projected_open_tail_ema_rejects_missing_authoritative_anchor(
     tmp_path, monkeypatch
 ):
