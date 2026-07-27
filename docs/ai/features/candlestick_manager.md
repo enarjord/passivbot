@@ -113,8 +113,10 @@
    side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
    sides retain their strict readiness contract. If the unavailable result changes the dynamically
    managed side to the configured manual stop mode, reconciliation preserves only that cycle's
-   proven forager entry cancellation. It does not weaken manual ownership for other sides, closes,
-   or creations. Held positions retain their stricter readiness contract.
+   proven forager entry cancellation. The authorization is rederived on later cycles while the
+   same resting entry remains, including degradation caused by required forager ranking EMAs, so a
+   rejected or ambiguous first cancellation is retried. It does not weaken manual ownership for
+   other sides, closes, or creations. Held positions retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX

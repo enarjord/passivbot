@@ -15,8 +15,9 @@ All notable user-facing changes will be documented in this file.
   provisionally bridge unresolved gaps already bounded by later authoritative candles without
   persisting them, and recompute when delayed real rows arrive. Mixed fixed/forager sides retain
   strict readiness for the fixed side, and a dynamically managed resting entry is still cancelled
-  if degradation changes its side to the configured manual stop mode without weakening ordinary
-  manual ownership.
+  if close, strategy, or ranking EMA degradation changes its side to the configured manual stop
+  mode. Failed or ambiguous cancellation attempts are retried without weakening ordinary manual
+  ownership.
 
 - Supported CCXT private order streams now isolate malformed semantic rows from websocket
   transport health: unnormalizable rows are discarded with a bounded warning and force an

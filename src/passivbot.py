@@ -16758,6 +16758,10 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
+        previous_ema_entry_cancellation_pairs = set(
+            getattr(self, "_orchestrator_ema_entry_cancellation_pairs", set())
+            or set()
+        )
         self._orchestrator_ema_entry_cancellation_pairs = set()
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17211,13 +17215,33 @@ class Passivbot:
         def has_normal_planning_mode(symbol: str) -> bool:
             return bool(normal_planning_psides(symbol))
 
+        def has_resting_entry(symbol: str, pside: str) -> bool:
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                if (
+                    str(order.get("position_side") or "") == pside
+                    and not bool(
+                        order.get("reduce_only", order.get("reduceOnly", False))
+                    )
+                ):
+                    return True
+            return False
+
         def dynamic_forager_normal_psides(symbol: str) -> set[str]:
+            """Return currently or previously proven dynamic forager sides."""
             dynamic_psides: set[str] = set()
-            for pside in normal_planning_psides(symbol):
+            current_normal_psides = normal_planning_psides(symbol)
+            for pside in ("long", "short"):
                 if (modes.get(pside, {}) or {}).get(symbol) is not None:
                     continue
                 try:
-                    if bool(is_forager_mode(pside)):
+                    if bool(is_forager_mode(pside)) and (
+                        pside in current_normal_psides
+                        or (
+                            (symbol, pside)
+                            in previous_ema_entry_cancellation_pairs
+                            and has_resting_entry(symbol, pside)
+                        )
+                    ):
                         dynamic_psides.add(pside)
                 except Exception:
                     continue
@@ -18472,9 +18496,15 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
-        for symbol in self._orchestrator_ema_unavailable_reasons.get(
-            "flat_active_required_ema_unavailable", set()
-        ):
+        cancellation_reason_symbols = set(
+            self._orchestrator_ema_unavailable_reasons.get(
+                "flat_active_required_ema_unavailable", set()
+            )
+        )
+        for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items():
+            if str(reason).startswith("missing_required_forager_"):
+                cancellation_reason_symbols.update(reason_symbols)
+        for symbol in cancellation_reason_symbols:
             managed_psides = dynamic_forager_normal_psides(symbol)
             for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
                 pside = str(order.get("position_side") or "")
