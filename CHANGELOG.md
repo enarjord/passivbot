@@ -19,12 +19,12 @@ All notable user-facing changes will be documented in this file.
   managed resting entry is still cancelled if close, strategy, or ranking EMA degradation changes
   its side to the configured manual stop mode. Ranking degradation retires entries only on the
   affected side. Failed or ambiguous cancellation attempts are retried only for the exact proven
-  exchange/client order ID, without weakening ordinary manual ownership. Temporary bot-managed
-  entry overrides such as HSL graceful-stop retain the same flat-symbol degradation behavior
-  instead of promoting missing EMA inputs into an account-wide restart loop. Budget-derived
-  forager ranking staleness also retains the active-tail grace period (10 minutes by default), so
-  a large refresh budget cannot make flat candidates nontradable after only one or two missing
-  completed candles.
+  exchange/client order ID, including after EMA recovery, without weakening ownership for orders
+  first observed after the side enters manual or ordinary tp-only mode. Temporary bot-managed entry
+  overrides such as HSL graceful-stop retain the same flat-symbol degradation behavior instead of
+  promoting missing EMA inputs into an account-wide restart loop. Budget-derived forager ranking
+  staleness also retains the active-tail grace period (10 minutes by default), so a large refresh
+  budget cannot make flat candidates nontradable after only one or two missing completed candles.
 
 - Supported CCXT private order streams now isolate malformed semantic rows from websocket
   transport health: unnormalizable rows are discarded with a bounded warning and force an

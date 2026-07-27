@@ -882,6 +882,26 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
         expected_order_key
     }
 
+    # Recovery must not discard a failed/ambiguous cancellation authorization:
+    # Rust may leave the pair unselected/manual even though EMA inputs recovered.
+    bot.close_mode = "value"
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+    assert bot._orchestrator_ema_unavailable_reasons == {}
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        expected_order_key
+    }
+
+    # An explicit operator-owned mode transfers entry ownership and terminates
+    # the degradation exception even if the same order remains visible.
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: "manual"}, "short": {symbol: None}},
+    )
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
+
 
 @pytest.mark.asyncio
 async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel():

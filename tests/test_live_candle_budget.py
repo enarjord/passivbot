@@ -5261,6 +5261,21 @@ async def test_cached_forager_metrics_do_not_project_unverified_internal_gap(
     )
     assert set(current) == {"qv", "log_range"}
     assert all(math.isfinite(value) for value in current.values())
+    cm._ema_cache.clear()
+    assert math.isnan(
+        await cm.get_latest_ema_quote_volume(
+            symbol,
+            3.0,
+            allow_remote_fetch=False,
+        )
+    )
+    assert math.isnan(
+        await cm.get_latest_ema_log_range(
+            symbol,
+            3.0,
+            allow_remote_fetch=False,
+        )
+    )
 
     cached = await cm.get_latest_cached_ema_metrics(
         symbol,

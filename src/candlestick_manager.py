@@ -7733,13 +7733,27 @@ class CandlestickManager:
             provisional_tolerance_ms = int(
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
             )
-            excluded_synthetic_ranges = [
-                (int(gap_start), int(gap_end))
-                for gap_start, gap_end in unverified_gap_ranges
-                if provisional_tolerance_ms <= 0
-                or int(gap_end) - int(gap_start) + ONE_MIN_MS
-                > provisional_tolerance_ms
-            ]
+            excluded_synthetic_ranges = []
+            for gap in self._get_known_gaps_enhanced(symbol):
+                if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                    GAP_REASON_AUTO,
+                    GAP_REASON_FETCH_FAILED,
+                }:
+                    continue
+                full_gap_start = int(gap["start_ts"])
+                full_gap_end = int(gap["end_ts"])
+                overlap_start = max(int(start_ts), full_gap_start)
+                overlap_end = min(int(end_ts), full_gap_end)
+                if overlap_start > overlap_end:
+                    continue
+                if (
+                    provisional_tolerance_ms <= 0
+                    or full_gap_end - full_gap_start + ONE_MIN_MS
+                    > provisional_tolerance_ms
+                ):
+                    excluded_synthetic_ranges.append(
+                        (overlap_start, overlap_end)
+                    )
         else:
             excluded_synthetic_ranges = unverified_gap_ranges
         result = self.standardize_gaps(
@@ -8579,7 +8593,7 @@ class CandlestickManager:
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
             fill_trailing_gaps=False,
-            allow_provisional_internal_gaps=True,
+            allow_provisional_internal_gaps=bool(allow_remote_fetch),
         )
         if arr.size == 0:
             return float("nan")

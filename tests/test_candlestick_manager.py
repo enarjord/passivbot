@@ -3514,6 +3514,57 @@ async def test_live_ema_refuses_provisional_internal_gap_beyond_tolerance(
 
 
 @pytest.mark.asyncio
+async def test_provisional_gap_tolerance_uses_full_recorded_gap_not_clipped_overlap(
+    monkeypatch, tmp_path
+):
+    now = 205 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+        provisional_internal_gap_tolerance_minutes=10,
+    )
+    cm._now_ms_callback = lambda: now
+    symbol = "CLIPPEDGAP/USDT:USDT"
+    requested_start = 200 * ONE_MIN_MS
+    requested_end = 204 * ONE_MIN_MS
+    previous_real = 188 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (previous_real, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (201 * ONE_MIN_MS, 101.0, 101.0, 101.0, 101.0, 1.0),
+            (202 * ONE_MIN_MS, 102.0, 102.0, 102.0, 102.0, 1.0),
+            (203 * ONE_MIN_MS, 103.0, 103.0, 103.0, 103.0, 1.0),
+            (requested_end, 104.0, 104.0, 104.0, 104.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        189 * ONE_MIN_MS,
+        requested_start,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=requested_start,
+        end_ts=requested_end,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=True,
+    )
+
+    assert list(result["ts"]) == [
+        201 * ONE_MIN_MS,
+        202 * ONE_MIN_MS,
+        203 * ONE_MIN_MS,
+        requested_end,
+    ]
+    assert requested_start not in cm._synthetic_timestamps.get(symbol, set())
+
+
+@pytest.mark.asyncio
 async def test_historical_fetch_splits_around_deferred_gap(
     monkeypatch, tmp_path
 ):

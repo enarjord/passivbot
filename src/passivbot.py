@@ -16765,7 +16765,35 @@ class Passivbot:
             getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
-        self._orchestrator_ema_entry_cancellation_order_keys = set()
+        bot_managed_override_modes = {
+            "graceful_stop",
+            "panic",
+            "tp_only_with_active_entry_cancellation",
+        }
+        retained_ema_entry_cancellation_order_keys = set()
+        for order_key in previous_ema_entry_cancellation_order_keys:
+            if not isinstance(order_key, tuple) or len(order_key) != 4:
+                continue
+            symbol, pside, _identity_kind, _identity = order_key
+            raw_mode = (modes.get(str(pside), {}) or {}).get(str(symbol))
+            if raw_mode is not None:
+                try:
+                    normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
+                        self, raw_mode
+                    )
+                except Exception:
+                    continue
+                if normalized_mode not in bot_managed_override_modes:
+                    continue
+            for order in (getattr(self, "open_orders", {}) or {}).get(
+                str(symbol), []
+            ):
+                if reconciler.ema_entry_cancellation_order_key(order) == order_key:
+                    retained_ema_entry_cancellation_order_keys.add(order_key)
+                    break
+        self._orchestrator_ema_entry_cancellation_order_keys = (
+            retained_ema_entry_cancellation_order_keys
+        )
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17279,11 +17307,6 @@ class Passivbot:
             Those modes do not transfer entry ownership to the operator.
             """
             managed_psides = dynamic_forager_normal_psides(symbol)
-            bot_managed_override_modes = {
-                "graceful_stop",
-                "panic",
-                "tp_only_with_active_entry_cancellation",
-            }
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
                 if explicit_mode is None:
