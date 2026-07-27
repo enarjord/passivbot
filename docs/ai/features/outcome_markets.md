@@ -121,6 +121,12 @@ remain unresolved through proposal, challenge, and dispute periods. Strategy ord
 be cancelled before the venue-specific cutoff. Capital is reusable only when authoritative account
 state proves it available.
 
+The Rust simulation contract retains both market-open time and the effective order-entry-open time.
+The latter is the later of trading open and an authoritative venue order-acceptance timestamp.
+Signal history may begin at trading open, but quotes and explicit orders cannot begin before order
+entry opens. An actual trading close may occur after the scheduled event; the scheduled event,
+actual close, resolution, and capital release remain independent lifecycle facts.
+
 Settlement truth includes the immutable market terms, resolution source, final payout fraction,
 resolution timestamp, and settlement/redemption evidence. A candle close is not a settlement
 oracle unless the venue contract explicitly says it is.
@@ -189,7 +195,9 @@ native book from falsely filling an order resting only in the other.
 
 This initial execution model is passive-only. It accepts post-only orders and rejects non-post-only
 orders until an explicit taker model defines immediate execution, liquidity role, fees, and
-slippage.
+slippage. A GTD expiry must be later than the order's placement timestamp and no later than the
+market's trading close; an already-expired order is rejected rather than rested until a later
+bucket.
 
 Some venues use a merged complementary book and report one economic trade as mirrored YES and NO
 fill records. Adapters retain both native records for audit and execution reconciliation, attach a
@@ -217,6 +225,11 @@ Settlement source-event identity is immutable as well. Re-importing the same ven
 source event may differ in observation metadata such as receive time, but contradictory payout,
 winner, event time, release time, fee, quantity, or raw authoritative evidence is archive
 corruption and must fail.
+
+Trade source-event and ordered-sequence identities are immutable. Re-importing one of those
+identities may differ in observation metadata such as receive time, collector session, or source
+cursor, but contradictory outcome, native side, price, quantity, exchange time, economic-event
+identity, or alternate sequence/source identity is archive corruption and must fail.
 
 Replay consolidates lifecycle observations without replacing the initial trading terms. In
 particular, an initial live Polymarket observation commonly has no `closedTime`; a later closed
@@ -387,8 +400,9 @@ belong to the retained market, outcome side, and exact expected client-order ID.
 executor independently validates every cancellation and creation against the deterministic
 Passivbot outcome namespace before its first write, then verifies the complete final managed-order
 set rather than trusting the previously constructed reconciliation object. If final verification
-fails after submissions, it cancels every attempted create that remains authoritative and verifies
-their absence before propagating the failure.
+fails after submissions, it cancels every attempted create that remains authoritative, continues
+through individual cancellation errors, and verifies all attempted identities absent before
+propagating the failure.
 
 If the verified actual-fill signal is unavailable or stale, new and replacement quotes are
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:

@@ -34,8 +34,9 @@ def test_evaluation_runs_modes_and_both_settlement_outcomes():
             "min_qty": 0.1,
             "min_notional": 0.0,
             "trading_opens_ms": 1_000,
+            "order_entry_opens_ms": 1_000,
             "trading_closes_ms": 5_000,
-            "scheduled_resolution_ms": 5_000,
+            "scheduled_event_ms": 5_000,
             "capabilities": {
                 "complementary_books_merged": False,
                 "supports_split": True,
@@ -140,8 +141,9 @@ def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
             "min_qty": 0.1,
             "min_notional": 0.0,
             "trading_opens_ms": 1_000,
+            "order_entry_opens_ms": 1_000,
             "trading_closes_ms": 5_000,
-            "scheduled_resolution_ms": 5_000,
+            "scheduled_event_ms": 5_000,
             "capabilities": {
                 "complementary_books_merged": False,
                 "supports_split": True,

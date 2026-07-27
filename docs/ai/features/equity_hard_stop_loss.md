@@ -30,6 +30,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    outcomes. They retain only a bounded exception type in diagnostics and fall back to authoritative
    replay when reuse is unavailable. Coin replay failures retain the same bounded classification
    without changing exception propagation or held-pair protection and flat-pair entry blocking.
+8. Backtest flat-state confirmation is minute-scoped. Sub-minute candle intervals may update other
+   simulation state every bar, but repeated bars within one hard-stop minute cannot satisfy multiple
+   flat confirmations or start cooldown earlier than the next distinct minute observation.
 
 ## Failure Semantics
 

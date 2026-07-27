@@ -143,6 +143,26 @@ def test_polymarket_rust_spec_requires_explicit_qty_step_and_uses_tick_bounds():
     assert spec["max_price"] == pytest.approx(0.99)
 
 
+def test_polymarket_rust_spec_preserves_order_entry_and_delayed_close_boundaries():
+    market = polymarket.normalize_market(load_fixture("polymarket_binary.json"))
+    market = replace(
+        market,
+        lifecycle=MarketLifecycle(
+            trading_open_time_ms=1_000,
+            order_acceptance_time_ms=2_000,
+            trading_close_time_ms=6_000,
+            scheduled_event_time_ms=5_000,
+        ),
+    )
+
+    spec = normalized_market_to_rust_spec(market, qty_step=0.01)
+
+    assert spec["trading_opens_ms"] == 1_000
+    assert spec["order_entry_opens_ms"] == 2_000
+    assert spec["trading_closes_ms"] == 6_000
+    assert spec["scheduled_event_ms"] == 5_000
+
+
 def test_hyperliquid_rust_spec_bounds_follow_significant_figure_grid():
     market = hyperliquid.normalize_market(load_fixture("hyperliquid_price_binary.json"))
 

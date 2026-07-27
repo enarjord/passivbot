@@ -300,6 +300,58 @@ async def test_executor_cancels_all_attempted_orders_after_partial_create_failur
 
 
 @pytest.mark.asyncio
+async def test_partial_create_cleanup_continues_after_individual_cancel_failure():
+    reconciliation = reconcile_outcome_orders(market(), plan(), snapshot())
+    first, second = reconciliation.creates
+    cleanup_snapshot = snapshot(
+        (
+            order(
+                "9",
+                outcome=first.intent.outcome,
+                price=first.intent.native_price,
+                cloid=first.client_order_id,
+            ),
+            order(
+                "10",
+                outcome=second.intent.outcome,
+                price=second.intent.native_price,
+                cloid=second.client_order_id,
+            ),
+        )
+    )
+    client = FakeClient(cleanup_snapshot, snapshot())
+    original_submit = client.submit_limit_order
+    original_cancel = client.cancel_order
+
+    async def fail_second_submit(*args, **kwargs):
+        if len(client.created) == 1:
+            client.created.append(("ambiguous-second", kwargs["client_order_id"]))
+            raise TimeoutError("ambiguous create timeout")
+        return await original_submit(*args, **kwargs)
+
+    async def fail_first_cleanup_cancel(*args, **kwargs):
+        if kwargs["order_id"] == 9:
+            client.cancelled.append(
+                (
+                    args[0].market_id,
+                    kwargs["outcome"],
+                    kwargs["order_id"],
+                    kwargs["expected_client_order_id"],
+                )
+            )
+            raise RuntimeError("order filled before cleanup cancellation")
+        return await original_cancel(*args, **kwargs)
+
+    client.submit_limit_order = fail_second_submit
+    client.cancel_order = fail_first_cleanup_cancel
+
+    with pytest.raises(TimeoutError, match="ambiguous create timeout"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [9, 10]
+
+
+@pytest.mark.asyncio
 async def test_executor_rejects_forged_unnamespaced_cancel_before_any_mutation():
     desired = replace(plan(), intents=())
     unmanaged = order(

@@ -258,7 +258,7 @@ impl OutcomeEmaAnchorState {
         {
             return Err(OutcomeError::InvalidPrice(canonical_close));
         }
-        if timestamp_ms < market.trading_opens_ms
+        if timestamp_ms < market.order_entry_opens_ms
             || timestamp_ms >= market.trading_closes_ms
             || self.observations < params.ema_warmup_seconds
             || market.trading_closes_ms.saturating_sub(timestamp_ms)
@@ -753,8 +753,9 @@ mod tests {
             min_qty: 0.1,
             min_notional: 0.0,
             trading_opens_ms: 1_000,
+            order_entry_opens_ms: 1_000,
             trading_closes_ms: 100_000,
-            scheduled_resolution_ms: 100_000,
+            scheduled_event_ms: 100_000,
             capabilities: OutcomeVenueCapabilities {
                 complementary_books_merged: false,
                 supports_split: true,
@@ -829,6 +830,29 @@ mod tests {
         assert!((bid.native_price - 0.49).abs() < 1e-12);
         assert!((ask.native_price - 0.49).abs() < 1e-12);
         assert!((ask.canonical_yes_price - 0.51).abs() < 1e-12);
+    }
+
+    #[test]
+    fn quote_waits_for_order_entry_acceptance_after_signal_open() {
+        let mut outcome_market = market();
+        outcome_market.order_entry_opens_ms = 3_000;
+        let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        let mut state = OutcomeEmaAnchorState::default();
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+
+        let before_acceptance = state
+            .quote(2_000, 0.5, &outcome_market, &parameters, &flat_inventory())
+            .unwrap();
+        let at_acceptance = state
+            .quote(3_000, 0.5, &outcome_market, &parameters, &flat_inventory())
+            .unwrap();
+
+        assert!(before_acceptance.canonical_bid.is_none());
+        assert!(before_acceptance.canonical_ask.is_none());
+        assert!(at_acceptance.canonical_bid.is_some());
+        assert!(at_acceptance.canonical_ask.is_some());
     }
 
     #[test]

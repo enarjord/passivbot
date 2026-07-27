@@ -302,8 +302,9 @@ pub struct BinaryOutcomeMarketSpec {
     pub min_qty: f64,
     pub min_notional: f64,
     pub trading_opens_ms: u64,
+    pub order_entry_opens_ms: u64,
     pub trading_closes_ms: u64,
-    pub scheduled_resolution_ms: u64,
+    pub scheduled_event_ms: u64,
     pub capabilities: OutcomeVenueCapabilities,
 }
 
@@ -348,11 +349,14 @@ impl BinaryOutcomeMarketSpec {
             ));
         }
         if self.trading_opens_ms >= self.trading_closes_ms
-            || self.trading_closes_ms > self.scheduled_resolution_ms
+            || self.trading_opens_ms >= self.scheduled_event_ms
+            || self.order_entry_opens_ms < self.trading_opens_ms
+            || self.order_entry_opens_ms >= self.trading_closes_ms
         {
             return Err(OutcomeError::InvalidMarket(
-                "timestamps must satisfy trading_open < trading_close <= scheduled_resolution"
-                    .to_string(),
+                "timestamps must satisfy trading_open <= order_entry_open < trading_close and "
+                    .to_string()
+                    + "trading_open < scheduled_event",
             ));
         }
         Ok(())

@@ -117,6 +117,14 @@ impl SingleOutcomeSimulator {
         if order.expires_at_ms.is_some() && !self.market.capabilities.supports_gtd {
             return Err(OutcomeError::UnsupportedOrderFeature("gtd".to_string()));
         }
+        if order
+            .expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms <= timestamp_ms)
+        {
+            return Err(OutcomeError::InvalidMarket(
+                "order expiry must be later than its placement timestamp".to_string(),
+            ));
+        }
         if self
             .open_orders
             .iter()
@@ -382,7 +390,7 @@ impl SingleOutcomeSimulator {
 
     fn ensure_trading(&self, timestamp_ms: u64) -> Result<(), OutcomeError> {
         if self.ledger.is_settled()
-            || timestamp_ms < self.market.trading_opens_ms
+            || timestamp_ms < self.market.order_entry_opens_ms
             || timestamp_ms >= self.market.trading_closes_ms
         {
             Err(OutcomeError::MarketNotTrading(timestamp_ms))
@@ -440,8 +448,9 @@ mod tests {
             min_qty: 0.1,
             min_notional: 0.0,
             trading_opens_ms: 1_000,
+            order_entry_opens_ms: 1_000,
             trading_closes_ms: 10_000,
-            scheduled_resolution_ms: 10_000,
+            scheduled_event_ms: 10_000,
             capabilities: OutcomeVenueCapabilities {
                 complementary_books_merged: merged,
                 supports_split: true,
@@ -772,6 +781,47 @@ mod tests {
         simulator.settle(10_000, 1.0).unwrap();
         assert!(simulator.open_orders().is_empty());
         assert!(simulator.ledger().is_settled());
+    }
+
+    #[test]
+    fn order_entry_respects_acceptance_after_open_and_close_after_scheduled_event() {
+        let mut delayed = market(false);
+        delayed.order_entry_opens_ms = 2_000;
+        delayed.scheduled_event_ms = 5_000;
+        delayed.trading_closes_ms = 6_000;
+        let mut simulator =
+            SingleOutcomeSimulator::new(delayed, OutcomeFeeSchedule::zero(), 1.0).unwrap();
+
+        assert_eq!(
+            simulator
+                .place_order(
+                    order("too-early", Outcome::Yes, OutcomeOrderSide::Buy, 0.5, 1.0),
+                    1_500,
+                )
+                .unwrap_err(),
+            OutcomeError::MarketNotTrading(1_500)
+        );
+        simulator
+            .place_order(
+                order("accepted", Outcome::Yes, OutcomeOrderSide::Buy, 0.5, 1.0),
+                2_000,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_gtd_order_expired_at_placement() {
+        let mut simulator =
+            SingleOutcomeSimulator::new(market(false), OutcomeFeeSchedule::zero(), 1.0).unwrap();
+        let mut expired = order("expired", Outcome::Yes, OutcomeOrderSide::Buy, 0.5, 1.0);
+        expired.expires_at_ms = Some(1_500);
+
+        assert!(matches!(
+            simulator.place_order(expired, 1_500),
+            Err(OutcomeError::InvalidMarket(message))
+                if message.contains("later than its placement")
+        ));
+        assert!(simulator.open_orders().is_empty());
     }
 
     #[test]

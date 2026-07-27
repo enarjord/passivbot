@@ -442,6 +442,64 @@ class OutcomeTradeArchive:
                     _utc_ms(),
                 ),
             )
+            if cursor.rowcount == 0:
+                identity_clauses = []
+                identity_params: list[str] = []
+                if trade.source_event_id is not None:
+                    identity_clauses.append("source_event_id = ?")
+                    identity_params.append(trade.source_event_id)
+                if trade.sequence_id is not None:
+                    identity_clauses.append("sequence_id = ?")
+                    identity_params.append(trade.sequence_id)
+                if not identity_clauses:
+                    raise RuntimeError(
+                        "outcome trade insert was ignored without a deduplication identity"
+                    )
+                retained = connection.execute(
+                    f"""
+                    SELECT outcome, native_side, native_price, canonical_yes_price, qty,
+                           exchange_time_ms, source_event_id, economic_event_id, sequence_id
+                    FROM outcome_trades
+                    WHERE venue = ? AND market_id = ? AND asset_id = ?
+                      AND ({" OR ".join(identity_clauses)})
+                    """,
+                    (
+                        trade.venue.value,
+                        trade.market_id,
+                        trade.asset_id,
+                        *identity_params,
+                    ),
+                ).fetchall()
+                expected = (
+                    trade.outcome.value,
+                    trade.native_side.value,
+                    trade.native_price,
+                    trade.canonical_yes_price,
+                    trade.qty,
+                    trade.exchange_time_ms,
+                    trade.source_event_id,
+                    trade.economic_event_id,
+                    trade.sequence_id,
+                )
+                retained_identities = {
+                    (
+                        row["outcome"],
+                        row["native_side"],
+                        row["native_price"],
+                        row["canonical_yes_price"],
+                        row["qty"],
+                        row["exchange_time_ms"],
+                        row["source_event_id"],
+                        row["economic_event_id"],
+                        row["sequence_id"],
+                    )
+                    for row in retained
+                }
+                if retained_identities != {expected}:
+                    raise ValueError(
+                        "conflicting outcome trade evidence for an immutable "
+                        "source or sequence identity"
+                    )
         return cursor.rowcount == 1
 
     def append_trades(

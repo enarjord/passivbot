@@ -38,8 +38,9 @@ def payload(market_id: str = "binary-1", start_ms: int = 1_000, settle_ms: int =
             "min_qty": 0.1,
             "min_notional": 0.0,
             "trading_opens_ms": start_ms,
+            "order_entry_opens_ms": start_ms,
             "trading_closes_ms": settle_ms,
-            "scheduled_resolution_ms": settle_ms,
+            "scheduled_event_ms": settle_ms,
             "capabilities": {
                 "complementary_books_merged": False,
                 "supports_split": True,

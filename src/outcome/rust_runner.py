@@ -56,9 +56,14 @@ def normalized_market_to_rust_spec(
 
     opens_ms = market.lifecycle.trading_open_time_ms
     closes_ms = market.lifecycle.trading_close_time_ms
-    resolution_ms = market.lifecycle.scheduled_event_time_ms
-    if opens_ms is None or closes_ms is None or resolution_ms is None:
+    scheduled_event_ms = market.lifecycle.scheduled_event_time_ms
+    if opens_ms is None or closes_ms is None or scheduled_event_ms is None:
         raise ValueError("outcome market lifecycle is incomplete for Rust planning")
+    acceptance_ms = market.lifecycle.order_acceptance_time_ms
+    order_entry_opens_ms = max(
+        opens_ms,
+        opens_ms if acceptance_ms is None else acceptance_ms,
+    )
     effective_qty_step = market.qty_step if qty_step is None else qty_step
     if (
         effective_qty_step is None
@@ -99,8 +104,9 @@ def normalized_market_to_rust_spec(
         "min_qty": market.min_order_qty,
         "min_notional": market.min_order_notional or 0.0,
         "trading_opens_ms": opens_ms,
+        "order_entry_opens_ms": order_entry_opens_ms,
         "trading_closes_ms": closes_ms,
-        "scheduled_resolution_ms": resolution_ms,
+        "scheduled_event_ms": scheduled_event_ms,
         "capabilities": {
             "complementary_books_merged": market.capabilities.complementary_books_merged,
             "supports_split": market.capabilities.supports_split,

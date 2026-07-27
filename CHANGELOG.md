@@ -77,7 +77,12 @@ All notable user-facing changes will be documented in this file.
   cancellation failures now recover every targeted managed order to verified absence, and
   settlement re-import rejects contradictory evidence under the same source identity. The initial
   normalized venue scope now explicitly requires one collateral unit of payout; bounded Polymarket
-  captures retain grid changes without fabricating unproven grid-stream coverage.
+  captures retain grid changes without fabricating unproven grid-stream coverage. Outcome archive
+  imports now reject contradictory trades under the same source or sequence identity, attempted
+  quote cleanup continues through individual cancellation errors, Rust keeps order-entry
+  acceptance separate from market open and permits authoritative trading close after the scheduled
+  event, and already-expired GTD orders are rejected at placement. Perpetual hard-stop flat
+  confirmation remains minute-scoped when backtests use sub-minute candles.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

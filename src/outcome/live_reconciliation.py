@@ -64,13 +64,17 @@ async def _cancel_attempted_creates(
         if order.market_id == market.market_id
         and order.client_order_id in attempted_cloids
     )
+    cleanup_errors: list[Exception] = []
     for order in cleanup_orders:
-        await client.cancel_order(
-            market,
-            outcome=order.outcome,
-            order_id=int(order.order_id),
-            expected_client_order_id=order.client_order_id,
-        )
+        try:
+            await client.cancel_order(
+                market,
+                outcome=order.outcome,
+                order_id=int(order.order_id),
+                expected_client_order_id=order.client_order_id,
+            )
+        except Exception as exc:
+            cleanup_errors.append(exc)
     verified = await client.fetch_account_snapshot((market,))
     remaining = sorted(
         order.order_id
@@ -79,10 +83,13 @@ async def _cancel_attempted_creates(
         and order.client_order_id in attempted_cloids
     )
     if remaining:
-        raise RuntimeError(
+        error = RuntimeError(
             "HIP-4 partial-create cleanup is not authoritative: "
             f"{remaining}"
         )
+        if cleanup_errors:
+            raise error from cleanup_errors[0]
+        raise error
 
 
 async def _cancel_reconciliation_targets(

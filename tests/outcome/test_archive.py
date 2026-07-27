@@ -65,6 +65,29 @@ def test_archive_deduplicates_explicit_event_identity_and_round_trips(tmp_path):
     assert loaded == [original]
 
 
+def test_archive_rejects_conflicting_duplicate_trade_identities(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    source_identified = trade("event-1")
+    sequence_identified = replace(
+        trade(None, timestamp_ms=2_000),
+        sequence_id="sequence-1",
+    )
+
+    assert archive.append_trade(source_identified) is True
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        archive.append_trade(replace(source_identified, qty=3.0))
+
+    assert archive.append_trade(sequence_identified) is True
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        archive.append_trade(
+            replace(
+                sequence_identified,
+                native_price=0.41,
+                canonical_yes_price=0.41,
+            )
+        )
+
+
 def test_archive_rejects_conflicting_duplicate_settlement_identity(tmp_path):
     archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
     original = OutcomeSettlementEvidence(

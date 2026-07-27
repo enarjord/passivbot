@@ -3605,8 +3605,15 @@ impl<'a> Backtest<'a> {
                 runtime.flat_confirmations = 0;
                 runtime.pending_stop = None;
             } else {
-                runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
-                if runtime.flat_confirmations == 1 {
+                let current_minute = timestamp_ms / 60_000;
+                let advances_confirmation = runtime
+                    .pending_stop
+                    .map(|snapshot| snapshot.timestamp_ms / 60_000 < current_minute)
+                    .unwrap_or(true);
+                if advances_confirmation {
+                    runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
+                }
+                if advances_confirmation && runtime.flat_confirmations == 1 {
                     runtime.pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: strategy_equity,
@@ -3615,7 +3622,7 @@ impl<'a> Backtest<'a> {
                         drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
-                if runtime.flat_confirmations >= 2 {
+                if advances_confirmation && runtime.flat_confirmations >= 2 {
                     let stop_snapshot = runtime.pending_stop.unwrap_or(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: strategy_equity,
@@ -3791,8 +3798,15 @@ impl<'a> Backtest<'a> {
                 runtime.flat_confirmations = 0;
                 runtime.pending_stop = None;
             } else {
-                runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
-                if runtime.flat_confirmations == 1 {
+                let current_minute = timestamp_ms / 60_000;
+                let advances_confirmation = runtime
+                    .pending_stop
+                    .map(|snapshot| snapshot.timestamp_ms / 60_000 < current_minute)
+                    .unwrap_or(true);
+                if advances_confirmation {
+                    runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
+                }
+                if advances_confirmation && runtime.flat_confirmations == 1 {
                     runtime.pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: synthetic_equity,
@@ -3801,7 +3815,7 @@ impl<'a> Backtest<'a> {
                         drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
-                if runtime.flat_confirmations >= 2 {
+                if advances_confirmation && runtime.flat_confirmations >= 2 {
                     let stop_snapshot = runtime.pending_stop.unwrap_or(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: synthetic_equity,
@@ -8763,7 +8777,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_flat_confirmation_ignores_open_panic_close_orders() {
+    fn hard_stop_flat_confirmation_ignores_panic_orders_and_is_minute_scoped() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -8803,7 +8817,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_ms: 60_000,
+            candle_interval_ms: 1_000,
         };
 
         let mut bp_pair = BotParamsPair::default();
@@ -8848,6 +8862,20 @@ mod tests {
 
         assert_eq!(bt.hard_stop_flat_confirmations, 1);
         assert!(bt.hard_stop_pending_stop.is_some());
+
+        bt.equities.timestamps_ms.push(61_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        assert_eq!(bt.hard_stop_flat_confirmations, 1);
+        assert!(!bt.hard_stop_halted);
+
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        assert_eq!(bt.hard_stop_flat_confirmations, 2);
+        assert!(bt.hard_stop_halted);
     }
 
     #[test]
