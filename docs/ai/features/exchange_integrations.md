@@ -43,6 +43,14 @@ even beyond the normal foreign-writer lookback. Recovered rows always force an
 authoritative account refresh. Sparse foreign, explicitly one-way,
 identity-conflicting, or unmarked notifications remain rejected.
 
+A successful private-websocket read and a valid individual order row are separate health
+boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,
+quantity, or close-only semantics cannot be normalized, it discards that row, requests an
+authoritative account-state refresh, and emits a bounded warning. Other valid rows from the same
+websocket message remain usable. A semantic row rejection must not be reported as a transport
+disconnect or consume the websocket reconnect budget; actual watch/read failures retain the
+bounded reconnect backoff.
+
 ## Broker Agreement Attribution
 
 Problem:
