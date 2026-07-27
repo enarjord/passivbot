@@ -52,6 +52,10 @@
    gaps use the non-persistent synthetic gap path with replacement/invalidation tracking for EMA
    reads while remaining unavailable to ordinary candle consumers. Unresolved gap metadata wholly
    inside the configured open-tail projection interval does not invalidate that projection.
+   Internal eligibility is measured from the complete still-uncovered contiguous span, including
+   portions outside the current EMA query. Authoritative or verified-zero rows inside older broad
+   retry metadata split the original outage into its remaining uncovered spans; stale metadata
+   bounds alone must not make a short residual gap unavailable.
    The open-tail age bound applies uniformly, including stock perps; venue category must not create
    an unbounded synthetic tail exception.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
@@ -120,9 +124,10 @@
    cancellation is retried. Orders which first appear after the side enters `manual` or ordinary
    `tp_only` are not authorized by matching symbol/side, price, or quantity. It does not weaken
    manual ownership for other sides, closes, or creations.
-   A temporary bot-managed entry override such as HSL `graceful_stop`, `panic`, or
-   `tp_only_with_active_entry_cancellation` retains this degradation/cancellation behavior;
-   `manual` and ordinary `tp_only` continue to protect operator-owned entries. Held positions
+   An explicit `normal` or temporary bot-managed entry override such as HSL `graceful_stop`,
+   `panic`, or `tp_only_with_active_entry_cancellation` retains this
+   degradation/cancellation behavior; `manual` and ordinary `tp_only` continue to protect
+   operator-owned entries. Held positions
    retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This

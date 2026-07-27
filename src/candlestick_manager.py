@@ -3312,6 +3312,67 @@ class CandlestickManager:
                 ranges.append((overlap_start, overlap_end))
         return ranges
 
+    def _unverified_uncovered_gap_ranges(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[Tuple[int, int]]:
+        """Return full still-missing spans from unknown gaps overlapping a range.
+
+        Known-gap metadata may temporarily cover minutes which a later refresh
+        has already populated. Width-sensitive provisional policy must measure
+        the remaining contiguous outage, not either the caller-clipped overlap
+        or stale outer metadata bounds.
+        """
+        cached = self._cache.get(symbol)
+        if cached is None or cached.size == 0:
+            cached = np.empty((0,), dtype=CANDLE_DTYPE)
+        else:
+            cached = np.sort(_ensure_dtype(cached), order="ts")
+            provisional_ts = self._synthetic_timestamps.get(symbol, set())
+            if provisional_ts:
+                cached = cached[
+                    ~np.isin(
+                        cached["ts"].astype(np.int64),
+                        np.asarray(tuple(provisional_ts), dtype=np.int64),
+                    )
+                ]
+
+        missing: List[Tuple[int, int]] = []
+        for gap in self._get_known_gaps_enhanced(symbol):
+            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                GAP_REASON_AUTO,
+                GAP_REASON_FETCH_FAILED,
+            }:
+                continue
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_start > int(end_ts) or gap_end < int(start_ts):
+                continue
+            gap_rows = self._slice_ts_range(
+                cached,
+                gap_start,
+                gap_end,
+                assume_sorted=True,
+            )
+            missing.extend(self._missing_spans(gap_rows, gap_start, gap_end))
+
+        merged: List[Tuple[int, int]] = []
+        for gap_start, gap_end in sorted(missing):
+            if merged and int(gap_start) <= int(merged[-1][1]) + ONE_MIN_MS:
+                merged[-1] = (
+                    int(merged[-1][0]),
+                    max(int(merged[-1][1]), int(gap_end)),
+                )
+            else:
+                merged.append((int(gap_start), int(gap_end)))
+        return [
+            (gap_start, gap_end)
+            for gap_start, gap_end in merged
+            if gap_start <= int(end_ts) and gap_end >= int(start_ts)
+        ]
+
     def _due_unverified_gap_ranges(
         self,
         symbol: str,
@@ -7734,18 +7795,13 @@ class CandlestickManager:
                 self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
             )
             excluded_synthetic_ranges = []
-            for gap in self._get_known_gaps_enhanced(symbol):
-                if str(gap.get("reason", GAP_REASON_AUTO)) not in {
-                    GAP_REASON_AUTO,
-                    GAP_REASON_FETCH_FAILED,
-                }:
-                    continue
-                full_gap_start = int(gap["start_ts"])
-                full_gap_end = int(gap["end_ts"])
+            for full_gap_start, full_gap_end in self._unverified_uncovered_gap_ranges(
+                symbol,
+                start_ts,
+                end_ts,
+            ):
                 overlap_start = max(int(start_ts), full_gap_start)
                 overlap_end = min(int(end_ts), full_gap_end)
-                if overlap_start > overlap_end:
-                    continue
                 if (
                     provisional_tolerance_ms <= 0
                     or full_gap_end - full_gap_start + ONE_MIN_MS

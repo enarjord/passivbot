@@ -907,6 +907,7 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 @pytest.mark.parametrize(
     "override_mode,order_id",
     [
+        ("normal", "explicit-normal-entry"),
         ("graceful_stop", "hsl-graceful-stop-entry"),
         (
             "tp_only_with_active_entry_cancellation",

@@ -3565,6 +3565,69 @@ async def test_provisional_gap_tolerance_uses_full_recorded_gap_not_clipped_over
 
 
 @pytest.mark.asyncio
+async def test_provisional_gap_tolerance_measures_remaining_uncovered_span(
+    monkeypatch, tmp_path
+):
+    now = 205 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+        provisional_internal_gap_tolerance_minutes=10,
+    )
+    cm._now_ms_callback = lambda: now
+    symbol = "RECOVEREDGAP/USDT:USDT"
+    requested_start = 200 * ONE_MIN_MS
+    requested_end = 204 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (
+                ts,
+                float(ts // ONE_MIN_MS),
+                float(ts // ONE_MIN_MS),
+                float(ts // ONE_MIN_MS),
+                float(ts // ONE_MIN_MS),
+                1.0,
+            )
+            for ts in [
+                *range(189 * ONE_MIN_MS, requested_start, ONE_MIN_MS),
+                201 * ONE_MIN_MS,
+                202 * ONE_MIN_MS,
+                203 * ONE_MIN_MS,
+                requested_end,
+            ]
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    # Metadata still has the original 12-minute outage, but authoritative
+    # recovery has reduced the contiguous uncovered portion to one minute.
+    cm._add_known_gap(
+        symbol,
+        189 * ONE_MIN_MS,
+        requested_start,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    result = await cm.get_candles(
+        symbol,
+        start_ts=requested_start,
+        end_ts=requested_end,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=True,
+    )
+
+    assert list(result["ts"]) == [
+        requested_start,
+        201 * ONE_MIN_MS,
+        202 * ONE_MIN_MS,
+        203 * ONE_MIN_MS,
+        requested_end,
+    ]
+    assert requested_start in cm._synthetic_timestamps[symbol]
+
+
+@pytest.mark.asyncio
 async def test_historical_fetch_splits_around_deferred_gap(
     monkeypatch, tmp_path
 ):

@@ -16765,7 +16765,7 @@ class Passivbot:
             getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
-        bot_managed_orchestrator_modes = {"graceful_stop", "panic"}
+        bot_managed_orchestrator_modes = {"normal", "graceful_stop", "panic"}
 
         def is_bot_managed_entry_override(mode: object) -> bool:
             """Preserve ownership semantics erased by orchestrator normalization."""
@@ -17285,7 +17285,18 @@ class Passivbot:
             dynamic_psides: set[str] = set()
             current_normal_psides = normal_planning_psides(symbol)
             for pside in ("long", "short"):
-                if (modes.get(pside, {}) or {}).get(symbol) is not None:
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is not None:
+                    try:
+                        if bool(is_forager_mode(pside)) and (
+                            Passivbot._mode_override_to_orchestrator_mode(
+                                self, explicit_mode
+                            )
+                            == "normal"
+                        ):
+                            dynamic_psides.add(pside)
+                    except Exception:
+                        pass
                     continue
                 try:
                     if bool(is_forager_mode(pside)) and (
