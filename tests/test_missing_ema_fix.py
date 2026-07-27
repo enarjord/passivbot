@@ -703,7 +703,7 @@ async def test_flat_forager_universe_symbol_missing_close_ema_marks_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable():
+async def test_forager_eligible_flat_normal_missing_close_ema_marks_unavailable():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -712,7 +712,9 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     symbol = "BTC/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode="nan")
     bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
-    bot.active_symbols = [symbol]
+    # Rust evaluates an eligible forager candidate before it enters the active
+    # set; missing required inputs remain symbol-scoped during that phase.
+    bot.active_symbols = []
     bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
     bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
@@ -907,7 +909,6 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 @pytest.mark.parametrize(
     "override_mode,order_id",
     [
-        ("normal", "explicit-normal-entry"),
         ("graceful_stop", "hsl-graceful-stop-entry"),
         (
             "tp_only_with_active_entry_cancellation",

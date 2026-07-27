@@ -124,8 +124,9 @@
    cancellation is retried. Orders which first appear after the side enters `manual` or ordinary
    `tp_only` are not authorized by matching symbol/side, price, or quantity. It does not weaken
    manual ownership for other sides, closes, or creations.
-   An explicit `normal` or temporary bot-managed entry override such as HSL `graceful_stop`,
-   `panic`, or `tp_only_with_active_entry_cancellation` retains this
+   Eligibility does not depend on prior membership in `active_symbols`: Rust evaluates the flat
+   forager universe before selecting active coins. A temporary bot-managed entry override such as
+   HSL `graceful_stop`, `panic`, or `tp_only_with_active_entry_cancellation` retains this
    degradation/cancellation behavior; `manual` and ordinary `tp_only` continue to protect
    operator-owned entries. Held positions
    retain their stricter readiness contract.

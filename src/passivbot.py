@@ -16765,7 +16765,7 @@ class Passivbot:
             getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
-        bot_managed_orchestrator_modes = {"normal", "graceful_stop", "panic"}
+        bot_managed_orchestrator_modes = {"graceful_stop", "panic"}
 
         def is_bot_managed_entry_override(mode: object) -> bool:
             """Preserve ownership semantics erased by orchestrator normalization."""
@@ -17285,18 +17285,7 @@ class Passivbot:
             dynamic_psides: set[str] = set()
             current_normal_psides = normal_planning_psides(symbol)
             for pside in ("long", "short"):
-                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
-                if explicit_mode is not None:
-                    try:
-                        if bool(is_forager_mode(pside)) and (
-                            Passivbot._mode_override_to_orchestrator_mode(
-                                self, explicit_mode
-                            )
-                            == "normal"
-                        ):
-                            dynamic_psides.add(pside)
-                    except Exception:
-                        pass
+                if (modes.get(pside, {}) or {}).get(symbol) is not None:
                     continue
                 try:
                     if bool(is_forager_mode(pside)) and (
@@ -17349,10 +17338,11 @@ class Passivbot:
                 return False
             if has_explicit_normal_planning_mode(symbol):
                 return False
-            return bool(
-                symbol in set(getattr(self, "active_symbols", []) or [])
-                and dynamic_forager_managed_entry_psides(symbol)
-            )
+            # Forager evaluates the full eligible universe before a candidate
+            # becomes selected/active. A flat dynamically managed candidate
+            # therefore remains symbol-scoped even when it is not yet present
+            # in ``active_symbols``.
+            return bool(dynamic_forager_managed_entry_psides(symbol))
 
         forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
         forager_projection_max_age_by_symbol: dict[str, int] = {}
