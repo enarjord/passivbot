@@ -73,7 +73,11 @@ All notable user-facing changes will be documented in this file.
   of every attempted create; live sell sizing excludes inventory reserved by unmanaged orders while
   reclaiming managed reservations. Outcome sell constraints are checked after quantity rounding,
   and the candle simulator rejects non-post-only orders until taker execution is modeled. Optimizer
-  candle pre-aggregation now converts per-coin validity indices to the aggregated interval.
+  candle pre-aggregation now converts per-coin validity indices to the aggregated interval. Partial
+  cancellation failures now recover every targeted managed order to verified absence, and
+  settlement re-import rejects contradictory evidence under the same source identity. The initial
+  normalized venue scope now explicitly requires one collateral unit of payout; bounded Polymarket
+  captures retain grid changes without fabricating unproven grid-stream coverage.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

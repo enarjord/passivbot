@@ -108,6 +108,12 @@ async def test_capture_archives_books_and_grid_without_using_them_as_candles(tmp
         start_ms=0,
         end_ms=10_000,
     ) == [grid_change]
+    assert archive.load_verified_price_grid_coverage(
+        market.venue,
+        market.market_id,
+        start_ms=0,
+        end_ms=10_000,
+    ) == []
 
 
 @pytest.mark.asyncio

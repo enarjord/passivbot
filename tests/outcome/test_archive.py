@@ -17,6 +17,7 @@ from outcome.models import (
     OutcomePriceGridChange,
     OutcomePriceGridMetadata,
     OutcomeSide,
+    OutcomeSettlementEvidence,
     OutcomeVenue,
 )
 
@@ -62,6 +63,32 @@ def test_archive_deduplicates_explicit_event_identity_and_round_trips(tmp_path):
     )
 
     assert loaded == [original]
+
+
+def test_archive_rejects_conflicting_duplicate_settlement_identity(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    original = OutcomeSettlementEvidence(
+        venue=OutcomeVenue.HYPERLIQUID,
+        market_id="913",
+        yes_fraction=1.0,
+        payout_unit=1.0,
+        settlement_time_ms=5_000,
+        capital_release_time_ms=5_000,
+        received_time_ms=5_100,
+        source_event_id="settlement-1",
+        evidence_source="hyperliquid_user_fill",
+        observed_yes_qty=2.0,
+        observed_no_qty=0.0,
+        collateral_payout=2.0,
+        fee=0.0,
+        fee_asset="USDC",
+        raw_payload={"dir": "Settlement"},
+    )
+
+    assert archive.append_settlement(original) is True
+    assert archive.append_settlement(replace(original, received_time_ms=5_200)) is False
+    with pytest.raises(ValueError, match="conflicting outcome settlement evidence"):
+        archive.append_settlement(replace(original, yes_fraction=0.0))
 
 
 def test_archive_does_not_invent_identity_for_source_without_unique_ids(tmp_path):

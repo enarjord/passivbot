@@ -588,6 +588,19 @@ class OutcomeTradeArchive:
             sort_keys=True,
             allow_nan=False,
         )
+        identity = (
+            settlement.yes_fraction,
+            settlement.payout_unit,
+            settlement.settlement_time_ms,
+            settlement.capital_release_time_ms,
+            settlement.evidence_source,
+            settlement.observed_yes_qty,
+            settlement.observed_no_qty,
+            settlement.collateral_payout,
+            settlement.fee,
+            settlement.fee_asset,
+            raw_payload_json,
+        )
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -621,6 +634,32 @@ class OutcomeTradeArchive:
                     _utc_ms(),
                 ),
             )
+            if cursor.rowcount == 0:
+                existing = connection.execute(
+                    """
+                    SELECT yes_fraction, payout_unit, settlement_time_ms,
+                           capital_release_time_ms, evidence_source,
+                           observed_yes_qty, observed_no_qty, collateral_payout,
+                           fee, fee_asset, raw_payload_json
+                    FROM outcome_settlements
+                    WHERE venue = ? AND market_id = ? AND source_event_id = ?
+                    """,
+                    (
+                        settlement.venue.value,
+                        settlement.market_id,
+                        settlement.source_event_id,
+                    ),
+                ).fetchone()
+                if existing is None:
+                    raise RuntimeError(
+                        "outcome settlement insert was ignored without an existing identity"
+                    )
+                if tuple(existing) != identity:
+                    raise ValueError(
+                        f"conflicting outcome settlement evidence for "
+                        f"{settlement.venue.value}:{settlement.market_id} "
+                        f"source event {settlement.source_event_id}"
+                    )
         return cursor.rowcount == 1
 
     def load_trades(

@@ -40,6 +40,11 @@ Ordinary binary settlement uses `yes_fraction` equal to `0` or `1`. The fraction
 is retained for venues that report invalid, ambiguous, interpolated, or otherwise fractional
 settlements.
 
+The initial normalized venue contract supports one collateral unit of payout, so
+`payout_unit == 1.0` and all native and canonical prices remain in `[0, 1]`. Rust keeps the payout
+term explicit for accounting clarity; accepting non-unit payout markets would require a deliberate
+extension of every normalized trade, account-fill, book, candle, adapter, and archive boundary.
+
 Strategy pricing uses one canonical YES coordinate. Native NO price `n` maps to canonical YES price
 `payout_unit - n`:
 
@@ -208,6 +213,11 @@ with conflicting contract terms. Constraint, fee, price-grid, and lifecycle obse
 change without replacing the retained contract. This is required because expired HIP-4
 price-binary rows disappear from `outcomeMeta`.
 
+Settlement source-event identity is immutable as well. Re-importing the same venue, market, and
+source event may differ in observation metadata such as receive time, but contradictory payout,
+winner, event time, release time, fee, quantity, or raw authoritative evidence is archive
+corruption and must fail.
+
 Replay consolidates lifecycle observations without replacing the initial trading terms. In
 particular, an initial live Polymarket observation commonly has no `closedTime`; a later closed
 observation supplies the actual trading close used for full-contract coverage.
@@ -332,10 +342,12 @@ metadata, one consistent authoritative settlement payout, actual fills, and cont
 coverage for both native side assets from trading open through trading close. The archive replay
 builder also requires independent full-window price-grid stream coverage on venues such as
 Polymarket where tick-size changes are a separate event source. Fill coverage does not prove grid
-coverage. The builder supplies the authoritative capital-release timestamp and payout to Rust;
-resolution-only evidence remains archived but is not a release timestamp. The EMA-anchor job
-adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
-shared-wallet orchestrator locks that job's allocation until that release.
+coverage. A bounded live capture without an authoritative grid-subscription readiness boundary
+archives observed changes but does not certify grid coverage. The builder supplies the
+authoritative capital-release timestamp and payout to Rust; resolution-only evidence remains
+archived but is not a release timestamp. The EMA-anchor job adapter invokes the EMA strategy
+kernel—not the generic scripted-action simulator—before the shared-wallet orchestrator locks that
+job's allocation until that release.
 
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,

@@ -389,8 +389,10 @@ class NormalizedOutcomeMarket:
             raise ValueError("market_id must not be empty")
         if self.yes_asset.side is not OutcomeSide.YES or self.no_asset.side is not OutcomeSide.NO:
             raise ValueError("yes_asset and no_asset must have their corresponding canonical sides")
-        if not math.isfinite(self.payout_unit) or self.payout_unit <= 0.0:
-            raise ValueError("payout_unit must be finite and positive")
+        if not math.isfinite(self.payout_unit) or self.payout_unit != 1.0:
+            raise ValueError(
+                "initial binary outcome markets require payout_unit equal to one collateral unit"
+            )
         for name in ("qty_step", "min_order_qty", "min_order_notional"):
             value = getattr(self, name)
             if value is not None and (not math.isfinite(value) or value <= 0.0):

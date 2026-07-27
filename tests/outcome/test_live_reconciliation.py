@@ -390,3 +390,57 @@ async def test_executor_cleans_up_attempted_orders_after_final_verification_fail
     assert [item[2] for item in client.cancelled] == [9]
     assert [item[3] for item in client.cancelled] == [first.client_order_id]
     assert len(client.created) == 2
+
+
+@pytest.mark.asyncio
+async def test_executor_recovers_all_targets_after_partial_cancellation_failure():
+    stale_bid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    stale_ask = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_ask",
+        observation_end_ms=2_000,
+    )
+    first_order = order(
+        "1",
+        outcome=OutcomeSide.YES,
+        price=0.48,
+        cloid=stale_bid,
+    )
+    second_order = order(
+        "2",
+        outcome=OutcomeSide.NO,
+        price=0.48,
+        cloid=stale_ask,
+    )
+    reconciliation = reconcile_outcome_orders_to_empty(
+        market(),
+        snapshot((first_order, second_order)),
+        decision_time_ms=4_000,
+    )
+    client = FakeClient(snapshot((second_order,)), snapshot())
+    original_cancel = client.cancel_order
+    failed_once = False
+
+    async def fail_second_cancel(*args, **kwargs):
+        nonlocal failed_once
+        result = await original_cancel(*args, **kwargs)
+        if kwargs["order_id"] == 2 and not failed_once:
+            failed_once = True
+            raise TimeoutError("ambiguous second cancellation")
+        return result
+
+    client.cancel_order = fail_second_cancel
+
+    with pytest.raises(TimeoutError, match="ambiguous second cancellation"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [1, 2, 2]
+    assert [item[3] for item in client.cancelled] == [
+        stale_bid,
+        stale_ask,
+        stale_ask,
+    ]

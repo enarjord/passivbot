@@ -103,8 +103,10 @@ async def capture_outcome_public_session(
     """Archive one bounded public session and return a verified trade-derived signal window.
 
     Books and price-grid changes are retained as independent audit/replay inputs. Only the trade
-    stream can create verified candle coverage. Any required auxiliary stream failure aborts the
-    session instead of silently claiming a complete capture.
+    stream can create verified candle coverage. The current Polymarket grid stream has no
+    authoritative subscription-readiness boundary, so this bounded capture intentionally does not
+    certify price-grid coverage. Any required auxiliary stream failure aborts the session instead
+    of silently claiming a complete capture.
     """
 
     if not collector_session.strip():

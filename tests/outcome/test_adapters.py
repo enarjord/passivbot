@@ -40,6 +40,13 @@ def test_hyperliquid_price_binary_market_maps_official_asset_encodings():
     assert market.min_order_notional == 10.0
 
 
+def test_initial_normalized_market_contract_rejects_non_unit_payouts():
+    market = hyperliquid.normalize_market(load_fixture("hyperliquid_price_binary.json"))
+
+    with pytest.raises(ValueError, match="one collateral unit"):
+        replace(market, payout_unit=2.0)
+
+
 @pytest.mark.parametrize(
     "description",
     [
