@@ -17216,6 +17216,15 @@ class Passivbot:
             """Return sides whose current Rust payload may place entries for symbol."""
             normal_psides: set[str] = set()
             pb_modes = getattr(self, "PB_modes", {})
+
+            def has_default_entry_capacity(pside: str) -> bool:
+                """Exclude disabled sides from implicit active-symbol normal mode."""
+                try:
+                    return int(self.get_max_n_positions(pside)) > 0
+                except Exception:
+                    # Minimal test/fallback bots may not expose the live helper.
+                    return True
+
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
                 if explicit_mode is not None:
@@ -17234,7 +17243,8 @@ class Passivbot:
                     continue
                 if symbol in pside_modes:
                     if (
-                        Passivbot._pb_mode_to_orchestrator_mode(
+                        has_default_entry_capacity(pside)
+                        and Passivbot._pb_mode_to_orchestrator_mode(
                             self, pside_modes.get(symbol)
                         )
                         == "normal"
@@ -17245,8 +17255,11 @@ class Passivbot:
                     entries_blocked = Passivbot._pside_blocks_new_entries(self, pside)
                 except Exception:
                     entries_blocked = False
-                if not entries_blocked and symbol in set(
-                    getattr(self, "active_symbols", []) or []
+                if (
+                    has_default_entry_capacity(pside)
+                    and not entries_blocked
+                    and symbol
+                    in set(getattr(self, "active_symbols", []) or [])
                 ):
                     normal_psides.add(pside)
             return normal_psides

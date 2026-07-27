@@ -120,7 +120,9 @@
    reconciliation cancel the resting entry. An open order alone must not promote a flat,
    dynamically selected symbol into the account-fatal required-input path. This degradation is
    side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
-   sides retain their strict readiness contract. Strategy EMA maps and Rust's `tradable` flag are
+   sides retain their strict readiness contract. A side disabled by zero entry capacity is not an
+   implicit normal side merely because the symbol is active on the opposite side. Strategy EMA
+   maps and Rust's `tradable` flag are
    nevertheless symbol-scoped: once every normal side is proven dynamically managed, any missing
    required strategy EMA degrades the whole flat symbol rather than fabricating a partial bundle.
    Missing forager ranking features remain side-scoped because their affected side is authoritative

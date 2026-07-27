@@ -918,6 +918,65 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 
 
 @pytest.mark.asyncio
+async def test_disabled_opposite_side_does_not_block_flat_forager_degradation():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "ONDO/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        qv_mode="nan",
+        lr1m_mode="nan",
+    )
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": "ondo-forager-entry",
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 9.0,
+                "price": 0.4,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.get_max_n_positions = lambda pside: 3 if pside == "long" else 0
+    bot.is_forager_mode = lambda pside=None: pside in (None, "long")
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 1.0, "volatility": 1.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_required_forager_volume+missing_required_forager_log_range": {
+            symbol
+        }
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (symbol, "long", "exchange_id", "ondo-forager-entry")
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "override_mode,order_id",
     [
