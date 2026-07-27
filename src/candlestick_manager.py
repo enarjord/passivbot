@@ -8022,17 +8022,6 @@ class CandlestickManager:
                 f"open-tail projection unavailable for {symbol}: no local candles "
                 f"start_ts={start_ts} latest_expected_ts={latest_expected}"
             )
-        # The deterministic fake-live harness intentionally permits sparse
-        # scenario timelines.  Those rows are authoritative test inputs rather
-        # than incomplete exchange history.
-        if (
-            str(self.exchange_name or "").lower() != "fake"
-            and self._unverified_gap_ranges(symbol, start_ts, latest_expected)
-        ):
-            raise RuntimeError(
-                f"open-tail projection unavailable for {symbol}: "
-                "unverified internal candle gap"
-            )
         arr = np.sort(_ensure_dtype(arr), order="ts")
         newest_ts = int(arr[-1]["ts"])
         if newest_ts > latest_expected:
@@ -8042,6 +8031,39 @@ class CandlestickManager:
                     f"open-tail projection unavailable for {symbol}: no candles after range clamp"
                 )
             newest_ts = int(arr[-1]["ts"])
+        if newest_ts < last_cached:
+            raise RuntimeError(
+                f"open-tail projection unavailable for {symbol}: "
+                f"authoritative tail anchor missing last_cached_ts={last_cached} "
+                f"newest_ts={newest_ts}"
+            )
+        # The deterministic fake-live harness intentionally permits sparse
+        # scenario timelines. Those rows are authoritative test inputs rather
+        # than incomplete exchange history.
+        #
+        # Unknown-gap metadata wholly after last_cached describes the exact
+        # bounded open tail this method is responsible for projecting. It must
+        # not turn a permitted provisional tail into an "internal gap" failure.
+        # Gaps at or before the authoritative anchor remain strict, except when
+        # every named timestamp is already covered by a real row and the gap
+        # metadata is merely stale.
+        if str(self.exchange_name or "").lower() != "fake":
+            for gap_start, gap_end in self._unverified_gap_ranges(
+                symbol,
+                start_ts,
+                min(last_cached, latest_expected),
+            ):
+                mask = (arr["ts"] >= int(gap_start)) & (arr["ts"] <= int(gap_end))
+                if not self._candle_range_has_full_coverage(
+                    arr[mask],
+                    int(gap_start),
+                    int(gap_end),
+                    ONE_MIN_MS,
+                ):
+                    raise RuntimeError(
+                        f"open-tail projection unavailable for {symbol}: "
+                        "unverified internal candle gap"
+                    )
         if newest_ts < latest_expected:
             prev_close = float(arr[-1]["c"])
             rows = []

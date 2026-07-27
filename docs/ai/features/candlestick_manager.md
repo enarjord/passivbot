@@ -50,6 +50,9 @@
    continuity gaps, not for unknown stale tails caused by refresh budget or REST delay.
 6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
    gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
+   Unresolved gap metadata wholly inside the configured open-tail projection interval does not
+   invalidate that projection; unresolved gaps at or before its authoritative tail anchor remain
+   unavailable.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the

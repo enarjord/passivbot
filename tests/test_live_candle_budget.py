@@ -4836,7 +4836,12 @@ def test_completed_candle_freshness_blocks_bounded_gap_plus_tail(monkeypatch):
 async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypatch):
     import math
     import numpy as np
-    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
 
     cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
     symbol = "TAIL/USDT:USDT"
@@ -4848,6 +4853,12 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         dtype=CANDLE_DTYPE,
     )
     cm._cache[symbol] = seed.copy()
+    cm._add_known_gap(
+        symbol,
+        last_cached + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
     cm._ema_cache[symbol] = {("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)}
     get_candles_calls = {"count": 0}
     original_get_candles = cm.get_candles
@@ -4898,6 +4909,157 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
     assert math.isfinite(projected["qv"][4.0])
     assert get_candles_calls["count"] == 1
     assert projected["close"][4.0] == pytest.approx(100.0)
+    assert cm._get_known_gaps(symbol) == [
+        (last_cached + ONE_MIN_MS, latest_expected)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_allows_ten_minute_known_gap(tmp_path, monkeypatch):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TENMIN/USDT:USDT"
+    last_cached = 60 * ONE_MIN_MS
+    latest_expected = last_cached + 10 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    seed = np.array(
+        [(last_cached, 100.0, 101.0, 99.0, 100.0, 2.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = seed.copy()
+    cm._add_known_gap(
+        symbol,
+        last_cached + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0], "qv": [4.0], "log_range": [4.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert projected["close"][4.0] == pytest.approx(100.0)
+    assert projected["qv"][4.0] == pytest.approx(0.0)
+    assert projected["log_range"][4.0] == pytest.approx(0.0)
+    assert all(
+        math.isfinite(projected[metric][4.0])
+        for metric in ("close", "qv", "log_range")
+    )
+    assert np.array_equal(cm._cache[symbol], seed)
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_rejects_missing_authoritative_anchor(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "NOANCHOR/USDT:USDT"
+    newest = 59 * ONE_MIN_MS
+    last_cached = newest + ONE_MIN_MS
+    latest_expected = last_cached + ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [(newest, 100.0, 100.0, 100.0, 100.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    with pytest.raises(RuntimeError, match="authoritative tail anchor missing"):
+        await cm.get_projected_open_tail_ema_metrics(
+            symbol,
+            {"close": [4.0]},
+            latest_expected_ts=latest_expected,
+            last_cached_ts=last_cached,
+            max_tail_gap_ms=10 * ONE_MIN_MS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_known_gap_is_replaced_by_late_real_candles(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "LATEKNOWN/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [(t58, 100.0, 100.0, 100.0, 100.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t59,
+        t60,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t58,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    assert projected["close"][3.0] == pytest.approx(100.0)
+    assert symbol in cm._projected_open_tail_ema_cache
+
+    real_late = np.array(
+        [
+            (t59, 110.0, 111.0, 109.0, 110.0, 3.0),
+            (t60, 120.0, 121.0, 119.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        real_late,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+
+    assert cm._get_known_gaps(symbol) == []
+    assert symbol not in cm._projected_open_tail_ema_cache
+    actual = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        allow_remote_fetch=False,
+    )
+    expected_rows = np.array(
+        [
+            (t58, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t59, 110.0, 111.0, 109.0, 110.0, 3.0),
+            (t60, 120.0, 121.0, 119.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    assert actual == pytest.approx(cm._ema(expected_rows["c"].astype(float), 3.0))
+    assert actual != pytest.approx(projected["close"][3.0])
 
 
 @pytest.mark.asyncio

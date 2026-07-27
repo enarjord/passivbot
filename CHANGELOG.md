@@ -7,7 +7,10 @@ All notable user-facing changes will be documented in this file.
 - Flat forager-selected symbols with resting entries now degrade to nontradable when required EMA
   inputs are temporarily unavailable, allowing normal reconciliation to cancel the stale entry
   instead of repeatedly crashing and restarting the whole live bot. Held positions and explicitly
-  configured normal modes retain their strict required-input behavior.
+  configured normal modes retain their strict required-input behavior. Bounded open-ended 1m gaps
+  continue using provisional in-memory EMA projection even when retry metadata records the missing
+  tail, so symbols remain tradable through the configured active-tail grace period and recover
+  immediately when authoritative candles arrive.
 
 - KuCoin private order updates now use the connector's actual exchange hedge mode for mandatory
   long/short attribution even when `live.hedge_mode=false` disables simultaneous strategy

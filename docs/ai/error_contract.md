@@ -55,7 +55,10 @@ block protective management of held symbols.
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when
 the previous close is known, overlap repair is scheduled, and the gap is within policy. Unknown
-stale tails must not be converted to zero volume or zero range.
+stale tails must not be persisted or treated as verified zero-volume or zero-range history. Within
+the configured active-tail bound, an explicitly supported provisional in-memory projection may use
+flat zero-volume rows for active strategy inputs while authoritative overlap repair continues.
+Forager ranking quote-volume and log-range inputs retain their narrower carry-forward contract.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
