@@ -189,6 +189,7 @@ _LOCK_BACKOFF_MAX = 2.0
 _GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
 _WEEX_RECENT_OHLCV_LIMIT = 1_000
 _WEEX_HISTORICAL_OHLCV_LIMIT = 100
+DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES = 120.0
 
 
 def _ensure_legacy_ohlcv_cache_base(cache_dir: str) -> str:
@@ -741,6 +742,7 @@ class CandlestickManager:
         # Optional minimum spacing between ccxt OHLCV calls from this manager.
         remote_fetch_min_interval_ms: float | None = None,
         lock_timeout_seconds: float | None = None,
+        gap_tolerance_ohlcvs_minutes: float = DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
@@ -766,6 +768,9 @@ class CandlestickManager:
         self.overlap_candles = int(overlap_candles)
         self.max_memory_candles_per_symbol = int(max_memory_candles_per_symbol)
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
+        self.gap_tolerance_ohlcvs_minutes = max(
+            0.0, float(gap_tolerance_ohlcvs_minutes)
+        )
         # Archive fetching: if False, only use ccxt REST API
         self.archive_enabled = bool(archive_enabled)
         # Debug levels: 0=warnings, 1=network summaries, 2=debug, 3=trace/firehose
@@ -1712,6 +1717,37 @@ class CandlestickManager:
     ) -> str:
         return str(Path(self._symbol_dir(symbol, timeframe=timeframe, tf=tf)) / f"{date_key}.npy")
 
+    def _recompute_shard_derived_meta(self, idx: dict) -> None:
+        """Recompute index bounds which are derived exclusively from shard metadata."""
+        shards = idx.get("shards", {})
+        if not isinstance(shards, dict):
+            shards = {}
+            idx["shards"] = shards
+        meta = idx.setdefault("meta", {})
+        try:
+            last_ts = 0
+            observed_start_ts: Optional[int] = None
+            for shard_meta in shards.values():
+                if not isinstance(shard_meta, dict):
+                    continue
+                mt = shard_meta.get("max_ts")
+                if mt is not None:
+                    last_ts = max(last_ts, int(mt))
+                mi = shard_meta.get("min_ts")
+                if mi is not None:
+                    observed_start_ts = (
+                        int(mi)
+                        if observed_start_ts is None
+                        else min(observed_start_ts, int(mi))
+                    )
+            meta["last_final_ts"] = int(last_ts)
+            meta["observed_start_ts"] = observed_start_ts
+            meta["inception_ts"] = observed_start_ts
+        except Exception:
+            meta["last_final_ts"] = 0
+            meta["observed_start_ts"] = None
+            meta["inception_ts"] = None
+
     def _prune_missing_shards_from_index(self, idx: dict) -> int:
         """Remove shard entries whose files are missing; refresh derived meta fields."""
         try:
@@ -1731,30 +1767,7 @@ class CandlestickManager:
             if not removed:
                 return 0
             idx["shards"] = shards
-            meta = idx.setdefault("meta", {})
-            try:
-                last_ts = 0
-                observed_start_ts: Optional[int] = None
-                for shard_meta in shards.values():
-                    if not isinstance(shard_meta, dict):
-                        continue
-                    mt = shard_meta.get("max_ts")
-                    if mt is not None:
-                        last_ts = max(last_ts, int(mt))
-                    mi = shard_meta.get("min_ts")
-                    if mi is not None:
-                        observed_start_ts = (
-                            int(mi)
-                            if observed_start_ts is None
-                            else min(observed_start_ts, int(mi))
-                        )
-                meta["last_final_ts"] = int(last_ts)
-                meta["observed_start_ts"] = observed_start_ts
-                meta["inception_ts"] = observed_start_ts
-            except Exception:
-                meta["last_final_ts"] = 0
-                meta["observed_start_ts"] = None
-                meta["inception_ts"] = None
+            self._recompute_shard_derived_meta(idx)
             return int(removed)
         except Exception:
             return 0
@@ -2831,10 +2844,13 @@ class CandlestickManager:
             return np.sort(_ensure_dtype(existing), order="ts")
         a = _ensure_dtype(existing)
         b = _ensure_dtype(new)
-        # Put existing first, then new; then keep last seen per ts to prefer new
+        # Put existing first, then new; then keep last seen per ts to prefer new.
+        # Sort the scalar timestamp vector rather than structured rows: NumPy
+        # may use unspecified structured fields as tie-breakers even when
+        # ``order="ts"``, which can otherwise let an older row win.
         combo = np.concatenate([a, b])
-        # Stable sort ensures that for equal timestamps, rows from `new` remain after `existing`.
-        combo = np.sort(combo, order="ts", kind="stable")
+        order = np.argsort(combo["ts"].astype(np.int64, copy=False), kind="stable")
+        combo = combo[order]
         ts = combo["ts"].astype(np.int64, copy=False)
         if combo.size <= 1:
             return combo
@@ -4686,6 +4702,212 @@ class CandlestickManager:
             last = ts[i]
         return arr[keep]
 
+    def _rejected_ccxt_ohlcv_timestamps(
+        self,
+        rows: list,
+        normalized: np.ndarray,
+    ) -> set[int]:
+        """Return parseable payload timestamps discarded during normalization.
+
+        A timestamp present in any accepted duplicate is not rejected. Callers
+        use the remaining timestamps as unavailable buckets rather than treating
+        invalid exchange data as an omitted no-trade interval.
+        """
+        accepted = (
+            {int(ts) for ts in normalized["ts"]}
+            if isinstance(normalized, np.ndarray) and normalized.size
+            else set()
+        )
+        present = set()
+        for row in rows:
+            try:
+                ts = int(row[0])
+                if ts % ONE_MIN_MS != 0:
+                    ts = _floor_minute(ts)
+                present.add(ts)
+            except (IndexError, TypeError, ValueError, OverflowError):
+                continue
+        return present - accepted
+
+    def _ccxt_ohlcv_has_unidentifiable_rejected_row(self, rows: list) -> bool:
+        """Return whether a raw row cannot be attributed to a candle bucket."""
+        for row in rows:
+            try:
+                int(row[0])
+            except (IndexError, TypeError, ValueError, OverflowError):
+                return True
+        return False
+
+    def _evict_rejected_native_sparse_synthetics(
+        self,
+        symbol: str,
+        *,
+        timeframe: str,
+        rejected_timestamps: Optional[set[int]] = None,
+        rejected_ranges: Optional[list[tuple[int, int]]] = None,
+    ) -> set[int]:
+        """Remove persisted KuCoin sparse placeholders contradicted by invalid real rows.
+
+        KuCoin omits native kline buckets that have no ticks. Passivbot's
+        internally bounded placeholders are therefore identifiable on disk as
+        flat zero-volume rows. A later payload row at that timestamp proves the
+        bucket was not an omitted no-trade interval; if that row is invalid, the
+        cached placeholder must become unavailable rather than survive the
+        merge.
+        """
+        rejected_timestamps = {
+            int(ts) for ts in (rejected_timestamps or set())
+        }
+        rejected_ranges = [
+            (int(start_ts), int(end_ts))
+            for start_ts, end_ts in (rejected_ranges or [])
+            if int(end_ts) >= int(start_ts)
+        ]
+        if not rejected_timestamps and not rejected_ranges:
+            return set()
+        tf_norm = self._normalize_timeframe_arg(timeframe, None)
+        if tf_norm == "1m":
+            return set()
+        shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+        exact_ts_arr = (
+            np.fromiter(rejected_timestamps, dtype=np.int64)
+            if rejected_timestamps
+            else np.empty((0,), dtype=np.int64)
+        )
+        removed: set[int] = set()
+        for day_key, path in shard_paths.items():
+            if not path or not os.path.exists(path):
+                continue
+            day_start, day_end = self._date_range_of_key(day_key)
+            if (
+                not any(day_start <= ts <= day_end for ts in rejected_timestamps)
+                and not any(
+                    start_ts <= day_end and end_ts >= day_start
+                    for start_ts, end_ts in rejected_ranges
+                )
+            ):
+                continue
+            shard = self._load_shard(path)
+            if shard.size == 0:
+                continue
+            shard_ts = shard["ts"].astype(np.int64, copy=False)
+            candidate = np.isin(shard_ts, exact_ts_arr)
+            for start_ts, end_ts in rejected_ranges:
+                candidate |= (shard_ts >= start_ts) & (shard_ts <= end_ts)
+            flat_zero = (
+                (shard["bv"] == 0.0)
+                & (shard["o"] == shard["h"])
+                & (shard["o"] == shard["l"])
+                & (shard["o"] == shard["c"])
+            )
+            remove_mask = candidate & flat_zero
+            if not bool(np.any(remove_mask)):
+                continue
+            removed.update(int(ts) for ts in shard["ts"][remove_mask])
+            kept = shard[~remove_mask]
+            if kept.size:
+                self._save_shard(symbol, day_key, kept, tf=tf_norm)
+            else:
+                os.remove(path)
+                idx = self._ensure_symbol_index(symbol, tf=tf_norm)
+                idx.setdefault("shards", {}).pop(day_key, None)
+                self._index[f"{symbol}::{tf_norm}"] = idx
+                self._save_index(symbol, tf=tf_norm)
+                self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+        if removed:
+            idx = self._ensure_symbol_index(symbol, tf=tf_norm)
+            self._recompute_shard_derived_meta(idx)
+            self._index[f"{symbol}::{tf_norm}"] = idx
+            self._save_index(symbol, tf=tf_norm)
+            self._invalidate_ema_cache(symbol, timeframe=tf_norm)
+            self._invalidate_tf_range_cache(
+                symbol,
+                timeframe=tf_norm,
+                start_ts=min(removed),
+                end_ts=max(removed),
+            )
+        return removed
+
+    def _synthesize_verified_sparse_payload_gaps(
+        self,
+        arr: np.ndarray,
+        *,
+        period_ms: int,
+        start_ts: int,
+        end_exclusive_ts: int,
+        rejected_timestamps: Optional[set[int]] = None,
+        has_unidentifiable_rejected_row: bool = False,
+    ) -> np.ndarray:
+        """Fill KuCoin higher-timeframe no-tick buckets bounded in one payload.
+
+        KuCoin documents that it omits kline buckets with no ticks.  Two real
+        adjacent rows in the same successful response prove that an internal
+        timestamp absent from that response is a no-trade interval. Timestamps
+        present in rejected rows remain unavailable. Leading, trailing, and
+        between-page gaps remain unproven and are deliberately not filled.
+
+        The established 1m path records verified gaps and standardizes them
+        later, so this helper is limited to native higher timeframes.
+        """
+        if (
+            not self._record_payload_gaps_as_known
+            or int(period_ms) <= ONE_MIN_MS
+            or not isinstance(arr, np.ndarray)
+            or arr.size < 2
+            or has_unidentifiable_rejected_row
+        ):
+            return arr
+        period_ms = int(period_ms)
+        first_requested_bucket = (
+            (int(start_ts) + period_ms - 1) // period_ms
+        ) * period_ms
+        requested_end_exclusive = int(end_exclusive_ts)
+        arr = np.sort(_ensure_dtype(arr), order="ts")
+        rows = []
+        changed = False
+        for idx in range(arr.shape[0] - 1):
+            current = arr[idx]
+            following = arr[idx + 1]
+            rows.append(tuple(current.tolist()))
+            current_ts = int(current["ts"])
+            following_ts = int(following["ts"])
+            if following_ts <= current_ts + int(period_ms):
+                continue
+            missing_span_ms = following_ts - current_ts - period_ms
+            tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * ONE_MIN_MS)
+            if tolerance_ms <= 0 or missing_span_ms > tolerance_ms:
+                continue
+            previous_close = float(current["c"])
+            synthesis_end = min(following_ts, requested_end_exclusive)
+            if rejected_timestamps:
+                barriers = [
+                    int(ts)
+                    for ts in rejected_timestamps
+                    if current_ts < int(ts) < following_ts
+                ]
+                if barriers:
+                    synthesis_end = min(synthesis_end, min(barriers))
+            for ts in range(
+                max(current_ts + period_ms, first_requested_bucket),
+                synthesis_end,
+                period_ms,
+            ):
+                rows.append(
+                    (
+                        int(ts),
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        previous_close,
+                        0.0,
+                    )
+                )
+                changed = True
+        rows.append(tuple(arr[-1].tolist()))
+        if not changed:
+            return arr
+        return np.array(rows, dtype=CANDLE_DTYPE)
+
     async def _fetch_ohlcv_paginated(
         self,
         symbol: str,
@@ -4718,6 +4940,8 @@ class CandlestickManager:
         all_rows = []
         pages = 0
         prev_last_ts: Optional[int] = None
+        verified_sparse_synthetic_count = 0
+        verified_sparse_synthetic_pages = 0
         total_span = max(1, end_excl - since_start)
 
         def _partial_rows() -> np.ndarray:
@@ -4771,6 +4995,43 @@ class CandlestickManager:
                     )
                 break
             arr = self._normalize_ccxt_ohlcv(page)
+            rejected_payload_timestamps = (
+                self._rejected_ccxt_ohlcv_timestamps(page, arr)
+                if self._record_payload_gaps_as_known and period_ms > ONE_MIN_MS
+                else set()
+            )
+            has_unidentifiable_rejected_row = bool(
+                self._record_payload_gaps_as_known
+                and period_ms > ONE_MIN_MS
+                and self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
+            )
+            rejected_ranges = []
+            if has_unidentifiable_rejected_row:
+                if arr.size >= 2:
+                    accepted_ts = np.sort(arr["ts"].astype(np.int64, copy=False))
+                    bounded_start = max(
+                        int(since_start), int(accepted_ts[0]) + period_ms
+                    )
+                    bounded_end = min(
+                        int(end_excl) - period_ms,
+                        int(accepted_ts[-1]) - period_ms,
+                    )
+                else:
+                    # With fewer than two accepted timestamps, the malformed row
+                    # cannot be bounded inside the payload. Treat the remaining
+                    # requested range as unavailable rather than allowing a
+                    # previously persisted placeholder to prove continuity.
+                    bounded_start = max(int(since_start), int(since))
+                    bounded_end = int(end_excl) - period_ms
+                if bounded_end >= bounded_start:
+                    rejected_ranges.append((bounded_start, bounded_end))
+            if rejected_payload_timestamps or rejected_ranges:
+                self._evict_rejected_native_sparse_synthetics(
+                    symbol,
+                    timeframe=tf_norm,
+                    rejected_timestamps=rejected_payload_timestamps,
+                    rejected_ranges=rejected_ranges,
+                )
             if arr.size == 0:
                 if (
                     raise_on_partial_empty_page
@@ -4782,6 +5043,18 @@ class CandlestickManager:
                         "reaching the requested end"
                     )
                 break
+            raw_arr_size = int(arr.size)
+            arr = self._synthesize_verified_sparse_payload_gaps(
+                arr,
+                period_ms=period_ms,
+                start_ts=since_start,
+                end_exclusive_ts=end_excl,
+                rejected_timestamps=rejected_payload_timestamps,
+                has_unidentifiable_rejected_row=has_unidentifiable_rejected_row,
+            )
+            if int(arr.size) > raw_arr_size:
+                verified_sparse_synthetic_count += int(arr.size) - raw_arr_size
+                verified_sparse_synthetic_pages += 1
             if probe_limit is not None and not self._ccxt_limit_probe_done:
                 # If Bitget returns >200 rows, we can safely use 1000 going forward.
                 if arr.shape[0] > 200:
@@ -4937,6 +5210,16 @@ class CandlestickManager:
                 break
             since = new_since
             prev_last_ts = last_ts
+        if verified_sparse_synthetic_count > 0:
+            self._log(
+                "info",
+                "kucoin_sparse_payload_gaps_synthesized",
+                symbol=symbol,
+                tf=tf_norm,
+                count=verified_sparse_synthetic_count,
+                pages=verified_sparse_synthetic_pages,
+                source="same_successful_payload",
+            )
         self._log(
             "debug",
             "ccxt_fetch_paginated_done",
@@ -6432,6 +6715,16 @@ class CandlestickManager:
                             int(end_excl),
                             timeframe=out_tf,
                         )
+                    # The fetch may have evicted a previously persisted KuCoin
+                    # sparse placeholder after a rejected real payload row
+                    # proved that bucket unavailable. Reload before merging so
+                    # this call cannot reintroduce the stale local copy.
+                    try:
+                        disk_arr = self._load_from_disk(
+                            symbol, start_ts, end_ts, timeframe=out_tf
+                        )
+                    except Exception:
+                        disk_arr = None
                     if fetched.size == 0:
                         if max_age_ms == 0:
                             sym_cache.pop(cache_key, None)

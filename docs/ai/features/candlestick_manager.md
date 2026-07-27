@@ -141,6 +141,22 @@
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
     every intermediate value.
+13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
+    candles in the same successful payload, absent from that raw payload, and no wider than the
+    fixed 120-minute live connector policy are materialized as flat zero-volume candles before
+    persistence. The simulation-only `backtest.gap_tolerance_ohlcvs_minutes` setting remains owned
+    by historical data preparation and does not alter live readiness. A bucket present in the raw
+    payload but rejected by candle validation is a
+    continuity barrier: it and later omitted buckets remain unavailable until another accepted real
+    candle establishes the close. A rejected row whose timestamp cannot be identified disables
+    synthesis for that payload page and evicts cached placeholders between the page's accepted
+    bounds. If fewer than two accepted timestamps exist, the remaining requested range is treated as
+    unavailable. Expansion is bounded to the requested range, and a later real exchange candle
+    always overwrites a persisted synthetic bucket. If a later payload contains a rejected real row
+    at a cached sparse-placeholder timestamp, the placeholder is evicted so the bucket becomes
+    unavailable and the timeframe index bounds are recomputed from the remaining shards. Leading,
+    trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. The
+    established 1m path retains its verified-gap tracking and standardization.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

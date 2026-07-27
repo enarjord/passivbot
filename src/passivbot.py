@@ -37,6 +37,7 @@ from cli_utils import (
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
     OhlcvTerminalEmptyPage,
     synthesize_1m_from_higher_tf,
 )
@@ -1313,6 +1314,12 @@ class Passivbot:
             "exchange": self.cca,
             "exchange_name": self.exchange,
             "debug": self.logging_level,
+            # Live KuCoin native sparse-candle continuity uses a fixed connector
+            # policy. Simulation-only backtest gap tolerance must not alter live
+            # EMA readiness.
+            "gap_tolerance_ohlcvs_minutes": (
+                DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES
+            ),
         }
         if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event

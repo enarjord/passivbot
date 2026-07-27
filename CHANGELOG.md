@@ -4,6 +4,20 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin private order updates now use the connector's actual exchange hedge mode for mandatory
+  long/short attribution even when `live.hedge_mode=false` disables simultaneous strategy
+  exposure, preventing valid updates without one-way `reduceOnly` metadata from reconnecting the
+  watcher. Hedge-mode close-only effect now follows KuCoin's authoritative side plus position-side
+  tuple when `reduceOnly` is omitted. KuCoin native higher-timeframe no-tick gaps are materialized
+  only when bounded by real candles, absent from one successful raw payload, and no wider than the
+  fixed 120-minute live connector policy, restoring required 1h volatility EMA readiness without
+  allowing the simulation-only backtest gap setting to alter live behavior. Rejected or
+  unidentifiable rows break payload continuity, expansion is bounded to the requested range, and
+  later real candles deterministically replace persisted synthetic buckets. A later rejected real
+  payload row evicts a cached sparse placeholder at the same timestamp; an unidentifiable rejection
+  evicts cached placeholders between accepted page bounds or across the remaining requested range
+  when those bounds are unavailable. Eviction also recomputes native-timeframe cache index bounds.
+
 - Hyperliquid recent candle gaps now retry on a time-spaced schedule instead of
   exhausting the persistent-gap budget in consecutive live cycles while the
   venue may still publish an authoritative no-trade row. Accelerated retries are

@@ -246,6 +246,22 @@ def test_determine_pos_side_rejects_hedge_order_without_durable_payload():
         bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "buy", "info": {}})
 
 
+def test_determine_pos_side_uses_exchange_hedge_mode_when_strategy_hedge_is_disabled():
+    bot = make_bot()
+    bot._config_hedge_mode = False
+
+    assert (
+        bot.determine_pos_side(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "info": {"positionSide": "LONG"},
+            }
+        )
+        == "long"
+    )
+
+
 def test_determine_pos_side_one_way_uses_side_and_reduce_only_not_position_state():
     bot = make_bot()
     bot._config_hedge_mode = False
