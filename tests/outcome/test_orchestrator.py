@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from outcome.orchestrator import (
@@ -112,6 +114,28 @@ def test_same_timestamp_settlement_is_released_before_new_market_allocation():
         starting_collateral=100.0,
     )
     assert portfolio.ending_collateral == pytest.approx(102.0)
+
+
+def test_overlapping_market_residual_peaks_are_aggregated_chronologically():
+    first = replace(
+        result("first", 0, 10_000, 40.0, 0.0),
+        max_abs_residual_qty=5.0,
+        residual_qty_timeline=((1_000, 5.0),),
+    )
+    second = replace(
+        result("second", 500, 9_000, 40.0, 0.0),
+        max_abs_residual_qty=5.0,
+        residual_qty_timeline=((2_000, -5.0),),
+    )
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            OutcomeBacktestJob("first", 0, 10_000, 40.0, lambda _: first),
+            OutcomeBacktestJob("second", 500, 9_000, 40.0, lambda _: second),
+        ],
+        starting_collateral=100.0,
+    )
+
+    assert portfolio.max_abs_residual_qty == pytest.approx(10.0)
 
 
 def test_empty_portfolio_preserves_wallet():

@@ -39,6 +39,7 @@ class SingleOutcomeBacktestResult:
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
     worst_case_settlement_equity_min: float
+    residual_qty_timeline: tuple[tuple[int, float], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.market_id:
@@ -93,6 +94,15 @@ class SingleOutcomeBacktestResult:
             raise ValueError("orders_placed_count must be non-negative")
         if self.fills_count < 0 or not 0 <= self.maker_fills_count <= self.fills_count:
             raise ValueError("invalid fill counts")
+        previous_time = self.trading_open_time_ms
+        for timestamp_ms, residual_qty in self.residual_qty_timeline:
+            if (
+                timestamp_ms < previous_time
+                or timestamp_ms >= self.settlement_time_ms
+                or not math.isfinite(residual_qty)
+            ):
+                raise ValueError("invalid single-outcome residual quantity timeline")
+            previous_time = timestamp_ms
 
     @property
     def net_pnl(self) -> float:
@@ -100,6 +110,31 @@ class SingleOutcomeBacktestResult:
 
 
 OutcomeRunner = Callable[[float], SingleOutcomeBacktestResult]
+
+
+def _portfolio_max_abs_residual_qty(
+    results: Iterable[SingleOutcomeBacktestResult],
+) -> float:
+    """Sweep per-market residual states on one chronological portfolio timeline."""
+
+    events: list[tuple[int, int, str, int, float]] = []
+    for result in results:
+        timeline = result.residual_qty_timeline
+        if not timeline and result.max_abs_residual_qty > 0.0:
+            # Hand-written or legacy runners without emitted fill history remain conservative:
+            # treat their reported peak as live for the whole allocation interval.
+            timeline = ((result.trading_open_time_ms, result.max_abs_residual_qty),)
+        for sequence, (timestamp_ms, residual_qty) in enumerate(timeline):
+            events.append((timestamp_ms, 1, result.market_id, sequence, residual_qty))
+        # Release settled inventory before any market opening at the same timestamp.
+        events.append((result.settlement_time_ms, 0, result.market_id, 0, 0.0))
+
+    current: dict[str, float] = {}
+    peak = 0.0
+    for _timestamp_ms, _priority, market_id, _sequence, residual_qty in sorted(events):
+        current[market_id] = residual_qty
+        peak = max(peak, sum(abs(value) for value in current.values()))
+    return peak
 
 
 @dataclass(frozen=True)
@@ -346,10 +381,7 @@ def run_outcome_portfolio_backtest(
         cumulative_yes_buy_qty=cumulative_yes_buy_qty,
         cumulative_no_buy_qty=cumulative_no_buy_qty,
         pair_completion_ratio=pair_completion_ratio,
-        max_abs_residual_qty=max(
-            (result.max_abs_residual_qty for result in results),
-            default=0.0,
-        ),
+        max_abs_residual_qty=_portfolio_max_abs_residual_qty(results),
         time_weighted_abs_residual_qty=(
             residual_qty_time_area_ms / portfolio_duration_ms
             if portfolio_duration_ms > 0

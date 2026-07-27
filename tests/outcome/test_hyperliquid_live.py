@@ -196,6 +196,8 @@ class FakeSession:
         if request_type == "userFills":
             return self.user_fills_payload
         if request_type == "userFillsByTime":
+            if isinstance(self.user_fills_by_time_payload, Exception):
+                raise self.user_fills_by_time_payload
             return self.user_fills_by_time_payload
         if request_type == "userFees":
             return user_fees()
@@ -412,6 +414,37 @@ async def test_expired_market_without_settlement_evidence_stays_explicitly_unres
         is HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT
     )
     assert lifecycle.settlement is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("history_payload", "expected_error"),
+    [
+        (TimeoutError("history unavailable"), "TimeoutError: history unavailable"),
+        ({"malformed": True}, "ValueError: Hyperliquid userFillsByTime response"),
+    ],
+)
+async def test_expired_market_settlement_recovery_failure_remains_cancel_eligible(
+    history_payload,
+    expected_error,
+):
+    payload, market = market_fixture()
+    session = FakeSession(payload)
+    session.meta_outcomes = []
+    session.user_fills_payload = []
+    session.user_fills_by_time_payload = history_payload
+    client = HyperliquidOutcomeLiveClient(session, account_address="0xaccount")
+
+    snapshot = await client.fetch_account_snapshot((market,))
+    lifecycle = await client.fetch_market_lifecycle(
+        market,
+        account=snapshot,
+        now_ms=market.lifecycle.scheduled_event_time_ms + 1,
+    )
+
+    assert lifecycle.state is HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT
+    assert lifecycle.settlement is None
+    assert lifecycle.settlement_recovery_error.startswith(expected_error)
 
 
 def test_account_fill_preserves_negative_fee_as_authoritative_rebate():

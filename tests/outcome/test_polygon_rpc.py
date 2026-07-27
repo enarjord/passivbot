@@ -164,6 +164,14 @@ def test_removed_or_noncanonical_logs_are_rejected():
     with pytest.raises(ValueError, match="canonical indexed address"):
         decode_polymarket_order_filled_log(bad_address, block_time_ms=10_000)
 
+    wrong_contract = raw_log(
+        address=POLYMARKET_CTF_EXCHANGE_V2,
+        topic0=POLYMARKET_ORDER_FILLED_V1_TOPIC,
+        data_words=[word(0), word(99), word(335_000), word(1_000_000), word(0)],
+    )
+    with pytest.raises(ValueError, match="address does not match"):
+        decode_polymarket_order_filled_log(wrong_contract, block_time_ms=10_000)
+
 
 @pytest.mark.asyncio
 async def test_download_proves_exact_range_and_filters_other_markets():

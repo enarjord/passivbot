@@ -63,7 +63,7 @@ async def _main() -> int:
             allow_mutations=False,
         )
         snapshot, yes_book, no_book = await asyncio.gather(
-            client.fetch_account_snapshot(tuple(markets)),
+            client.fetch_account_snapshot((selected[0],)),
             client.fetch_book(selected[0], outcome=OutcomeSide.YES),
             client.fetch_book(selected[0], outcome=OutcomeSide.NO),
         )

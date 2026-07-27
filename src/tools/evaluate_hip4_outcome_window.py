@@ -111,6 +111,12 @@ async def _main() -> int:
         type=float,
         help="Explicit payout-notional settlement rate; pass 0 only as a stated assumption",
     )
+    parser.add_argument(
+        "--fee-incidence",
+        required=True,
+        choices=("every_fill", "inventory_reduction_only"),
+        help="Explicit incidence contract for the supplied HIP-4 fill rates",
+    )
     args = parser.parse_args()
     if args.end_ms <= args.start_ms:
         parser.error("--end-ms must be greater than --start-ms")
@@ -184,7 +190,7 @@ async def _main() -> int:
             "maker_rate": args.maker_rate,
             "taker_rate": args.taker_rate,
             "formula": "notional",
-            "incidence": "inventory_reduction_only",
+            "incidence": args.fee_incidence,
             "settlement_rate": args.settlement_rate,
         },
         starting_collateral=args.starting_collateral,
@@ -213,7 +219,7 @@ async def _main() -> int:
                 "assumptions": {
                     "maker_rate": args.maker_rate,
                     "taker_rate": args.taker_rate,
-                    "fee_incidence": "inventory_reduction_only",
+                    "fee_incidence": args.fee_incidence,
                     "settlement_rate": args.settlement_rate,
                     "settlement_scenarios": [0.0, 1.0],
                 },

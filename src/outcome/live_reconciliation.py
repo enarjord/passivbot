@@ -31,13 +31,24 @@ class OutcomeOrderCancel:
 
 
 @dataclass(frozen=True)
+class OutcomeOrderKeep:
+    order_id: str
+    intent: OutcomeLiveOrderIntent
+    client_order_id: str
+
+
+@dataclass(frozen=True)
 class OutcomeOrderReconciliation:
     market_id: str
     observation_end_ms: int
     creates: tuple[OutcomeOrderCreate, ...]
     cancels: tuple[OutcomeOrderCancel, ...]
-    kept_order_ids: tuple[str, ...]
+    kept: tuple[OutcomeOrderKeep, ...]
     unmanaged_order_ids: tuple[str, ...]
+
+    @property
+    def kept_order_ids(self) -> tuple[str, ...]:
+        return tuple(item.order_id for item in self.kept)
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,48 @@ async def _cancel_attempted_creates(
         error = RuntimeError(
             "HIP-4 partial-create cleanup is not authoritative: "
             f"{remaining}"
+        )
+        if cleanup_errors:
+            raise error from cleanup_errors[0]
+        raise error
+
+
+async def _cancel_all_managed_orders(
+    client: HyperliquidOutcomeLiveClient,
+    market: NormalizedOutcomeMarket,
+    authoritative: HyperliquidOutcomeAccountSnapshot | None = None,
+) -> None:
+    """Drive every surviving managed quote for this market to verified absence."""
+
+    if authoritative is None:
+        authoritative = await client.fetch_account_snapshot((market,))
+    managed = tuple(
+        order
+        for order in authoritative.open_orders
+        if order.market_id == market.market_id
+        and is_managed_outcome_client_order_id(order.client_order_id, market.market_id)
+    )
+    cleanup_errors: list[Exception] = []
+    for order in managed:
+        try:
+            await client.cancel_order(
+                market,
+                outcome=order.outcome,
+                order_id=int(order.order_id),
+                expected_client_order_id=order.client_order_id,
+            )
+        except Exception as exc:
+            cleanup_errors.append(exc)
+    verified = await client.fetch_account_snapshot((market,))
+    remaining = sorted(
+        order.order_id
+        for order in verified.open_orders
+        if order.market_id == market.market_id
+        and is_managed_outcome_client_order_id(order.client_order_id, market.market_id)
+    )
+    if remaining:
+        error = RuntimeError(
+            f"HIP-4 managed-order cleanup is not authoritative: {remaining}"
         )
         if cleanup_errors:
             raise error from cleanup_errors[0]
@@ -196,7 +249,15 @@ def reconcile_outcome_orders(
         ]
         if matches:
             keep = sorted(matches, key=lambda order: order.order_id)[0]
-            kept.append(keep.order_id)
+            if keep.client_order_id is None:  # guarded by managed selection
+                raise AssertionError("managed outcome order unexpectedly omitted client_order_id")
+            kept.append(
+                OutcomeOrderKeep(
+                    order_id=keep.order_id,
+                    intent=intent,
+                    client_order_id=keep.client_order_id,
+                )
+            )
             retained_order_ids.add(keep.order_id)
         else:
             creates.append(OutcomeOrderCreate(intent=intent, client_order_id=cloid))
@@ -218,7 +279,7 @@ def reconcile_outcome_orders(
         observation_end_ms=plan.observation_end_ms,
         creates=tuple(creates),
         cancels=tuple(cancels),
-        kept_order_ids=tuple(sorted(kept)),
+        kept=tuple(sorted(kept, key=lambda item: item.order_id)),
         unmanaged_order_ids=tuple(sorted(order.order_id for order in unmanaged)),
     )
 
@@ -262,7 +323,7 @@ def reconcile_outcome_orders_to_empty(
         observation_end_ms=decision_time_ms,
         creates=(),
         cancels=tuple(sorted(cancels, key=lambda item: item.order_id)),
-        kept_order_ids=(),
+        kept=(),
         unmanaged_order_ids=tuple(sorted(order.order_id for order in unmanaged)),
     )
 
@@ -371,11 +432,22 @@ async def execute_hip4_order_reconciliation(
                     f"intent: {creation.client_order_id}"
                 )
         final_order_ids = {order.order_id for order in final_market_orders}
-        missing_kept = set(reconciliation.kept_order_ids) - final_order_ids
-        if missing_kept:
-            raise RuntimeError(
-                f"HIP-4 kept managed orders are no longer authoritative: {sorted(missing_kept)}"
-            )
+        for kept in reconciliation.kept:
+            matches = [
+                order
+                for order in final_market_orders
+                if order.order_id == kept.order_id
+                and order.client_order_id == kept.client_order_id
+            ]
+            if len(matches) != 1 or not _order_matches_intent(
+                matches[0],
+                kept.intent,
+                market.market_id,
+            ):
+                raise RuntimeError(
+                    "HIP-4 kept managed order is no longer authoritative with its exact "
+                    f"intent: {kept.order_id}"
+                )
         cancelled_still_open = {
             cancellation.order_id
             for cancellation in reconciliation.cancels
@@ -405,18 +477,15 @@ async def execute_hip4_order_reconciliation(
                 f"{sorted(unexpected_managed)}"
             )
     except Exception:
-        if not attempted_creates:
-            raise
         try:
-            await _cancel_attempted_creates(
+            await _cancel_all_managed_orders(
                 client,
                 market,
-                tuple(attempted_creates),
                 final_snapshot,
             )
         except Exception as cleanup_error:
             raise RuntimeError(
-                "HIP-4 final verification failed and attempted-create cleanup could "
+                "HIP-4 final verification failed and managed-order cleanup could "
                 "not establish an authoritative safe state"
             ) from cleanup_error
         raise
@@ -441,6 +510,17 @@ def _validate_managed_reconciliation(
         raise ValueError("outcome reconciliation contains duplicate kept order IDs")
     if set(cancel_ids) & set(kept_ids):
         raise ValueError("outcome reconciliation cannot both keep and cancel an order")
+    for kept in reconciliation.kept:
+        if not is_managed_outcome_client_order_id(
+            kept.client_order_id,
+            market.market_id,
+        ):
+            raise ValueError("outcome reconciliation cannot keep an unnamespaced order")
+        if (
+            managed_outcome_client_order_slot(kept.client_order_id, market.market_id)
+            != kept.intent.slot
+        ):
+            raise ValueError("outcome reconciliation kept order has the wrong managed slot")
     for cancellation in reconciliation.cancels:
         if not is_managed_outcome_client_order_id(
             cancellation.client_order_id,

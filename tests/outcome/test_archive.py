@@ -110,6 +110,16 @@ def test_archive_rejects_conflicting_duplicate_settlement_identity(tmp_path):
 
     assert archive.append_settlement(original) is True
     assert archive.append_settlement(replace(original, received_time_ms=5_200)) is False
+    assert (
+        archive.append_settlement(
+            replace(
+                original,
+                received_time_ms=5_300,
+                evidence_source="hyperliquid_user_fills_by_time",
+            )
+        )
+        is False
+    )
     with pytest.raises(ValueError, match="conflicting outcome settlement evidence"):
         archive.append_settlement(replace(original, yes_fraction=0.0))
 

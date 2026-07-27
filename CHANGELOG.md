@@ -69,19 +69,26 @@ All notable user-facing changes will be documented in this file.
   history and capital-release evidence, rather than treating fill coverage as tick history or
   `ConditionResolution` as redemption. Source bars must be contiguous before interval aggregation;
   one-sided pair completion can use its full remaining inventory headroom; mode summaries retain
-  peak paired and residual exposure. Final HIP-4 verification failures now trigger verified cleanup
-  of every attempted create; live sell sizing excludes inventory reserved by unmanaged orders while
+  peak paired and residual exposure. Portfolio peak residual now aggregates overlapping market
+  residuals on one chronological timeline. Final HIP-4 verification failures now trigger verified
+  cleanup of every surviving managed quote, including kept quotes partially filled during
+  reconciliation; live sell sizing excludes inventory reserved by unmanaged orders while
   reclaiming managed reservations. Outcome sell constraints are checked after quantity rounding,
   and the candle simulator rejects non-post-only orders until taker execution is modeled. Optimizer
   candle pre-aggregation now converts per-coin validity indices to the aggregated interval. Partial
   cancellation failures now recover every targeted managed order to verified absence, and
-  settlement re-import rejects contradictory evidence under the same source identity. The initial
+  settlement re-import rejects contradictory economic evidence under the same source identity
+  while allowing endpoint provenance to differ. Full-contract replay rejects unmodeled
+  quantity/minimum constraint changes; HIP-4 evaluation requires explicit fee incidence,
+  fee-enabled Polymarket window evaluation fails closed, EMA spans require at least one second,
+  and Polygon log decoding verifies authoritative contract-address/topic pairs. The initial
   normalized venue scope now explicitly requires one collateral unit of payout; bounded Polymarket
   captures retain grid changes without fabricating unproven grid-stream coverage. Outcome archive
   imports now reject contradictory trades under the same source or sequence identity, attempted
   quote cleanup continues through individual cancellation errors, Rust keeps order-entry
   acceptance separate from market open and permits authoritative trading close after the scheduled
-  event, and already-expired GTD orders are rejected at placement. Perpetual hard-stop flat
+  event, already-expired GTD orders are rejected at placement, and failed post-expiry settlement
+  recovery remains observable without blocking protective managed-order cancellation. Perpetual hard-stop flat
   confirmation remains minute-scoped when backtests use sub-minute candles.
   Authenticated outcome mutations remain disabled by default.
 

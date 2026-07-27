@@ -75,6 +75,22 @@ def consolidated_archived_market(
     if not market_versions:
         raise ValueError("cannot consolidate an empty outcome market history")
     first = market_versions[0]
+    initial_constraints = (
+        first.qty_step,
+        first.min_order_qty,
+        first.min_order_notional,
+    )
+    for version in market_versions[1:]:
+        constraints = (
+            version.qty_step,
+            version.min_order_qty,
+            version.min_order_notional,
+        )
+        if constraints != initial_constraints:
+            raise ValueError(
+                "full-contract outcome replay does not yet support changing "
+                "quantity or minimum-order constraints"
+            )
 
     def first_present(name: str):
         return next(

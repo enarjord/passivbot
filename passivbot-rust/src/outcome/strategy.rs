@@ -53,6 +53,16 @@ impl OutcomeEmaAnchorParams {
             }
         }
         for (name, value) in [
+            ("ema_span_fast_seconds", self.ema_span_fast_seconds),
+            ("ema_span_slow_seconds", self.ema_span_slow_seconds),
+        ] {
+            if value < 1.0 {
+                return Err(OutcomeError::InvalidMarket(format!(
+                    "{name} must be at least one one-second observation"
+                )));
+            }
+        }
+        for (name, value) in [
             ("quote_offset", self.quote_offset),
             ("inventory_skew", self.inventory_skew),
             ("min_locked_pair_edge", self.min_locked_pair_edge),
@@ -784,6 +794,13 @@ mod tests {
             entry_cutoff_ms_before_close: 5_000,
             execution_mode: mode,
         }
+    }
+
+    #[test]
+    fn ema_spans_require_at_least_one_one_second_observation() {
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        parameters.ema_span_fast_seconds = 0.5;
+        assert!(parameters.validate().is_err());
     }
 
     fn flat_inventory() -> OutcomeInventorySnapshot {

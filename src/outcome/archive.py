@@ -651,7 +651,6 @@ class OutcomeTradeArchive:
             settlement.payout_unit,
             settlement.settlement_time_ms,
             settlement.capital_release_time_ms,
-            settlement.evidence_source,
             settlement.observed_yes_qty,
             settlement.observed_no_qty,
             settlement.collateral_payout,
@@ -696,7 +695,7 @@ class OutcomeTradeArchive:
                 existing = connection.execute(
                     """
                     SELECT yes_fraction, payout_unit, settlement_time_ms,
-                           capital_release_time_ms, evidence_source,
+                           capital_release_time_ms,
                            observed_yes_qty, observed_no_qty, collateral_payout,
                            fee, fee_asset, raw_payload_json
                     FROM outcome_settlements

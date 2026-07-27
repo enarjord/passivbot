@@ -19,6 +19,7 @@ from outcome.evaluation import (
     evaluate_ema_anchor_outcome_modes,
     summarize_outcome_strategy_modes,
 )
+from outcome.rust_runner import normalized_market_to_rust_spec
 
 
 GAMMA_MARKET_URL = "https://gamma-api.polymarket.com/markets/{market_id}"
@@ -50,6 +51,14 @@ def _proves_interval(
         if cursor >= end_ms:
             return True
     return False
+
+
+def _require_fee_free_market(market) -> None:
+    if market.fee_metadata.formula != "venue_reported_zero":
+        raise ValueError(
+            "Polymarket evaluation requires an explicitly fee-free market; "
+            f"unsupported fee metadata formula {market.fee_metadata.formula!r}"
+        )
 
 
 async def _main() -> int:
@@ -93,6 +102,7 @@ async def _main() -> int:
         raise ValueError("Polymarket evaluation requires a fixed price grid")
     if market.min_order_qty is None:
         raise ValueError("Polymarket evaluation requires a minimum order quantity")
+    _require_fee_free_market(market)
 
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
@@ -121,34 +131,17 @@ async def _main() -> int:
     finally:
         archive.close()
 
-    tick = market.price_grid.fixed_step
-    market_spec = {
-        "venue": market.venue.value,
-        "market_id": market.market_id,
-        "yes_asset_id": market.yes_asset.asset_id,
-        "no_asset_id": market.no_asset.asset_id,
-        "payout_unit": market.payout_unit,
-        "min_price": tick,
-        "max_price": market.payout_unit - tick,
-        "price_grid": {"kind": "fixed_step", "step": tick},
-        "qty_step": args.qty_step,
-        "min_qty": market.min_order_qty,
-        "min_notional": market.min_order_notional or 0.0,
-        # This tool evaluates only the archived sample. These are deliberately synthetic
-        # boundaries and must not be reported as a full-contract backtest.
-        "trading_opens_ms": args.start_ms,
-        "trading_closes_ms": args.end_ms,
-        "scheduled_resolution_ms": args.end_ms,
-        "capabilities": {
-            "complementary_books_merged": market.capabilities.complementary_books_merged,
-            "supports_split": market.capabilities.supports_split,
-            "supports_merge": market.capabilities.supports_merge,
-            "supports_redeem": market.capabilities.supports_redeem,
-            "supports_post_only": market.capabilities.supports_post_only,
-            "supports_gtd": market.capabilities.supports_gtd,
-            "sell_requires_inventory": market.capabilities.sell_requires_inventory,
-        },
-    }
+    market_spec = normalized_market_to_rust_spec(market, qty_step=args.qty_step)
+    # This tool evaluates only the archived sample. These are deliberately synthetic
+    # boundaries and must not be reported as a full-contract backtest.
+    market_spec.update(
+        {
+            "trading_opens_ms": args.start_ms,
+            "order_entry_opens_ms": args.start_ms,
+            "trading_closes_ms": args.end_ms,
+            "scheduled_event_ms": args.end_ms,
+        }
+    )
     strategy_params = {
         "ema_span_fast_seconds": args.ema_fast_seconds,
         "ema_span_slow_seconds": args.ema_slow_seconds,

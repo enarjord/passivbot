@@ -8,7 +8,10 @@ import pytest
 
 from outcome.adapters import hyperliquid
 from outcome.archive import OutcomeTradeArchive
-from outcome.archive_replay import build_archived_ema_anchor_replay
+from outcome.archive_replay import (
+    build_archived_ema_anchor_replay,
+    consolidated_archived_market,
+)
 from outcome.candles import VerifiedCoverage
 from outcome.models import (
     MarketLifecycle,
@@ -21,6 +24,17 @@ from outcome.models import (
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
+
+
+def test_full_contract_replay_rejects_midmarket_constraint_changes():
+    raw_market = json.loads(
+        (FIXTURES / "hyperliquid_price_binary.json").read_text()
+    )
+    initial = hyperliquid.normalize_market(raw_market)
+    changed = replace(initial, min_order_qty=initial.min_order_qty + 1.0)
+
+    with pytest.raises(ValueError, match="changing quantity or minimum-order"):
+        consolidated_archived_market([initial, changed])
 
 
 def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):

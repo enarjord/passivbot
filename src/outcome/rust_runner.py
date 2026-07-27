@@ -133,6 +133,13 @@ def run_single_outcome_backtest(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def summary_from_rust_output(output: Mapping[str, Any]) -> SingleOutcomeBacktestResult:
+    residual_qty = 0.0
+    residual_qty_timeline = []
+    for raw_fill in output["fills"]:
+        fill = raw_fill["fill"]
+        accounting = raw_fill["accounting"]
+        residual_qty += float(accounting["canonical_yes_exposure_delta"])
+        residual_qty_timeline.append((int(fill["timestamp_ms"]), residual_qty))
     return SingleOutcomeBacktestResult(
         market_id=str(output["market_id"]),
         trading_open_time_ms=int(output["trading_open_time_ms"]),
@@ -167,6 +174,7 @@ def summary_from_rust_output(output: Mapping[str, Any]) -> SingleOutcomeBacktest
         worst_case_settlement_equity_min=float(
             output["worst_case_settlement_equity_min"]
         ),
+        residual_qty_timeline=tuple(residual_qty_timeline),
     )
 
 

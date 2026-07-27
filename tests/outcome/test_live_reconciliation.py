@@ -101,6 +101,7 @@ def order(
     outcome: OutcomeSide,
     price: float,
     cloid: str | None,
+    qty: float = 25.0,
 ) -> OutcomeOpenOrder:
     return OutcomeOpenOrder(
         market_id="913",
@@ -109,7 +110,7 @@ def order(
         outcome=outcome,
         side=OutcomeOrderSide.BUY,
         native_price=price,
-        qty=25.0,
+        qty=qty,
         original_qty=25.0,
         timestamp_ms=3_000,
         client_order_id=cloid,
@@ -442,6 +443,35 @@ async def test_executor_cleans_up_attempted_orders_after_final_verification_fail
     assert [item[2] for item in client.cancelled] == [9]
     assert [item[3] for item in client.cancelled] == [first.client_order_id]
     assert len(client.created) == 2
+
+
+@pytest.mark.asyncio
+async def test_executor_cancels_surviving_kept_quote_after_partial_fill_race():
+    desired = replace(plan(), intents=(plan().intents[0],))
+    cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    kept = order("1", outcome=OutcomeSide.YES, price=0.49, cloid=cloid)
+    reconciliation = reconcile_outcome_orders(
+        market(),
+        desired,
+        snapshot((kept,)),
+    )
+    partially_filled = order(
+        "1",
+        outcome=OutcomeSide.YES,
+        price=0.49,
+        cloid=cloid,
+        qty=10.0,
+    )
+    client = FakeClient(snapshot((partially_filled,)), snapshot())
+
+    with pytest.raises(RuntimeError, match="kept managed order"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [1]
 
 
 @pytest.mark.asyncio

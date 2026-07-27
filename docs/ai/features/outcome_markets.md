@@ -222,9 +222,9 @@ change without replacing the retained contract. This is required because expired
 price-binary rows disappear from `outcomeMeta`.
 
 Settlement source-event identity is immutable as well. Re-importing the same venue, market, and
-source event may differ in observation metadata such as receive time, but contradictory payout,
-winner, event time, release time, fee, quantity, or raw authoritative evidence is archive
-corruption and must fail.
+source event may differ in observation metadata such as receive time or endpoint provenance, but
+contradictory payout, winner, event time, release time, fee, quantity, or raw authoritative
+evidence is archive corruption and must fail.
 
 Trade source-event and ordered-sequence identities are immutable. Re-importing one of those
 identities may differ in observation metadata such as receive time, collector session, or source
@@ -233,7 +233,9 @@ identity, or alternate sequence/source identity is archive corruption and must f
 
 Replay consolidates lifecycle observations without replacing the initial trading terms. In
 particular, an initial live Polymarket observation commonly has no `closedTime`; a later closed
-observation supplies the actual trading close used for full-contract coverage.
+observation supplies the authoritative close. Full-contract replay fails closed if quantity-step
+or minimum-order constraints change because the initial simulator does not yet model those
+constraint transitions.
 
 Preserve raw venue payloads or lossless fixtures at the adapter boundary when practical. Derive
 one-second bars reproducibly from actual fills, never from bids, asks, midpoints, marks, or reported
@@ -309,11 +311,14 @@ Hyperliquid documents a 2,000-row response limit and availability of only the ac
 most recent fills. Persist every observed settlement record before it can age out. If neither
 current account state nor retained evidence proves a payout, remain
 `expired_awaiting_settlement`; never infer the winner from market disappearance or price.
+A bounded settlement-history lookup failure is recorded on that unresolved lifecycle and does not
+block protective cancellation of exact managed orders.
 
 ## Outcome EMA Anchor
 
 `ema_anchor_outcome` is a derivative strategy, not a direct reuse of perpetual-futures sizing.
-EMA spans are measured in seconds against the dense actual-fill-derived one-second signal series.
+EMA spans are measured in seconds against the dense actual-fill-derived one-second signal series
+and must be at least one one-second observation.
 Quote offsets and inventory skew are absolute probability points on `[0, payout_unit]`; they are
 not unbounded multiplicative percentages. Every quote remains a canonical bid or ask but resolves
 to an executable native YES/NO buy or inventory-backed sell.
@@ -376,7 +381,9 @@ bucket's timestamp and the resulting inventory is charged through that bucket's 
 This is a deterministic bucket model, not a claim about sub-second fill order. The shared-wallet
 orchestrator
 aggregates buy quantities before calculating portfolio pair completion and weights inventory-time
-areas across overlapping contracts on the common portfolio horizon.
+areas across overlapping contracts on the common portfolio horizon. Portfolio peak residual is
+also swept chronologically as the sum of absolute per-market residuals, rather than taking the
+largest single-market peak.
 
 ## Live Safety
 
@@ -399,10 +406,10 @@ cancellation is allowed after expiry only for an order proven by the fresh accou
 belong to the retained market, outcome side, and exact expected client-order ID. The mutation
 executor independently validates every cancellation and creation against the deterministic
 Passivbot outcome namespace before its first write, then verifies the complete final managed-order
-set rather than trusting the previously constructed reconciliation object. If final verification
-fails after submissions, it cancels every attempted create that remains authoritative, continues
-through individual cancellation errors, and verifies all attempted identities absent before
-propagating the failure.
+set rather than trusting the previously constructed reconciliation object. Kept orders must still
+match their exact expected remaining quantity and terms. If final verification fails, the executor
+cancels every surviving managed quote for the market, continues through individual cancellation
+errors, and verifies the managed set absent before propagating the failure.
 
 If the verified actual-fill signal is unavailable or stale, new and replacement quotes are
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:

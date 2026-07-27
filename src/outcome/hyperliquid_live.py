@@ -42,6 +42,10 @@ class OutcomeMutationDisabled(RuntimeError):
     pass
 
 
+class OutcomeSettlementRecoveryUnavailable(RuntimeError):
+    """The bounded settlement-history request failed before a response was available."""
+
+
 class OutcomeActionRejected(RuntimeError):
     pass
 
@@ -141,6 +145,7 @@ class HyperliquidOutcomeLifecycleSnapshot:
     state: HyperliquidOutcomeLifecycleState
     observed_at_ms: int
     settlement: OutcomeSettlementEvidence | None
+    settlement_recovery_error: str | None = None
 
     def __post_init__(self) -> None:
         if not self.market_id:
@@ -151,6 +156,13 @@ class HyperliquidOutcomeLifecycleSnapshot:
             self.settlement is not None
         ):
             raise ValueError("HIP-4 settled lifecycle requires exactly one settlement evidence")
+        if self.settlement_recovery_error is not None and (
+            self.state is not HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT
+            or not self.settlement_recovery_error.strip()
+        ):
+            raise ValueError(
+                "HIP-4 settlement recovery errors require an expired unresolved lifecycle"
+            )
 
 
 @dataclass(frozen=True)
@@ -402,12 +414,18 @@ class HyperliquidOutcomeLiveClient:
         if observed_at_ms < 0:
             raise ValueError("HIP-4 lifecycle observation time must be non-negative")
         settlement = account.settlement(market.market_id) if account is not None else None
+        settlement_recovery_error = None
         if settlement is None and observed_at_ms >= event_time_ms:
-            historical_settlements = await self.fetch_settlement_evidence(
-                market,
-                start_time_ms=event_time_ms,
-                end_time_ms=observed_at_ms,
-            )
+            try:
+                historical_settlements = await self.fetch_settlement_evidence(
+                    market,
+                    start_time_ms=event_time_ms,
+                    end_time_ms=observed_at_ms,
+                )
+            except (OutcomeSettlementRecoveryUnavailable, ValueError) as exc:
+                historical_settlements = ()
+                cause = exc.__cause__ or exc
+                settlement_recovery_error = f"{type(cause).__name__}: {cause}"
             if historical_settlements:
                 yes_fractions = {
                     evidence.yes_fraction for evidence in historical_settlements
@@ -449,6 +467,7 @@ class HyperliquidOutcomeLiveClient:
             state=HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT,
             observed_at_ms=observed_at_ms,
             settlement=None,
+            settlement_recovery_error=settlement_recovery_error,
         )
 
     async def fetch_settlement_evidence(
@@ -463,15 +482,20 @@ class HyperliquidOutcomeLiveClient:
         _selected_identifiers((market,))
         if start_time_ms < 0 or end_time_ms < start_time_ms:
             raise ValueError("HIP-4 settlement history range is invalid")
-        payload = await self.session.publicPostInfo(
-            {
-                "type": "userFillsByTime",
-                "user": self.account_address,
-                "startTime": int(start_time_ms),
-                "endTime": int(end_time_ms),
-                "aggregateByTime": False,
-            }
-        )
+        try:
+            payload = await self.session.publicPostInfo(
+                {
+                    "type": "userFillsByTime",
+                    "user": self.account_address,
+                    "startTime": int(start_time_ms),
+                    "endTime": int(end_time_ms),
+                    "aggregateByTime": False,
+                }
+            )
+        except Exception as exc:
+            raise OutcomeSettlementRecoveryUnavailable(
+                "HIP-4 settlement history request failed"
+            ) from exc
         received_time_ms = int(time.time() * 1_000)
         if not isinstance(payload, list) or not all(
             isinstance(row, Mapping) for row in payload

@@ -9,6 +9,7 @@ import pytest
 from outcome.adapters import hyperliquid, polymarket
 from outcome.models import OutcomeFeeMetadata
 from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
+from tools.evaluate_polymarket_outcome_window import _require_fee_free_market
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
@@ -22,6 +23,19 @@ def test_archived_polymarket_fee_curve_maps_to_probability_variance():
     market = polymarket.normalize_market(fixture("polymarket_binary.json"))
 
     assert _rust_fee_formula(market, "archived") == "probability_variance"
+    with pytest.raises(ValueError, match="explicitly fee-free"):
+        _require_fee_free_market(market)
+
+    _require_fee_free_market(
+        replace(
+            market,
+            fee_metadata=OutcomeFeeMetadata(
+                formula="venue_reported_zero",
+                maker_rate=0.0,
+                taker_rate=0.0,
+            ),
+        )
+    )
 
 
 def test_archived_fee_formula_fails_closed_when_not_representable():

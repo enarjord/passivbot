@@ -122,8 +122,20 @@ def decode_polymarket_order_filled_log(
     if len(topics) != 4:
         raise ValueError("Polymarket OrderFilled log must contain four topics")
     topic0 = str(topics[0]).casefold()
+    address = str(raw_log.get("address", "")).casefold()
+    expected_address_by_topic = {
+        POLYMARKET_ORDER_FILLED_V1_TOPIC: POLYMARKET_CTF_EXCHANGE_V1,
+        POLYMARKET_ORDER_FILLED_V2_TOPIC: POLYMARKET_CTF_EXCHANGE_V2,
+    }
+    expected_address = expected_address_by_topic.get(topic0)
+    if expected_address is None:
+        raise ValueError("unsupported Polymarket OrderFilled topic")
+    if address != expected_address:
+        raise ValueError(
+            "Polymarket OrderFilled log address does not match its event version"
+        )
     common = {
-        "address": str(raw_log.get("address", "")).casefold(),
+        "address": address,
         "blockNumber": _hex_int(raw_log.get("blockNumber"), "blockNumber"),
         "transactionIndex": _hex_int(
             raw_log.get("transactionIndex"), "transactionIndex"
@@ -168,9 +180,6 @@ def decode_polymarket_order_filled_log(
             "builder": f"0x{words[5].hex()}",
             "metadata": f"0x{words[6].hex()}",
         }
-    else:
-        raise ValueError("unsupported Polymarket OrderFilled topic")
-
     return {**common, "args": args, "raw_log": dict(raw_log)}
 
 
@@ -188,6 +197,10 @@ def decode_polymarket_condition_resolution_log(
         raise ValueError("Polymarket ConditionResolution log must contain four topics")
     if str(topics[0]).casefold() != POLYMARKET_CONDITION_RESOLUTION_TOPIC:
         raise ValueError("unsupported Polymarket ConditionResolution topic")
+    if str(raw_log.get("address", "")).casefold() != POLYMARKET_CONDITIONAL_TOKENS:
+        raise ValueError(
+            "Polymarket ConditionResolution log address is not Conditional Tokens"
+        )
     raw_data = _hex_bytes(raw_log.get("data"), "ConditionResolution data")
     if len(raw_data) != 5 * 32:
         raise ValueError("binary ConditionResolution data must contain five ABI words")
