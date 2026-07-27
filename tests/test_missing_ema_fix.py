@@ -748,6 +748,59 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavailable():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
+
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert m1_close_emas[symbol] == {}
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert h1_log_range_emas[symbol] == {}
+    assert symbol not in volumes_long
+    assert symbol not in log_ranges_long
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_clears_stale_rank_feature_failures():
     try:
         import passivbot as pb_mod

@@ -72,8 +72,8 @@
    `fetch_failed` rows remain absent until authoritative candles replace them, including when a
    retry is due or the current request disallows remote fetching, and must not become synthetic
    zero-volume continuity candles. Day-coalesced historical fetches split around deferred ranges
-   rather than contacting the venue for them. Forced 1m and native
-   higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
+   rather than contacting the venue for them. Forced 1m and native higher-timeframe candidate
+   refreshes treat a terminal empty page after partial pagination as a
    failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
    already covers the requested end is complete, not terminal-empty. Partial authoritative
    recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
@@ -94,6 +94,13 @@
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
    disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
    cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
+
+   A flat symbol selected by forager remains eligible for symbol-scoped required-EMA degradation
+   even while one of its entry orders is resting. The unavailable symbol is sent to Rust as
+   nontradable for that planning cycle, which removes its ideal orders and lets normal
+   reconciliation cancel the resting entry. An open order alone must not promote a flat,
+   dynamically selected symbol into the account-fatal required-input path. Held positions and
+   explicitly configured normal modes retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX

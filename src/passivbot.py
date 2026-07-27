@@ -17012,11 +17012,14 @@ class Passivbot:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
 
-        def has_position_or_open_order(symbol: str) -> bool:
+        def has_position(symbol: str) -> bool:
             try:
-                if self.has_position(symbol=symbol):
-                    return True
+                return bool(self.has_position(symbol=symbol))
             except Exception:
+                return True
+
+        def has_position_or_open_order(symbol: str) -> bool:
+            if has_position(symbol):
                 return True
             try:
                 if bool(getattr(self, "open_orders", {}).get(symbol)):
@@ -17237,7 +17240,12 @@ class Passivbot:
         def flat_forager_default_normal_symbol(symbol: str) -> bool:
             if not bool(is_forager_mode()):
                 return False
-            if has_position_or_open_order(symbol):
+            # A resting order must not promote a flat, forager-selected symbol
+            # into the account-fatal required-input path. Marking it
+            # nontradable lets Rust emit no ideal order, so normal
+            # reconciliation retires the stale resting order while candle
+            # health recovers. Held positions remain on the strict path.
+            if has_position(symbol):
                 return False
             if has_explicit_normal_planning_mode(symbol):
                 return False
