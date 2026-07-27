@@ -252,6 +252,7 @@ https://partner.bitget.com/bg/Y8FU1W
 https://www.okx.com/join/PASSIVBOT  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
 https://www.kucoin.com/r/broker/CX8QZQJX  
+https://www.weex.com/en/register?vipCode=ppc8
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  
