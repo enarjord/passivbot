@@ -5219,6 +5219,58 @@ async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
 
 
 @pytest.mark.asyncio
+async def test_cached_forager_metrics_do_not_project_unverified_internal_gap(
+    tmp_path, monkeypatch
+):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "CACHEDGAP/USDT:USDT"
+    t10 = 10 * ONE_MIN_MS
+    t11 = 11 * ONE_MIN_MS
+    t12 = 12 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t12 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [
+            (t10, 100.0, 101.0, 99.0, 100.0, 2.0),
+            (t12, 102.0, 103.0, 101.0, 102.0, 3.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t11,
+        t11,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    current = await cm.get_latest_ema_metrics(
+        symbol,
+        {"qv": 3.0, "log_range": 3.0},
+    )
+    assert set(current) == {"qv", "log_range"}
+    assert all(math.isfinite(value) for value in current.values())
+
+    cached = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 3.0, "log_range": 3.0},
+        max_staleness_ms=10 * ONE_MIN_MS,
+    )
+    assert cached == {}
+
+
+@pytest.mark.asyncio
 async def test_projected_open_tail_ema_seeds_when_tail_exceeds_span(tmp_path, monkeypatch):
     import numpy as np
     from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS

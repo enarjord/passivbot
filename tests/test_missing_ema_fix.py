@@ -741,7 +741,7 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     assert bot._orchestrator_ema_unavailable_reasons == {
         "flat_active_required_ema_unavailable": {symbol}
     }
-    assert bot._orchestrator_ema_entry_cancellation_pairs == set()
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
     assert bot._forager_rank_feature_unavailable_by_side == {
         "long": {symbol},
         "short": {symbol},
@@ -785,7 +785,7 @@ async def test_mixed_forager_fixed_normal_side_missing_ema_remains_strict():
             bot, [symbol], mode_overrides
         )
 
-    assert bot._orchestrator_ema_entry_cancellation_pairs == set()
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
 
 
 @pytest.mark.asyncio
@@ -805,6 +805,7 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
                 "symbol": symbol,
                 "position_side": "long",
                 "side": "buy",
+                "id": "forager-entry-1",
                 "qty": 1.0,
                 "price": 100.0,
                 "reduce_only": False,
@@ -839,7 +840,15 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
     assert bot._orchestrator_ema_unavailable_reasons == {
         "flat_active_required_ema_unavailable": {symbol}
     }
-    assert bot._orchestrator_ema_entry_cancellation_pairs == {(symbol, "long")}
+    expected_order_key = (
+        symbol,
+        "long",
+        "exchange_id",
+        "forager-entry-1",
+    )
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        expected_order_key
+    }
 
     from live import reconciler
 
@@ -869,7 +878,9 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
     assert h1_log_range_emas[symbol] == {}
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
-    assert bot._orchestrator_ema_entry_cancellation_pairs == {(symbol, "long")}
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        expected_order_key
+    }
 
 
 @pytest.mark.asyncio
@@ -893,6 +904,7 @@ async def test_forager_ranking_ema_degradation_authorizes_resting_entry_cancel()
                 "symbol": symbol,
                 "position_side": "long",
                 "side": "buy",
+                "id": "forager-ranking-entry-1",
                 "qty": 1.0,
                 "price": 100.0,
                 "reduce_only": False,
@@ -912,7 +924,83 @@ async def test_forager_ranking_ema_degradation_authorizes_resting_entry_cancel()
     assert bot._orchestrator_ema_unavailable_reasons == {
         "missing_required_forager_volume": {symbol}
     }
-    assert bot._orchestrator_ema_entry_cancellation_pairs == {(symbol, "long")}
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            "forager-ranking-entry-1",
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_forager_ranking_degradation_authorizes_only_affected_side():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value", qv_mode="nan")
+    bot.PB_modes = {
+        "long": {symbol: "normal"},
+        "short": {symbol: "normal"},
+    }
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": "long-forager-entry",
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            },
+            {
+                "id": "short-forager-entry",
+                "symbol": symbol,
+                "position_side": "short",
+                "side": "sell",
+                "qty": 1.0,
+                "price": 101.0,
+                "reduce_only": False,
+            },
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {
+                "volume": 1.0 if pside == "long" else 0.0,
+                "volatility": 0.0,
+            }
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": set(),
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (symbol, "long", "exchange_id", "long-forager-entry")
+    }
 
 
 @pytest.mark.asyncio

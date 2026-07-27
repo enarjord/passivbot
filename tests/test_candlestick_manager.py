@@ -3474,6 +3474,46 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
 
 
 @pytest.mark.asyncio
+async def test_live_ema_refuses_provisional_internal_gap_beyond_tolerance(
+    monkeypatch, tmp_path
+):
+    now = 15 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+        provisional_internal_gap_tolerance_minutes=2,
+    )
+    cm._now_ms_callback = lambda: now
+    symbol = "WIDEGAP/USDT:USDT"
+    start = 10 * ONE_MIN_MS
+    end = 14 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (end, 110.0, 110.0, 110.0, 110.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        start + ONE_MIN_MS,
+        end - ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    assert math.isnan(
+        await cm.get_latest_ema_close(
+            symbol,
+            5.0,
+            allow_remote_fetch=False,
+        )
+    )
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+
+
+@pytest.mark.asyncio
 async def test_historical_fetch_splits_around_deferred_gap(
     monkeypatch, tmp_path
 ):

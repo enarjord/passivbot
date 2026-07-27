@@ -13,13 +13,16 @@ All notable user-facing changes will be documented in this file.
   immediately when authoritative candles arrive. The same bounded open-tail policy now applies to
   stock perps instead of granting them an unbounded no-trade-tail exception. EMA reads also
   provisionally bridge unresolved gaps already bounded by later authoritative candles without
-  persisting them, and recompute when delayed real rows arrive. Mixed fixed/forager sides retain
-  strict readiness for the fixed side, and a dynamically managed resting entry is still cancelled
-  if close, strategy, or ranking EMA degradation changes its side to the configured manual stop
-  mode. Failed or ambiguous cancellation attempts are retried without weakening ordinary manual
-  ownership. Budget-derived forager ranking staleness also retains the active-tail grace period
-  (10 minutes by default), so a large refresh budget cannot make flat candidates nontradable after
-  only one or two missing completed candles.
+  persisting them, recompute when delayed real rows arrive, and refuse gaps wider than the live
+  active-tail bound. Cache-only forager ranking carry-forward does not project unresolved internal
+  gaps. Mixed fixed/forager sides retain strict readiness for the fixed side, and a dynamically
+  managed resting entry is still cancelled if close, strategy, or ranking EMA degradation changes
+  its side to the configured manual stop mode. Ranking degradation retires entries only on the
+  affected side. Failed or ambiguous cancellation attempts are retried only for the exact proven
+  exchange/client order ID, without weakening ordinary manual ownership. Budget-derived forager
+  ranking staleness also retains the active-tail grace period (10 minutes by default), so a large
+  refresh budget cannot make flat candidates nontradable after only one or two missing completed
+  candles.
 
 - Supported CCXT private order streams now isolate malformed semantic rows from websocket
   transport health: unnormalizable rows are discarded with a bounded warning and force an

@@ -1320,6 +1320,9 @@ class Passivbot:
             "gap_tolerance_ohlcvs_minutes": (
                 DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES
             ),
+            "provisional_internal_gap_tolerance_minutes": require_live_value(
+                config, "max_active_candle_tail_gap_minutes"
+            ),
         }
         if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
@@ -16758,11 +16761,11 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
-        previous_ema_entry_cancellation_pairs = set(
-            getattr(self, "_orchestrator_ema_entry_cancellation_pairs", set())
+        previous_ema_entry_cancellation_order_keys = set(
+            getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
-        self._orchestrator_ema_entry_cancellation_pairs = set()
+        self._orchestrator_ema_entry_cancellation_order_keys = set()
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17226,6 +17229,26 @@ class Passivbot:
                     return True
             return False
 
+        def ema_entry_cancellation_order_key(order: dict) -> tuple | None:
+            return reconciler.ema_entry_cancellation_order_key(order)
+
+        def has_previously_authorized_resting_entry(
+            symbol: str, pside: str
+        ) -> bool:
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                if (
+                    str(order.get("position_side") or "") != pside
+                    or bool(order.get("reduce_only", order.get("reduceOnly", False)))
+                ):
+                    continue
+                order_key = ema_entry_cancellation_order_key(order)
+                if (
+                    order_key is not None
+                    and order_key in previous_ema_entry_cancellation_order_keys
+                ):
+                    return True
+            return False
+
         def dynamic_forager_normal_psides(symbol: str) -> set[str]:
             """Return currently or previously proven dynamic forager sides."""
             dynamic_psides: set[str] = set()
@@ -17237,9 +17260,10 @@ class Passivbot:
                     if bool(is_forager_mode(pside)) and (
                         pside in current_normal_psides
                         or (
-                            (symbol, pside)
-                            in previous_ema_entry_cancellation_pairs
-                            and has_resting_entry(symbol, pside)
+                            has_resting_entry(symbol, pside)
+                            and has_previously_authorized_resting_entry(
+                                symbol, pside
+                            )
                         )
                     ):
                         dynamic_psides.add(pside)
@@ -18496,25 +18520,40 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
-        cancellation_reason_symbols = set(
+        all_dynamic_cancellation_symbols = set(
             self._orchestrator_ema_unavailable_reasons.get(
                 "flat_active_required_ema_unavailable", set()
             )
         )
-        for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items():
-            if str(reason).startswith("missing_required_forager_"):
-                cancellation_reason_symbols.update(reason_symbols)
-        for symbol in cancellation_reason_symbols:
-            managed_psides = dynamic_forager_normal_psides(symbol)
+        cancellation_psides_by_symbol: dict[str, set[str]] = {}
+        for symbol in all_dynamic_cancellation_symbols:
+            cancellation_psides_by_symbol[str(symbol)] = (
+                dynamic_forager_normal_psides(symbol)
+            )
+        ranking_reason_symbols = {
+            str(symbol)
+            for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items()
+            if str(reason).startswith("missing_required_forager_")
+            for symbol in reason_symbols
+        }
+        for pside, unavailable_symbols in rank_feature_unavailable_by_side.items():
+            for symbol in ranking_reason_symbols & set(unavailable_symbols):
+                if pside in dynamic_forager_normal_psides(symbol):
+                    cancellation_psides_by_symbol.setdefault(symbol, set()).add(
+                        pside
+                    )
+        for symbol, managed_psides in cancellation_psides_by_symbol.items():
             for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
                 pside = str(order.get("position_side") or "")
                 if (
                     pside in managed_psides
                     and not bool(order.get("reduce_only", order.get("reduceOnly", False)))
                 ):
-                    self._orchestrator_ema_entry_cancellation_pairs.add(
-                        (str(symbol), pside)
-                    )
+                    order_key = ema_entry_cancellation_order_key(order)
+                    if order_key is not None:
+                        self._orchestrator_ema_entry_cancellation_order_keys.add(
+                            order_key
+                        )
         self._orchestrator_ema_bundle_symbols = set(symbols)
         self._orchestrator_forager_m1_log_range_emas = {
             symbol: dict(values)

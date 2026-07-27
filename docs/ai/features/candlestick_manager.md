@@ -113,10 +113,12 @@
    side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
    sides retain their strict readiness contract. If the unavailable result changes the dynamically
    managed side to the configured manual stop mode, reconciliation preserves only that cycle's
-   proven forager entry cancellation. The authorization is rederived on later cycles while the
-   same resting entry remains, including degradation caused by required forager ranking EMAs, so a
-   rejected or ambiguous first cancellation is retried. It does not weaken manual ownership for
-   other sides, closes, or creations. Held positions retain their stricter readiness contract.
+   proven forager entry cancellation, identified by exchange or client order ID. The authorization
+   is rederived on later cycles only while that same resting entry remains, including degradation
+   caused by required forager ranking EMAs, so a rejected or ambiguous first cancellation is
+   retried. A replacement or coexisting operator order is not authorized by matching symbol/side,
+   price, or quantity. It does not weaken manual ownership for other sides, closes, or creations.
+   Held positions retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
@@ -141,12 +143,14 @@
     an earlier path. Forced overlap refreshes also split around deferred internal
     gaps. A failed retry of a persistent recent gap retains the persistent retry
     cadence, and all retry metadata uses the manager's active live/replay clock.
-    Missing rows remain unavailable until an authoritative row arrives, and a
-    dependent 1m EMA window remains unavailable while it intersects an unresolved
-    unknown gap rather than computing over a sparse sequence. Complete rows in the
-    supplied EMA window remain authoritative even if stale known-gap metadata still
-    names their timestamps. Recording or extending a 1m gap invalidates cached 1m
-    EMA and open-tail projection values. An overlap refresh which retries a due gap
+    Missing rows remain unavailable to ordinary candle consumers until an authoritative row
+    arrives. Live strategy EMA reads may provisionally bridge a later-bracketed internal gap with
+    non-persistent flat zero-volume rows only when the gap is no wider than
+    `live.max_active_candle_tail_gap_minutes`; cache-only forager ranking carry-forward remains
+    unavailable across an unresolved internal gap. Complete rows in the supplied EMA window remain
+    authoritative even if stale known-gap metadata still names their timestamps. Recording or
+    extending a 1m gap invalidates cached 1m EMA and open-tail projection values. An overlap refresh
+    which retries a due gap
     stamps every unresolved remainder before later repair stages run, preventing a
     second attempt in the same request. Historical pagination
     flushes deferred partial-page index writes before propagating terminal-empty
@@ -163,7 +167,8 @@
     spans, and projection horizon; local candle persistence invalidates it.
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
-    every intermediate value.
+    every intermediate value. Live provisional internal-gap tolerance is separate from the
+    simulation-only backtest gap tolerance.
 13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
     candles in the same successful payload, absent from that raw payload, and no wider than the
     fixed 120-minute live connector policy are materialized as flat zero-volume candles before

@@ -311,6 +311,28 @@ def extract_order_exchange_id(order: dict) -> str:
     return ""
 
 
+def ema_entry_cancellation_order_key(order: dict) -> Optional[tuple[str, str, str, str]]:
+    """Return a strong identity for an already-proven resting entry.
+
+    Degraded-mode cancellation is an exception to manual ownership, so price/qty
+    similarity is deliberately insufficient: an exchange or client order id must
+    prove that the cancellation still targets the same order.
+    """
+    if not isinstance(order, dict):
+        return None
+    symbol = str(order.get("symbol") or "")
+    pside = str(order.get("position_side") or order.get("positionSide") or "")
+    if not symbol or pside not in ("long", "short"):
+        return None
+    exchange_id = extract_order_exchange_id(order)
+    if exchange_id:
+        return (symbol, pside, "exchange_id", exchange_id)
+    custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    if custom_id:
+        return (symbol, pside, "client_id", custom_id)
+    return None
+
+
 def canonical_passivbot_custom_id(custom_id: str) -> str:
     """Normalize broker/exchange wrappers around Passivbot custom ids."""
     if not custom_id:
@@ -2134,21 +2156,27 @@ def apply_mode_filters(
     to_create: list[dict],
 ) -> tuple[list[dict], list[dict]]:
     """Apply mode-specific cancel/create filtering rules."""
-    ema_entry_cancellation_pairs = set(
-        getattr(bot, "_orchestrator_ema_entry_cancellation_pairs", set()) or set()
+    ema_entry_cancellation_order_keys = set(
+        getattr(bot, "_orchestrator_ema_entry_cancellation_order_keys", set())
+        or set()
     )
     for pside in ["long", "short"]:
         mode = bot.PB_modes[pside].get(symbol)
         if mode == "manual":
-            if (symbol, pside) in ema_entry_cancellation_pairs:
+            if ema_entry_cancellation_order_keys:
                 # This pair was dynamically managed by forager when its required
-                # EMA became unavailable. Preserve only the already-planned
-                # entry cancellation; do not broaden manual mode to closes or
-                # creations belonging to genuinely manual sides.
+                # EMA became unavailable. Preserve cancellation only for the
+                # exact proven resting entry; do not broaden manual mode to
+                # closes, creations, replacements, or operator-owned orders.
                 to_cancel = [
                     x
                     for x in to_cancel
-                    if x["position_side"] != pside or not x["reduce_only"]
+                    if x["position_side"] != pside
+                    or (
+                        not x["reduce_only"]
+                        and ema_entry_cancellation_order_key(x)
+                        in ema_entry_cancellation_order_keys
+                    )
                 ]
             else:
                 to_cancel = [x for x in to_cancel if x["position_side"] != pside]

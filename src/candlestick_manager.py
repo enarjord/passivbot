@@ -743,6 +743,7 @@ class CandlestickManager:
         remote_fetch_min_interval_ms: float | None = None,
         lock_timeout_seconds: float | None = None,
         gap_tolerance_ohlcvs_minutes: float = DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
+        provisional_internal_gap_tolerance_minutes: float = 10.0,
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
@@ -770,6 +771,9 @@ class CandlestickManager:
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
         self.gap_tolerance_ohlcvs_minutes = max(
             0.0, float(gap_tolerance_ohlcvs_minutes)
+        )
+        self.provisional_internal_gap_tolerance_minutes = max(
+            0.0, float(provisional_internal_gap_tolerance_minutes)
         )
         # Archive fetching: if False, only use ccxt REST API
         self.archive_enabled = bool(archive_enabled)
@@ -6523,8 +6527,9 @@ class CandlestickManager:
           live forager candidates where cache misses should not block trading.
         - If `allow_provisional_internal_gaps` is True: unresolved gaps already
           bounded by later candles may be represented in this returned array by
-          non-persistent zero-volume continuity rows. Open-ended tails retain
-          the separate `fill_trailing_gaps` policy.
+          non-persistent zero-volume continuity rows only when each gap is no
+          wider than `provisional_internal_gap_tolerance_minutes`. Open-ended
+          tails retain the separate `fill_trailing_gaps` policy.
         """
         self._raise_if_shutdown_requested("get_candles")
         if max_age_ms is not None and max_age_ms < 0:
@@ -7719,15 +7724,24 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
-        excluded_synthetic_ranges = (
-            []
-            if allow_provisional_internal_gaps
-            else self._unverified_gap_ranges(
-                symbol,
-                start_ts,
-                end_ts,
-            )
+        unverified_gap_ranges = self._unverified_gap_ranges(
+            symbol,
+            start_ts,
+            end_ts,
         )
+        if allow_provisional_internal_gaps:
+            provisional_tolerance_ms = int(
+                self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
+            )
+            excluded_synthetic_ranges = [
+                (int(gap_start), int(gap_end))
+                for gap_start, gap_end in unverified_gap_ranges
+                if provisional_tolerance_ms <= 0
+                or int(gap_end) - int(gap_start) + ONE_MIN_MS
+                > provisional_tolerance_ms
+            ]
+        else:
+            excluded_synthetic_ranges = unverified_gap_ranges
         result = self.standardize_gaps(
             data_for_gaps,
             start_ts=start_ts,
@@ -8154,7 +8168,7 @@ class CandlestickManager:
             max_lookback_candles=max_candles,
             fill_trailing_gaps=False,
             allow_remote_fetch=False,
-            allow_provisional_internal_gaps=True,
+            allow_provisional_internal_gaps=False,
         )
         if raw.size == 0 or not candle_range_has_full_coverage(
             raw, start_ts, int(last_cached), timeframe=timeframe
