@@ -55,7 +55,10 @@ block protective management of held symbols.
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when
 the previous close is known, overlap repair is scheduled, and the gap is within policy. Unknown
-stale tails must not be converted to zero volume or zero range.
+stale tails must not be persisted or treated as verified zero-volume or zero-range history. Within
+the configured active-tail bound, an explicitly supported provisional in-memory projection may use
+flat zero-volume rows for active strategy inputs while authoritative overlap repair continues.
+Forager ranking quote-volume and log-range inputs retain their narrower carry-forward contract.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
@@ -66,6 +69,9 @@ Flat-symbol forager candidates may remain rankable within
 `live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
 projection. Quote-volume and log-range ranking inputs carry forward their latest known EMA with
 age/source metadata; they do not receive invented zero tails.
+When the forager setting is unset, its budget-derived acceptable age must not be shorter than
+`live.max_active_candle_tail_gap_minutes`; the refresh budget must not silently reduce the active
+tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
 unavailable for new entries. Do not silently rank only the subset that happened to refresh first.

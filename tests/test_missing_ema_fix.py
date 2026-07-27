@@ -410,6 +410,8 @@ class _BundleReproBot:
         )
         self.cached_metric_calls = []
         self.projection_metric_requests = []
+        self.qv_provisional_flags = []
+        self.lr_provisional_flags = []
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
@@ -435,7 +437,12 @@ class _BundleReproBot:
                 self.outer = outer
 
             async def get_latest_ema_close(
-                self, symbol, span, max_age_ms=30_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                max_age_ms=30_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=True,
             ):
                 if self.outer.close_mode == "timeout":
                     raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -444,8 +451,16 @@ class _BundleReproBot:
                 return float(self.outer.close_value)
 
             async def get_latest_ema_quote_volume(
-                self, symbol, span, max_age_ms=60_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                max_age_ms=60_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=None,
             ):
+                self.outer.qv_provisional_flags.append(
+                    allow_provisional_internal_gaps
+                )
                 if self.outer.qv_mode == "timeout":
                     raise TimeoutError("quote volume timeout")
                 if self.outer.qv_mode == "nan":
@@ -453,8 +468,17 @@ class _BundleReproBot:
                 return 250000.0
 
             async def get_latest_ema_log_range(
-                self, symbol, span, tf=None, max_age_ms=60_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                tf=None,
+                max_age_ms=60_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=None,
             ):
+                self.outer.lr_provisional_flags.append(
+                    (tf or "1m", allow_provisional_internal_gaps)
+                )
                 if tf == "1h":
                     if self.outer.h1_mode == "timeout":
                         raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -703,7 +727,7 @@ async def test_flat_forager_universe_symbol_missing_close_ema_marks_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable():
+async def test_forager_eligible_flat_normal_missing_close_ema_marks_unavailable():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -712,7 +736,9 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     symbol = "BTC/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode="nan")
     bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
-    bot.active_symbols = [symbol]
+    # Rust evaluates an eligible forager candidate before it enters the active
+    # set; missing required inputs remain symbol-scoped during that phase.
+    bot.active_symbols = []
     bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
     bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
@@ -741,9 +767,444 @@ async def test_forager_selected_flat_normal_missing_close_ema_marks_unavailable(
     assert bot._orchestrator_ema_unavailable_reasons == {
         "flat_active_required_ema_unavailable": {symbol}
     }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
     assert bot._forager_rank_feature_unavailable_by_side == {
         "long": {symbol},
         "short": {symbol},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mixed_forager_fixed_normal_side_missing_ema_remains_strict():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "normal"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "position_side": "short",
+                "side": "sell",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    bot.is_forager_mode = lambda pside=None: pside in {None, "long"}
+    mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
+
+    with pytest.raises(
+        RuntimeError, match=r"missing required close EMA for BTC/USDT:USDT"
+    ):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], mode_overrides
+        )
+
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
+
+
+@pytest.mark.asyncio
+async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavailable():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "client_order_id": "forager-entry-client-1",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
+
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert m1_close_emas[symbol] == {}
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert h1_log_range_emas[symbol] == {}
+    assert symbol not in volumes_long
+    assert symbol not in log_ranges_long
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+    expected_order_key = (
+        symbol,
+        "long",
+        "client_id",
+        "forager-entry-client-1",
+    )
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        expected_order_key
+    }
+
+    from live import reconciler
+
+    bot.PB_modes["long"][symbol] = "manual"
+    resting_entry = bot.open_orders[symbol][0]
+    assert reconciler.apply_mode_filters(
+        bot, symbol, [resting_entry], []
+    ) == ([resting_entry], [])
+
+    # If the first cancellation is rejected or ambiguous, the Rust state from
+    # that degraded cycle leaves this side in manual stop mode. The next EMA
+    # cycle must retain the narrow cancellation authorization while the proven
+    # resting entry remains. A later exchange ID is an additional alias for the
+    # same client-identified order, not a new identity.
+    resting_entry["id"] = "forager-entry-exchange-1"
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+    assert m1_close_emas[symbol] == {}
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert h1_log_range_emas[symbol] == {}
+    assert symbol not in volumes_long
+    assert symbol not in log_ranges_long
+    expected_order_keys = {
+        expected_order_key,
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            "forager-entry-exchange-1",
+        ),
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == expected_order_keys
+
+    # Recovery must not discard a failed/ambiguous cancellation authorization:
+    # Rust may leave the pair unselected/manual even though EMA inputs recovered.
+    bot.close_mode = "value"
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+    assert bot._orchestrator_ema_unavailable_reasons == {}
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == expected_order_keys
+
+    # An explicit operator-owned mode transfers entry ownership and terminates
+    # the degradation exception even if the same order remains visible.
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: "manual"}, "short": {symbol: None}},
+    )
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
+
+
+@pytest.mark.asyncio
+async def test_disabled_opposite_side_does_not_block_flat_forager_degradation():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "ONDO/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        qv_mode="nan",
+        lr1m_mode="nan",
+    )
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": "ondo-forager-entry",
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 9.0,
+                "price": 0.4,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.get_max_n_positions = lambda pside: 3 if pside == "long" else 0
+    bot.is_forager_mode = lambda pside=None: pside in (None, "long")
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 1.0, "volatility": 1.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_required_forager_volume+missing_required_forager_log_range": {
+            symbol
+        }
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (symbol, "long", "exchange_id", "ondo-forager-entry")
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override_mode,order_id",
+    [
+        ("graceful_stop", "hsl-graceful-stop-entry"),
+        (
+            "tp_only_with_active_entry_cancellation",
+            "hsl-active-cancellation-entry",
+        ),
+    ],
+)
+async def test_forager_resting_entry_under_bot_managed_override_can_degrade_and_cancel(
+    override_mode, order_id
+):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": order_id,
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {
+        "long": {symbol: override_mode},
+        "short": {symbol: None},
+    }
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert all(result_map[symbol] == {} for result_map in result[:4])
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            order_id,
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_forager_ranking_ema_degradation_authorizes_resting_entry_cancel():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        qv_mode="nan",
+    )
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "id": "forager-ranking-entry-1",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_required_forager_volume": {symbol}
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            "forager-ranking-entry-1",
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_forager_ranking_degradation_authorizes_only_affected_side():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value", qv_mode="nan")
+    bot.PB_modes = {
+        "long": {symbol: "normal"},
+        "short": {symbol: "normal"},
+    }
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": "long-forager-entry",
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            },
+            {
+                "id": "short-forager-entry",
+                "symbol": symbol,
+                "position_side": "short",
+                "side": "sell",
+                "qty": 1.0,
+                "price": 101.0,
+                "reduce_only": False,
+            },
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {
+                "volume": 1.0 if pside == "long" else 0.0,
+                "volatility": 0.0,
+            }
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": set(),
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (symbol, "long", "exchange_id", "long-forager-entry")
+    }
+    assert bot._orchestrator_dynamic_forager_eligibility_psides_by_symbol == {
+        symbol: {"long", "short"}
+    }
+
+    # Rust's symbol-level tradable=false result may move both sides to manual
+    # even though only the long ranking feature was missing. Preserve dynamic
+    # eligibility independently of cancellation scope: the remaining short
+    # entry must not turn the next identical gap into an account-fatal error,
+    # and it must not become cancellable.
+    bot.PB_modes = {
+        "long": {symbol: "manual"},
+        "short": {symbol: "manual"},
+    }
+    bot.open_orders[symbol] = [
+        order
+        for order in bot.open_orders[symbol]
+        if order["position_side"] == "short"
+    ]
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_required_forager_volume": {symbol}
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
+    assert bot._orchestrator_dynamic_forager_eligibility_psides_by_symbol == {
+        symbol: {"long", "short"}
     }
 
 
@@ -1330,6 +1791,8 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot.qv_provisional_flags == [False]
+    assert bot.lr_provisional_flags == [("1m", False)]
     assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
@@ -2266,7 +2729,15 @@ class _PacingProbeCM:
         self.current_concurrency = 0
         self.max_concurrency = 0
 
-    async def get_latest_ema_close(self, symbol, *, span, max_age_ms, allow_remote_fetch=True):
+    async def get_latest_ema_close(
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=True,
+    ):
         self.current_concurrency += 1
         self.max_concurrency = max(self.max_concurrency, self.current_concurrency)
         try:
@@ -2276,12 +2747,25 @@ class _PacingProbeCM:
             self.current_concurrency -= 1
 
     async def get_latest_ema_quote_volume(
-        self, symbol, *, span, max_age_ms, allow_remote_fetch=True
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
     ):
         return 0.0
 
     async def get_latest_ema_log_range(
-        self, symbol, *, span, max_age_ms, tf="1m", allow_remote_fetch=True
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        tf="1m",
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
     ):
         return 0.0
 

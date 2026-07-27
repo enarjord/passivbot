@@ -49,7 +49,15 @@
    zero-volume or zero-range tail minutes. Zero volume/log-range is valid for verified no-trade
    continuity gaps, not for unknown stale tails caused by refresh budget or REST delay.
 6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
-   gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
+   gaps use the non-persistent synthetic gap path with replacement/invalidation tracking for EMA
+   reads while remaining unavailable to ordinary candle consumers. Unresolved gap metadata wholly
+   inside the configured open-tail projection interval does not invalidate that projection.
+   Internal eligibility is measured from the complete still-uncovered contiguous span, including
+   portions outside the current EMA query. Authoritative or verified-zero rows inside older broad
+   retry metadata split the original outage into its remaining uncovered spans; stale metadata
+   bounds alone must not make a short residual gap unavailable.
+   The open-tail age bound applies uniformly, including stock perps; venue category must not create
+   an unbounded synthetic tail exception.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the
@@ -72,12 +80,26 @@
    `fetch_failed` rows remain absent until authoritative candles replace them, including when a
    retry is due or the current request disallows remote fetching, and must not become synthetic
    zero-volume continuity candles. Day-coalesced historical fetches split around deferred ranges
-   rather than contacting the venue for them. Forced 1m and native
-   higher-timeframe candidate refreshes treat a terminal empty page after partial pagination as a
+   rather than contacting the venue for them. Forced 1m and native higher-timeframe candidate
+   refreshes treat a terminal empty page after partial pagination as a
    failed surface refresh so the caller can apply its bounded retry delay; an overlap page that
    already covers the requested end is complete, not terminal-empty. Partial authoritative
    recovery stamps the unresolved remainder with a new retry time, and deferred exclusions remain
-   compact timestamp intervals even for large historical gaps. Refresh budgets count
+   compact timestamp intervals even for large historical gaps.
+   Live EMA reads are the deliberate exception for gaps already bounded by later authoritative
+   candles: they may use non-persistent zero-volume continuity rows so sparse no-trade intervals
+   do not permanently block strategy inputs. The timestamps remain unresolved and retryable;
+   delayed authoritative rows replace the provisional values and invalidate affected EMA caches.
+   This exception is selected explicitly by the consumer: cache-only candidate close EMAs and
+   completed-candle forager ranking metrics remain strict, use policy-separated cache entries, and
+   cannot reuse a provisional active-strategy result. Synthetic replacement tracking follows the
+   manager's live/replay clock so delayed authoritative rows invalidate provisional replay EMAs
+   deterministically.
+   The live orchestrator likewise requests forager quote-volume and log-range through the strict
+   policy even for active symbols. A coincident strategy log-range span may use provisional
+   continuity without leaking that value into the separate `forager_m1` ranking bundle.
+   Open-ended tails use the separate bounded projection policy below.
+   Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
    candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
@@ -94,6 +116,38 @@
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
    disk coverage without entering the reusable range or EMA caches. Affected higher-timeframe EMA
    cache entries are invalidated, and higher-timeframe EMAs require full requested coverage.
+
+   A flat symbol selected by forager remains eligible for symbol-scoped required-EMA degradation
+   even while one of its entry orders is resting. The unavailable symbol is sent to Rust as
+   nontradable for that planning cycle, which removes its ideal orders and lets normal
+   reconciliation cancel the resting entry. An open order alone must not promote a flat,
+   dynamically selected symbol into the account-fatal required-input path. This degradation is
+   side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
+   sides retain their strict readiness contract. A side disabled by zero entry capacity is not an
+   implicit normal side merely because the symbol is active on the opposite side. Strategy EMA
+   maps and Rust's `tradable` flag are
+   nevertheless symbol-scoped: once every normal side is proven dynamically managed, any missing
+   required strategy EMA degrades the whole flat symbol rather than fabricating a partial bundle.
+   Missing forager ranking features remain side-scoped because their affected side is authoritative
+   and carried separately from strategy EMA maps. Dynamic-management eligibility is retained in
+   memory independently of side-scoped cancellation permission when Rust's symbol-level
+   nontradable result changes both sides to the configured manual stop mode. This lets the next
+   identical missing-ranking cycle remain degraded without authorizing cancellation of an
+   unaffected side's resting entry; an explicit operator `manual` or ordinary `tp_only` override
+   still revokes the retained eligibility. Reconciliation preserves only the affected side's
+   proven forager entry cancellation, identified by exchange or client order ID. Every entry
+   observed while the side is fully managed is bot-owned under the live ownership contract, even
+   if the user originally submitted it. Authorization survives EMA recovery and is rederived on
+   later cycles only while the same order ID remains, so a rejected or ambiguous first
+   cancellation is retried. Orders which first appear after the side enters `manual` or ordinary
+   `tp_only` are not authorized by matching symbol/side, price, or quantity. It does not weaken
+   manual ownership for other sides, closes, or creations.
+   Eligibility does not depend on prior membership in `active_symbols`: Rust evaluates the flat
+   forager universe before selecting active coins. A temporary bot-managed entry override such as
+   HSL `graceful_stop`, `panic`, or `tp_only_with_active_entry_cancellation` retains this
+   degradation/cancellation behavior; `manual` and ordinary `tp_only` continue to protect
+   operator-owned entries. Held positions
+   retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
@@ -118,12 +172,14 @@
     an earlier path. Forced overlap refreshes also split around deferred internal
     gaps. A failed retry of a persistent recent gap retains the persistent retry
     cadence, and all retry metadata uses the manager's active live/replay clock.
-    Missing rows remain unavailable until an authoritative row arrives, and a
-    dependent 1m EMA window remains unavailable while it intersects an unresolved
-    unknown gap rather than computing over a sparse sequence. Complete rows in the
-    supplied EMA window remain authoritative even if stale known-gap metadata still
-    names their timestamps. Recording or extending a 1m gap invalidates cached 1m
-    EMA and open-tail projection values. An overlap refresh which retries a due gap
+    Missing rows remain unavailable to ordinary candle consumers until an authoritative row
+    arrives. Live strategy EMA reads may provisionally bridge a later-bracketed internal gap with
+    non-persistent flat zero-volume rows only when the gap is no wider than
+    `live.max_active_candle_tail_gap_minutes`; cache-only forager ranking carry-forward remains
+    unavailable across an unresolved internal gap. Complete rows in the supplied EMA window remain
+    authoritative even if stale known-gap metadata still names their timestamps. Recording or
+    extending a 1m gap invalidates cached 1m EMA and open-tail projection values. An overlap refresh
+    which retries a due gap
     stamps every unresolved remainder before later repair stages run, preventing a
     second attempt in the same request. Historical pagination
     flushes deferred partial-page index writes before propagating terminal-empty
@@ -140,7 +196,8 @@
     spans, and projection horizon; local candle persistence invalidates it.
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
-    every intermediate value.
+    every intermediate value. Live provisional internal-gap tolerance is separate from the
+    simulation-only backtest gap tolerance.
 13. KuCoin omits kline buckets with no ticks. For native timeframes above 1m, gaps bounded by real
     candles in the same successful payload, absent from that raw payload, and no wider than the
     fixed 120-minute live connector policy are materialized as flat zero-volume candles before

@@ -1320,6 +1320,9 @@ class Passivbot:
             "gap_tolerance_ohlcvs_minutes": (
                 DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES
             ),
+            "provisional_internal_gap_tolerance_minutes": require_live_value(
+                config, "max_active_candle_tail_gap_minutes"
+            ),
         }
         if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
@@ -16758,6 +16761,63 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
+        previous_ema_entry_cancellation_order_keys = set(
+            getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
+            or set()
+        )
+        previous_dynamic_forager_eligibility = {
+            str(symbol): {
+                str(pside)
+                for pside in psides
+                if str(pside) in {"long", "short"}
+            }
+            for symbol, psides in (
+                getattr(
+                    self,
+                    "_orchestrator_dynamic_forager_eligibility_psides_by_symbol",
+                    {},
+                )
+                or {}
+            ).items()
+        }
+        self._orchestrator_dynamic_forager_eligibility_psides_by_symbol = {}
+        bot_managed_orchestrator_modes = {"graceful_stop", "panic"}
+
+        def is_bot_managed_entry_override(mode: object) -> bool:
+            """Preserve ownership semantics erased by orchestrator normalization."""
+            raw_mode = str(mode or "").strip().lower()
+            if raw_mode == "tp_only_with_active_entry_cancellation":
+                return True
+            try:
+                normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
+                    self, raw_mode
+                )
+            except Exception:
+                return False
+            return normalized_mode in bot_managed_orchestrator_modes
+
+        retained_ema_entry_cancellation_order_keys = set()
+        for order_key in previous_ema_entry_cancellation_order_keys:
+            if not isinstance(order_key, tuple) or len(order_key) != 4:
+                continue
+            symbol, pside, _identity_kind, _identity = order_key
+            raw_mode = (modes.get(str(pside), {}) or {}).get(str(symbol))
+            if raw_mode is not None and not is_bot_managed_entry_override(raw_mode):
+                continue
+            for order in (getattr(self, "open_orders", {}) or {}).get(
+                str(symbol), []
+            ):
+                current_order_keys = reconciler.ema_entry_cancellation_order_keys(
+                    order
+                )
+                if order_key in current_order_keys:
+                    retained_ema_entry_cancellation_order_keys.update(
+                        current_order_keys
+                    )
+                    break
+        self._orchestrator_ema_entry_cancellation_order_keys = (
+            retained_ema_entry_cancellation_order_keys
+        )
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -17012,11 +17072,14 @@ class Passivbot:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
 
-        def has_position_or_open_order(symbol: str) -> bool:
+        def has_position(symbol: str) -> bool:
             try:
-                if self.has_position(symbol=symbol):
-                    return True
+                return bool(self.has_position(symbol=symbol))
             except Exception:
+                return True
+
+        def has_position_or_open_order(symbol: str) -> bool:
+            if has_position(symbol):
                 return True
             try:
                 if bool(getattr(self, "open_orders", {}).get(symbol)):
@@ -17165,9 +17228,19 @@ class Passivbot:
                 parts.append("projection_ctx=no")
             return " ".join(parts)
 
-        def has_normal_planning_mode(symbol: str) -> bool:
-            """Return True when the current Rust payload may place entries for symbol."""
+        def has_default_entry_capacity(pside: str) -> bool:
+            """Exclude disabled sides from implicit active-symbol normal mode."""
+            try:
+                return int(self.get_max_n_positions(pside)) > 0
+            except Exception:
+                # Minimal test/fallback bots may not expose the live helper.
+                return True
+
+        def normal_planning_psides(symbol: str) -> set[str]:
+            """Return sides whose current Rust payload may place entries for symbol."""
+            normal_psides: set[str] = set()
             pb_modes = getattr(self, "PB_modes", {})
+
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
                 if explicit_mode is not None:
@@ -17177,7 +17250,7 @@ class Passivbot:
                         )
                         == "normal"
                     ):
-                        return True
+                        normal_psides.add(pside)
                     continue
                 pside_modes = (
                     pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
@@ -17186,62 +17259,135 @@ class Passivbot:
                     continue
                 if symbol in pside_modes:
                     if (
-                        Passivbot._pb_mode_to_orchestrator_mode(
+                        has_default_entry_capacity(pside)
+                        and Passivbot._pb_mode_to_orchestrator_mode(
                             self, pside_modes.get(symbol)
                         )
                         == "normal"
                     ):
-                        return True
+                        normal_psides.add(pside)
                     continue
                 try:
                     entries_blocked = Passivbot._pside_blocks_new_entries(self, pside)
                 except Exception:
                     entries_blocked = False
-                if not entries_blocked and symbol in set(
-                    getattr(self, "active_symbols", []) or []
+                if (
+                    has_default_entry_capacity(pside)
+                    and not entries_blocked
+                    and symbol
+                    in set(getattr(self, "active_symbols", []) or [])
+                ):
+                    normal_psides.add(pside)
+            return normal_psides
+
+        def has_normal_planning_mode(symbol: str) -> bool:
+            return bool(normal_planning_psides(symbol))
+
+        def has_resting_entry(symbol: str, pside: str) -> bool:
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                if (
+                    str(order.get("position_side") or "") == pside
+                    and not bool(
+                        order.get("reduce_only", order.get("reduceOnly", False))
+                    )
                 ):
                     return True
             return False
 
-        def has_explicit_normal_planning_mode(symbol: str) -> bool:
-            """Return True when config/runtime state explicitly selected normal."""
+        def ema_entry_cancellation_order_keys(order: dict) -> set[tuple]:
+            return reconciler.ema_entry_cancellation_order_keys(order)
+
+        def has_previously_authorized_resting_entry(
+            symbol: str, pside: str
+        ) -> bool:
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                if (
+                    str(order.get("position_side") or "") != pside
+                    or bool(order.get("reduce_only", order.get("reduceOnly", False)))
+                ):
+                    continue
+                order_keys = ema_entry_cancellation_order_keys(order)
+                if order_keys & previous_ema_entry_cancellation_order_keys:
+                    return True
+            return False
+
+        def dynamic_forager_normal_psides(symbol: str) -> set[str]:
+            """Return currently or previously proven dynamic forager sides."""
+            dynamic_psides: set[str] = set()
+            current_normal_psides = normal_planning_psides(symbol)
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
-                if explicit_mode is not None:
-                    if (
-                        Passivbot._mode_override_to_orchestrator_mode(
-                            self, explicit_mode
-                        )
-                        == "normal"
-                    ):
-                        return True
-                    continue
-            if bool(is_forager_mode()):
-                return False
-            pb_modes = getattr(self, "PB_modes", {})
-            for pside in ("long", "short"):
-                pside_modes = (
-                    pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
-                )
-                if not isinstance(pside_modes, dict) or symbol not in pside_modes:
-                    continue
-                if (
-                    Passivbot._pb_mode_to_orchestrator_mode(
-                        self, pside_modes.get(symbol)
+                retained_previous = (
+                    pside
+                    in previous_dynamic_forager_eligibility.get(symbol, set())
+                    and (
+                        explicit_mode is None
+                        or is_bot_managed_entry_override(explicit_mode)
                     )
-                    == "normal"
-                ):
-                    return True
-            return False
+                )
+                if explicit_mode is not None and not retained_previous:
+                    continue
+                try:
+                    if (
+                        has_default_entry_capacity(pside)
+                        and bool(is_forager_mode(pside))
+                        and (
+                            pside in current_normal_psides
+                            or retained_previous
+                            or (
+                                has_resting_entry(symbol, pside)
+                                and has_previously_authorized_resting_entry(
+                                    symbol, pside
+                                )
+                            )
+                        )
+                    ):
+                        dynamic_psides.add(pside)
+                except Exception:
+                    continue
+            return dynamic_psides
+
+        def dynamic_forager_managed_entry_psides(symbol: str) -> set[str]:
+            """Return forager sides where Passivbot still owns entry cancellation.
+
+            Temporary safety overrides such as HSL graceful-stop may replace
+            ``normal`` during startup while a bot-created entry is still resting.
+            Those modes do not transfer entry ownership to the operator.
+            """
+            managed_psides = dynamic_forager_normal_psides(symbol)
+            for pside in ("long", "short"):
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is None:
+                    continue
+                try:
+                    if bool(is_forager_mode(pside)) and (
+                        is_bot_managed_entry_override(explicit_mode)
+                    ):
+                        managed_psides.add(pside)
+                except Exception:
+                    continue
+            return managed_psides
+
+        def has_explicit_normal_planning_mode(symbol: str) -> bool:
+            """Return True when any normal side is not dynamically forager-selected."""
+            normal_psides = normal_planning_psides(symbol)
+            return bool(normal_psides - dynamic_forager_normal_psides(symbol))
 
         def flat_forager_default_normal_symbol(symbol: str) -> bool:
-            if not bool(is_forager_mode()):
-                return False
-            if has_position_or_open_order(symbol):
+            # A resting order must not promote a flat, forager-selected symbol
+            # into the account-fatal required-input path. Marking it
+            # nontradable lets Rust emit no ideal order, so normal
+            # reconciliation retires the stale resting order while candle
+            # health recovers. Held positions remain on the strict path.
+            if has_position(symbol):
                 return False
             if has_explicit_normal_planning_mode(symbol):
                 return False
-            return symbol in set(getattr(self, "active_symbols", []) or [])
+            # Forager evaluates the full eligible universe before a candidate
+            # becomes selected/active. A flat dynamically managed candidate
+            # therefore remains symbol-scoped even when it is not yet present
+            # in ``active_symbols``.
+            return bool(dynamic_forager_managed_entry_psides(symbol))
 
         forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
         forager_projection_max_age_by_symbol: dict[str, int] = {}
@@ -17452,9 +17598,11 @@ class Passivbot:
             out: dict[float, float] = {}
             if not spans:
                 return out
-            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
-                ema_type
-            )
+            metric_key = {
+                "m1_volume": "qv",
+                "m1_log_range": "log_range",
+                "forager_m1_log_range": "log_range",
+            }.get(ema_type)
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
@@ -17784,6 +17932,9 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                    allow_provisional_internal_gaps=(
+                        symbol not in cache_only_symbols
+                    ),
                 )
             )
 
@@ -17794,6 +17945,9 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                    # Quote volume is consumed only by forager ranking today.
+                    # Unknown internal gaps must not become invented zero volume.
+                    allow_provisional_internal_gaps=False,
                 )
             )
 
@@ -17804,6 +17958,19 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                )
+            )
+
+        async def ema_forager_lr_1m(symbol: str, span: float) -> float:
+            return float(
+                await self.cm.get_latest_ema_log_range(
+                    symbol,
+                    span=span,
+                    max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
+                    # Ranking is stricter than active strategy volatility and
+                    # owns a policy-separated EMA cache entry.
+                    allow_provisional_internal_gaps=False,
                 )
             )
 
@@ -18045,15 +18212,14 @@ class Passivbot:
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
-                elif is_forager_mode():
+                if is_forager_mode():
                     forager_lr1m = await fetch_map(
                         sym,
                         m1_lr_spans,
-                        ema_lr_1m,
-                        "m1_log_range",
+                        ema_forager_lr_1m,
+                        "forager_m1_log_range",
                     )
-                    lr1m = {**forager_lr1m, **lr1m}
-                if forager_lr1m is None:
+                elif forager_lr1m is None:
                     forager_lr1m = {
                         span: lr1m[span]
                         for span in m1_lr_spans
@@ -18472,7 +18638,44 @@ class Passivbot:
             str(reason): set(reason_symbols)
             for reason, reason_symbols in ema_unavailable_reasons.items()
         }
+        all_dynamic_cancellation_symbols = set(
+            self._orchestrator_ema_unavailable_reasons.get(
+                "flat_active_required_ema_unavailable", set()
+            )
+        )
+        cancellation_psides_by_symbol: dict[str, set[str]] = {}
+        for symbol in all_dynamic_cancellation_symbols:
+            cancellation_psides_by_symbol[str(symbol)] = (
+                dynamic_forager_managed_entry_psides(symbol)
+            )
+        ranking_reason_symbols = {
+            str(symbol)
+            for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items()
+            if str(reason).startswith("missing_required_forager_")
+            for symbol in reason_symbols
+        }
+        for pside, unavailable_symbols in rank_feature_unavailable_by_side.items():
+            for symbol in ranking_reason_symbols & set(unavailable_symbols):
+                if pside in dynamic_forager_managed_entry_psides(symbol):
+                    cancellation_psides_by_symbol.setdefault(symbol, set()).add(
+                        pside
+                    )
+        for symbol, managed_psides in cancellation_psides_by_symbol.items():
+            for order in (getattr(self, "open_orders", {}) or {}).get(symbol, []):
+                pside = str(order.get("position_side") or "")
+                if (
+                    pside in managed_psides
+                    and not bool(order.get("reduce_only", order.get("reduceOnly", False)))
+                ):
+                    self._orchestrator_ema_entry_cancellation_order_keys.update(
+                        ema_entry_cancellation_order_keys(order)
+                    )
         self._orchestrator_ema_bundle_symbols = set(symbols)
+        self._orchestrator_dynamic_forager_eligibility_psides_by_symbol = {
+            str(symbol): set(dynamic_forager_normal_psides(symbol))
+            for symbol in symbols
+            if dynamic_forager_normal_psides(symbol)
+        }
         self._orchestrator_forager_m1_log_range_emas = {
             symbol: dict(values)
             for symbol, values in forager_m1_log_range_emas.items()
@@ -19359,7 +19562,12 @@ class Passivbot:
     def _forager_target_staleness_ms(
         self, n_symbols: int, max_calls_per_minute: int
     ) -> int:
-        """Compute max acceptable staleness for forager candidates based on refresh budget."""
+        """Compute max acceptable staleness for forager candidates.
+
+        The refresh-budget cadence may lengthen this window, but must not shorten the
+        default active-tail grace period.  An explicit forager staleness cap remains an
+        operator override and may intentionally select a shorter window.
+        """
         try:
             n_syms = int(n_symbols)
         except Exception:
@@ -19368,10 +19576,24 @@ class Passivbot:
             max_calls = int(max_calls_per_minute)
         except Exception:
             max_calls = 0
+        configured_floor = get_optional_live_value(
+            self.config, "max_active_candle_tail_gap_minutes", 10.0
+        )
+        try:
+            floor_minutes = float(configured_floor)
+        except Exception:
+            floor_minutes = 10.0
+        if not math.isfinite(floor_minutes) or floor_minutes <= 0.0:
+            floor_minutes = 10.0
+        floor_ms = max(60_000, int(floor_minutes * 60_000))
         if n_syms <= 0 or max_calls <= 0:
-            return int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-        minutes = max(1.0, float(n_syms) / float(max_calls))
-        target_ms = int(minutes * 60_000)
+            target_ms = max(
+                floor_ms,
+                int(getattr(self, "inactive_coin_candle_ttl_ms", floor_ms)),
+            )
+        else:
+            minutes = max(1.0, float(n_syms) / float(max_calls))
+            target_ms = max(floor_ms, int(minutes * 60_000))
         configured_cap = get_optional_live_value(
             self.config, "max_forager_candle_staleness_minutes", None
         )

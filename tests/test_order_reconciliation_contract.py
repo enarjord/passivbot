@@ -978,6 +978,57 @@ def test_mode_scope_contract_is_management_not_order_ownership():
         ) == ([entry, close], [entry, close])
 
 
+def test_manual_stop_preserves_only_forager_ema_entry_cancellation():
+    symbol = "BTC/USDT:USDT"
+    entry = {
+        "id": "forager-entry",
+        "symbol": symbol,
+        "position_side": "long",
+        "reduce_only": False,
+    }
+    close = {
+        "id": "forager-close",
+        "symbol": symbol,
+        "position_side": "long",
+        "reduce_only": True,
+    }
+    operator_entry = {
+        "id": "operator-entry",
+        "symbol": symbol,
+        "position_side": "long",
+        "reduce_only": False,
+    }
+
+    class Bot:
+        PB_modes = {"long": {symbol: "manual"}, "short": {}}
+        _orchestrator_ema_entry_cancellation_order_keys = {
+            (symbol, "long", "exchange_id", "forager-entry")
+        }
+
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry, operator_entry, close], [entry, close]
+    ) == ([entry], [])
+
+    entry_with_both_ids = {
+        **entry,
+        "id": "exchange-id-arrived-later",
+        "client_order_id": "forager-entry-client",
+    }
+    Bot._orchestrator_ema_entry_cancellation_order_keys = {
+        (symbol, "long", "client_id", "forager-entry-client")
+    }
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry_with_both_ids, operator_entry, close], []
+    ) == ([entry_with_both_ids], [])
+
+    Bot._orchestrator_ema_entry_cancellation_order_keys = {
+        (symbol, "short", "exchange_id", "forager-entry")
+    }
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry, close], [entry, close]
+    ) == ([], [])
+
+
 def _normalized_order(price: float) -> dict:
     return {
         "symbol": "BTC/USDT:USDT",

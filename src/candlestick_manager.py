@@ -743,6 +743,7 @@ class CandlestickManager:
         remote_fetch_min_interval_ms: float | None = None,
         lock_timeout_seconds: float | None = None,
         gap_tolerance_ohlcvs_minutes: float = DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
+        provisional_internal_gap_tolerance_minutes: float = 10.0,
         # Archive fetching: if False, only use ccxt REST API even if archives are available.
         # Useful for live bots where archives may timeout; backtester enables by default.
         archive_enabled: bool = True,
@@ -770,6 +771,9 @@ class CandlestickManager:
         self.max_disk_candles_per_symbol_per_tf = int(max_disk_candles_per_symbol_per_tf)
         self.gap_tolerance_ohlcvs_minutes = max(
             0.0, float(gap_tolerance_ohlcvs_minutes)
+        )
+        self.provisional_internal_gap_tolerance_minutes = max(
+            0.0, float(provisional_internal_gap_tolerance_minutes)
         )
         # Archive fetching: if False, only use ccxt REST API
         self.archive_enabled = bool(archive_enabled)
@@ -2742,7 +2746,7 @@ class CandlestickManager:
             self._synthetic_timestamps[symbol] = set()
         self._synthetic_timestamps[symbol].update(ts_set)
         # Keep only the most recent week to bound memory usage.
-        cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
+        cutoff = self._now_ms() - 7 * 24 * 60 * ONE_MIN_MS
         self._synthetic_timestamps[symbol] = {
             ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
         }
@@ -3307,6 +3311,67 @@ class CandlestickManager:
             if overlap_start <= overlap_end:
                 ranges.append((overlap_start, overlap_end))
         return ranges
+
+    def _unverified_uncovered_gap_ranges(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+    ) -> List[Tuple[int, int]]:
+        """Return full still-missing spans from unknown gaps overlapping a range.
+
+        Known-gap metadata may temporarily cover minutes which a later refresh
+        has already populated. Width-sensitive provisional policy must measure
+        the remaining contiguous outage, not either the caller-clipped overlap
+        or stale outer metadata bounds.
+        """
+        cached = self._cache.get(symbol)
+        if cached is None or cached.size == 0:
+            cached = np.empty((0,), dtype=CANDLE_DTYPE)
+        else:
+            cached = np.sort(_ensure_dtype(cached), order="ts")
+            provisional_ts = self._synthetic_timestamps.get(symbol, set())
+            if provisional_ts:
+                cached = cached[
+                    ~np.isin(
+                        cached["ts"].astype(np.int64),
+                        np.asarray(tuple(provisional_ts), dtype=np.int64),
+                    )
+                ]
+
+        missing: List[Tuple[int, int]] = []
+        for gap in self._get_known_gaps_enhanced(symbol):
+            if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+                GAP_REASON_AUTO,
+                GAP_REASON_FETCH_FAILED,
+            }:
+                continue
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_start > int(end_ts) or gap_end < int(start_ts):
+                continue
+            gap_rows = self._slice_ts_range(
+                cached,
+                gap_start,
+                gap_end,
+                assume_sorted=True,
+            )
+            missing.extend(self._missing_spans(gap_rows, gap_start, gap_end))
+
+        merged: List[Tuple[int, int]] = []
+        for gap_start, gap_end in sorted(missing):
+            if merged and int(gap_start) <= int(merged[-1][1]) + ONE_MIN_MS:
+                merged[-1] = (
+                    int(merged[-1][0]),
+                    max(int(merged[-1][1]), int(gap_end)),
+                )
+            else:
+                merged.append((int(gap_start), int(gap_end)))
+        return [
+            (gap_start, gap_end)
+            for gap_start, gap_end in merged
+            if gap_start <= int(end_ts) and gap_end >= int(start_ts)
+        ]
 
     def _due_unverified_gap_ranges(
         self,
@@ -6496,6 +6561,7 @@ class CandlestickManager:
         skip_historical_gap_fill: bool = False,
         max_lookback_candles: Optional[int] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: bool = False,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -6520,6 +6586,11 @@ class CandlestickManager:
         - If `allow_remote_fetch` is False: serve only local memory/disk data and
           do not call exchange/archive fetchers. This is used for non-critical
           live forager candidates where cache misses should not block trading.
+        - If `allow_provisional_internal_gaps` is True: unresolved gaps already
+          bounded by later candles may be represented in this returned array by
+          non-persistent zero-volume continuity rows only when each gap is no
+          wider than `provisional_internal_gap_tolerance_minutes`. Open-ended
+          tails retain the separate `fill_trailing_gaps` policy.
         """
         self._raise_if_shutdown_requested("get_candles")
         if max_age_ms is not None and max_age_ms < 0:
@@ -7714,6 +7785,33 @@ class CandlestickManager:
         if fill_trailing_gaps is not None:
             trailing_fill = bool(fill_trailing_gaps)
 
+        unverified_gap_ranges = self._unverified_gap_ranges(
+            symbol,
+            start_ts,
+            end_ts,
+        )
+        if allow_provisional_internal_gaps:
+            provisional_tolerance_ms = int(
+                self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
+            )
+            excluded_synthetic_ranges = []
+            for full_gap_start, full_gap_end in self._unverified_uncovered_gap_ranges(
+                symbol,
+                start_ts,
+                end_ts,
+            ):
+                overlap_start = max(int(start_ts), full_gap_start)
+                overlap_end = min(int(end_ts), full_gap_end)
+                if (
+                    provisional_tolerance_ms <= 0
+                    or full_gap_end - full_gap_start + ONE_MIN_MS
+                    > provisional_tolerance_ms
+                ):
+                    excluded_synthetic_ranges.append(
+                        (overlap_start, overlap_end)
+                    )
+        else:
+            excluded_synthetic_ranges = unverified_gap_ranges
         result = self.standardize_gaps(
             data_for_gaps,
             start_ts=start_ts,
@@ -7723,11 +7821,7 @@ class CandlestickManager:
             fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
-            excluded_synthetic_ranges=self._unverified_gap_ranges(
-                symbol,
-                start_ts,
-                end_ts,
-            ),
+            excluded_synthetic_ranges=excluded_synthetic_ranges,
         )
 
         # Log accumulated gap summaries (throttled)
@@ -7917,15 +8011,6 @@ class CandlestickManager:
             )
         raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
 
-    @staticmethod
-    def _is_stock_perp_symbol(symbol: str) -> bool:
-        try:
-            from tradfi_data import is_stock_perp_symbol
-
-            return bool(is_stock_perp_symbol(str(symbol)))
-        except Exception:
-            return False
-
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,
@@ -8005,6 +8090,7 @@ class CandlestickManager:
             max_age_ms=None,
             timeframe="1m",
             allow_remote_fetch=False,
+            allow_provisional_internal_gaps=True,
         )
         # get_candles may legitimately record bounded internal synthetic gaps.
         # Projection itself must not write EMA cache entries or open-tail synthetic timestamps.
@@ -8022,17 +8108,6 @@ class CandlestickManager:
                 f"open-tail projection unavailable for {symbol}: no local candles "
                 f"start_ts={start_ts} latest_expected_ts={latest_expected}"
             )
-        # The deterministic fake-live harness intentionally permits sparse
-        # scenario timelines.  Those rows are authoritative test inputs rather
-        # than incomplete exchange history.
-        if (
-            str(self.exchange_name or "").lower() != "fake"
-            and self._unverified_gap_ranges(symbol, start_ts, latest_expected)
-        ):
-            raise RuntimeError(
-                f"open-tail projection unavailable for {symbol}: "
-                "unverified internal candle gap"
-            )
         arr = np.sort(_ensure_dtype(arr), order="ts")
         newest_ts = int(arr[-1]["ts"])
         if newest_ts > latest_expected:
@@ -8042,6 +8117,39 @@ class CandlestickManager:
                     f"open-tail projection unavailable for {symbol}: no candles after range clamp"
                 )
             newest_ts = int(arr[-1]["ts"])
+        if newest_ts < last_cached:
+            raise RuntimeError(
+                f"open-tail projection unavailable for {symbol}: "
+                f"authoritative tail anchor missing last_cached_ts={last_cached} "
+                f"newest_ts={newest_ts}"
+            )
+        # The deterministic fake-live harness intentionally permits sparse
+        # scenario timelines. Those rows are authoritative test inputs rather
+        # than incomplete exchange history.
+        #
+        # Unknown-gap metadata wholly after last_cached describes the exact
+        # bounded open tail this method is responsible for projecting. It must
+        # not turn a permitted provisional tail into an "internal gap" failure.
+        # Gaps at or before the authoritative anchor remain strict, except when
+        # every named timestamp is already covered by a real row and the gap
+        # metadata is merely stale.
+        if str(self.exchange_name or "").lower() != "fake":
+            for gap_start, gap_end in self._unverified_gap_ranges(
+                symbol,
+                start_ts,
+                min(last_cached, latest_expected),
+            ):
+                mask = (arr["ts"] >= int(gap_start)) & (arr["ts"] <= int(gap_end))
+                if not self._candle_range_has_full_coverage(
+                    arr[mask],
+                    int(gap_start),
+                    int(gap_end),
+                    ONE_MIN_MS,
+                ):
+                    raise RuntimeError(
+                        f"open-tail projection unavailable for {symbol}: "
+                        "unverified internal candle gap"
+                    )
         if newest_ts < latest_expected:
             prev_close = float(arr[-1]["c"])
             rows = []
@@ -8130,6 +8238,7 @@ class CandlestickManager:
             max_lookback_candles=max_candles,
             fill_trailing_gaps=False,
             allow_remote_fetch=False,
+            allow_provisional_internal_gaps=False,
         )
         if raw.size == 0 or not candle_range_has_full_coverage(
             raw, start_ts, int(last_cached), timeframe=timeframe
@@ -8276,6 +8385,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: bool = True,
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles.
 
@@ -8287,7 +8397,10 @@ class CandlestickManager:
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = self._now_ms()
         tf_key = str(period_ms)
-        key = ("close", float(span), tf_key)
+        cache_metric_key = (
+            "close" if allow_provisional_internal_gaps else "close:strict"
+        )
+        key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -8300,7 +8413,8 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
         if arr.size == 0:
             return float("nan")
@@ -8456,6 +8570,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -8464,6 +8579,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="volume",
             series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
         )
@@ -8477,6 +8593,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         """Return latest EMA of quote volume over last `span` finalized candles.
 
@@ -8491,6 +8608,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="qv",
             series_fn=lambda a: (
                 np.asarray(a["bv"], dtype=np.float64)
@@ -8512,6 +8630,7 @@ class CandlestickManager:
         *,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
         metric_key: str,
         series_fn,
     ) -> float:
@@ -8525,7 +8644,14 @@ class CandlestickManager:
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = self._now_ms()
         tf_key = str(period_ms)
-        key = (metric_key, float(span), tf_key)
+        if allow_provisional_internal_gaps is None:
+            allow_provisional_internal_gaps = bool(allow_remote_fetch)
+        cache_metric_key = (
+            metric_key
+            if allow_provisional_internal_gaps
+            else f"{metric_key}:strict"
+        )
+        key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -8538,7 +8664,8 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
         if arr.size == 0:
             return float("nan")
@@ -8567,11 +8694,10 @@ class CandlestickManager:
     ) -> Dict[str, float]:
         """Compute multiple latest-EMA metrics with a single candles fetch.
 
-        This is an optimization wrapper around get_candles() + EMA calculations. It preserves the
-        per-metric behavior of get_latest_ema_* helpers by:
-        - Using a single `get_candles()` call for the largest requested span.
-        - For 1m candles: applying gap standardization per metric window (same as get_candles()).
-        - Caching results in `self._ema_cache` per (metric, span, timeframe).
+        This is the strict completed-candle path used by forager ranking. It:
+        - Uses a single `get_candles()` call for the largest requested span.
+        - Requires authoritative or verified-zero coverage across every metric window.
+        - Keeps its cache entries separate from provisional active-strategy values.
         """
         out: Dict[str, float] = {}
         if not spans_by_metric:
@@ -8595,7 +8721,7 @@ class CandlestickManager:
         cache = self._ema_cache.setdefault(symbol, {})
         missing: List[str] = []
         for metric_key, span in spans_by_metric.items():
-            key = (str(metric_key), float(span), tf_key)
+            key = (f"{metric_key}:strict", float(span), tf_key)
             if max_age_ms is not None and max_age_ms > 0 and key in cache:
                 val, cached_end_ts, computed_at = cache[key]
                 if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
@@ -8613,10 +8739,11 @@ class CandlestickManager:
             start_ts=start_ts,
             end_ts=end_ts,
             max_age_ms=max_age_ms,
-            strict=True if period_ms == ONE_MIN_MS else False,
+            strict=False,
             timeframe=out_tf,
             max_lookback_candles=window_candles,
-            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=False,
         )
         if raw.size == 0:
             for metric_key in missing:
@@ -8688,7 +8815,11 @@ class CandlestickManager:
             series = series_for(metric_key, tail)
             res = float(self._ema(series, span))
             out[metric_key] = res
-            cache[(metric_key, span, tf_key)] = (res, int(end_ts), int(now))
+            cache[(f"{metric_key}:strict", span, tf_key)] = (
+                res,
+                int(end_ts),
+                int(now),
+            )
 
         return out
 
@@ -8701,6 +8832,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -8709,6 +8841,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="log_range",
             series_fn=lambda a: np.log(
                 np.maximum(np.asarray(a["h"], dtype=np.float64), 1e-12)
