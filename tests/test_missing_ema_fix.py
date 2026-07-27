@@ -410,6 +410,8 @@ class _BundleReproBot:
         )
         self.cached_metric_calls = []
         self.projection_metric_requests = []
+        self.qv_provisional_flags = []
+        self.lr_provisional_flags = []
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
@@ -449,8 +451,16 @@ class _BundleReproBot:
                 return float(self.outer.close_value)
 
             async def get_latest_ema_quote_volume(
-                self, symbol, span, max_age_ms=60_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                max_age_ms=60_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=None,
             ):
+                self.outer.qv_provisional_flags.append(
+                    allow_provisional_internal_gaps
+                )
                 if self.outer.qv_mode == "timeout":
                     raise TimeoutError("quote volume timeout")
                 if self.outer.qv_mode == "nan":
@@ -458,8 +468,17 @@ class _BundleReproBot:
                 return 250000.0
 
             async def get_latest_ema_log_range(
-                self, symbol, span, tf=None, max_age_ms=60_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                tf=None,
+                max_age_ms=60_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=None,
             ):
+                self.outer.lr_provisional_flags.append(
+                    (tf or "1m", allow_provisional_internal_gaps)
+                )
                 if tf == "1h":
                     if self.outer.h1_mode == "timeout":
                         raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -1742,6 +1761,8 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot.qv_provisional_flags == [False]
+    assert bot.lr_provisional_flags == [("1m", False)]
     assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
@@ -2696,12 +2717,25 @@ class _PacingProbeCM:
             self.current_concurrency -= 1
 
     async def get_latest_ema_quote_volume(
-        self, symbol, *, span, max_age_ms, allow_remote_fetch=True
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
     ):
         return 0.0
 
     async def get_latest_ema_log_range(
-        self, symbol, *, span, max_age_ms, tf="1m", allow_remote_fetch=True
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        tf="1m",
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
     ):
         return 0.0
 

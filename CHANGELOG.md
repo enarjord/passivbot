@@ -23,7 +23,9 @@ All notable user-facing changes will be documented in this file.
   exchange/client order ID, including when an exchange ID appears after the client ID and after EMA
   recovery, without weakening ownership for orders first observed after the side enters manual or
   ordinary tp-only mode. Cache-only candidate close EMAs and completed-candle forager ranking
-  metrics cannot reuse provisional active-strategy cache values. Temporary bot-managed entry
+  metrics cannot reuse provisional active-strategy cache values; active-symbol quote-volume and
+  log-range ranking reads are equally strict and remain separate from provisional strategy
+  log-range inputs. Temporary bot-managed entry
   overrides such as HSL graceful-stop retain the same flat-symbol degradation behavior instead of
   promoting missing EMA inputs into an account-wide restart loop. Budget-derived forager ranking
   staleness also retains the active-tail grace period (10 minutes by default), so a large refresh

@@ -17568,9 +17568,11 @@ class Passivbot:
             out: dict[float, float] = {}
             if not spans:
                 return out
-            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
-                ema_type
-            )
+            metric_key = {
+                "m1_volume": "qv",
+                "m1_log_range": "log_range",
+                "forager_m1_log_range": "log_range",
+            }.get(ema_type)
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
@@ -17913,6 +17915,9 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                    # Quote volume is consumed only by forager ranking today.
+                    # Unknown internal gaps must not become invented zero volume.
+                    allow_provisional_internal_gaps=False,
                 )
             )
 
@@ -17923,6 +17928,19 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                )
+            )
+
+        async def ema_forager_lr_1m(symbol: str, span: float) -> float:
+            return float(
+                await self.cm.get_latest_ema_log_range(
+                    symbol,
+                    span=span,
+                    max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
+                    # Ranking is stricter than active strategy volatility and
+                    # owns a policy-separated EMA cache entry.
+                    allow_provisional_internal_gaps=False,
                 )
             )
 
@@ -18164,15 +18182,14 @@ class Passivbot:
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
-                elif is_forager_mode():
+                if is_forager_mode():
                     forager_lr1m = await fetch_map(
                         sym,
                         m1_lr_spans,
-                        ema_lr_1m,
-                        "m1_log_range",
+                        ema_forager_lr_1m,
+                        "forager_m1_log_range",
                     )
-                    lr1m = {**forager_lr1m, **lr1m}
-                if forager_lr1m is None:
+                elif forager_lr1m is None:
                     forager_lr1m = {
                         span: lr1m[span]
                         for span in m1_lr_spans

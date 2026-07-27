@@ -8570,6 +8570,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -8578,6 +8579,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="volume",
             series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
         )
@@ -8591,6 +8593,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         """Return latest EMA of quote volume over last `span` finalized candles.
 
@@ -8605,6 +8608,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="qv",
             series_fn=lambda a: (
                 np.asarray(a["bv"], dtype=np.float64)
@@ -8626,6 +8630,7 @@ class CandlestickManager:
         *,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
         metric_key: str,
         series_fn,
     ) -> float:
@@ -8639,7 +8644,13 @@ class CandlestickManager:
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = self._now_ms()
         tf_key = str(period_ms)
-        cache_metric_key = metric_key if allow_remote_fetch else f"{metric_key}:strict"
+        if allow_provisional_internal_gaps is None:
+            allow_provisional_internal_gaps = bool(allow_remote_fetch)
+        cache_metric_key = (
+            metric_key
+            if allow_provisional_internal_gaps
+            else f"{metric_key}:strict"
+        )
         key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
@@ -8654,7 +8665,7 @@ class CandlestickManager:
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
             fill_trailing_gaps=False,
-            allow_provisional_internal_gaps=bool(allow_remote_fetch),
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
         if arr.size == 0:
             return float("nan")
@@ -8821,6 +8832,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -8829,6 +8841,7 @@ class CandlestickManager:
             timeframe,
             tf=tf,
             allow_remote_fetch=allow_remote_fetch,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
             metric_key="log_range",
             series_fn=lambda a: np.log(
                 np.maximum(np.asarray(a["h"], dtype=np.float64), 1e-12)

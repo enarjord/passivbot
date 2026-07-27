@@ -95,6 +95,9 @@
    cannot reuse a provisional active-strategy result. Synthetic replacement tracking follows the
    manager's live/replay clock so delayed authoritative rows invalidate provisional replay EMAs
    deterministically.
+   The live orchestrator likewise requests forager quote-volume and log-range through the strict
+   policy even for active symbols. A coincident strategy log-range span may use provisional
+   continuity without leaking that value into the separate `forager_m1` ranking bundle.
    Open-ended tails use the separate bounded projection policy below.
    Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
