@@ -90,6 +90,11 @@
    candles: they may use non-persistent zero-volume continuity rows so sparse no-trade intervals
    do not permanently block strategy inputs. The timestamps remain unresolved and retryable;
    delayed authoritative rows replace the provisional values and invalidate affected EMA caches.
+   This exception is selected explicitly by the consumer: cache-only candidate close EMAs and
+   completed-candle forager ranking metrics remain strict, use policy-separated cache entries, and
+   cannot reuse a provisional active-strategy result. Synthetic replacement tracking follows the
+   manager's live/replay clock so delayed authoritative rows invalidate provisional replay EMAs
+   deterministically.
    Open-ended tails use the separate bounded projection policy below.
    Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
@@ -115,7 +120,11 @@
    reconciliation cancel the resting entry. An open order alone must not promote a flat,
    dynamically selected symbol into the account-fatal required-input path. This degradation is
    side-aware: every normal side must be dynamically forager-selected; fixed or explicitly normal
-   sides retain their strict readiness contract. If the unavailable result changes the dynamically
+   sides retain their strict readiness contract. Strategy EMA maps and Rust's `tradable` flag are
+   nevertheless symbol-scoped: once every normal side is proven dynamically managed, any missing
+   required strategy EMA degrades the whole flat symbol rather than fabricating a partial bundle.
+   Missing forager ranking features remain side-scoped because their affected side is authoritative
+   and carried separately from strategy EMA maps. If the unavailable result changes the dynamically
    managed side to the configured manual stop mode, reconciliation preserves only that cycle's
    proven forager entry cancellation, identified by exchange or client order ID. Every entry
    observed while the side is fully managed is bot-owned under the live ownership contract, even

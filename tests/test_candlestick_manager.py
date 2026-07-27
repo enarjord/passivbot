@@ -3433,6 +3433,14 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
     )
     assert list(ordinary["ts"]) == [start, end]
 
+    strict_candidate = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=False,
+    )
+    assert math.isnan(strict_candidate)
+
     provisional = await cm.get_latest_ema_close(
         symbol,
         3.0,
@@ -3446,6 +3454,14 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
     assert np.array_equal(cm._cache[symbol], authoritative)
     assert missing in cm._synthetic_timestamps[symbol]
     assert ("close", 3.0, str(ONE_MIN_MS)) in cm._ema_cache[symbol]
+    strict_after_provisional = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        max_age_ms=ONE_MIN_MS,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=False,
+    )
+    assert math.isnan(strict_after_provisional)
 
     cm._persist_batch(
         symbol,
@@ -3471,6 +3487,36 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
     )
     assert authoritative_ema == pytest.approx(expected_authoritative)
     assert authoritative_ema != pytest.approx(provisional)
+
+
+def test_synthetic_timestamp_retention_uses_replay_clock(monkeypatch, tmp_path):
+    wall_now = 10_000 * ONE_MIN_MS
+    replay_now = 100 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: wall_now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="fake",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._now_ms_callback = lambda: replay_now
+    symbol = "REPLAY/USDT:USDT"
+    synthetic_ts = replay_now - ONE_MIN_MS
+    cm._ema_cache[symbol] = {
+        ("close", 3.0, str(ONE_MIN_MS)): (100.0, synthetic_ts, replay_now)
+    }
+
+    cm._track_synthetic_timestamps(symbol, [synthetic_ts])
+
+    assert cm._synthetic_timestamps[symbol] == {synthetic_ts}
+    cm._check_synthetic_replacement(
+        symbol,
+        np.array(
+            [(synthetic_ts, 101.0, 101.0, 101.0, 101.0, 1.0)],
+            dtype=CANDLE_DTYPE,
+        ),
+    )
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+    assert cm._ema_cache.get(symbol, {}) == {}
 
 
 @pytest.mark.asyncio

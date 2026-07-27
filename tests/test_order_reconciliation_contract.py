@@ -1009,6 +1009,18 @@ def test_manual_stop_preserves_only_forager_ema_entry_cancellation():
         Bot(), symbol, [entry, operator_entry, close], [entry, close]
     ) == ([entry], [])
 
+    entry_with_both_ids = {
+        **entry,
+        "id": "exchange-id-arrived-later",
+        "client_order_id": "forager-entry-client",
+    }
+    Bot._orchestrator_ema_entry_cancellation_order_keys = {
+        (symbol, "long", "client_id", "forager-entry-client")
+    }
+    assert reconciler.apply_mode_filters(
+        Bot(), symbol, [entry_with_both_ids, operator_entry, close], []
+    ) == ([entry_with_both_ids], [])
+
     Bot._orchestrator_ema_entry_cancellation_order_keys = {
         (symbol, "short", "exchange_id", "forager-entry")
     }

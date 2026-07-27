@@ -435,7 +435,12 @@ class _BundleReproBot:
                 self.outer = outer
 
             async def get_latest_ema_close(
-                self, symbol, span, max_age_ms=30_000, allow_remote_fetch=True
+                self,
+                symbol,
+                span,
+                max_age_ms=30_000,
+                allow_remote_fetch=True,
+                allow_provisional_internal_gaps=True,
             ):
                 if self.outer.close_mode == "timeout":
                     raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -807,7 +812,7 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
                 "symbol": symbol,
                 "position_side": "long",
                 "side": "buy",
-                "id": "forager-entry-1",
+                "client_order_id": "forager-entry-client-1",
                 "qty": 1.0,
                 "price": 100.0,
                 "reduce_only": False,
@@ -845,8 +850,8 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
     expected_order_key = (
         symbol,
         "long",
-        "exchange_id",
-        "forager-entry-1",
+        "client_id",
+        "forager-entry-client-1",
     )
     assert bot._orchestrator_ema_entry_cancellation_order_keys == {
         expected_order_key
@@ -862,8 +867,10 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 
     # If the first cancellation is rejected or ambiguous, the Rust state from
     # that degraded cycle leaves this side in manual stop mode. The next EMA
-    # cycle must rederive the same narrow cancellation authorization while the
-    # proven resting entry remains.
+    # cycle must retain the narrow cancellation authorization while the proven
+    # resting entry remains. A later exchange ID is an additional alias for the
+    # same client-identified order, not a new identity.
+    resting_entry["id"] = "forager-entry-exchange-1"
     (
         m1_close_emas,
         m1_volume_emas,
@@ -880,9 +887,16 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
     assert h1_log_range_emas[symbol] == {}
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
-    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
-        expected_order_key
+    expected_order_keys = {
+        expected_order_key,
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            "forager-entry-exchange-1",
+        ),
     }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == expected_order_keys
 
     # Recovery must not discard a failed/ambiguous cancellation authorization:
     # Rust may leave the pair unselected/manual even though EMA inputs recovered.
@@ -891,9 +905,7 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
         bot, [symbol], mode_overrides
     )
     assert bot._orchestrator_ema_unavailable_reasons == {}
-    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
-        expected_order_key
-    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == expected_order_keys
 
     # An explicit operator-owned mode transfers entry ownership and terminates
     # the degradation exception even if the same order remains visible.
@@ -2607,7 +2619,15 @@ class _PacingProbeCM:
         self.current_concurrency = 0
         self.max_concurrency = 0
 
-    async def get_latest_ema_close(self, symbol, *, span, max_age_ms, allow_remote_fetch=True):
+    async def get_latest_ema_close(
+        self,
+        symbol,
+        *,
+        span,
+        max_age_ms,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=True,
+    ):
         self.current_concurrency += 1
         self.max_concurrency = max(self.max_concurrency, self.current_concurrency)
         try:

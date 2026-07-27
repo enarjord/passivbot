@@ -333,6 +333,26 @@ def ema_entry_cancellation_order_key(order: dict) -> Optional[tuple[str, str, st
     return None
 
 
+def ema_entry_cancellation_order_keys(
+    order: dict,
+) -> set[tuple[str, str, str, str]]:
+    """Return every strong identity alias for an already-proven resting entry."""
+    if not isinstance(order, dict):
+        return set()
+    symbol = str(order.get("symbol") or "")
+    pside = str(order.get("position_side") or order.get("positionSide") or "")
+    if not symbol or pside not in ("long", "short"):
+        return set()
+    keys: set[tuple[str, str, str, str]] = set()
+    exchange_id = extract_order_exchange_id(order)
+    if exchange_id:
+        keys.add((symbol, pside, "exchange_id", exchange_id))
+    custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    if custom_id:
+        keys.add((symbol, pside, "client_id", custom_id))
+    return keys
+
+
 def canonical_passivbot_custom_id(custom_id: str) -> str:
     """Normalize broker/exchange wrappers around Passivbot custom ids."""
     if not custom_id:
@@ -2156,14 +2176,14 @@ def apply_mode_filters(
     to_create: list[dict],
 ) -> tuple[list[dict], list[dict]]:
     """Apply mode-specific cancel/create filtering rules."""
-    ema_entry_cancellation_order_keys = set(
+    authorized_ema_entry_cancellation_order_keys = set(
         getattr(bot, "_orchestrator_ema_entry_cancellation_order_keys", set())
         or set()
     )
     for pside in ["long", "short"]:
         mode = bot.PB_modes[pside].get(symbol)
         if mode == "manual":
-            if ema_entry_cancellation_order_keys:
+            if authorized_ema_entry_cancellation_order_keys:
                 # This pair was dynamically managed by forager when its required
                 # EMA became unavailable. Preserve cancellation only for the
                 # exact proven resting entry; do not broaden manual mode to
@@ -2174,8 +2194,10 @@ def apply_mode_filters(
                     if x["position_side"] != pside
                     or (
                         not x["reduce_only"]
-                        and ema_entry_cancellation_order_key(x)
-                        in ema_entry_cancellation_order_keys
+                        and bool(
+                            ema_entry_cancellation_order_keys(x)
+                            & authorized_ema_entry_cancellation_order_keys
+                        )
                     )
                 ]
             else:

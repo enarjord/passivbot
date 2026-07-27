@@ -16791,8 +16791,13 @@ class Passivbot:
             for order in (getattr(self, "open_orders", {}) or {}).get(
                 str(symbol), []
             ):
-                if reconciler.ema_entry_cancellation_order_key(order) == order_key:
-                    retained_ema_entry_cancellation_order_keys.add(order_key)
+                current_order_keys = reconciler.ema_entry_cancellation_order_keys(
+                    order
+                )
+                if order_key in current_order_keys:
+                    retained_ema_entry_cancellation_order_keys.update(
+                        current_order_keys
+                    )
                     break
         self._orchestrator_ema_entry_cancellation_order_keys = (
             retained_ema_entry_cancellation_order_keys
@@ -17260,8 +17265,8 @@ class Passivbot:
                     return True
             return False
 
-        def ema_entry_cancellation_order_key(order: dict) -> tuple | None:
-            return reconciler.ema_entry_cancellation_order_key(order)
+        def ema_entry_cancellation_order_keys(order: dict) -> set[tuple]:
+            return reconciler.ema_entry_cancellation_order_keys(order)
 
         def has_previously_authorized_resting_entry(
             symbol: str, pside: str
@@ -17272,11 +17277,8 @@ class Passivbot:
                     or bool(order.get("reduce_only", order.get("reduceOnly", False)))
                 ):
                     continue
-                order_key = ema_entry_cancellation_order_key(order)
-                if (
-                    order_key is not None
-                    and order_key in previous_ema_entry_cancellation_order_keys
-                ):
+                order_keys = ema_entry_cancellation_order_keys(order)
+                if order_keys & previous_ema_entry_cancellation_order_keys:
                     return True
             return False
 
@@ -17885,6 +17887,9 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+                    allow_provisional_internal_gaps=(
+                        symbol not in cache_only_symbols
+                    ),
                 )
             )
 
@@ -18602,11 +18607,9 @@ class Passivbot:
                     pside in managed_psides
                     and not bool(order.get("reduce_only", order.get("reduceOnly", False)))
                 ):
-                    order_key = ema_entry_cancellation_order_key(order)
-                    if order_key is not None:
-                        self._orchestrator_ema_entry_cancellation_order_keys.add(
-                            order_key
-                        )
+                    self._orchestrator_ema_entry_cancellation_order_keys.update(
+                        ema_entry_cancellation_order_keys(order)
+                    )
         self._orchestrator_ema_bundle_symbols = set(symbols)
         self._orchestrator_forager_m1_log_range_emas = {
             symbol: dict(values)

@@ -2746,7 +2746,7 @@ class CandlestickManager:
             self._synthetic_timestamps[symbol] = set()
         self._synthetic_timestamps[symbol].update(ts_set)
         # Keep only the most recent week to bound memory usage.
-        cutoff = _utc_now_ms() - 7 * 24 * 60 * ONE_MIN_MS
+        cutoff = self._now_ms() - 7 * 24 * 60 * ONE_MIN_MS
         self._synthetic_timestamps[symbol] = {
             ts for ts in self._synthetic_timestamps[symbol] if ts > cutoff
         }
@@ -8385,6 +8385,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: bool = True,
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles.
 
@@ -8396,7 +8397,10 @@ class CandlestickManager:
         # EMA result cache: reuse if end_ts unchanged and within TTL
         now = self._now_ms()
         tf_key = str(period_ms)
-        key = ("close", float(span), tf_key)
+        cache_metric_key = (
+            "close" if allow_provisional_internal_gaps else "close:strict"
+        )
+        key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -8410,7 +8414,7 @@ class CandlestickManager:
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
             fill_trailing_gaps=False,
-            allow_provisional_internal_gaps=True,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
         if arr.size == 0:
             return float("nan")
@@ -8635,7 +8639,8 @@ class CandlestickManager:
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         now = self._now_ms()
         tf_key = str(period_ms)
-        key = (metric_key, float(span), tf_key)
+        cache_metric_key = metric_key if allow_remote_fetch else f"{metric_key}:strict"
+        key = (cache_metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
         if max_age_ms is not None and max_age_ms > 0 and key in cache:
             val, cached_end_ts, computed_at = cache[key]
@@ -8678,11 +8683,10 @@ class CandlestickManager:
     ) -> Dict[str, float]:
         """Compute multiple latest-EMA metrics with a single candles fetch.
 
-        This is an optimization wrapper around get_candles() + EMA calculations. It preserves the
-        per-metric behavior of get_latest_ema_* helpers by:
-        - Using a single `get_candles()` call for the largest requested span.
-        - For 1m candles: applying gap standardization per metric window (same as get_candles()).
-        - Caching results in `self._ema_cache` per (metric, span, timeframe).
+        This is the strict completed-candle path used by forager ranking. It:
+        - Uses a single `get_candles()` call for the largest requested span.
+        - Requires authoritative or verified-zero coverage across every metric window.
+        - Keeps its cache entries separate from provisional active-strategy values.
         """
         out: Dict[str, float] = {}
         if not spans_by_metric:
@@ -8706,7 +8710,7 @@ class CandlestickManager:
         cache = self._ema_cache.setdefault(symbol, {})
         missing: List[str] = []
         for metric_key, span in spans_by_metric.items():
-            key = (str(metric_key), float(span), tf_key)
+            key = (f"{metric_key}:strict", float(span), tf_key)
             if max_age_ms is not None and max_age_ms > 0 and key in cache:
                 val, cached_end_ts, computed_at = cache[key]
                 if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
@@ -8728,7 +8732,7 @@ class CandlestickManager:
             timeframe=out_tf,
             max_lookback_candles=window_candles,
             fill_trailing_gaps=False,
-            allow_provisional_internal_gaps=True,
+            allow_provisional_internal_gaps=False,
         )
         if raw.size == 0:
             for metric_key in missing:
@@ -8800,7 +8804,11 @@ class CandlestickManager:
             series = series_for(metric_key, tail)
             res = float(self._ema(series, span))
             out[metric_key] = res
-            cache[(metric_key, span, tf_key)] = (res, int(end_ts), int(now))
+            cache[(f"{metric_key}:strict", span, tf_key)] = (
+                res,
+                int(end_ts),
+                int(now),
+            )
 
         return out
 

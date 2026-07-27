@@ -5254,13 +5254,18 @@ async def test_cached_forager_metrics_do_not_project_unverified_internal_gap(
         t11,
         reason=GAP_REASON_FETCH_FAILED,
     )
+    cm._ema_cache[symbol] = {
+        ("qv", 3.0, str(ONE_MIN_MS)): (12345.0, t12, t12),
+        ("log_range", 3.0, str(ONE_MIN_MS)): (0.01, t12, t12),
+    }
 
     current = await cm.get_latest_ema_metrics(
         symbol,
         {"qv": 3.0, "log_range": 3.0},
+        max_age_ms=ONE_MIN_MS,
     )
     assert set(current) == {"qv", "log_range"}
-    assert all(math.isfinite(value) for value in current.values())
+    assert all(math.isnan(value) for value in current.values())
     cm._ema_cache.clear()
     assert math.isnan(
         await cm.get_latest_ema_quote_volume(
