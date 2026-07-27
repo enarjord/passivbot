@@ -1176,6 +1176,36 @@ async def test_forager_ranking_degradation_authorizes_only_affected_side():
     assert bot._orchestrator_ema_entry_cancellation_order_keys == {
         (symbol, "long", "exchange_id", "long-forager-entry")
     }
+    assert bot._orchestrator_dynamic_forager_eligibility_psides_by_symbol == {
+        symbol: {"long", "short"}
+    }
+
+    # Rust's symbol-level tradable=false result may move both sides to manual
+    # even though only the long ranking feature was missing. Preserve dynamic
+    # eligibility independently of cancellation scope: the remaining short
+    # entry must not turn the next identical gap into an account-fatal error,
+    # and it must not become cancellable.
+    bot.PB_modes = {
+        "long": {symbol: "manual"},
+        "short": {symbol: "manual"},
+    }
+    bot.open_orders[symbol] = [
+        order
+        for order in bot.open_orders[symbol]
+        if order["position_side"] == "short"
+    ]
+    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot,
+        [symbol],
+        {"long": {symbol: None}, "short": {symbol: None}},
+    )
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "missing_required_forager_volume": {symbol}
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
+    assert bot._orchestrator_dynamic_forager_eligibility_psides_by_symbol == {
+        symbol: {"long", "short"}
+    }
 
 
 @pytest.mark.asyncio

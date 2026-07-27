@@ -19,7 +19,9 @@ All notable user-facing changes will be documented in this file.
   managed resting entry is still cancelled if close, strategy, or ranking EMA degradation changes
   its side to the configured manual stop mode. A disabled opposite side no longer misclassifies an
   otherwise dynamic forager symbol as fixed-normal. Ranking degradation retires entries only on
-  the affected side. Failed or ambiguous cancellation attempts are retried only for the exact proven
+  the affected side, while dynamic-forager eligibility survives the resulting symbol-level manual
+  stop so a later identical ranking gap does not become an account-wide error. Failed or ambiguous
+  cancellation attempts are retried only for the exact proven
   exchange/client order ID, including when an exchange ID appears after the client ID and after EMA
   recovery, without weakening ownership for orders first observed after the side enters manual or
   ordinary tp-only mode. Cache-only candidate close EMAs and completed-candle forager ranking

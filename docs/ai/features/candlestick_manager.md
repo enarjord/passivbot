@@ -129,8 +129,12 @@
    nevertheless symbol-scoped: once every normal side is proven dynamically managed, any missing
    required strategy EMA degrades the whole flat symbol rather than fabricating a partial bundle.
    Missing forager ranking features remain side-scoped because their affected side is authoritative
-   and carried separately from strategy EMA maps. If the unavailable result changes the dynamically
-   managed side to the configured manual stop mode, reconciliation preserves only that cycle's
+   and carried separately from strategy EMA maps. Dynamic-management eligibility is retained in
+   memory independently of side-scoped cancellation permission when Rust's symbol-level
+   nontradable result changes both sides to the configured manual stop mode. This lets the next
+   identical missing-ranking cycle remain degraded without authorizing cancellation of an
+   unaffected side's resting entry; an explicit operator `manual` or ordinary `tp_only` override
+   still revokes the retained eligibility. Reconciliation preserves only the affected side's
    proven forager entry cancellation, identified by exchange or client order ID. Every entry
    observed while the side is fully managed is bot-owned under the live ownership contract, even
    if the user originally submitted it. Authorization survives EMA recovery and is rederived on

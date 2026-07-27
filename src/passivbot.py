@@ -16765,6 +16765,22 @@ class Passivbot:
             getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
+        previous_dynamic_forager_eligibility = {
+            str(symbol): {
+                str(pside)
+                for pside in psides
+                if str(pside) in {"long", "short"}
+            }
+            for symbol, psides in (
+                getattr(
+                    self,
+                    "_orchestrator_dynamic_forager_eligibility_psides_by_symbol",
+                    {},
+                )
+                or {}
+            ).items()
+        }
+        self._orchestrator_dynamic_forager_eligibility_psides_by_symbol = {}
         bot_managed_orchestrator_modes = {"graceful_stop", "panic"}
 
         def is_bot_managed_entry_override(mode: object) -> bool:
@@ -17212,18 +17228,18 @@ class Passivbot:
                 parts.append("projection_ctx=no")
             return " ".join(parts)
 
+        def has_default_entry_capacity(pside: str) -> bool:
+            """Exclude disabled sides from implicit active-symbol normal mode."""
+            try:
+                return int(self.get_max_n_positions(pside)) > 0
+            except Exception:
+                # Minimal test/fallback bots may not expose the live helper.
+                return True
+
         def normal_planning_psides(symbol: str) -> set[str]:
             """Return sides whose current Rust payload may place entries for symbol."""
             normal_psides: set[str] = set()
             pb_modes = getattr(self, "PB_modes", {})
-
-            def has_default_entry_capacity(pside: str) -> bool:
-                """Exclude disabled sides from implicit active-symbol normal mode."""
-                try:
-                    return int(self.get_max_n_positions(pside)) > 0
-                except Exception:
-                    # Minimal test/fallback bots may not expose the live helper.
-                    return True
 
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
@@ -17300,15 +17316,29 @@ class Passivbot:
             dynamic_psides: set[str] = set()
             current_normal_psides = normal_planning_psides(symbol)
             for pside in ("long", "short"):
-                if (modes.get(pside, {}) or {}).get(symbol) is not None:
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                retained_previous = (
+                    pside
+                    in previous_dynamic_forager_eligibility.get(symbol, set())
+                    and (
+                        explicit_mode is None
+                        or is_bot_managed_entry_override(explicit_mode)
+                    )
+                )
+                if explicit_mode is not None and not retained_previous:
                     continue
                 try:
-                    if bool(is_forager_mode(pside)) and (
-                        pside in current_normal_psides
-                        or (
-                            has_resting_entry(symbol, pside)
-                            and has_previously_authorized_resting_entry(
-                                symbol, pside
+                    if (
+                        has_default_entry_capacity(pside)
+                        and bool(is_forager_mode(pside))
+                        and (
+                            pside in current_normal_psides
+                            or retained_previous
+                            or (
+                                has_resting_entry(symbol, pside)
+                                and has_previously_authorized_resting_entry(
+                                    symbol, pside
+                                )
                             )
                         )
                     ):
@@ -18641,6 +18671,11 @@ class Passivbot:
                         ema_entry_cancellation_order_keys(order)
                     )
         self._orchestrator_ema_bundle_symbols = set(symbols)
+        self._orchestrator_dynamic_forager_eligibility_psides_by_symbol = {
+            str(symbol): set(dynamic_forager_normal_psides(symbol))
+            for symbol in symbols
+            if dynamic_forager_normal_psides(symbol)
+        }
         self._orchestrator_forager_m1_log_range_emas = {
             symbol: dict(values)
             for symbol, values in forager_m1_log_range_emas.items()
