@@ -26,6 +26,11 @@
         "secret": "secret",
         "passphrase": "passphrase"
     },
+    "bitunix_01" : {
+        "exchange": "bitunix",
+        "key": "key",
+        "secret": "secret"
+    },
     "okx_01" : {
         "exchange": "okx",
         "key": "key",

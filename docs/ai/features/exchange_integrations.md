@@ -5,8 +5,9 @@ requires explicit user approval; prefer offline request-construction tests.
 
 ## Supported Live-Exchange Boundary
 
-The supported production live connectors are Binance, Bybit, Bitget, OKX, Gate.io, KuCoin,
-Hyperliquid, and WEEX. The fake connector is an offline deterministic test harness, not an exchange.
+The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OKX, Gate.io,
+KuCoin, Hyperliquid, and WEEX. The fake connector is an offline deterministic test harness, not an
+exchange.
 
 Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
 stale legacy placeholders retained only until a separate cleanup removes them. Their presence does
@@ -362,6 +363,84 @@ after the fill is not locally present; wider-timeframe candles or an
 earliest-available reset are not parity-safe substitutes. Once that range is
 dense, only the bounded non-persistent open-tail projection described in the
 candlestick-manager contract may bridge delayed current candles.
+
+## Bitunix Futures
+
+### Native connector and authentication
+
+Bitunix is not available in the pinned CCXT release, so the production connector is a narrow
+native async REST/WebSocket implementation rather than a generic `CCXTBot` exchange class.
+It retains the CCXT-compatible object boundary consumed by Passivbot while implementing only the
+futures operations required by live trading.
+
+Handling:
+
+1. Sign private REST requests with Bitunix's documented double SHA-256 scheme. Sort query keys for
+   signing, and sign the exact compact JSON body bytes sent on POST.
+2. Supply `marginCoin=USDT` to account and symbol-configuration requests. Successful account data
+   may be either an object or a singleton list; accept exactly those shapes.
+3. Map business error envelopes to CCXT exception classes and propagate unknown failures. Keep
+   request spacing below the venue's documented UID/IP rolling limit.
+4. Authenticate the private WebSocket with its seconds-based signature, subscribe to `order`, and
+   enrich each notification from REST order detail before publishing it. The raw push lacks enough
+   durable close-only metadata for authoritative reconciliation.
+5. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
+   this connector.
+
+Primary references: [Bitunix REST authentication](https://www.bitunix.com/api-docs/futures/common/sign.html),
+[WebSocket login](https://www.bitunix.com/api-docs/futures/websocket/prepare/WebSocket.html), and
+[order channel](https://www.bitunix.com/api-docs/futures/websocket/private/Order%20Channel.html).
+
+### Hedge orders, positions, and fills
+
+Bitunix's hedge placement request uses a venue-specific side contract:
+`BUY + OPEN` opens long, `SELL + OPEN` opens short, `BUY + CLOSE` closes long, and
+`SELL + CLOSE` closes short. A close additionally requires the live `positionId`. Order-detail and
+fill responses instead expose the actual buy/sell action.
+
+Handling:
+
+1. Keep the exchange account in `HEDGE` mode. Translate Passivbot's explicit `position_side` into
+   the placement-side tuple and send `reduceOnly=true` plus the cached authoritative `positionId`
+   on every close.
+2. Treat response `side` as the actual action. Derive long/short from action plus the boolean
+   `reduceOnly`; never reuse placement-side semantics while parsing a response.
+3. Accept both documented `LONG`/`SHORT` and observed `BUY`/`SELL` aliases on position rows. Keep
+   all other position-side values invalid.
+4. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
+   only trailing underscore padding before applying the closed order-status allowlist.
+5. Page trade history by `skip` to the reported total, deduplicate by `tradeId`, preserve
+   `realizedPNL` and fees, and enrich empty fill `clientId` values through order detail. This is the
+   canonical fill source for realized PnL, unstuck accounting, and HSL replay.
+6. Reconstruct realized wallet balance as
+   `available + frozen + margin - crossUnrealizedPNL - isolationUnrealizedPNL`; do not feed
+   mark-to-market equity into Rust sizing.
+
+Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade/place_order.html),
+[pending positions](https://www.bitunix.com/api-docs/futures/position/get_pending_positions.html),
+[order detail](https://www.bitunix.com/api-docs/futures/trade/get_order_detail.html), and
+[history trades](https://www.bitunix.com/api-docs/futures/trade/get_history_trades.html).
+
+### Live quotes and candles
+
+The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for
+authoritative top-of-book and last price, splitting the active market set across connections
+because Bitunix permits at most 300 subscriptions per connection. A targeted ticker request may
+use one-row REST depth as a bounded startup fallback; broad operation must not fan out one depth
+request per market or substitute last trade for bid/ask.
+
+Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
+`quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
+volume so Passivbot's generic quote-volume calculation remains dimensionally correct. In live
+behavior, `startTime` does not anchor a response; the venue tail-anchors at `endTime`. Derive each
+forward page's `endTime` from `since + limit * timeframe`, filter to the requested bounds, sort
+ascending, and deduplicate. This pagination supports live warmup, restart reconstruction, and
+runtime indicators only. Bulk historical Bitunix data for backtesting or optimization is not a
+supported source.
+
+Primary references: [ticker WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/Tickers%20Channel.html),
+[REST depth](https://www.bitunix.com/api-docs/futures/market/get_depth.html), and
+[kline API](https://www.bitunix.com/api-docs/futures/market/get_kline.html).
 
 ## WEEX Futures
 
