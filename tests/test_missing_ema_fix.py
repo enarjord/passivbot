@@ -904,7 +904,19 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 
 
 @pytest.mark.asyncio
-async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel():
+@pytest.mark.parametrize(
+    "override_mode,order_id",
+    [
+        ("graceful_stop", "hsl-graceful-stop-entry"),
+        (
+            "tp_only_with_active_entry_cancellation",
+            "hsl-active-cancellation-entry",
+        ),
+    ],
+)
+async def test_forager_resting_entry_under_bot_managed_override_can_degrade_and_cancel(
+    override_mode, order_id
+):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -917,7 +929,7 @@ async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel(
     bot.open_orders = {
         symbol: [
             {
-                "id": "hsl-graceful-stop-entry",
+                "id": order_id,
                 "symbol": symbol,
                 "position_side": "long",
                 "side": "buy",
@@ -932,7 +944,7 @@ async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel(
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
     _enable_forager_required_ranking(bot)
     mode_overrides = {
-        "long": {symbol: "graceful_stop"},
+        "long": {symbol: override_mode},
         "short": {symbol: None},
     }
 
@@ -949,7 +961,7 @@ async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel(
             symbol,
             "long",
             "exchange_id",
-            "hsl-graceful-stop-entry",
+            order_id,
         )
     }
 

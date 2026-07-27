@@ -16765,26 +16765,29 @@ class Passivbot:
             getattr(self, "_orchestrator_ema_entry_cancellation_order_keys", set())
             or set()
         )
-        bot_managed_override_modes = {
-            "graceful_stop",
-            "panic",
-            "tp_only_with_active_entry_cancellation",
-        }
+        bot_managed_orchestrator_modes = {"graceful_stop", "panic"}
+
+        def is_bot_managed_entry_override(mode: object) -> bool:
+            """Preserve ownership semantics erased by orchestrator normalization."""
+            raw_mode = str(mode or "").strip().lower()
+            if raw_mode == "tp_only_with_active_entry_cancellation":
+                return True
+            try:
+                normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
+                    self, raw_mode
+                )
+            except Exception:
+                return False
+            return normalized_mode in bot_managed_orchestrator_modes
+
         retained_ema_entry_cancellation_order_keys = set()
         for order_key in previous_ema_entry_cancellation_order_keys:
             if not isinstance(order_key, tuple) or len(order_key) != 4:
                 continue
             symbol, pside, _identity_kind, _identity = order_key
             raw_mode = (modes.get(str(pside), {}) or {}).get(str(symbol))
-            if raw_mode is not None:
-                try:
-                    normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
-                        self, raw_mode
-                    )
-                except Exception:
-                    continue
-                if normalized_mode not in bot_managed_override_modes:
-                    continue
+            if raw_mode is not None and not is_bot_managed_entry_override(raw_mode):
+                continue
             for order in (getattr(self, "open_orders", {}) or {}).get(
                 str(symbol), []
             ):
@@ -17312,11 +17315,8 @@ class Passivbot:
                 if explicit_mode is None:
                     continue
                 try:
-                    normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
-                        self, explicit_mode
-                    )
                     if bool(is_forager_mode(pside)) and (
-                        normalized_mode in bot_managed_override_modes
+                        is_bot_managed_entry_override(explicit_mode)
                     ):
                         managed_psides.add(pside)
                 except Exception:
