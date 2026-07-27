@@ -651,8 +651,44 @@ class CCXTBot(Passivbot):
                     break
                 raw_orders = await self._do_watch_orders()
                 consecutive_failures = 0
-                normalized = [self._normalize_order_update(o) for o in raw_orders]
-                self.handle_order_update(normalized)
+                normalized = []
+                untrusted = []
+                for order in raw_orders:
+                    try:
+                        normalized.append(self._normalize_order_update(order))
+                    except (KeyError, TypeError, ValueError) as exc:
+                        untrusted.append((order, exc))
+                if untrusted:
+                    symbols = {
+                        str(order.get("symbol") or "")
+                        for order, _exc in untrusted
+                        if isinstance(order, dict) and order.get("symbol")
+                    }
+                    now_monotonic = time.monotonic()
+                    last_warning = float(
+                        getattr(
+                            self,
+                            "_untrusted_order_ws_last_warning_monotonic",
+                            float("-inf"),
+                        )
+                    )
+                    if now_monotonic - last_warning >= 60.0:
+                        logging.warning(
+                            "[ws] %s order updates lacked authoritative order semantics; "
+                            "discarding %d rows and requesting account-state refresh | symbols=%s",
+                            self.exchange,
+                            len(untrusted),
+                            self._log_symbols(sorted(symbols), limit=8),
+                        )
+                        self._untrusted_order_ws_last_warning_monotonic = now_monotonic
+                    self._mark_account_critical_state_dirty(
+                        reason="order_ws_semantics_unavailable",
+                        symbols=symbols,
+                        source=f"{self.exchange}_order_ws",
+                        level=logging.DEBUG,
+                    )
+                if normalized:
+                    self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
             except Exception as e:

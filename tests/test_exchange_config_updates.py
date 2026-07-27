@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from ccxt.base.errors import BadRequest, RateLimitExceeded
+from ccxt.base.errors import BadRequest, MarginModeAlreadySet, RateLimitExceeded
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
 
@@ -67,6 +67,34 @@ def make_kucoin_config_bot():
     bot.hedge_mode = True
     bot.max_leverage = {}
     return bot
+
+
+@pytest.mark.asyncio
+async def test_binance_already_set_margin_mode_is_successful_noop(caplog):
+    from exchanges.binance import BinanceBot
+
+    symbol = "BTC/USDT:USDT"
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.cca = SimpleNamespace(
+        set_margin_mode=AsyncMock(
+            side_effect=MarginModeAlreadySet("No need to change margin type")
+        ),
+        set_leverage=AsyncMock(return_value={"leverage": 5}),
+    )
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._calc_leverage_for_symbol = lambda _symbol: 5
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.update_exchange_config_by_symbols([symbol])
+
+    bot.cca.set_margin_mode.assert_awaited_once_with("cross", symbol=symbol)
+    bot.cca.set_leverage.assert_awaited_once_with(5, symbol=symbol)
+    assert "margin mode unchanged" in caplog.text
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and "margin" in record.getMessage()
+    ]
 
 
 @pytest.mark.asyncio
