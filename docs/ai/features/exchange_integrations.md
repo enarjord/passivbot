@@ -165,7 +165,9 @@ Handling:
 4. For an unresolved 1m gap already bounded by cached real rows, retry with both boundary rows in
    the requested range. Promote the exact omission to verified no-trade continuity only if one
    successful raw payload returns both boundaries and no row inside the gap. This contextual proof
-   may repair an older persistent `fetch_failed` gap; empty or one-sided retries remain unavailable.
+   may repair an older persistent `fetch_failed` gap. Empty, one-sided, malformed, or partially
+   recovered responses remain unavailable, preserve persistent gap status, and restart the
+   persistent retry cooldown rather than issuing another contextual request on every candle read.
 
 ## Bitget Futures
 

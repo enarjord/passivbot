@@ -3218,6 +3218,47 @@ class CandlestickManager:
             retry_count=_GAP_MAX_RETRIES,
         )
 
+    def _defer_persistent_gap_retry(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
+        """Restart the cooldown for persistent unresolved gaps after a failed proof.
+
+        Contextual KuCoin verification is a re-check of an already-persistent
+        gap, not the first attempt in a new ordinary retry sequence. Preserve
+        the persistent retry count and reason so an empty or one-sided response
+        cannot make every subsequent candle read issue another REST request.
+        """
+        now = self._now_ms() if now_ms is None else int(now_ms)
+        changed = False
+        gaps = self._get_known_gaps_enhanced(symbol)
+        for gap in gaps:
+            if (
+                int(gap["start_ts"]) <= int(end_ts)
+                and int(gap["end_ts"]) >= int(start_ts)
+                and int(gap.get("retry_count", 0)) >= _GAP_MAX_RETRIES
+                and str(gap.get("reason", GAP_REASON_AUTO))
+                in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+            ):
+                gap["retry_count"] = _GAP_MAX_RETRIES
+                gap["last_retry_at"] = now
+                changed = True
+        if changed:
+            self._save_known_gaps_enhanced(symbol, gaps)
+            self._log(
+                "debug",
+                "persistent_gap_verification_deferred",
+                symbol=symbol,
+                start_ts=int(start_ts),
+                end_ts=int(end_ts),
+                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
+            )
+        return changed
+
     def _is_recent_hyperliquid_gap(
         self,
         gap: GapEntry,
@@ -4802,6 +4843,78 @@ class CandlestickManager:
             except (IndexError, TypeError, ValueError, OverflowError):
                 return True
         return False
+
+    async def _fetch_kucoin_contextual_gap_page(
+        self,
+        symbol: str,
+        *,
+        left_boundary_ts: int,
+        right_boundary_ts: int,
+        gap_start_ts: int,
+        gap_end_ts: int,
+    ) -> Tuple[np.ndarray, bool]:
+        """Fetch one raw KuCoin page and verify an omission between real bounds.
+
+        The proof deliberately bypasses generic pagination's immediate
+        intra-page gap recording. Only one successful raw response containing
+        both selected boundary candles and no accepted or rejected row inside
+        the unresolved interval may certify that interval as no-trade
+        continuity.
+        """
+        left_ts = int(left_boundary_ts)
+        right_ts = int(right_boundary_ts)
+        gap_start = int(gap_start_ts)
+        gap_end = int(gap_end_ts)
+        request_since = left_ts
+        if (
+            self._ccxt_since_exclusive
+            and self._ccxt_page_overlap_candles > 0
+            and left_ts > 0
+        ):
+            request_since = max(
+                0,
+                left_ts
+                - ONE_MIN_MS * int(self._ccxt_page_overlap_candles),
+            )
+        requested_buckets = max(
+            2,
+            (right_ts - request_since) // ONE_MIN_MS + 1,
+        )
+        page = await self._ccxt_fetch_ohlcv_once(
+            symbol,
+            request_since,
+            min(int(self._ccxt_limit_default), int(requested_buckets)),
+            end_exclusive_ms=right_ts + ONE_MIN_MS,
+            tf="1m",
+        )
+        normalized = self._normalize_ccxt_ohlcv(page)
+        if normalized.size:
+            normalized = normalized[
+                (normalized["ts"] >= left_ts)
+                & (normalized["ts"] <= right_ts)
+            ]
+        accepted_timestamps = (
+            {int(ts) for ts in normalized["ts"]}
+            if normalized.size
+            else set()
+        )
+        rejected_timestamps = self._rejected_ccxt_ohlcv_timestamps(
+            page, normalized
+        )
+        proof = bool(
+            left_ts in accepted_timestamps
+            and right_ts in accepted_timestamps
+            and not self._ccxt_ohlcv_has_unidentifiable_rejected_row(page)
+            and not any(
+                gap_start <= int(ts) <= gap_end
+                for ts in rejected_timestamps
+            )
+            and not any(
+                gap_start <= int(ts) <= gap_end
+                for ts in accepted_timestamps
+            )
+        )
+        return normalized, proof
 
     def _evict_rejected_native_sparse_synthetics(
         self,
@@ -7668,6 +7781,21 @@ class CandlestickManager:
                         for gap in self._get_known_gaps_enhanced(symbol)
                     )
 
+                def persistent_unverified_gap_covering(
+                    s: int, e: int
+                ) -> Optional[GapEntry]:
+                    for gap in self._get_known_gaps_enhanced(symbol):
+                        if (
+                            int(gap["start_ts"]) <= int(s)
+                            and int(gap["end_ts"]) >= int(e)
+                            and int(gap.get("retry_count", 0))
+                            >= _GAP_MAX_RETRIES
+                            and str(gap.get("reason", GAP_REASON_AUTO))
+                            in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+                        ):
+                            return gap
+                    return None
+
                 def kucoin_verification_bounds(
                     candles: np.ndarray, s: int, e: int
                 ) -> Optional[Tuple[int, int]]:
@@ -7684,7 +7812,10 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    if not span_has_unverified_gap_present(s, e):
+                    persistent_gap = persistent_unverified_gap_covering(s, e)
+                    if persistent_gap is None or not self._should_retry_gap(
+                        persistent_gap, now_ms=now
+                    ):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
                     provisional = self._synthetic_timestamps.get(symbol, set())
@@ -7765,50 +7896,84 @@ class CandlestickManager:
                         else:
                             fetch_start = int(contextual_bounds[0])
                             end_excl_gap = int(contextual_bounds[1]) + ONE_MIN_MS
+                        contextual_verified = False
                         persisted_batches = False
+                        if contextual_bounds is not None:
+                            fetched, contextual_verified = (
+                                await self._fetch_kucoin_contextual_gap_page(
+                                    symbol,
+                                    left_boundary_ts=int(contextual_bounds[0]),
+                                    right_boundary_ts=int(contextual_bounds[1]),
+                                    gap_start_ts=int(s),
+                                    gap_end_ts=int(e),
+                                )
+                            )
+                        else:
 
-                        def _persist_gap_batch(batch: np.ndarray) -> None:
-                            nonlocal persisted_batches
-                            batch = self._slice_ts_range(_ensure_dtype(batch), start_ts, end_ts)
-                            if not batch.size:
-                                return
-                            persisted_batches = True
-                            self._persist_batch(
-                                symbol,
-                                batch,
-                                timeframe="1m",
-                                merge_cache=True,
-                                last_refresh_ms=now,
-                            )
-
-                        try:
-                            fetched = await self._fetch_ohlcv_paginated(
-                                symbol,
-                                fetch_start,
-                                end_excl_gap,
-                                on_batch=_persist_gap_batch,
-                                raise_on_partial_empty_page=max_age_ms == 0,
-                            )
-                        except TypeError:
-                            fetched = await self._fetch_ohlcv_paginated(
-                                symbol,
-                                fetch_start,
-                                end_excl_gap,
-                            )
-                        attempts += 1
-                        attempted.append((int(s), int(e)))
-                        fetched = self._slice_ts_range(_ensure_dtype(fetched), start_ts, end_ts)
-                        if fetched.size:
-                            if not persisted_batches:
+                            def _persist_gap_batch(batch: np.ndarray) -> None:
+                                nonlocal persisted_batches
+                                batch = self._slice_ts_range(
+                                    _ensure_dtype(batch), start_ts, end_ts
+                                )
+                                if not batch.size:
+                                    return
+                                persisted_batches = True
                                 self._persist_batch(
                                     symbol,
-                                    fetched,
+                                    batch,
                                     timeframe="1m",
                                     merge_cache=True,
                                     last_refresh_ms=now,
                                 )
+
+                            try:
+                                fetched = await self._fetch_ohlcv_paginated(
+                                    symbol,
+                                    fetch_start,
+                                    end_excl_gap,
+                                    on_batch=_persist_gap_batch,
+                                    raise_on_partial_empty_page=max_age_ms == 0,
+                                )
+                            except TypeError:
+                                fetched = await self._fetch_ohlcv_paginated(
+                                    symbol,
+                                    fetch_start,
+                                    end_excl_gap,
+                                )
+                        attempts += 1
+                        if contextual_bounds is None:
+                            attempted.append((int(s), int(e)))
+                        fetched = self._slice_ts_range(
+                            _ensure_dtype(fetched), start_ts, end_ts
+                        )
+                        if fetched.size and not persisted_batches:
+                            self._persist_batch(
+                                symbol,
+                                fetched,
+                                timeframe="1m",
+                                merge_cache=True,
+                                last_refresh_ms=now,
+                            )
+                        if contextual_bounds is not None:
+                            if contextual_verified:
+                                self._record_verified_gap(
+                                    symbol, int(s), int(e)
+                                )
+                            else:
+                                self._defer_persistent_gap_retry(
+                                    symbol,
+                                    int(s),
+                                    int(e),
+                                    now_ms=now,
+                                )
+                        if fetched.size:
                             arr = np.sort(self._cache[symbol], order="ts")
-                            sub = self._slice_ts_range(arr, start_ts, end_ts, assume_sorted=True)
+                            sub = self._slice_ts_range(
+                                arr,
+                                start_ts,
+                                end_ts,
+                                assume_sorted=True,
+                            )
                 # After attempts, recompute missing and tag remaining as known gaps
                 still_missing = self._missing_spans(sub, start_ts, inclusive_end)
                 # Stamp every attempted remainder, including a partially recovered

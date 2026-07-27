@@ -62,7 +62,9 @@
    coverage from the first whole minute following the latest fill through the last cached candle.
    A missing reset boundary, internal minute, or tail beyond the bound remains unavailable. The
    temporary rows never enter candle shards or manager caches, so a delayed real high or low
-   replaces the projection on the next cycle.
+   replaces the projection on the next cycle. Each trailing consumer records structured projection
+   context by symbol and position side, including the authoritative and projected bounds, projected
+   candle count, and consecutive-use count; authoritative recovery clears that runtime context.
 7. Binance monthly and daily archive requests are parallel within each tier, verify the published
    SHA-256 sidecar before parsing, and write only invalid v2 rows. Monthly archives are attempted
    only after Binance's first-Monday publication window plus a buffer; daily archives exclude the

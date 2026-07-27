@@ -1569,6 +1569,10 @@ class Passivbot:
         self._trailing_unavailable_warning_signature = ()
         self._trailing_unavailable_warning_last_ms = 0
         self._trailing_unavailable_warning_interval_ms = 5 * 60 * 1000
+        self._trailing_tail_projection_counts: dict[tuple[str, str], int] = {}
+        self._orchestrator_trailing_projection_contexts: dict[
+            str, dict[str, dict]
+        ] = {}
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -8865,8 +8869,8 @@ class Passivbot:
 
     def _completed_trailing_candle_subset(
         self, arr: np.ndarray, changed_ts: int
-    ) -> np.ndarray | None:
-        """Return dense finalized 1m candles after a fill, or None if incomplete.
+    ) -> tuple[np.ndarray | None, dict | None]:
+        """Return dense finalized post-fill candles and optional tail projection context.
 
         CandlestickManager may synthesize only confirmed internal no-trade gaps as
         zero-volume candles. Those dense rows match backtest continuity and are
@@ -8878,12 +8882,12 @@ class Passivbot:
         latest_finalized = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
         first_eligible = (int(changed_ts) // ONE_MIN_MS + 1) * ONE_MIN_MS
         if latest_finalized < first_eligible:
-            return None
+            return None, None
         subset = arr[
             (arr["ts"] >= first_eligible) & (arr["ts"] <= latest_finalized)
         ]
         if subset.size == 0:
-            return None
+            return None, None
         subset = np.sort(subset, order="ts")
         timestamps = subset["ts"].astype(np.int64)
         newest_ts = int(timestamps[-1])
@@ -8893,7 +8897,8 @@ class Passivbot:
             or int(timestamps[0]) != first_eligible
             or (timestamps.size > 1 and np.any(np.diff(timestamps) != ONE_MIN_MS))
         ):
-            return None
+            return None, None
+        projection_context = None
         if newest_ts < latest_finalized:
             try:
                 max_tail_minutes = float(
@@ -8911,10 +8916,10 @@ class Passivbot:
                 or latest_finalized - newest_ts
                 > int(max_tail_minutes * ONE_MIN_MS)
             ):
-                return None
+                return None, None
             previous_close = float(subset[-1]["c"])
             if not math.isfinite(previous_close) or previous_close <= 0.0:
-                return None
+                return None, None
             projected = np.array(
                 [
                     (
@@ -8935,7 +8940,18 @@ class Passivbot:
             )
             if projected.size:
                 subset = np.concatenate([subset, projected])
-        return subset
+                projection_context = {
+                    "timeframe": "1m",
+                    "consumer": "trailing_extrema",
+                    "latest_expected_ts": int(latest_finalized),
+                    "last_cached_ts": int(newest_ts),
+                    "tail_gap_age_ms": int(latest_finalized - newest_ts),
+                    "tail_gap_candles": int(projected.size),
+                    "missing_candles": int(projected.size),
+                    "max_tail_gap_ms": int(max_tail_minutes * ONE_MIN_MS),
+                    "reason": "open_tail_gap_projection",
+                }
+        return subset, projection_context
 
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
@@ -8974,6 +8990,11 @@ class Passivbot:
         self._orchestrator_trailing_unavailable_symbols = set()
         self._orchestrator_trailing_unavailable_reasons = {}
         self._orchestrator_trailing_unavailable_psides = {}
+        previous_projection_counts = dict(
+            getattr(self, "_trailing_tail_projection_counts", {}) or {}
+        )
+        current_projection_counts: dict[tuple[str, str], int] = {}
+        projection_contexts: dict[str, dict[str, dict]] = defaultdict(dict)
         position_change_anchors = self._get_last_position_change_anchors()
         last_position_changes = {
             symbol: {
@@ -9183,7 +9204,11 @@ class Passivbot:
             for pside, changed_ts in last_position_changes[symbol].items():
                 if pside not in required_trailing.get(symbol, set()):
                     continue
-                subset = self._completed_trailing_candle_subset(arr, int(changed_ts))
+                subset, projection_context = (
+                    self._completed_trailing_candle_subset(
+                        arr, int(changed_ts)
+                    )
+                )
                 if subset is None:
                     unavailable_reasons[
                         "incomplete_trailing_candle_coverage"
@@ -9195,6 +9220,34 @@ class Passivbot:
                         subset["h"], subset["l"], subset["c"]
                     )
                     self.trailing_prices[symbol][pside] = bundle
+                    if projection_context is not None:
+                        projection_key = (symbol, pside)
+                        consecutive_uses = (
+                            int(
+                                previous_projection_counts.get(
+                                    projection_key, 0
+                                )
+                            )
+                            + 1
+                        )
+                        current_projection_counts[projection_key] = (
+                            consecutive_uses
+                        )
+                        projection_context = {
+                            **projection_context,
+                            "consecutive_uses": consecutive_uses,
+                        }
+                        projection_contexts[symbol][pside] = dict(
+                            projection_context
+                        )
+                        Passivbot._emit_candle_tail_projected_event(
+                            self,
+                            symbol=symbol,
+                            pside=pside,
+                            context=projection_context,
+                            reason_code="trailing_open_tail_projection",
+                            status="degraded",
+                        )
                 except Exception as e:
                     unavailable_reasons["bundle_compute_failed"].add(symbol)
                     unavailable_psides[symbol].add(pside)
@@ -9293,6 +9346,14 @@ class Passivbot:
             symbol: sorted(psides)
             for symbol, psides in sorted(unavailable_psides.items())
             if psides
+        }
+        self._trailing_tail_projection_counts = current_projection_counts
+        self._orchestrator_trailing_projection_contexts = {
+            symbol: {
+                pside: dict(context)
+                for pside, context in sorted(pside_contexts.items())
+            }
+            for symbol, pside_contexts in sorted(projection_contexts.items())
         }
 
     def symbol_is_eligible(self, symbol):

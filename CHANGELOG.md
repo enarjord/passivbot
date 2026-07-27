@@ -10,13 +10,16 @@ All notable user-facing changes will be documented in this file.
   fields instead of treating available margin as equity.
 - KuCoin 1m sparse-gap repair now includes the nearest real candle on both sides of an unresolved
   interval, allowing one successful exchange payload to prove and materialize genuine no-trade
-  minutes without converting empty or one-sided fetch failures into candles. Background forager
-  refreshes also back off unchanged empty tails without ERROR spam while unexpected failures remain
-  loud.
+  minutes without converting empty, one-sided, malformed, or partially recovered responses into
+  candles. Failed contextual verification preserves the persistent gap and restarts its bounded
+  retry cooldown instead of consuming REST capacity on every candle read. Background forager
+  refreshes also back off unchanged empty tails without ERROR spam while unexpected failures
+  remain loud.
 - Trailing extrema now use the configured bounded active-candle tail projection for a missing open
   1m tail after otherwise dense post-fill coverage. The temporary flat zero-volume rows are not
   persisted, delayed real candles replace them on the next cycle, and leading, internal, or
-  over-limit gaps still make trailing state unavailable.
+  over-limit gaps still make trailing state unavailable. Structured diagnostics identify the
+  trailing consumer, symbol, position side, projection bounds, and consecutive fallback uses.
 
 - Flat forager-selected symbols with resting entries now degrade to nontradable when required EMA
   inputs are temporarily unavailable, allowing normal reconciliation to cancel the stale entry
