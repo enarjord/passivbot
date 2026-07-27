@@ -12,6 +12,14 @@ All notable user-facing changes will be documented in this file.
   tail, so symbols remain tradable through the configured active-tail grace period and recover
   immediately when authoritative candles arrive.
 
+- Supported CCXT private order streams now isolate malformed semantic rows from websocket
+  transport health: unnormalizable rows are discarded with a bounded warning and force an
+  authoritative account-state refresh, while valid rows in the same message are processed without
+  reconnecting. Bitget side-attribution failures now use this path without logging raw payloads.
+- Binance's explicit `MarginModeAlreadySet` response is now treated as a successful configuration
+  no-op at DEBUG instead of an ERROR; unknown margin-mode failures retain their existing loud
+  handling.
+
 - KuCoin private order updates now use the connector's actual exchange hedge mode for mandatory
   long/short attribution even when `live.hedge_mode=false` disables simultaneous strategy
   exposure, preventing valid updates without one-way `reduceOnly` metadata from reconnecting the

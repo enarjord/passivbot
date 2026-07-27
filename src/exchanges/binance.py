@@ -8,6 +8,7 @@ from passivbot_exceptions import FatalBotException
 import asyncio
 import random
 import re
+from ccxt.base.errors import MarginModeAlreadySet
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from pure_funcs import flatten
 from procedures import load_broker_code
@@ -624,6 +625,11 @@ class BinanceBot(CCXTBot):
             try:
                 res_margin = await coros_to_call_margin_mode[symbol]
                 to_print += f"margin={format_exchange_config_response(res_margin)}"
+            except MarginModeAlreadySet:
+                logging.debug(
+                    "[config] %s margin mode unchanged | error_type=MarginModeAlreadySet",
+                    log_symbol,
+                )
             except Exception as e:
                 logging.error(
                     "[config] %s cross-margin update failed | %s",
