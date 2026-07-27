@@ -884,6 +884,57 @@ async def test_forager_selected_flat_with_resting_entry_missing_ema_marks_unavai
 
 
 @pytest.mark.asyncio
+async def test_forager_resting_entry_under_graceful_stop_can_degrade_and_cancel():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="nan")
+    bot.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+    bot.active_symbols = [symbol]
+    bot.open_orders = {
+        symbol: [
+            {
+                "id": "hsl-graceful-stop-entry",
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "reduce_only": False,
+            }
+        ]
+    }
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {
+        "long": {symbol: "graceful_stop"},
+        "short": {symbol: None},
+    }
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert all(result_map[symbol] == {} for result_map in result[:4])
+    assert bot._orchestrator_ema_unavailable_reasons == {
+        "flat_active_required_ema_unavailable": {symbol}
+    }
+    assert bot._orchestrator_ema_entry_cancellation_order_keys == {
+        (
+            symbol,
+            "long",
+            "exchange_id",
+            "hsl-graceful-stop-entry",
+        )
+    }
+
+
+@pytest.mark.asyncio
 async def test_forager_ranking_ema_degradation_authorizes_resting_entry_cancel():
     try:
         import passivbot as pb_mod

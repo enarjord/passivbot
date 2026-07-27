@@ -17271,6 +17271,35 @@ class Passivbot:
                     continue
             return dynamic_psides
 
+        def dynamic_forager_managed_entry_psides(symbol: str) -> set[str]:
+            """Return forager sides where Passivbot still owns entry cancellation.
+
+            Temporary safety overrides such as HSL graceful-stop may replace
+            ``normal`` during startup while a bot-created entry is still resting.
+            Those modes do not transfer entry ownership to the operator.
+            """
+            managed_psides = dynamic_forager_normal_psides(symbol)
+            bot_managed_override_modes = {
+                "graceful_stop",
+                "panic",
+                "tp_only_with_active_entry_cancellation",
+            }
+            for pside in ("long", "short"):
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is None:
+                    continue
+                try:
+                    normalized_mode = Passivbot._mode_override_to_orchestrator_mode(
+                        self, explicit_mode
+                    )
+                    if bool(is_forager_mode(pside)) and (
+                        normalized_mode in bot_managed_override_modes
+                    ):
+                        managed_psides.add(pside)
+                except Exception:
+                    continue
+            return managed_psides
+
         def has_explicit_normal_planning_mode(symbol: str) -> bool:
             """Return True when any normal side is not dynamically forager-selected."""
             normal_psides = normal_planning_psides(symbol)
@@ -17288,7 +17317,7 @@ class Passivbot:
                 return False
             return bool(
                 symbol in set(getattr(self, "active_symbols", []) or [])
-                and dynamic_forager_normal_psides(symbol)
+                and dynamic_forager_managed_entry_psides(symbol)
             )
 
         forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
@@ -18528,7 +18557,7 @@ class Passivbot:
         cancellation_psides_by_symbol: dict[str, set[str]] = {}
         for symbol in all_dynamic_cancellation_symbols:
             cancellation_psides_by_symbol[str(symbol)] = (
-                dynamic_forager_normal_psides(symbol)
+                dynamic_forager_managed_entry_psides(symbol)
             )
         ranking_reason_symbols = {
             str(symbol)
@@ -18538,7 +18567,7 @@ class Passivbot:
         }
         for pside, unavailable_symbols in rank_feature_unavailable_by_side.items():
             for symbol in ranking_reason_symbols & set(unavailable_symbols):
-                if pside in dynamic_forager_normal_psides(symbol):
+                if pside in dynamic_forager_managed_entry_psides(symbol):
                     cancellation_psides_by_symbol.setdefault(symbol, set()).add(
                         pside
                     )

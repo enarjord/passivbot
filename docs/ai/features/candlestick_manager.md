@@ -118,7 +118,10 @@
    caused by required forager ranking EMAs, so a rejected or ambiguous first cancellation is
    retried. A replacement or coexisting operator order is not authorized by matching symbol/side,
    price, or quantity. It does not weaken manual ownership for other sides, closes, or creations.
-   Held positions retain their stricter readiness contract.
+   A temporary bot-managed entry override such as HSL `graceful_stop`, `panic`, or
+   `tp_only_with_active_entry_cancellation` retains this degradation/cancellation behavior;
+   `manual` and ordinary `tp_only` continue to protect operator-owned entries. Held positions
+   retain their stricter readiness contract.
 9. WEEX live warmups use exchange-specific hybrid pagination: bounded 100-row historical windows
    followed by the recent endpoint only when its 999 finalized-row tail covers the remainder. This
    supports deep-enough 1m and 1h live EMA, trailing, and HSL restart windows without enabling WEEX
