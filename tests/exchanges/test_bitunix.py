@@ -306,6 +306,85 @@ def test_open_market_order_requires_positive_price_for_reconciliation():
 
 
 @pytest.mark.asyncio
+async def test_open_orders_paginate_to_stable_reported_total():
+    client = _prepared_client()
+    client.milliseconds = lambda: 1_700_001_000_000
+    client._request = AsyncMock(
+        side_effect=[
+            {
+                "orderList": [
+                    _order_row(
+                        orderId="order-2",
+                        ctime=1_700_000_000_002,
+                        mtime=1_700_000_000_002,
+                    )
+                ],
+                "total": 2,
+            },
+            {"orderList": [_order_row()], "total": 2},
+        ]
+    )
+
+    orders = await client.fetch_open_orders(limit=1)
+
+    assert [order["id"] for order in orders] == ["order-1", "order-2"]
+    assert [
+        call.kwargs["params"]["skip"]
+        for call in client._request.await_args_list
+    ] == [0, 1]
+    assert {
+        call.kwargs["params"]["endTime"]
+        for call in client._request.await_args_list
+    } == {1_700_001_000_000}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"orderList": [_order_row()]},
+        {"orderList": [_order_row()], "total": None},
+        {"orderList": [_order_row()], "total": 0},
+        {"orderList": [], "total": -1},
+    ],
+)
+async def test_open_orders_reject_missing_or_inconsistent_total(payload):
+    client = _prepared_client()
+    client._request = AsyncMock(return_value=payload)
+
+    with pytest.raises(ValueError, match="open-orders total"):
+        await client.fetch_open_orders(limit=1)
+
+
+@pytest.mark.asyncio
+async def test_open_orders_reject_total_changes_between_pages():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        side_effect=[
+            {"orderList": [_order_row(orderId="order-2")], "total": 2},
+            {"orderList": [_order_row()], "total": 3},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="open-orders total changed"):
+        await client.fetch_open_orders(limit=1)
+
+
+@pytest.mark.asyncio
+async def test_open_orders_reject_duplicate_or_incomplete_pagination():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        side_effect=[
+            {"orderList": [_order_row()], "total": 2},
+            {"orderList": [_order_row()], "total": 2},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="duplicate or incomplete"):
+        await client.fetch_open_orders(limit=1)
+
+
+@pytest.mark.asyncio
 async def test_create_close_order_uses_hedge_side_and_position_id():
     client = _prepared_client()
     client._position_ids[("BTC/USDT:USDT", "long")] = "position-1"

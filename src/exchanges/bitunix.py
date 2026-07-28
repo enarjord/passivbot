@@ -81,6 +81,7 @@ class BitunixClient:
     PRIVATE_WS_URL = "wss://fapi.bitunix.com/private/"
     MAX_PAGE_SIZE = 100
     MAX_KLINE_PAGE_SIZE = 200
+    MAX_OPEN_ORDER_PAGES = 1000
     MAX_FILL_PAGES = 1000
     TICKER_MAX_AGE_MS = 30_000
     TICKER_WAIT_SECONDS = 8.0
@@ -640,10 +641,14 @@ class BitunixClient:
         }
 
     async def _fetch_order_page(
-        self, symbol: str | None, skip: int, limit: int
+        self, symbol: str | None, skip: int, limit: int, end_time: int
     ) -> tuple[list[dict], int]:
         await self._ensure_markets()
-        params: dict[str, Any] = {"skip": skip, "limit": limit}
+        params: dict[str, Any] = {
+            "skip": skip,
+            "limit": limit,
+            "endTime": end_time,
+        }
         if symbol:
             params["symbol"] = self.market(symbol)["id"]
         data = await self._request(
@@ -654,7 +659,15 @@ class BitunixClient:
         )
         if not isinstance(data, dict) or not isinstance(data.get("orderList"), list):
             raise ValueError("Bitunix open-orders response has invalid shape")
-        return data["orderList"], int(data.get("total") or 0)
+        try:
+            total = _int(data.get("total"), field="open-orders total")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "Bitunix response has invalid open-orders total"
+            ) from exc
+        if total < 0:
+            raise ValueError("Bitunix response has negative open-orders total")
+        return data["orderList"], total
 
     async def fetch_open_orders(
         self,
@@ -664,15 +677,52 @@ class BitunixClient:
         params: dict | None = None,
     ) -> list[dict]:
         page_size = min(self.MAX_PAGE_SIZE, max(1, int(limit or self.MAX_PAGE_SIZE)))
-        rows: list[dict] = []
+        snapshot_end = self.milliseconds()
+        rows: dict[str, dict] = {}
         skip = 0
-        while True:
-            page, total = await self._fetch_order_page(symbol, skip, page_size)
-            rows.extend(page)
+        expected_total: int | None = None
+        for _ in range(self.MAX_OPEN_ORDER_PAGES):
+            page, total = await self._fetch_order_page(
+                symbol, skip, page_size, snapshot_end
+            )
+            if expected_total is None:
+                expected_total = total
+            elif total != expected_total:
+                raise ValueError(
+                    "Bitunix open-orders total changed during pagination"
+                )
+            for row in page:
+                if not isinstance(row, dict):
+                    raise ValueError(
+                        "Bitunix open-orders response contains a non-object row"
+                    )
+                order_id = str(row.get("orderId") or "")
+                if not order_id:
+                    raise ValueError("Bitunix open-orders row missing orderId")
+                rows[order_id] = row
             skip += len(page)
-            if not page or skip >= total or len(page) < page_size:
+            if skip > total:
+                raise ValueError(
+                    "Bitunix open-orders total is smaller than returned rows"
+                )
+            if not page and skip < total:
+                raise ValueError(
+                    "Bitunix open-orders pagination ended before total"
+                )
+            if skip == total:
                 break
-        return sorted((self._normalize_order(row) for row in rows), key=lambda x: x["timestamp"])
+        else:
+            raise RuntimeError(
+                "Bitunix open-orders pagination exceeded safety limit"
+            )
+        if expected_total is None or len(rows) != expected_total:
+            raise ValueError(
+                "Bitunix open-orders pagination returned duplicate or incomplete rows"
+            )
+        return sorted(
+            (self._normalize_order(row) for row in rows.values()),
+            key=lambda order: order["timestamp"],
+        )
 
     async def fetch_order(
         self, order_id: str, symbol: str | None = None, params: dict | None = None

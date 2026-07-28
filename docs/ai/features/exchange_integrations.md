@@ -417,13 +417,16 @@ Handling:
    terminal market-order detail may omit the request price.
 5. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
    only trailing underscore padding before applying the closed order-status allowlist.
-6. Page trade history by `skip` to the required, stable reported total under one fixed `endTime`
+6. Page pending orders by `skip` to the required, stable reported total under one fixed `endTime`
+   snapshot. Reject missing, changing, truncated, or duplicate pagination results before treating
+   the account-critical open-order set as authoritative.
+7. Page trade history by `skip` to the required, stable reported total under one fixed `endTime`
    snapshot. Reject missing, changing, truncated, or duplicate pagination results. Preserve
    `realizedPNL` and the fee sign so maker rebates remain positive balance impacts. Enrich empty
    fill `clientId` values through order detail, but retain the exchange-truth fill with unknown
    attribution when terminal order detail has expired. This is the canonical fill source for
    realized PnL, unstuck accounting, and HSL replay.
-7. Reconstruct realized wallet balance as
+8. Reconstruct realized wallet balance as
    `available + frozen + margin - crossUnrealizedPNL - isolationUnrealizedPNL`; do not feed
    mark-to-market equity into Rust sizing.
 

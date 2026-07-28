@@ -18,7 +18,8 @@ All notable user-facing changes will be documented in this file.
   WebSocket connector, including complete market metadata and top-of-book coverage, live-candle
   pagination, hedge-mode order and position reconciliation, account configuration, realized-PnL
   fill events, long/short reduce-only order lifecycles, honest identifier-only market-order
-  acknowledgements, and bounded REST ticker snapshots when WebSockets are explicitly disabled.
+  acknowledgements, strict complete open-order pagination, and bounded REST ticker snapshots when
+  WebSockets are explicitly disabled.
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.
