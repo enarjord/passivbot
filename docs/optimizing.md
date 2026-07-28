@@ -399,14 +399,49 @@ Key fields (directly under `backtest`):
 
 - `backtest.suite_enabled`: master toggle for suite mode, can also be set with `--suite [y/n]`
 - `backtest.scenarios`: list of scenario dictionaries (same schema as backtest scenarios)
-- `backtest.aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
+- `backtest.aggregate`: default per-metric reducers for combining scenario results (default:
+  `{"default": "mean"}`)
 
-Set `optimize.objective_scenario` to a unique scenario label (commonly `base`) when the suite
-exists primarily as a robustness gate. Objectives are then read from that scenario, while
-`optimize.limits` continue to use the suite aggregation and each limit's `stat`. This supports
-optimizing performance on a representative long period while enforcing worst-case drawdown,
-completion, and recovery constraints across shorter stress periods. The equivalent CLI override
-is `--objective-scenario LABEL`.
+`optimize.objective_scenario` sets the default scoring basis. Set it to a unique scenario label
+(commonly `base`) to read objectives from that scenario by default, or leave it `null` to use suite
+aggregation by default. The equivalent global CLI override is `--objective-scenario LABEL`.
+`optimize.limits` always continue to use suite aggregation and each limit's `stat`.
+
+Each object-form `optimize.scoring` entry may override the default:
+
+```json
+{
+  "backtest": {
+    "aggregate": {"default": "mean"}
+  },
+  "optimize": {
+    "objective_scenario": "base",
+    "scoring": [
+      {"metric": "adg_strategy_eq", "goal": "max"},
+      {
+        "metric": "strategy_eq_underwater_pct_mean",
+        "goal": "min",
+        "scenario": null
+      },
+      {
+        "metric": "strategy_eq_recovery_days_max",
+        "goal": "min",
+        "scenario": null,
+        "aggregate": "max"
+      }
+    ]
+  }
+}
+```
+
+An omitted `scenario` inherits `optimize.objective_scenario`, a named value selects that scenario,
+and explicit `null` selects suite aggregation. An aggregate objective without its own `aggregate`
+uses the metric-specific `backtest.aggregate` rule and then its `default`; an explicit `aggregate`
+may be `mean`, `min`, `max`, `std`, or `median`. A named scenario and `aggregate` are mutually
+exclusive. This permits representative base-period performance objectives alongside mean or
+worst-case stress objectives while limits retain their independent suite-wide contract.
+Each metric may still appear only once in `optimize.scoring`; scoring the same metric from multiple
+bases is not supported in this first version.
 
 Suite mode is opt-in. The default schema/example config does not enable it automatically.
 
@@ -415,8 +450,7 @@ During evaluation the optimizer records:
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
   backtests). These are exposed on each individual as `<label>__{metric}`.
 - Aggregated metrics computed with the `backtest.aggregate` rules (default `mean`).
-  These aggregated values feed `optimize.limits` and, unless `optimize.objective_scenario` is set,
-  `optimize.scoring`.
+  These values feed `optimize.limits` and aggregate-based `optimize.scoring` entries.
 
 See [Suite Examples](suite_examples.md) for practical scenario configurations including exchange
 comparisons, date range testing, and parameter sensitivity analysis.

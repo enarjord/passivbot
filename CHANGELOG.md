@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Optimizer suites may now select the scoring basis independently for each objective. A scoring
+  entry may set `scenario` to a named suite scenario, set it explicitly to `null` to use suite
+  aggregation, and optionally set `aggregate` to `mean`, `min`, `max`, `std`, or `median`.
+  Omitting `scenario` inherits `optimize.objective_scenario`; aggregate objectives without an
+  explicit reducer inherit the metric-specific or default `backtest.aggregate` rule. Limits remain
+  suite-aggregated.
 - Gate multi-currency futures balance now remains stable while resting orders reserve and release
   margin, preventing balance-driven ideal-order resizing and reconciliation churn. Passivbot
   reconstructs account margin balance from Gate's available, position-margin, and order-margin

@@ -646,9 +646,11 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         if baseline_specs is None:
             baseline_specs = specs
             baseline_metrics = metrics
-        elif metrics != baseline_metrics:
+        elif specs != baseline_specs:
             raise ValueError(
-                f"Inconsistent optimize.scoring in {entry_path}; expected {baseline_metrics}, got {metrics}"
+                f"Inconsistent optimize.scoring in {entry_path}; expected "
+                f"{[spec.to_config() for spec in baseline_specs]}, got "
+                f"{[spec.to_config() for spec in specs]}"
             )
 
         metrics_block = entry.get("metrics") or {}
