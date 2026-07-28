@@ -102,7 +102,6 @@ import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
-from live.planning_availability import PlanningAvailability
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -818,9 +817,6 @@ class Passivbot:
     )
     _emit_planning_defer_summary_event = (
         live_event_emitters.emit_planning_defer_summary_event
-    )
-    _emit_planning_symbol_state_event = (
-        live_event_emitters.emit_planning_symbol_state_event
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _emit_health_summary_event = live_event_emitters.emit_health_summary_event
@@ -10596,7 +10592,6 @@ class Passivbot:
     def _emit_snapshot_built_diagnostic(
         self, snapshot: PlanningSnapshot, *, context: str
     ) -> None:
-        availability = PlanningAvailability.from_snapshot(snapshot, now_ms=utc_ms())
         surface_ages = []
         for surface in snapshot.surfaces:
             try:
@@ -10669,14 +10664,12 @@ class Passivbot:
                         }
                         for packet in snapshot.data_packets
                     ],
-                    "planning_availability": availability.summary(),
                 },
                 ts_ms=snapshot.ts_ms,
                 cycle_id=self._current_live_event_cycle_id(),
                 snapshot_id=snapshot.snapshot_id,
             ),
         )
-        self._emit_planning_symbol_state_event(availability, context=context)
 
     def _completed_candle_summary_from_snapshot(
         self, snapshot: PlanningSnapshot

@@ -39,6 +39,9 @@ verification and contract-specific regression coverage.
 3. The order-replacement churn gate was reduced to a recent-behavior economy
    filter. Stale-order cancellation and the 0.02% reconciliation tolerance
    remain authoritative.
+4. The passive Python planning-availability Cartesian product and its routine
+   per-snapshot event were removed. They duplicated readiness evidence, could
+   not model actual Rust applicability, and were never enforcement inputs.
 
 ## Decision rules for further work
 

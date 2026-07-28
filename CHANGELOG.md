@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Retired the diagnostic-only Python planning-availability Cartesian product
+  and its routine `planning.symbol_state` event. Snapshot provenance, actual
+  planning deferrals, EMA degradation, Rust results, reconciliation, and
+  initial-entry outcomes remain available through their canonical structured
+  events; live trading and readiness enforcement are unchanged.
 - Optimizer suites may now select the scoring basis independently for each objective. A scoring
   entry may set `scenario` to a named suite scenario, set it explicitly to `null` to use suite
   aggregation, and optionally set `aggregate` to `mean`, `min`, `max`, `std`, or `median`.
