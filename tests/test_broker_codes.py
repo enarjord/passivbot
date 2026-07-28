@@ -8,6 +8,7 @@ def test_load_broker_code_independent_of_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     assert load_broker_code("bybit") == "passivbotbybit"
+    assert load_broker_code("weex") == "WEEX111164"
 
 
 def test_load_broker_code_uses_env_override(monkeypatch, tmp_path):
