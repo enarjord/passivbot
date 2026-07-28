@@ -346,6 +346,54 @@ async def test_create_close_order_uses_hedge_side_and_position_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "side,position_side,reduce_only",
+    [
+        ("buy", "LONG", False),
+        ("sell", "LONG", True),
+    ],
+)
+async def test_create_market_order_returns_identifier_acknowledgement(
+    side, position_side, reduce_only
+):
+    client = _prepared_client()
+    if reduce_only:
+        client._position_ids[("BTC/USDT:USDT", "long")] = "position-1"
+    client._request = AsyncMock(
+        return_value={"orderId": "order-1", "clientId": "clock_market_long_1"}
+    )
+
+    result = await client.create_order(
+        "BTC/USDT:USDT",
+        "market",
+        side,
+        0.001,
+        None,
+        {
+            "positionSide": position_side,
+            "clientOrderId": "clock_market_long_1",
+            "reduceOnly": reduce_only,
+        },
+    )
+
+    assert result["id"] == "order-1"
+    assert result["clientOrderId"] == "clock_market_long_1"
+    assert result["type"] == "market"
+    assert result["side"] == side
+    assert result["price"] is None
+    assert result["status"] is None
+    assert result["info"]["positionSide"] == position_side
+    assert result["reduceOnly"] is reduce_only
+    assert build_contract_bot("bitunix").did_create_order(result) is True
+    body = client._request.await_args.kwargs["body"]
+    assert body["orderType"] == "MARKET"
+    assert "price" not in body
+    assert "effect" not in body
+    if reduce_only:
+        assert body["positionId"] == "position-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "raw_side,expected",
     [("LONG", "long"), ("BUY", "long"), ("SHORT", "short"), ("SELL", "short")],
 )
@@ -690,6 +738,41 @@ async def test_ticker_depth_fallback_is_capped_before_any_rest_fanout():
 
 
 @pytest.mark.asyncio
+async def test_rest_only_tickers_skip_public_websocket_and_use_depth():
+    client = _prepared_client()
+    client.ws_enabled = False
+    client._ensure_ticker_tasks = MagicMock(
+        side_effect=AssertionError("public websocket must stay disabled")
+    )
+    expected = {
+        "symbol": "BTC/USDT:USDT",
+        "bid": 99.0,
+        "ask": 101.0,
+        "last": 100.0,
+        "timestamp": 1_700_000_000_000,
+    }
+    client._fetch_depth_ticker = AsyncMock(return_value=expected)
+
+    result = await client.fetch_tickers(["BTC/USDT:USDT"])
+
+    assert result == {"BTC/USDT:USDT": expected}
+    client._ensure_ticker_tasks.assert_not_called()
+    client._fetch_depth_ticker.assert_awaited_once_with("BTC/USDT:USDT")
+
+
+@pytest.mark.asyncio
+async def test_rest_only_tickers_reject_unbounded_bulk_request():
+    client = _prepared_client()
+    client.ws_enabled = False
+    client._fetch_depth_ticker = AsyncMock()
+
+    with pytest.raises(NetworkError, match="requires explicit symbols"):
+        await client.fetch_tickers()
+
+    client._fetch_depth_ticker.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_depth_ticker_uses_midpoint_as_synthetic_last():
     client = _prepared_client()
     client._request = AsyncMock(
@@ -773,7 +856,9 @@ def test_native_session_applies_bitunix_endpoint_override():
         "Existing": "header",
         "X-Proxy": "enabled",
     }
+    assert bot.cca.ws_enabled is False
     assert bot.ccp is None
+    assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
 def test_native_session_applies_bitunix_domain_rewrite():

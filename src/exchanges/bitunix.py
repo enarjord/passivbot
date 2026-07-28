@@ -148,6 +148,7 @@ class BitunixClient:
         }
         self.timeout = int(config.get("timeout") or 30_000)
         self.enableRateLimit = bool(config.get("enableRateLimit", True))
+        self.ws_enabled = bool(config.get("wsEnabled", True))
         self.options: dict[str, Any] = {}
         self.markets: dict[str, dict] = {}
         self.markets_by_id: dict[str, dict] = {}
@@ -758,6 +759,29 @@ class BitunixClient:
         order_id = str(data.get("orderId") or "")
         if not order_id:
             raise ExchangeError("Bitunix place-order response missing orderId")
+        if order_type == "MARKET":
+            # Bitunix acknowledges placement with identifiers only. A market
+            # order may already be terminal when the response arrives, so do
+            # not fabricate an unpriced open-order row from the request.
+            return {
+                "info": {
+                    **data,
+                    "positionSide": pside.upper(),
+                    "reduceOnly": reduce_only,
+                },
+                "id": order_id,
+                "clientOrderId": str(data.get("clientId") or client_id),
+                "timestamp": self.milliseconds(),
+                "symbol": symbol,
+                "type": "market",
+                "side": str(side).lower(),
+                "price": None,
+                "amount": abs(float(amount)),
+                "filled": None,
+                "remaining": None,
+                "status": None,
+                "reduceOnly": reduce_only,
+            }
         raw = {
             **body,
             **data,
@@ -1122,6 +1146,8 @@ class BitunixClient:
                 reconnect_delay = min(30.0, reconnect_delay * 2.0)
 
     def _ensure_ticker_tasks(self) -> None:
+        if not self.ws_enabled:
+            return
         if self._ticker_tasks and all(
             not task.done() for task in self._ticker_tasks
         ):
@@ -1160,6 +1186,21 @@ class BitunixClient:
         )
         for symbol in desired:
             self.market(symbol)
+        if not self.ws_enabled:
+            if symbols is None:
+                raise NetworkError(
+                    "Bitunix REST-only ticker mode requires explicit symbols"
+                )
+            if len(desired) > self.MAX_DEPTH_FALLBACK_SYMBOLS:
+                raise NetworkError(
+                    "Bitunix REST-only ticker request has "
+                    f"{len(desired)} symbols; depth requests limited to "
+                    f"{self.MAX_DEPTH_FALLBACK_SYMBOLS}"
+                )
+            return {
+                symbol: await self._fetch_depth_ticker(symbol)
+                for symbol in desired
+            }
         self._ensure_ticker_tasks()
         deadline = time.monotonic() + self.TICKER_WAIT_SECONDS
         while time.monotonic() < deadline:
@@ -1399,6 +1440,7 @@ class BitunixBot(CCXTBot):
 
     def create_ccxt_sessions(self) -> None:
         ccxt_config = self._build_ccxt_config()
+        ccxt_config["wsEnabled"] = bool(self.ws_enabled)
         endpoint_override = getattr(self, "endpoint_override", None)
         if endpoint_override is not None:
             unsupported_keys = set(endpoint_override.rest_url_overrides) - {"api"}
@@ -1422,6 +1464,11 @@ class BitunixBot(CCXTBot):
         else:
             self.ccp = None
             logging.info("bitunix: WebSocket disabled, using REST polling")
+
+    def _market_snapshot_ticker_strategy(self) -> str:
+        if not self.ws_enabled:
+            return "symbols"
+        return super()._market_snapshot_ticker_strategy()
 
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()

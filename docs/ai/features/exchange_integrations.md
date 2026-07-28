@@ -388,7 +388,8 @@ Handling:
    account-state refresh instead of silently discarding the transition.
 5. Apply custom endpoint domain rewrites and `rest.url_overrides.api` to the native REST base, and
    merge `rest.extra_headers` into every request without allowing them to replace authentication
-   headers. Honor `disable_ws` by using REST order polling.
+   headers. Honor `disable_ws` for both private orders and public tickers: use REST order polling
+   and request only explicit, bounded symbol sets through REST depth.
 6. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
    this connector.
 
@@ -438,7 +439,10 @@ authoritative top-of-book and last price, splitting the active market set across
 because Bitunix permits at most 300 subscriptions per connection. A targeted ticker request may
 use one-row REST depth for at most eight missing symbols as a bounded startup fallback, with the
 bid/ask midpoint labeled as its synthetic last. Broad operation must fail instead of fanning out
-one depth request per market or substituting bid/ask for a last trade.
+one depth request per market or substituting bid/ask for a last trade. When WebSockets are
+explicitly disabled, live market snapshots select this targeted REST path directly without opening
+or waiting for a public ticker socket; unbounded bulk requests and requests above the eight-symbol
+limit fail closed.
 
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
