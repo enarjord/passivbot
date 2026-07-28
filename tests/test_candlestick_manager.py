@@ -988,6 +988,71 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_latest_ema_metric_spans_batches_and_matches_individual_helpers(
+    tmp_path, monkeypatch
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "BATCH/USDT"
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    rows = []
+    for index in range(12):
+        ts = end_ts - (11 - index) * ONE_MIN_MS
+        close = 100.0 + index
+        rows.append(
+            (
+                ts,
+                close,
+                close + 1.0,
+                close - 1.0,
+                close,
+                1.0 + index,
+            )
+        )
+    cm._cache[symbol] = np.array(rows, dtype=CANDLE_DTYPE)
+
+    original_get_candles = cm.get_candles
+    calls = {"count": 0}
+
+    async def counted_get_candles(*args, **kwargs):
+        calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "get_candles", counted_get_candles)
+    spans = {
+        "close": [3.0, 5.0, 8.5],
+        "qv": [4.0, 7.0],
+        "log_range": [6.0],
+    }
+    batched = await cm.get_latest_ema_metric_spans(symbol, spans)
+    assert calls["count"] == 1
+
+    cm._ema_cache.clear()
+    expected = {
+        "close": {
+            span: await cm.get_latest_ema_close(symbol, span)
+            for span in spans["close"]
+        },
+        "qv": {
+            span: await cm.get_latest_ema_quote_volume(symbol, span)
+            for span in spans["qv"]
+        },
+        "log_range": {
+            span: await cm.get_latest_ema_log_range(symbol, span)
+            for span in spans["log_range"]
+        },
+    }
+    for metric_key, values in expected.items():
+        for span, value in values.items():
+            assert batched[metric_key][span] == pytest.approx(value)
+
+
+@pytest.mark.asyncio
 async def test_latest_ema_helpers_reject_short_tail_without_caching(tmp_path, monkeypatch):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     fixed_now_ms = 1725590400000
@@ -4229,7 +4294,10 @@ def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_kucoin_contextual_retry_proves_persistent_sparse_gap(tmp_path, monkeypatch):
+@pytest.mark.parametrize("retry_count", [1, _GAP_MAX_RETRIES])
+async def test_kucoin_contextual_retry_proves_sparse_gap_immediately(
+    tmp_path, monkeypatch, retry_count
+):
     """A retry must include real rows on both sides of a sparse KuCoin gap.
 
     Querying only the absent timestamps returns an empty payload and leaves the
@@ -4272,11 +4340,8 @@ async def test_kucoin_contextual_retry_proves_persistent_sparse_gap(tmp_path, mo
         ONE_MIN_MS,
         22 * ONE_MIN_MS,
         reason=GAP_REASON_FETCH_FAILED,
-        retry_count=_GAP_MAX_RETRIES,
+        retry_count=retry_count,
     )
-    due_gaps = cm._get_known_gaps_enhanced(symbol)
-    due_gaps[0]["last_retry_at"] = now - _GAP_PERSISTENT_RETRY_MS - 1
-    cm._save_known_gaps_enhanced(symbol, due_gaps)
 
     result = await cm.get_candles(
         symbol,
@@ -4363,12 +4428,6 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
         reason=GAP_REASON_FETCH_FAILED,
         retry_count=_GAP_MAX_RETRIES,
     )
-    gaps = cm._get_known_gaps_enhanced(symbol)
-    gaps[0]["last_retry_at"] = (
-        clock["now"] - _GAP_PERSISTENT_RETRY_MS - 1
-    )
-    cm._save_known_gaps_enhanced(symbol, gaps)
-
     first = await cm.get_candles(
         symbol,
         start_ts=0,
@@ -4395,7 +4454,7 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
         for gap in unresolved
     )
     assert all(
-        int(gap["last_retry_at"]) == clock["now"]
+        int(gap["last_contextual_retry_at"]) == clock["now"]
         for gap in unresolved
     )
 
@@ -4409,7 +4468,7 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
 
     due_again = cm._get_known_gaps_enhanced(symbol)
     for gap in due_again:
-        gap["last_retry_at"] = (
+        gap["last_contextual_retry_at"] = (
             clock["now"] - _GAP_PERSISTENT_RETRY_MS - 1
         )
     cm._save_known_gaps_enhanced(symbol, due_again)

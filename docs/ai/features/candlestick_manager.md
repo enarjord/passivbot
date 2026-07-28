@@ -225,10 +225,12 @@
     unavailable and the timeframe index bounds are recomputed from the remaining shards. Leading,
     trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. For 1m
     gaps initially classified as `auto_detected` or `fetch_failed`, a targeted retry may expand to
-    the nearest cached real candle on each side. Only when one successful raw payload returns both
-    boundaries while omitting the intervening timestamps may that exact range be promoted to
-    verified `no_trades` continuity. Empty, one-sided, terminal, or rejected payloads do not prove
-    the gap.
+    the nearest cached real candle on each side as soon as those boundaries are available; this
+    proof does not wait for the ordinary retry count to become persistent. Only when one successful
+    raw payload returns both boundaries while omitting the intervening timestamps may that exact
+    range be promoted to verified `no_trades` continuity. Empty, one-sided, terminal, or rejected
+    payloads do not prove the gap and start a separate seven-day contextual-proof cooldown. Ordinary
+    missing-range retries retain their existing independent schedule.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

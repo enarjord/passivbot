@@ -17714,11 +17714,25 @@ class Passivbot:
                 "m1_log_range": "log_range",
                 "forager_m1_log_range": "log_range",
             }.get(ema_type)
+            batched_values: Optional[dict[float, float]] = None
+            batched_error: Optional[Exception] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, ema_type
+                )
+            except Exception as exc:
+                batched_error = exc
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
-                    val = float(await fn(symbol, span))
+                    if batched_error is not None:
+                        raise batched_error
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await fn(symbol, span)
+                    )
                 except Exception as e:
                     if metric_key is not None:
                         fallback = await fetch_cached_forager_metric(
@@ -17765,11 +17779,25 @@ class Passivbot:
             if ema_type == "h1_log_range" and symbol in cache_only_symbols:
                 metric_key = "log_range"
                 metric_timeframe = "1h"
+            batched_values: Optional[dict[float, float]] = None
+            batched_error: Optional[Exception] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, ema_type
+                )
+            except Exception as exc:
+                batched_error = exc
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
                 try:
-                    val = float(await fn(symbol, span))
+                    if batched_error is not None:
+                        raise batched_error
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await fn(symbol, span)
+                    )
                 except Exception as e:
                     reason = f"{type(e).__name__}: {e}"
                 else:
@@ -17904,13 +17932,27 @@ class Passivbot:
             max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
             primary_missing: list[tuple[float, str]] = []
+            batched_values: Optional[dict[float, float]] = None
+            batched_error: Optional[Exception] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, "m1_close"
+                )
+            except Exception as exc:
+                batched_error = exc
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, "close_ema")
                 span = float(sp)
                 key = (symbol, span)
                 reason = None
                 try:
-                    val = float(await ema_close(symbol, span))
+                    if batched_error is not None:
+                        raise batched_error
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await ema_close(symbol, span)
+                    )
                 except Exception as e:
                     reason = f"{type(e).__name__}: {e}"
                 else:
@@ -18095,6 +18137,49 @@ class Passivbot:
                     allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
+
+        async def fetch_batched_ema_values(
+            symbol: str,
+            spans: list[float],
+            ema_type: str,
+        ) -> Optional[dict[float, float]]:
+            """Use one candle load for compatible EMA spans when supported."""
+            method_on_type = getattr(
+                type(self.cm), "get_latest_ema_metric_spans", None
+            )
+            method = getattr(self.cm, "get_latest_ema_metric_spans", None)
+            if not callable(method_on_type) or not callable(method):
+                return None
+            metric_key = {
+                "m1_close": "close",
+                "m1_volume": "qv",
+                "m1_log_range": "log_range",
+                "forager_m1_log_range": "log_range",
+                "h1_log_range": "log_range",
+            }.get(ema_type)
+            if metric_key is None:
+                return None
+            timeframe = "1h" if ema_type == "h1_log_range" else "1m"
+            strict = ema_type in {"m1_volume", "forager_m1_log_range"}
+            values = await method(
+                symbol,
+                {metric_key: [float(span) for span in spans]},
+                max_age_ms=(
+                    h1_max_age_by_symbol.get(symbol, 600_000)
+                    if timeframe == "1h"
+                    else m1_max_age_by_symbol.get(symbol, 60_000)
+                ),
+                timeframe=timeframe,
+                allow_remote_fetch=symbol not in cache_only_symbols,
+                allow_provisional_internal_gaps=(
+                    False if strict else symbol not in cache_only_symbols
+                ),
+            )
+            metric_values = values.get(metric_key, {})
+            return {
+                float(span): float(value)
+                for span, value in metric_values.items()
+            }
 
         async def load_projected_open_tail_bundle(
             sym: str,

@@ -3688,13 +3688,19 @@ class FillEventsManager:
         self,
         lifecycle: Dict[str, object],
         observation: PnlObservation,
-    ) -> Tuple[set[str], float, int]:
+    ) -> Tuple[set[str], float, int, bool]:
         close_fills = list(lifecycle["close_fills"])
         lifecycle_events = list(lifecycle.get("events") or [])
         lifecycle_fee_paid = sum(signed_fee_paid_from_payload(ev) for ev in lifecycle_events)
         gross_target = float(observation.realized_pnl) - lifecycle_fee_paid
         synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
         delta = gross_target - synthetic_total
+        pnl_changed = not math.isclose(
+            delta,
+            0.0,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
         weights = []
         for close in close_fills:
             signed_qty = _payload_signed_effective_qty(close)
@@ -3708,17 +3714,31 @@ class FillEventsManager:
             weights = [1.0 for _ in close_fills]
             total_weight = float(len(close_fills))
         for close, weight in zip(close_fills, weights):
-            close["pnl"] = float(close.get("pnl") or 0.0) + delta * (weight / total_weight)
+            if pnl_changed:
+                close["pnl"] = float(close.get("pnl") or 0.0) + delta * (
+                    weight / total_weight
+                )
         days_touched: set[str] = set()
+        metadata_changed = False
         for close in close_fills:
+            close_metadata_changed = bool(
+                close.get("pnl_status") != "complete"
+                or close.get("pnl_source")
+                != PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+                or close.get("pnl_synthetic_reason")
+            )
+            if close_metadata_changed:
+                metadata_changed = True
             close["pnl_status"] = "complete"
             close["pnl_source"] = PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
             close["pnl_synthetic_reason"] = ""
-            try:
-                days_touched.add(_day_key(int(close["timestamp"])))
-            except (KeyError, TypeError, ValueError, OverflowError):
-                pass
-        return days_touched, delta, len(close_fills)
+            if pnl_changed or close_metadata_changed:
+                try:
+                    days_touched.add(_day_key(int(close["timestamp"])))
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    pass
+        changed = pnl_changed or metadata_changed
+        return days_touched, delta if pnl_changed else 0.0, len(close_fills), changed
 
     def _reconcile_pnl_observations(
         self,
@@ -3764,10 +3784,14 @@ class FillEventsManager:
             if len(candidates) != 1:
                 continue
             lifecycle = candidates[0]
-            touched, delta, fill_count = self._apply_cycle_observation(lifecycle, obs)
-            days_touched.update(touched)
+            touched, delta, fill_count, changed = self._apply_cycle_observation(
+                lifecycle, obs
+            )
             used_lifecycle_ids.add(id(lifecycle))
             matched_observation_ids.add(id(obs))
+            if not changed:
+                continue
+            days_touched.update(touched)
             reconciled_cycles += 1
             reconciled_fills += fill_count
             total_delta += delta
@@ -4535,7 +4559,11 @@ class FillEventsManager:
                     prev is not None
                     and event.pnl_pending
                     and not prev.pnl_pending
-                    and _is_synthetic_pnl_source(prev.pnl_source)
+                    and (
+                        _is_synthetic_pnl_source(prev.pnl_source)
+                        or prev.pnl_source
+                        == PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+                    )
                 ):
                     merged = event.to_dict()
                     merged["pnl"] = prev.pnl

@@ -4392,6 +4392,7 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
 @pytest.mark.asyncio
 async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
     tmp_path: Path,
+    caplog,
 ):
     cache_dir = tmp_path / "fills_cycle_reconciled"
     entry_ts = 1_700_000_000_000
@@ -4461,7 +4462,8 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
         fee_pct_fallback=0.0,
     )
 
-    await manager.refresh()
+    with caplog.at_level(logging.WARNING):
+        await manager.refresh()
 
     events = manager.get_events(symbol="TON/USDT:USDT")
     by_id = {ev.id: ev for ev in events}
@@ -4478,6 +4480,10 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
     assert sum(ev.pnl for ev in refreshed_events if "close" in ev.pb_order_type) == pytest.approx(
         5.0
     )
+    assert sum(
+        "reconciled aggregate realized PnL to fill lifecycle" in record.message
+        for record in caplog.records
+    ) == 1
 
     reloaded = FillEventsManager(
         exchange="kucoin",

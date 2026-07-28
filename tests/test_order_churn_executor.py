@@ -215,6 +215,30 @@ def test_repeated_churn_deferral_keeps_events_but_throttles_info(
     assert structured_emitter.call_count == 3
 
 
+def test_churn_admission_logs_bounded_account_summary(monkeypatch, caplog):
+    bot = _Bot()
+    now = [100.0]
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: now[0])
+
+    near = _order("near", distance=0.002)
+    stable = _order("stable", churn=False, distance=None)
+    with caplog.at_level(logging.INFO):
+        assert _apply_order_churn_admission(bot, [near, stable]) == [near, stable]
+        assert "churn gate admission summary" not in caplog.text
+        now[0] += 601.0
+        assert _apply_order_churn_admission(bot, [near]) == [near]
+
+    summaries = [
+        record.getMessage()
+        for record in caplog.records
+        if "churn gate admission summary" in record.getMessage()
+    ]
+    assert len(summaries) == 1
+    assert "candidates=3" in summaries[0]
+    assert "market_distance_exempt:2" in summaries[0]
+    assert "no_churn_evidence:1" in summaries[0]
+
+
 @pytest.mark.asyncio
 async def test_cancellation_capacity_diagnostics_remain_isolated(
     monkeypatch, caplog

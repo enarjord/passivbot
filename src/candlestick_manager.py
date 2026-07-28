@@ -236,6 +236,7 @@ class GapEntry(TypedDict, total=False):
     reason: str  # "auto_detected", "exchange_downtime", "no_archive", "fetch_failed", "manual", "no_trades"
     added_at: int  # Timestamp when gap was first detected (ms)
     last_retry_at: int  # Timestamp of the latest remote attempt for this gap (ms)
+    last_contextual_retry_at: int  # Latest KuCoin boundary-proof attempt (ms)
 
 
 # Maximum fetch attempts before marking gap as persistent
@@ -2928,6 +2929,9 @@ class CandlestickManager:
                         "last_retry_at": int(
                             it.get("last_retry_at", it.get("added_at", now_ms))
                         ),
+                        "last_contextual_retry_at": int(
+                            it.get("last_contextual_retry_at", 0)
+                        ),
                     }
                     if entry["start_ts"] <= entry["end_ts"]:
                         out.append(entry)
@@ -2981,6 +2985,10 @@ class CandlestickManager:
                         prev.get("last_retry_at", prev.get("added_at", 0)),
                         gap.get("last_retry_at", gap.get("added_at", 0)),
                     ),
+                    "last_contextual_retry_at": max(
+                        prev.get("last_contextual_retry_at", 0),
+                        gap.get("last_contextual_retry_at", 0),
+                    ),
                 }
         idx = self._ensure_symbol_index(symbol)
         idx["meta"]["known_gaps"] = [
@@ -2992,6 +3000,9 @@ class CandlestickManager:
                 "added_at": int(g.get("added_at", 0)),
                 "last_retry_at": int(
                     g.get("last_retry_at", g.get("added_at", 0))
+                ),
+                "last_contextual_retry_at": int(
+                    g.get("last_contextual_retry_at", 0)
                 ),
             }
             for g in merged
@@ -3252,6 +3263,66 @@ class CandlestickManager:
             self._log(
                 "debug",
                 "persistent_gap_verification_deferred",
+                symbol=symbol,
+                start_ts=int(start_ts),
+                end_ts=int(end_ts),
+                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
+            )
+        return changed
+
+    def _kucoin_contextual_retry_due(
+        self,
+        gap: GapEntry,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
+        """Return whether a KuCoin sparse-gap boundary proof is due.
+
+        Boundary proof is independent of the ordinary missing-range retry
+        count.  A newly discovered sparse interval should be proved as soon as
+        real rows bracket it, rather than spending three empty-range retries
+        and then waiting for the persistent-gap cooldown.  Failed boundary
+        proofs retain their own cooldown so routine candle reads cannot cause
+        a REST treadmill.
+        """
+        if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+            GAP_REASON_AUTO,
+            GAP_REASON_FETCH_FAILED,
+        }:
+            return False
+        now = self._now_ms() if now_ms is None else int(now_ms)
+        last_retry_at = int(gap.get("last_contextual_retry_at", 0))
+        return (
+            last_retry_at <= 0
+            or now - last_retry_at >= _GAP_PERSISTENT_RETRY_MS
+        )
+
+    def _defer_kucoin_contextual_gap_retry(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
+        """Restart only the KuCoin contextual-proof cooldown after failure."""
+        now = self._now_ms() if now_ms is None else int(now_ms)
+        changed = False
+        gaps = self._get_known_gaps_enhanced(symbol)
+        for gap in gaps:
+            if (
+                int(gap["start_ts"]) <= int(end_ts)
+                and int(gap["end_ts"]) >= int(start_ts)
+                and str(gap.get("reason", GAP_REASON_AUTO))
+                in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+            ):
+                gap["last_contextual_retry_at"] = now
+                changed = True
+        if changed:
+            self._save_known_gaps_enhanced(symbol, gaps)
+            self._log(
+                "debug",
+                "kucoin_contextual_gap_verification_deferred",
                 symbol=symbol,
                 start_ts=int(start_ts),
                 end_ts=int(end_ts),
@@ -7781,15 +7852,13 @@ class CandlestickManager:
                         for gap in self._get_known_gaps_enhanced(symbol)
                     )
 
-                def persistent_unverified_gap_covering(
+                def unverified_gap_covering(
                     s: int, e: int
                 ) -> Optional[GapEntry]:
                     for gap in self._get_known_gaps_enhanced(symbol):
                         if (
                             int(gap["start_ts"]) <= int(s)
                             and int(gap["end_ts"]) >= int(e)
-                            and int(gap.get("retry_count", 0))
-                            >= _GAP_MAX_RETRIES
                             and str(gap.get("reason", GAP_REASON_AUTO))
                             in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
                         ):
@@ -7812,9 +7881,9 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    persistent_gap = persistent_unverified_gap_covering(s, e)
-                    if persistent_gap is None or not self._should_retry_gap(
-                        persistent_gap, now_ms=now
+                    unverified_gap = unverified_gap_covering(s, e)
+                    if unverified_gap is None or not self._kucoin_contextual_retry_due(
+                        unverified_gap, now_ms=now
                     ):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
@@ -7960,7 +8029,7 @@ class CandlestickManager:
                                     symbol, int(s), int(e)
                                 )
                             else:
-                                self._defer_persistent_gap_retry(
+                                self._defer_kucoin_contextual_gap_retry(
                                     symbol,
                                     int(s),
                                     int(e),
@@ -9054,6 +9123,125 @@ class CandlestickManager:
                 int(now),
             )
 
+        return out
+
+    async def get_latest_ema_metric_spans(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        max_age_ms: Optional[int] = None,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
+    ) -> Dict[str, Dict[float, float]]:
+        """Compute multiple metrics and spans from one completed-candle load.
+
+        Results and cache keys intentionally match the individual latest-EMA
+        helpers.  This is the orchestration hot path: a symbol may need three
+        close spans plus volatility and volume metrics, and loading the same
+        candle window once per span is pure duplicate work.
+        """
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        if not normalized:
+            return {}
+        out_tf = timeframe if timeframe is not None else tf
+        period_ms = _tf_to_ms(out_tf)
+        if allow_provisional_internal_gaps is None:
+            allow_provisional_internal_gaps = bool(allow_remote_fetch)
+        now = self._now_ms()
+        tf_key = str(period_ms)
+        cache = self._ema_cache.setdefault(symbol, {})
+        out: Dict[str, Dict[float, float]] = {
+            metric_key: {} for metric_key in normalized
+        }
+        missing: Dict[str, List[float]] = {}
+        for metric_key, spans in normalized.items():
+            cache_metric_key = (
+                metric_key
+                if allow_provisional_internal_gaps
+                else f"{metric_key}:strict"
+            )
+            for span in spans:
+                _start_ts, end_ts = await self._latest_finalized_range(
+                    span, period_ms=period_ms
+                )
+                key = (cache_metric_key, float(span), tf_key)
+                if max_age_ms is not None and max_age_ms > 0 and key in cache:
+                    val, cached_end_ts, computed_at = cache[key]
+                    if (
+                        int(cached_end_ts) == int(end_ts)
+                        and now - int(computed_at) <= int(max_age_ms)
+                    ):
+                        out[metric_key][span] = float(val)
+                        continue
+                missing.setdefault(metric_key, []).append(span)
+        if not missing:
+            return out
+
+        max_span = max(span for spans in missing.values() for span in spans)
+        start_ts, end_ts = await self._latest_finalized_range(
+            max_span, period_ms=period_ms
+        )
+        raw = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=max_age_ms,
+            timeframe=out_tf,
+            allow_remote_fetch=allow_remote_fetch,
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
+        )
+        if raw.size == 0:
+            for metric_key, spans in missing.items():
+                out[metric_key].update({span: float("nan") for span in spans})
+            return out
+
+        for metric_key, spans in missing.items():
+            cache_metric_key = (
+                metric_key
+                if allow_provisional_internal_gaps
+                else f"{metric_key}:strict"
+            )
+            for span in spans:
+                span_candles = max(1, int(math.ceil(span)))
+                metric_start_ts = int(
+                    end_ts - period_ms * (span_candles - 1)
+                )
+                tail = self._slice_ts_range(
+                    raw,
+                    metric_start_ts,
+                    end_ts,
+                    assume_sorted=True,
+                )
+                if tail.size == 0 or not self._ema_window_has_required_coverage(
+                    tail,
+                    metric_start_ts,
+                    end_ts,
+                    symbol=symbol,
+                    timeframe=out_tf,
+                ):
+                    out[metric_key][span] = float("nan")
+                    continue
+                if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+                    tail,
+                    metric_start_ts,
+                    end_ts,
+                    period_ms,
+                ):
+                    out[metric_key][span] = float("nan")
+                    continue
+                value = float(self._ema(self._ema_metric_series(metric_key, tail), span))
+                out[metric_key][span] = value
+                if not math.isfinite(value):
+                    continue
+                cache[(cache_metric_key, float(span), tf_key)] = (
+                    value,
+                    int(end_ts),
+                    int(now),
+                )
         return out
 
     async def get_latest_ema_log_range(
