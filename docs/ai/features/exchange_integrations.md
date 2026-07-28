@@ -412,13 +412,17 @@ Handling:
    `reduceOnly`; never reuse placement-side semantics while parsing a response.
 3. Accept both documented `LONG`/`SHORT` and observed `BUY`/`SELL` aliases on position rows. Keep
    all other position-side values invalid.
-4. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
+4. Require a positive finite request price for every limit order and every open order. Only
+   terminal market-order detail may omit the request price.
+5. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
    only trailing underscore padding before applying the closed order-status allowlist.
-5. Page trade history by `skip` to the reported total under one fixed `endTime` snapshot,
-   deduplicate by `tradeId`, preserve `realizedPNL` and fees, and enrich empty fill `clientId`
-   values through order detail. This is the canonical fill source for realized PnL, unstuck
-   accounting, and HSL replay.
-6. Reconstruct realized wallet balance as
+6. Page trade history by `skip` to the required, stable reported total under one fixed `endTime`
+   snapshot. Reject missing, changing, truncated, or duplicate pagination results. Preserve
+   `realizedPNL` and the fee sign so maker rebates remain positive balance impacts. Enrich empty
+   fill `clientId` values through order detail, but retain the exchange-truth fill with unknown
+   attribution when terminal order detail has expired. This is the canonical fill source for
+   realized PnL, unstuck accounting, and HSL replay.
+7. Reconstruct realized wallet balance as
    `available + frozen + margin - crossUnrealizedPNL - isolationUnrealizedPNL`; do not feed
    mark-to-market equity into Rust sizing.
 

@@ -22,7 +22,11 @@ from custom_endpoint_overrides import (
     ResolvedEndpointOverride,
 )
 from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
-from fill_events_manager import BitunixFetcher, _build_fetcher_for_bot
+from fill_events_manager import (
+    BitunixFetcher,
+    _build_fetcher_for_bot,
+    signed_fee_paid_from_payload,
+)
 from candlestick_manager import CandlestickManager
 
 
@@ -273,6 +277,34 @@ def test_order_status_accepts_live_trailing_enum_padding():
     assert client._normalize_order(_order_row(status="NEW_"))["status"] == "open"
 
 
+@pytest.mark.parametrize("price", [None, "", "0", "-1", "nan"])
+def test_limit_order_requires_positive_finite_price(price):
+    client = _prepared_client()
+
+    with pytest.raises(ValueError, match="order.price"):
+        client._normalize_order(_order_row(price=price))
+
+
+def test_terminal_market_order_allows_missing_request_price():
+    client = _prepared_client()
+
+    order = client._normalize_order(
+        _order_row(orderType="MARKET", price=None, status="FILLED")
+    )
+
+    assert order["type"] == "market"
+    assert order["price"] == 0.0
+
+
+def test_open_market_order_requires_positive_price_for_reconciliation():
+    client = _prepared_client()
+
+    with pytest.raises(ValueError, match="order.price"):
+        client._normalize_order(
+            _order_row(orderType="MARKET", price=None, status="NEW")
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_close_order_uses_hedge_side_and_position_id():
     client = _prepared_client()
@@ -422,6 +454,49 @@ async def test_fill_history_freezes_end_time_when_until_is_omitted(monkeypatch):
         call.kwargs["params"]["endTime"]
         for call in client._request.await_args_list
     } == {1_700_001_000_000}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tradeList": [_trade_row()]},
+        {"tradeList": [_trade_row()], "total": None},
+        {"tradeList": [_trade_row()], "total": 0},
+        {"tradeList": [_trade_row()], "total": -1},
+    ],
+)
+async def test_fill_history_rejects_missing_or_inconsistent_total(payload):
+    client = _prepared_client()
+    client._request = AsyncMock(return_value=payload)
+
+    with pytest.raises(ValueError, match="fill-history total"):
+        await client.fetch_my_trades(limit=1)
+
+
+@pytest.mark.asyncio
+async def test_fill_history_rejects_total_changes_between_pages():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        side_effect=[
+            {"tradeList": [_trade_row(tradeId="trade-2")], "total": 2},
+            {"tradeList": [_trade_row()], "total": 3},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="fill-history total changed"):
+        await client.fetch_my_trades(limit=1)
+
+
+def test_trade_normalization_preserves_fee_rebate_sign():
+    client = _prepared_client()
+
+    trade = client._normalize_trade(_trade_row(fee="-0.01"))
+    event = BitunixFetcher._normalize_trade(trade)
+
+    assert trade["fee"]["cost"] == -0.01
+    assert trade["fees"][0]["cost"] == -0.01
+    assert signed_fee_paid_from_payload(event) == pytest.approx(0.01)
 
 
 @pytest.mark.asyncio
@@ -815,6 +890,7 @@ async def test_bitunix_fetcher_normalizes_accounting_fields():
     assert events[0]["side"] == "buy"
     assert events[0]["pnl"] == 0.0
     assert events[0]["c_mult"] == 1.0
+    assert signed_fee_paid_from_payload(events[0]) == pytest.approx(-0.01)
     assert cache["trade-1"][0] == "clock_entry_long_1"
 
 
@@ -837,6 +913,23 @@ async def test_bitunix_fetcher_enriches_missing_fill_client_id_from_order_detail
     assert events[0]["client_order_id"] == "clock_entry_long_1"
     assert events[0]["pb_order_type"]
     assert cache["trade-1"][0] == "clock_entry_long_1"
+
+
+@pytest.mark.asyncio
+async def test_bitunix_fetcher_retains_fill_when_order_detail_expired():
+    client = _prepared_client()
+    trade = client._normalize_trade(_trade_row(clientId=""))
+    client.fetch_my_trades = AsyncMock(return_value=[trade])
+    client.fetch_order = AsyncMock(side_effect=OrderNotFound("expired"))
+    fetcher = BitunixFetcher(client)
+    cache = {}
+
+    events = await fetcher.fetch(None, None, cache)
+
+    assert [event["id"] for event in events] == ["trade-1"]
+    assert events[0]["client_order_id"] == ""
+    assert events[0]["pb_order_type"] == "unknown"
+    assert cache["trade-1"] == ("", "unknown")
 
 
 def test_build_fetcher_for_bitunix():

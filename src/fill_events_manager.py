@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 import passivbot_rust as pbr
-from ccxt.base.errors import RateLimitExceeded
+from ccxt.base.errors import OrderNotFound, RateLimitExceeded
 from bitget_normalization import (
     deduce_side_pside,
     deduce_uta_side_pside as _deduce_uta_side_pside,
@@ -6089,8 +6089,11 @@ class BitunixFetcher(BaseFetcher):
 
         async def fetch_detail(key: Tuple[str, str]):
             order_id, symbol = key
-            async with semaphore:
-                order = await self.api.fetch_order(order_id, symbol)
+            try:
+                async with semaphore:
+                    order = await self.api.fetch_order(order_id, symbol)
+            except OrderNotFound:
+                return key, ""
             info = order.get("info") if isinstance(order, dict) else {}
             client_order_id = (
                 str(order.get("clientOrderId") or "")

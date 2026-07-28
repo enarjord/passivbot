@@ -580,7 +580,6 @@ class BitunixClient:
                 default=0.0,
             )
         )
-        price = _float(row.get("price"), field="order.price", default=0.0)
         timestamp = _int(row.get("ctime"), field="order.ctime")
         order_id = str(row.get("orderId") or "")
         if not order_id:
@@ -590,6 +589,17 @@ class BitunixClient:
         ).lower()
         if order_type not in {"limit", "market"}:
             raise ValueError("Bitunix order missing LIMIT/MARKET order type")
+        status = self._order_status(
+            row.get("status") or row.get("orderStatus")
+        )
+        price_required = order_type == "limit" or status == "open"
+        price = _float(
+            row.get("price"),
+            field="order.price",
+            default=0.0 if not price_required else None,
+        )
+        if price_required and price <= 0.0:
+            raise ValueError("Bitunix response has non-positive order.price")
         info = deepcopy(row)
         info["positionSide"] = pside.upper()
         info["reduceOnly"] = reduce_only
@@ -617,11 +627,11 @@ class BitunixClient:
                 default=0.0,
             )
             or None,
-            "status": self._order_status(row.get("status") or row.get("orderStatus")),
+            "status": status,
             "fee": (
                 {
                     "currency": "USDT",
-                    "cost": abs(_float(row.get("fee"), field="order.fee")),
+                    "cost": _float(row.get("fee"), field="order.fee"),
                 }
                 if row.get("fee") not in (None, "")
                 else None
@@ -857,8 +867,8 @@ class BitunixClient:
             "price": price,
             "amount": qty,
             "cost": qty * price,
-            "fee": {"currency": "USDT", "cost": abs(fee)},
-            "fees": [{"currency": "USDT", "cost": abs(fee)}],
+            "fee": {"currency": "USDT", "cost": fee},
+            "fees": [{"currency": "USDT", "cost": fee}],
             "clientOrderId": str(row.get("clientId") or ""),
         }
 
@@ -892,6 +902,7 @@ class BitunixClient:
             query["startTime"] = int(since)
         query.update(params)
         rows: dict[str, dict] = {}
+        expected_total: int | None = None
         for _ in range(self.MAX_FILL_PAGES):
             data = await self._request(
                 "GET",
@@ -902,17 +913,47 @@ class BitunixClient:
             if not isinstance(data, dict) or not isinstance(data.get("tradeList"), list):
                 raise ValueError("Bitunix fill-history response has invalid shape")
             page = data["tradeList"]
+            try:
+                total = _int(
+                    data.get("total"),
+                    field="fill-history total",
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "Bitunix response has invalid fill-history total"
+                ) from exc
+            if total < 0:
+                raise ValueError(
+                    "Bitunix response has negative fill-history total"
+                )
+            if expected_total is None:
+                expected_total = total
+            elif total != expected_total:
+                raise ValueError(
+                    "Bitunix fill-history total changed during pagination"
+                )
             for row in page:
                 trade_id = str(row.get("tradeId") or "")
                 if not trade_id:
                     raise ValueError("Bitunix fill-history row missing tradeId")
                 rows[trade_id] = row
             query["skip"] += len(page)
-            total = int(data.get("total") or 0)
-            if not page or query["skip"] >= total or len(page) < page_size:
+            if query["skip"] > total:
+                raise ValueError(
+                    "Bitunix fill-history total is smaller than returned rows"
+                )
+            if not page and query["skip"] < total:
+                raise ValueError(
+                    "Bitunix fill-history pagination ended before total"
+                )
+            if query["skip"] == total:
                 break
         else:
             raise RuntimeError("Bitunix fill-history pagination exceeded safety limit")
+        if expected_total is None or len(rows) != expected_total:
+            raise ValueError(
+                "Bitunix fill-history pagination returned duplicate or incomplete rows"
+            )
         return sorted(
             (self._normalize_trade(row) for row in rows.values()),
             key=lambda trade: trade["timestamp"],
