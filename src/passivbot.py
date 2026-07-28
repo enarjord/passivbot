@@ -1218,11 +1218,7 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self._authoritative_surface_signatures = {}
-        self._authoritative_surface_generations = {}
         self._authoritative_refresh_epoch = 0
-        self._authoritative_refresh_epoch_fresh = set()
-        self._authoritative_refresh_epoch_changed = set()
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
         self._trailing_fill_refresh_started_generation = 0
@@ -10341,44 +10337,13 @@ class Passivbot:
 
     def _begin_authoritative_refresh_epoch(self) -> None:
         """Start a new authoritative state refresh cohort for execution gating."""
-        self._authoritative_refresh_epoch = (
-            int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
-        )
-        self._authoritative_refresh_epoch_fresh = set()
-        self._authoritative_refresh_epoch_changed = set()
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is None:
-            ledger = FreshnessLedger(now_ms=utc_ms())
-            self.freshness_ledger = ledger
-        ledger.begin_epoch(now_ms=utc_ms())
+        ledger = self._ensure_freshness_ledger()
+        self._authoritative_refresh_epoch = ledger.begin_epoch(now_ms=utc_ms())
 
     def _record_authoritative_surface(self, surface: str, signature) -> bool:
         """Record a fresh authoritative surface snapshot and whether it changed."""
-        if not hasattr(self, "_authoritative_surface_signatures"):
-            self._authoritative_surface_signatures = {}
-        if not hasattr(self, "_authoritative_surface_generations"):
-            self._authoritative_surface_generations = {}
-        if not hasattr(self, "_authoritative_refresh_epoch_fresh"):
-            self._authoritative_refresh_epoch_fresh = set()
-        if not hasattr(self, "_authoritative_refresh_epoch_changed"):
-            self._authoritative_refresh_epoch_changed = set()
-        prev = self._authoritative_surface_signatures.get(surface)
-        changed = prev != signature
-        self._authoritative_surface_signatures[surface] = signature
-        self._authoritative_refresh_epoch_fresh.add(surface)
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is not None:
-            ledger.stamp(
-                surface,
-                signature,
-                now_ms=utc_ms(),
-                epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
-            )
-        if changed:
-            self._authoritative_surface_generations[surface] = (
-                int(self._authoritative_surface_generations.get(surface, 0) or 0) + 1
-            )
-            self._authoritative_refresh_epoch_changed.add(surface)
+        ledger = self._ensure_freshness_ledger()
+        changed = ledger.stamp(surface, signature, now_ms=utc_ms())
         if surface in ACCOUNT_PACKET_KINDS:
             self._finalize_live_data_packet_metadata(surface, signature=signature)
         return changed
@@ -10460,6 +10425,9 @@ class Passivbot:
         ledger = getattr(self, "freshness_ledger", None)
         if ledger is None:
             ledger = FreshnessLedger(now_ms=utc_ms())
+            ledger.epoch = int(
+                getattr(self, "_authoritative_refresh_epoch", 0) or 0
+            )
             self.freshness_ledger = ledger
         return ledger
 
@@ -10868,13 +10836,12 @@ class Passivbot:
     def _authoritative_execution_barrier_state(self) -> tuple[bool, dict]:
         """Return whether execution must be skipped until authoritative state settles."""
         required = self._authoritative_required_surfaces()
-        fresh = set(getattr(self, "_authoritative_refresh_epoch_fresh", set()) or set())
-        changed_all = set(
-            getattr(self, "_authoritative_refresh_epoch_changed", set()) or set()
-        )
+        ledger = self._ensure_freshness_ledger()
+        current_epoch = int(ledger.epoch)
+        fresh = set(ledger.surfaces_at_epoch(current_epoch))
+        changed_all = set(ledger.changed_surfaces_at_epoch(current_epoch))
         changed = sorted(changed_all & {"positions", "open_orders", "fills"})
         pending = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
-        current_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
         missing = sorted(
             surface
             for surface in required
@@ -10934,7 +10901,7 @@ class Passivbot:
         """Escalate follow-up confirmations only when the current refresh cohort was insufficient."""
         refreshed_surfaces = set(refreshed_surfaces or set())
         changed_all = set(
-            getattr(self, "_authoritative_refresh_epoch_changed", set()) or set()
+            self._ensure_freshness_ledger().changed_surfaces_at_epoch()
         )
         if (
             refreshed_surfaces == {"open_orders"}

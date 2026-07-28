@@ -42,6 +42,11 @@ verification and contract-specific regression coverage.
 4. The passive Python planning-availability Cartesian product and its routine
    per-snapshot event were removed. They duplicated readiness evidence, could
    not model actual Rust applicability, and were never enforcement inputs.
+5. Authoritative per-surface signature, freshness, and changed-this-cohort
+   ownership was consolidated in `FreshnessLedger`. Parallel `Passivbot` maps
+   and sets plus both unused generation counters were removed; pending
+   post-write confirmation obligations and immutable planning snapshots remain
+   separate because they represent distinct contracts.
 
 ## Decision rules for further work
 
@@ -92,6 +97,12 @@ Look for:
 Desired output: one owner for each readiness fact, a mapping of downstream
 consumers, and a deletion-first proposal. Do not implement until the
 account-wide versus scoped safety boundary is explicit.
+
+Current result: `FreshnessLedger` is the sole owner of per-surface freshness
+and change facts. Remaining candidates are the scalar
+`_authoritative_refresh_epoch` compatibility alias and the overlapping
+disappeared-self-order confirmation, symbol-block, and same-wave state-change
+representations. Audit their direct callers before further deletion.
 
 ### 2. Fill and realized-PnL reconstruction
 
@@ -149,6 +160,12 @@ Map every revision or epoch to:
 Delete any token which has no unique invalidation semantics. Keep the
 gatekeeper passive until its ownership boundary is narrower than the existing
 authoritative guards and its removal plan is known.
+
+Current result: the unused authoritative surface generations were deleted.
+Data-packet revisions remain diagnostics-only provenance, pending
+confirmations remain cross-wave execution obligations, and planning snapshots
+remain immutable handoff proofs; these are not interchangeable with freshness
+epochs.
 
 ### 5. Create/cancel safeguard pipeline
 

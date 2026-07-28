@@ -391,7 +391,9 @@ def log_staged_refresh_timings(
     routine_without_fills = {"balance", "open_orders", "positions"}
     plan_set = set(plan)
     unusual_plan = plan_set not in (full_plan, routine_without_fills)
-    epoch_changed = set(getattr(bot, "_authoritative_refresh_epoch_changed", set()) or set())
+    epoch_changed = set(
+        bot._ensure_freshness_ledger().changed_surfaces_at_epoch()
+    )
     meaningful_surfaces = epoch_changed - {"balance"}
     if pending_confirmations and plan_set == {"open_orders"} and wall_ms < 2_000:
         meaningful_surfaces -= {"open_orders"}

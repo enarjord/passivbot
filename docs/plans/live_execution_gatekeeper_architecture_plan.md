@@ -9,7 +9,7 @@ safe migration path for making live execution easier to inspect, test, and reaso
 
 The first implementation commitment is intentionally narrower than the full target architecture:
 build the event/data-packet spine and immutable per-cycle snapshot boundary first. Gatekeeper
-enforcement should remain conditional until the planning-availability contract is explicit and
+enforcement should remain conditional until the Rust planning-completeness contract is explicit and
 tested.
 
 ## Purpose
@@ -44,9 +44,9 @@ front-loaded:
 The key unresolved safety gap is downstream gatekeeper visibility. A gatekeeper can only evaluate
 actions Rust emitted. If stale or missing snapshot inputs cause Rust not to emit an order it would
 have emitted with fresh data, the gatekeeper cannot recover that missing action. The mitigation is
-not gatekeeping alone; it is an explicit planning-availability contract before enforcement.
+not gatekeeping alone; it is an explicit Rust planning-completeness contract before enforcement.
 
-This means the first useful plateau is Phases 1-2 plus a planning-availability audit surface. The
+This means the first useful plateau is Phases 1-2 plus a Rust planning-completeness audit surface. The
 full gatekeeper should be built only after that plateau is reviewed and the stale-input policy is
 settled.
 
@@ -741,7 +741,7 @@ in JSONL artifacts or DEBUG/TRACE.
 
 - Add this plan and review with external agents.
 - Record the agreed scope split: Phases 1-2 are green-lit as a behavior-preserving plateau;
-  gatekeeper enforcement is conditional on planning-availability work.
+  gatekeeper enforcement is conditional on Rust planning-completeness work.
 - Identify current call sites for snapshot building, Rust input building, reconciliation, gates, and
   executor writes.
 - Define initial `DataPacket`, `LiveSnapshot`, `PlannedAction`, and `GateDecision` types in tests
@@ -896,8 +896,9 @@ The smallest valuable slice:
 5. Add tests proving the current cycle uses frozen packet revisions.
 6. Emit minimal `planning_unavailable` events for account-critical or obviously stale non-account
    surfaces without changing execution.
-7. Add passive planning-availability reporting and diagnostic-isolation tests before any
-   gatekeeper enforcement work.
+7. Add Rust-origin planning-completeness reporting for decisions Rust actually evaluated, plus
+   diagnostic-isolation tests, before any gatekeeper enforcement work. Do not recreate a
+   Python-side Cartesian product of hypothetical symbol, side, and order-class decisions.
 
 This creates the diagnostic spine without changing order behavior. Gatekeeper enforcement should
-wait until the event, snapshot, and planning-availability boundaries are visible and testable.
+wait until the event, snapshot, and Rust planning-completeness boundaries are visible and testable.

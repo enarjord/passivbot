@@ -12,10 +12,9 @@ LIVE_STATE_SURFACES = ACCOUNT_SURFACES | frozenset({"completed_candles", "market
 class SurfaceState:
     name: str
     updated_ms: int = 0
-    epoch: int = 0
-    generation: int = 0
+    epoch: int = -1
     signature: Any = None
-    changed: bool = False
+    changed_epoch: int = -1
 
 
 @dataclass
@@ -58,20 +57,39 @@ class FreshnessLedger:
         state.signature = signature
         state.updated_ms = int(now_ms)
         state.epoch = int(self.epoch if epoch is None else epoch)
-        state.changed = changed
         if changed:
-            state.generation += 1
+            state.changed_epoch = state.epoch
         self._clear_satisfied_symbol_blocks()
         return changed
 
     def surface_epoch(self, surface: str) -> int:
-        return int(self.surfaces.get(surface, SurfaceState(surface)).epoch or 0)
+        return max(
+            0, int(self.surfaces.get(surface, SurfaceState(surface)).epoch)
+        )
 
     def surface_signature(self, surface: str) -> Any:
         return self.surfaces.get(surface, SurfaceState(surface)).signature
 
     def surface_updated_ms(self, surface: str) -> int:
         return int(self.surfaces.get(surface, SurfaceState(surface)).updated_ms or 0)
+
+    def surfaces_at_epoch(self, epoch: int | None = None) -> frozenset[str]:
+        """Return surfaces stamped in the requested refresh cohort."""
+        target_epoch = int(self.epoch if epoch is None else epoch)
+        return frozenset(
+            name
+            for name, state in self.surfaces.items()
+            if state.epoch == target_epoch
+        )
+
+    def changed_surfaces_at_epoch(self, epoch: int | None = None) -> frozenset[str]:
+        """Return surfaces whose signature changed in the requested refresh cohort."""
+        target_epoch = int(self.epoch if epoch is None else epoch)
+        return frozenset(
+            name
+            for name, state in self.surfaces.items()
+            if state.changed_epoch == target_epoch
+        )
 
     def surfaces_missing_after(self, surfaces: set[str] | frozenset[str], min_epoch: int) -> list[str]:
         return sorted(surface for surface in surfaces if self.surface_epoch(surface) < int(min_epoch))
