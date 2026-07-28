@@ -3588,6 +3588,32 @@ class TestEvaluator:
         ):
             SuiteEvaluator(base, [], {"default": "mean"})
 
+    def test_suite_limit_scenario_must_match_context_label(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "base",
+                "value": 0.5,
+            }
+        ]
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="optimizer limit.*selects scenario 'base'.*not present",
+        ):
+            SuiteEvaluator(base, [], {"default": "mean"})
+
     def test_suite_scoring_resolves_mixed_scenario_and_aggregate_bases(self):
         from optimize import Evaluator, SuiteEvaluator
         from config_utils import get_template_config

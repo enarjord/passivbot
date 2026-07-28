@@ -4,7 +4,7 @@ from copy import deepcopy
 from difflib import get_close_matches
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from config.limits import resolve_limit_stat
+from config.limits import resolve_limit_basis
 from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, METRIC_ALIASES, canonical_metric_name
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
@@ -180,15 +180,16 @@ def _build_single_bound_check(
     numeric_bound = _ensure_float(bound)
     if numeric_bound is None:
         return None
-    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{stat}"
+    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
+    metric_key = f"{metric}_{basis.stat}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "bound": numeric_bound,
         "penalty_weight": penalty_weight,
-        "stat": stat,
+        "stat": basis.stat,
+        "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }
 
@@ -210,14 +211,15 @@ def _build_range_check(
         return None
     if low > high:
         low, high = high, low
-    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{stat}"
+    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
+    metric_key = f"{metric}_{basis.stat}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "range": (low, high),
         "penalty_weight": penalty_weight,
-        "stat": stat,
+        "stat": basis.stat,
+        "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }

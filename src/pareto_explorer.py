@@ -15,7 +15,7 @@ from config.limits import (
     normalize_limit_entries,
     parse_limit_cli_entries,
     resolve_aggregate_mode,
-    resolve_limit_stat,
+    resolve_limit_basis,
 )
 from config.metrics import resolve_metric_value
 from config.scoring import (
@@ -859,6 +859,20 @@ def _resolve_limit_value(
     metric = str(entry.get("metric", "")).strip()
     if not metric:
         return None
+    basis = resolve_limit_basis(
+        dict(entry),
+        aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None,
+    )
+    if basis.scenario is not None:
+        scenario_values = _scenario_metric_values(
+            candidate.entry,
+            basis.scenario,
+            source=candidate.path,
+        )
+        value = resolve_metric_value(scenario_values, metric)
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return float(value)
+        return None
     if candidate.scenario is not None and "stat" in entry:
         requested_stat = str(entry.get("stat", "")).strip().lower()
         if requested_stat != "mean":
@@ -866,10 +880,7 @@ def _resolve_limit_value(
                 f"Scenario {candidate.scenario!r} stores one mean value per metric; "
                 f"limit stat={requested_stat!r} is unavailable for {candidate.path.name}."
             )
-    stat = resolve_limit_stat(
-        dict(entry),
-        aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None,
-    )
+    stat = basis.stat
     if "stat" not in entry:
         value = resolve_metric_value(candidate.aggregated_values, metric)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):

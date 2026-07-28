@@ -157,7 +157,7 @@ from opt_utils import make_json_serializable, generate_incremental_diff, round_f
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
-from typing import Sequence, Tuple, List, Dict, Any, Optional
+from typing import Sequence, Tuple, List, Dict, Any, Mapping, Optional
 from shared_arrays import SharedArrayManager, attach_shared_array
 from ohlcv_utils import align_and_aggregate_hlcvs
 from optimize_suite import (
@@ -1605,6 +1605,7 @@ class Evaluator:
         analyses_combined,
         *,
         limit_metrics=None,
+        scenario_limit_metrics: Mapping[str, Mapping[str, float]] | None = None,
         objective_values: Sequence[float] | None = None,
         return_raw_objectives: bool = False,
     ):
@@ -1617,12 +1618,33 @@ class Evaluator:
         per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
-            val = resolve_metric_value(limit_metrics, check["metric_key"])
+            scenario = check.get("scenario")
+            check_metrics = limit_metrics
+            if scenario is not None:
+                if scenario_limit_metrics is None:
+                    raise ValueError(
+                        f"scenario-specific optimizer limit on {check['metric']!r} "
+                        f"requires suite mode (scenario {scenario!r})"
+                    )
+                check_metrics = scenario_limit_metrics.get(scenario)
+                if check_metrics is None:
+                    available = ", ".join(sorted(scenario_limit_metrics)) or "<none>"
+                    raise ValueError(
+                        f"optimizer limit on {check['metric']!r} selects unknown scenario "
+                        f"{scenario!r}; available labels: {available}"
+                    )
+            val = resolve_metric_value(check_metrics, check["metric_key"])
             if val is None:
+                basis = (
+                    f"scenario {scenario!r}"
+                    if scenario is not None
+                    else f"suite stat {check['stat']!r}"
+                )
                 raise ValueError(
                     "missing optimizer limit metric "
-                    f"{check['metric_key']!r} for limit on {check['metric']!r}; "
-                    f"available metrics: {_format_available_metric_keys(limit_metrics)}"
+                    f"{check['metric_key']!r} for limit on {check['metric']!r} "
+                    f"from {basis}; "
+                    f"available metrics: {_format_available_metric_keys(check_metrics)}"
                 )
             penalty = compute_limit_violation(check, val)
             if not penalty:
@@ -1722,6 +1744,14 @@ class SuiteEvaluator:
                     f"available labels: {', '.join(labels)}"
                 )
         self.base.build_limit_checks(self.aggregate_cfg)
+        for check in self.base.limit_checks:
+            scenario = check.get("scenario")
+            if scenario is not None and scenario not in labels:
+                raise ValueError(
+                    f"optimizer limit on {check['metric']!r} selects scenario "
+                    f"{scenario!r}, which is not present in backtest.scenarios; "
+                    f"available labels: {', '.join(labels)}"
+                )
         # Cache for master dataset attachments (shared across scenarios)
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
         self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
@@ -2067,6 +2097,11 @@ class SuiteEvaluator:
         required_scenario_labels = {
             basis.scenario for basis in self.objective_bases if basis.scenario is not None
         }
+        required_scenario_labels.update(
+            check["scenario"]
+            for check in self.base.limit_checks
+            if check.get("scenario") is not None
+        )
         scenario_stats_by_label = {
             result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
             for result in scenario_results
@@ -2101,6 +2136,7 @@ class SuiteEvaluator:
         objectives, total_penalty = self.base.calc_fitness(
             flat_stats,
             limit_metrics=flat_stats,
+            scenario_limit_metrics=scenario_stats_by_label,
             objective_values=objective_values,
         )
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
@@ -2868,7 +2904,8 @@ async def main():
         help=(
             "Repeatable optimize limit override. Example: "
             "\"drawdown_worst > 0.35\" or "
-            "\"loss_profit_ratio outside_range [0.05,0.7]\""
+            "\"drawdown_worst_strategy_eq <= 0.5 scenario=base\". "
+            "Aggregate limits may use stat=min|max|mean|std|median."
         ),
     )
     optimize_common_group.add_argument(

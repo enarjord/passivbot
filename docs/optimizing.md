@@ -405,7 +405,8 @@ Key fields (directly under `backtest`):
 `optimize.objective_scenario` sets the default scoring basis. Set it to a unique scenario label
 (commonly `base`) to read objectives from that scenario by default, or leave it `null` to use suite
 aggregation by default. The equivalent global CLI override is `--objective-scenario LABEL`.
-`optimize.limits` always continue to use suite aggregation and each limit's `stat`.
+Each `optimize.limits` entry independently uses suite aggregation by default or may select one
+named scenario.
 
 Each object-form `optimize.scoring` entry may override the default:
 
@@ -442,6 +443,31 @@ exclusive. This permits representative base-period performance objectives alongs
 worst-case stress objectives while limits retain their independent suite-wide contract.
 Each metric may still appear only once in `optimize.scoring`; scoring the same metric from multiple
 bases is not supported in this first version.
+
+Limits may combine a scenario-specific threshold with a separate suite-wide threshold for the same
+metric:
+
+```json
+"limits": [
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "scenario": "base",
+    "value": 0.5
+  },
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "stat": "max",
+    "value": 0.7
+  }
+]
+```
+
+The first limit reads only `base`; the second reads the maximum across scenarios. Their violations
+are evaluated independently and their penalties accumulate. A named `scenario` and `stat` are
+mutually exclusive. An omitted or null `scenario` uses suite aggregation; with no explicit `stat`,
+the limit falls back through the metric-specific and default `backtest.aggregate` rules.
 
 Suite mode is opt-in. The default schema/example config does not enable it automatically.
 
@@ -584,7 +610,10 @@ objects. Each object describes when to penalize a result:
   to keep a metric within `[low, high]`, or `inside_range` to forbid a band.
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
-- Optional `stat`: override the statistic to compare against (`min`, `max`, `mean`, `std`).
+- Optional `scenario`: select one named suite scenario. Omitted or explicit `null` uses suite
+  aggregation. Named scenarios cannot be combined with `stat`.
+- Optional `stat`: for suite aggregation, override the statistic to compare against (`min`, `max`,
+  `mean`, `std`, or `median`).
   Without `stat`, Passivbot resolves the metric through `backtest.aggregate`: first a
   metric-specific aggregate rule, then `backtest.aggregate.default`, then `mean`.
 
@@ -592,7 +621,18 @@ Example:
 
 ```json
 "limits": [
-  {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "scenario": "base",
+    "value": 0.5
+  },
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "stat": "max",
+    "value": 0.7
+  },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
   {"metric": "adg", "penalize_if": "<", "value": 0.0008, "stat": "mean"}
 ]
@@ -613,6 +653,7 @@ in `--limit` are written as keep conditions, matching `pareto_store.py` filterin
 passivbot optimize \
   --clear-limits \
   --limit 'drawdown_worst <= 0.35' \
+  --limit 'drawdown_worst_strategy_eq <= 0.5 scenario=base' \
   --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
   --limit 'adg > 0.0008 stat=mean'

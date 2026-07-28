@@ -385,7 +385,7 @@ def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
 
 def _looks_like_stat_column(name: str) -> bool:
     lowered = name.lower()
-    return lowered.endswith(("_mean", "_min", "_max", "_std"))
+    return lowered.endswith(("_mean", "_min", "_max", "_std", "_median"))
 
 
 def _limits_to_exprs(limits_cfg: Any) -> List[str]:
@@ -402,6 +402,11 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
         mode = entry.get("penalize_if")
         if not metric or not mode:
             continue
+        scenario = entry.get("scenario")
+        if scenario is not None:
+            metric = f"{scenario}__{metric}"
+        elif entry.get("stat") is not None:
+            metric = f"{metric}_{entry['stat']}"
         if mode == "greater_than":
             num = _ensure_float(entry.get("value"))
             if num is not None:

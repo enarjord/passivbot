@@ -513,6 +513,21 @@ def test_scenario_limit_uses_scalar_and_rejects_non_mean_stat(
         )
 
 
+def test_limit_entry_can_select_scenario_without_projecting_candidates(
+    scenario_pareto_dir: Path,
+):
+    _pareto_dir, candidates, _specs = load_candidates(scenario_pareto_dir)
+
+    filtered, limits = filter_candidates(
+        candidates,
+        limits_payload=None,
+        limit_entries=["metric_a>0.75 scenario=bull"],
+    )
+
+    assert [candidate.path.stem for candidate in filtered] == ["a", "b"]
+    assert limits[0]["scenario"] == "bull"
+
+
 def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
     scenario_pareto_dir: Path,
     capsys,

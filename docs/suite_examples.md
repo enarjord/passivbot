@@ -207,6 +207,32 @@ aggregation, and optionally set an objective-only `aggregate` reducer. For examp
 
 Here ADG uses `base`, while underwater percentage uses the configured suite aggregate.
 
+Limits choose their basis independently. This example applies a tighter drawdown threshold to the
+base scenario and a looser worst-scenario threshold across the whole suite:
+
+```json
+{
+  "optimize": {
+    "limits": [
+      {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "scenario": "base",
+        "value": 0.5
+      },
+      {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "stat": "max",
+        "value": 0.7
+      }
+    ]
+  }
+}
+```
+
+The two limits are independent and both penalties apply when both thresholds are exceeded.
+
 ## Recommended Workflow
 
 1. Start with a single backtest or optimize run.

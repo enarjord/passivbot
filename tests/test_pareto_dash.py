@@ -76,3 +76,24 @@ def test_load_history_dataframe_emits_iterations(tmp_path):
     assert "objective.w_0" in df.columns
     assert not df.empty
     assert np.isclose(df["adg"].iloc[0], 0.1)
+
+
+def test_default_limit_expressions_target_scenario_columns():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "metric": "adg",
+                "penalize_if": "less_than",
+                "scenario": "base",
+                "value": 0.08,
+            },
+            {
+                "metric": "adg",
+                "penalize_if": "less_than",
+                "stat": "min",
+                "value": 0.05,
+            },
+        ]
+    )
+
+    assert expressions == ["base__adg_usd>=0.08", "adg_usd_min>=0.05"]

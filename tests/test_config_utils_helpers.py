@@ -682,6 +682,78 @@ def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries(
     assert normalized[1]["enabled"] is False
 
 
+def test_normalize_limit_entries_supports_scenario_specific_limits():
+    raw = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": " base ",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+
+    assert config_utils.normalize_limit_entries(raw) == [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "match"),
+    [
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "base",
+                "stat": "max",
+                "value": 0.5,
+            },
+            "cannot set both a named scenario and stat",
+        ),
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "",
+                "value": 0.5,
+            },
+            "non-empty scenario label",
+        ),
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": 123,
+                "value": 0.5,
+            },
+            "scenario label string or null",
+        ),
+    ],
+)
+def test_normalize_limit_entries_rejects_invalid_scenario_basis(entry, match):
+    with pytest.raises(ValueError, match=match):
+        config_utils.normalize_limit_entries([entry])
+
+
 def test_load_config_preserves_canonical_optimize_limits(tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
@@ -791,6 +863,19 @@ def test_parse_limit_cli_entry_supports_range_and_extras():
         "range": [0.05, 0.7],
         "stat": "mean",
         "enabled": False,
+    }
+
+
+def test_parse_limit_cli_entry_supports_scenario_selector():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq > 0.5 scenario=base"
+    )
+
+    assert entry == {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "less_than_or_equal",
+        "value": 0.5,
+        "scenario": "base",
     }
 
 
