@@ -85,6 +85,25 @@ def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
     )
 
 
+@pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0, 2_000.0])
+def test_rust_ema_last_matches_python_reference(span):
+    import passivbot_rust as pbr
+
+    values = np.asarray(
+        [float("nan"), 1.0, 2.0, float("nan"), -3.0, 8.0, 13.0],
+        dtype=np.float64,
+    )
+    alpha = 2.0 / (span + 1.0)
+    expected = 1.0
+    for value in [2.0, -3.0, 8.0, 13.0]:
+        expected = alpha * value + (1.0 - alpha) * expected
+    assert pbr.ema_last(values, span) == pytest.approx(
+        expected,
+        rel=0.0,
+        abs=1e-15,
+    )
+
+
 @pytest.mark.asyncio
 async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
     class _Ex:

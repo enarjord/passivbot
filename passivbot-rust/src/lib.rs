@@ -70,6 +70,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_backtest_bundle, m)?)?;
     m.add_function(wrap_pyfunction!(calc_auto_unstuck_allowance, m)?)?;
     m.add_function(wrap_pyfunction!(hysteresis, m)?)?;
+    m.add_function(wrap_pyfunction!(ema_last_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_min_entry_qty_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pprice_diff_int, m)?)?;
     m.add_function(wrap_pyfunction!(calc_pside_price_diff_int, m)?)?;

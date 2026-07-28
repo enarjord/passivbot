@@ -62,6 +62,13 @@ from datetime import datetime, timezone
 import numpy as np
 import portalocker  # type: ignore
 
+try:
+    import passivbot_rust as pbr
+except ImportError:  # pragma: no cover - editable source-only tooling fallback
+    pbr = None
+
+_RUST_EMA_LAST = getattr(pbr, "ema_last", None) if pbr is not None else None
+
 from legacy_data_migrator import (
     standardize_cache_directories,
     migrate_legacy_data_all_on_init,
@@ -8237,6 +8244,9 @@ class CandlestickManager:
 
     def _ema(self, values: np.ndarray, span: float) -> float:
         """Return the final bias-corrected EMA without allocating a full series."""
+        if _RUST_EMA_LAST is not None:
+            contiguous = np.ascontiguousarray(values, dtype=np.float64)
+            return float(_RUST_EMA_LAST(contiguous, float(span)))
         n = int(values.shape[0])
         if n == 0:
             return float("nan")
