@@ -820,7 +820,9 @@ class CandlestickManager:
 
         self._cache: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
-        self._index_mtime: Dict[str, Optional[float]] = {}
+        self._index_mtime: Dict[
+            str, Optional[Tuple[int, int, int]]
+        ] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
         # Compatibility attribute retained for older monitor/tool code.  The
@@ -835,13 +837,7 @@ class CandlestickManager:
         self._projected_open_tail_ema_cache: Dict[
             str,
             OrderedDict[
-                Tuple[
-                    int,
-                    int,
-                    int,
-                    int,
-                    Tuple[Tuple[str, Tuple[float, ...]], ...],
-                ],
+                Tuple[Any, ...],
                 Dict[str, Dict[float, float]],
             ],
         ] = {}
@@ -1793,7 +1789,12 @@ class CandlestickManager:
         existing = self._index.get(key)
         cached_mtime = self._index_mtime.get(key)
         try:
-            current_mtime = os.path.getmtime(idx_path)
+            stat = os.stat(idx_path)
+            current_mtime = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+                int(stat.st_ino),
+            )
         except FileNotFoundError:
             current_mtime = None
         except Exception:
@@ -1947,7 +1948,12 @@ class CandlestickManager:
         with portalocker.Lock(lock_path, timeout=5):
             self._atomic_write_bytes(idx_path, payload)
         try:
-            self._index_mtime[key] = os.path.getmtime(idx_path)
+            stat = os.stat(idx_path)
+            self._index_mtime[key] = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+                int(stat.st_ino),
+            )
         except Exception:
             self._index_mtime[key] = None
 
@@ -8374,6 +8380,62 @@ class CandlestickManager:
             )
         raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
 
+    def _projection_shared_content_signature(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: str,
+    ) -> Tuple[Any, ...]:
+        """Return content-bearing shared-cache state for a projection window.
+
+        The index is reloaded when another process atomically replaces it.
+        Shard checksums and gap coverage affect projection inputs; refresh and
+        retry timestamps intentionally do not.
+        """
+        idx = self._ensure_symbol_index(symbol, timeframe=timeframe)
+        shards = idx.get("shards", {})
+        shard_state: List[Tuple[Any, ...]] = []
+        if isinstance(shards, dict):
+            for date_key in self._date_keys_between(start_ts, end_ts):
+                shard = shards.get(date_key)
+                if not isinstance(shard, dict):
+                    continue
+                shard_state.append(
+                    (
+                        str(date_key),
+                        shard.get("min_ts"),
+                        shard.get("max_ts"),
+                        shard.get("count"),
+                        shard.get("crc32"),
+                    )
+                )
+
+        gap_state: List[Tuple[int, int, str]] = []
+        known_gaps = idx.get("meta", {}).get("known_gaps", [])
+        if isinstance(known_gaps, list):
+            for gap in known_gaps:
+                try:
+                    if isinstance(gap, dict):
+                        gap_start = int(gap.get("start_ts", 0))
+                        gap_end = int(gap.get("end_ts", 0))
+                        reason = str(gap.get("reason", GAP_REASON_AUTO))
+                    elif isinstance(gap, (list, tuple)) and len(gap) >= 2:
+                        gap_start = int(gap[0])
+                        gap_end = int(gap[1])
+                        reason = GAP_REASON_AUTO
+                    else:
+                        continue
+                except Exception:
+                    continue
+                clipped_start = max(int(start_ts), gap_start)
+                clipped_end = min(int(end_ts), gap_end)
+                if clipped_start <= clipped_end:
+                    gap_state.append((clipped_start, clipped_end, reason))
+
+        return (tuple(shard_state), tuple(sorted(gap_state)))
+
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,
@@ -8417,10 +8479,17 @@ class CandlestickManager:
             int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
             last_cached,
         )
+        shared_content_signature = self._projection_shared_content_signature(
+            symbol,
+            start_ts,
+            latest_expected,
+            timeframe=timeframe,
+        )
         cache_key = (
             int(latest_expected),
             int(last_cached),
             int(max_tail_gap),
+            shared_content_signature,
             tuple(
                 (metric_key, tuple(float(span) for span in spans))
                 for metric_key, spans in sorted(normalized.items())

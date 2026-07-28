@@ -17742,24 +17742,23 @@ class Passivbot:
                 "forager_m1_log_range": "log_range",
             }.get(ema_type)
             batched_values: Optional[dict[float, float]] = None
-            batched_error: Optional[Exception] = None
             try:
                 batched_values = await fetch_batched_ema_values(
                     symbol, spans, ema_type
                 )
-            except Exception as exc:
-                batched_error = exc
+            except Exception:
+                # A widest-window batch failure does not prove that each
+                # narrower span is unavailable. Retry spans independently
+                # before considering bounded cached fallback.
+                batched_values = None
             cached_fallbacks: dict[float, float] = {}
-            if metric_key is not None and (
-                batched_error is not None or batched_values is not None
-            ):
+            if metric_key is not None and batched_values is not None:
                 fallback_spans = [
                     float(span)
                     for span in spans
-                    if batched_error is not None
-                    or float(span) not in (batched_values or {})
+                    if float(span) not in batched_values
                     or not math.isfinite(
-                        float((batched_values or {}).get(float(span), float("nan")))
+                        float(batched_values.get(float(span), float("nan")))
                     )
                 ]
                 cached_fallbacks = await fetch_cached_forager_metrics(
@@ -17769,8 +17768,6 @@ class Passivbot:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
-                    if batched_error is not None:
-                        raise batched_error
                     val = float(
                         batched_values[span]
                         if batched_values is not None
@@ -17782,7 +17779,6 @@ class Passivbot:
                         if (
                             fallback is None
                             and batched_values is None
-                            and batched_error is None
                         ):
                             fallback = await fetch_cached_forager_metric(
                                 symbol, span, metric_key
@@ -17802,7 +17798,6 @@ class Passivbot:
                         if (
                             fallback is None
                             and batched_values is None
-                            and batched_error is None
                         ):
                             fallback = await fetch_cached_forager_metric(
                                 symbol, span, metric_key
@@ -17835,24 +17830,22 @@ class Passivbot:
                 metric_key = "log_range"
                 metric_timeframe = "1h"
             batched_values: Optional[dict[float, float]] = None
-            batched_error: Optional[Exception] = None
             try:
                 batched_values = await fetch_batched_ema_values(
                     symbol, spans, ema_type
                 )
-            except Exception as exc:
-                batched_error = exc
+            except Exception:
+                # Retry each span through the primary reader. A failed batch
+                # may only mean its widest window was incomplete.
+                batched_values = None
             cached_fallbacks: dict[float, float] = {}
-            if metric_key is not None and (
-                batched_error is not None or batched_values is not None
-            ):
+            if metric_key is not None and batched_values is not None:
                 fallback_spans = [
                     float(span)
                     for span in spans
-                    if batched_error is not None
-                    or float(span) not in (batched_values or {})
+                    if float(span) not in batched_values
                     or not math.isfinite(
-                        float((batched_values or {}).get(float(span), float("nan")))
+                        float(batched_values.get(float(span), float("nan")))
                     )
                 ]
                 cached_fallbacks = await fetch_cached_forager_metrics(
@@ -17866,8 +17859,6 @@ class Passivbot:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
                 try:
-                    if batched_error is not None:
-                        raise batched_error
                     val = float(
                         batched_values[span]
                         if batched_values is not None
@@ -17885,7 +17876,6 @@ class Passivbot:
                     if (
                         fallback is None
                         and batched_values is None
-                        and batched_error is None
                     ):
                         fallback = await fetch_cached_forager_metric(
                             symbol,
@@ -18014,21 +18004,20 @@ class Passivbot:
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
             primary_missing: list[tuple[float, str]] = []
             batched_values: Optional[dict[float, float]] = None
-            batched_error: Optional[Exception] = None
             try:
                 batched_values = await fetch_batched_ema_values(
                     symbol, spans, "m1_close"
                 )
-            except Exception as exc:
-                batched_error = exc
+            except Exception:
+                # Preserve usable shorter spans when the combined request's
+                # widest window cannot be loaded.
+                batched_values = None
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, "close_ema")
                 span = float(sp)
                 key = (symbol, span)
                 reason = None
                 try:
-                    if batched_error is not None:
-                        raise batched_error
                     val = float(
                         batched_values[span]
                         if batched_values is not None

@@ -204,9 +204,11 @@
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
     result keyed by the cached-tail timestamp, requested spans, and projection
-    horizon. Persistence invalidates it only when candle content, synthetic
-    provenance, or known-gap coverage changes; metadata-only refresh writes do
-    not force a full recomputation.
+    horizon. The key also includes the content-bearing shard and known-gap state
+    for the requested window, so another process writing the shared cache
+    invalidates stale projections. Candle content, synthetic provenance, or
+    known-gap coverage changes invalidate local entries; metadata-only refresh
+    writes do not force a full recomputation.
     Compatible current and bounded cache-only EMA spans share one candle-window
     load per metric policy. Complete windows use a vectorized continuity check
     instead of rebuilding every unchanged real row in Python.
