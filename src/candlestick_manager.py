@@ -8693,9 +8693,7 @@ class CandlestickManager:
             allow_remote_fetch=False,
             allow_provisional_internal_gaps=False,
         )
-        if raw.size == 0 or not candle_range_has_full_coverage(
-            raw, start_ts, int(last_cached), timeframe=timeframe
-        ):
+        if raw.size == 0:
             return {}
 
         out: Dict[str, Dict[float, float]] = {
@@ -8708,7 +8706,12 @@ class CandlestickManager:
                 tail = self._slice_ts_range(
                     raw, metric_start_ts, int(last_cached), assume_sorted=True
                 )
-                if tail.size == 0:
+                if tail.size == 0 or not candle_range_has_full_coverage(
+                    tail,
+                    metric_start_ts,
+                    int(last_cached),
+                    timeframe=timeframe,
+                ):
                     continue
                 series = self._ema_metric_series(metric_key, tail)
                 if series.shape[0] == 0:

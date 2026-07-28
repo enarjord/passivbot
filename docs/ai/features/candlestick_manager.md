@@ -210,8 +210,10 @@
     known-gap coverage changes invalidate local entries; metadata-only refresh
     writes do not force a full recomputation.
     Compatible current and bounded cache-only EMA spans share one candle-window
-    load per metric policy. Complete windows use a vectorized continuity check
-    instead of rebuilding every unchanged real row in Python.
+    load per metric policy. Cache-only coverage is validated independently per
+    span, preserving complete shorter spans when a longer requested window is
+    incomplete. Complete windows use a vectorized continuity check instead of
+    rebuilding every unchanged real row in Python.
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
     every intermediate value. Live provisional internal-gap tolerance is separate from the

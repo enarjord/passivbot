@@ -7,13 +7,14 @@ All notable user-facing changes will be documented in this file.
 - Live EMA preparation now batches compatible spans per symbol and metric family, including bounded
   cache-only fallbacks for stale forager candidates, and complete candle windows bypass redundant
   Python gap reconstruction. A failed combined read retries each span through its primary reader
-  before using bounded fallback, preserving shorter complete EMA windows. Metadata-only candle
-  refreshes no longer invalidate otherwise identical open-tail projections, while candle-content
-  and known-gap changes written by another bot process invalidate the affected cached projection.
-  This removes repeated candle-window loads and projection recomputation. The final scalar EMA
-  recurrence now runs in the Rust extension with the same sequential floating-point and
-  non-finite-sample semantics, without changing completed-candle freshness, gap handling, or EMA
-  math.
+  before using bounded fallback, preserving shorter complete EMA windows. Batched cache-only
+  fallbacks likewise validate coverage per span so a missing long-window prefix does not discard a
+  complete shorter fallback. Metadata-only candle refreshes no longer invalidate otherwise
+  identical open-tail projections, while candle-content and known-gap changes written by another
+  bot process invalidate the affected cached projection. This removes repeated candle-window loads
+  and projection recomputation. The final scalar EMA recurrence now runs in the Rust extension with
+  the same sequential floating-point and non-finite-sample semantics, without changing
+  completed-candle freshness, gap handling, or EMA math.
 - KuCoin aggregate position-cycle PnL reconciliation is now idempotent across overlapping fill
   refreshes: a pending trade row no longer discards an already reconciled authoritative value, while
   a genuinely revised position-history total still updates the affected lifecycle.

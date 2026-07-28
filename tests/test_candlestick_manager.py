@@ -231,6 +231,65 @@ async def test_latest_cached_ema_metric_spans_loads_one_window_for_all_spans(
 
 
 @pytest.mark.asyncio
+async def test_latest_cached_ema_metric_spans_preserves_complete_shorter_window(
+    tmp_path,
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MIXED/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (
+                minute * ONE_MIN_MS,
+                100.0 + minute,
+                102.0 + minute,
+                99.0 + minute,
+                101.0 + minute,
+                2.0 + minute,
+            )
+            for minute in range(5, 10)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        candles,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    original_get_candles = cm.get_candles
+    calls = 0
+
+    async def counted_get_candles(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original_get_candles(*args, **kwargs)
+
+    cm.get_candles = counted_get_candles
+    out = await cm.get_latest_cached_ema_metric_spans(
+        symbol,
+        {"qv": [3.0, 8.0], "log_range": [3.0, 8.0]},
+        max_staleness_ms=0,
+        window_candles=8,
+    )
+
+    assert calls == 1
+    assert set(out["qv"]) == {3.0}
+    assert set(out["log_range"]) == {3.0}
+    assert all(
+        math.isfinite(value)
+        for metric_values in out.values()
+        for value in metric_values.values()
+    )
+
+
+@pytest.mark.asyncio
 async def test_latest_cached_h1_ema_metrics_use_h1_index(tmp_path):
     class _Ex:
         id = "weex"
