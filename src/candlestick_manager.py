@@ -5646,6 +5646,24 @@ class CandlestickManager:
                 self._log_strict_gaps_summary()
             return a[i0:i1]
 
+        # Complete ranges are overwhelmingly the common live path.  Avoid
+        # rebuilding every real candle through Python tuples when there is
+        # nothing to synthesize.  Keep returning a new array as documented.
+        i0 = int(np.searchsorted(ts_arr, effective_lo, side="left"))
+        i1 = int(np.searchsorted(ts_arr, effective_hi, side="right"))
+        expected_len = int((effective_hi - effective_lo) // ONE_MIN_MS) + 1
+        complete = a[i0:i1]
+        if (
+            complete.shape[0] == expected_len
+            and int(complete[0]["ts"]) == effective_lo
+            and int(complete[-1]["ts"]) == effective_hi
+            and (
+                expected_len == 1
+                or np.all(np.diff(_ts_index(complete)) == ONE_MIN_MS)
+            )
+        ):
+            return complete.copy()
+
         expected = np.arange(
             effective_lo,
             effective_hi + ONE_MIN_MS,
@@ -8539,6 +8557,35 @@ class CandlestickManager:
         forward qv/log-range EMAs through a bounded unknown stale tail. It never
         fetches remote candles and never appends synthetic tail rows.
         """
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        nested = await self.get_latest_cached_ema_metric_spans(
+            symbol,
+            normalized,
+            max_staleness_ms=max_staleness_ms,
+            window_candles=window_candles,
+            timeframe=timeframe,
+        )
+        # Preserve the legacy one-value-per-metric API.  Callers historically
+        # supplied one span for each metric; if several are supplied, the
+        # largest normalized span retains the prior overwrite behavior.
+        out: Dict[str, float] = {}
+        for metric_key, spans in normalized.items():
+            metric_values = nested.get(metric_key, {})
+            for span in spans:
+                if span in metric_values:
+                    out[str(metric_key)] = float(metric_values[span])
+        return out
+
+    async def get_latest_cached_ema_metric_spans(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+        timeframe: str = "1m",
+    ) -> Dict[str, Dict[float, float]]:
+        """Return cache-only EMA values for multiple metrics and spans in one load."""
         period_ms = _tf_to_ms(timeframe)
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
@@ -8582,7 +8629,9 @@ class CandlestickManager:
         ):
             return {}
 
-        out: Dict[str, float] = {}
+        out: Dict[str, Dict[float, float]] = {
+            metric_key: {} for metric_key in normalized
+        }
         for metric_key, spans in normalized.items():
             for span in spans:
                 span_candles = max(1, int(math.ceil(span)))
@@ -8590,16 +8639,6 @@ class CandlestickManager:
                 tail = self._slice_ts_range(
                     raw, metric_start_ts, int(last_cached), assume_sorted=True
                 )
-                if period_ms == ONE_MIN_MS:
-                    tail = self.standardize_gaps(
-                        tail,
-                        start_ts=metric_start_ts,
-                        end_ts=int(last_cached),
-                        strict=False,
-                        fill_trailing_gaps=False,
-                        assume_sorted=True,
-                        symbol=symbol,
-                    )
                 if tail.size == 0:
                     continue
                 series = self._ema_metric_series(metric_key, tail)
@@ -8607,7 +8646,7 @@ class CandlestickManager:
                     continue
                 val = float(self._ema(series, span))
                 if math.isfinite(val):
-                    out[str(metric_key)] = val
+                    out[str(metric_key)][float(span)] = val
         return out
 
     async def _latest_finalized_range(

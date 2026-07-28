@@ -172,6 +172,65 @@ async def test_latest_cached_ema_metrics_carries_values_without_tail_zeroing(tmp
 
 
 @pytest.mark.asyncio
+async def test_latest_cached_ema_metric_spans_loads_one_window_for_all_spans(
+    tmp_path,
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "BATCHED/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (
+                minute * ONE_MIN_MS,
+                100.0 + minute,
+                102.0 + minute,
+                99.0 + minute,
+                101.0 + minute,
+                2.0 + minute,
+            )
+            for minute in range(5, 10)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        candles,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    original_get_candles = cm.get_candles
+    calls = 0
+
+    async def counted_get_candles(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original_get_candles(*args, **kwargs)
+
+    cm.get_candles = counted_get_candles
+    out = await cm.get_latest_cached_ema_metric_spans(
+        symbol,
+        {"qv": [2.0, 4.0], "log_range": [2.0, 4.0]},
+        max_staleness_ms=0,
+    )
+
+    assert calls == 1
+    assert set(out) == {"qv", "log_range"}
+    assert set(out["qv"]) == {2.0, 4.0}
+    assert set(out["log_range"]) == {2.0, 4.0}
+    assert all(
+        math.isfinite(value)
+        for metric_values in out.values()
+        for value in metric_values.values()
+    )
+
+
+@pytest.mark.asyncio
 async def test_latest_cached_h1_ema_metrics_use_h1_index(tmp_path):
     class _Ex:
         id = "weex"
@@ -281,6 +340,31 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     # synthesized middle candle should have bv == 0 and c equal to previous close (102.0)
     assert float(res[1]["bv"]) == 0.0
     assert math.isclose(float(res[1]["c"]), 102.0, rel_tol=1e-6)
+
+
+def test_standardize_gaps_complete_range_returns_equal_independent_copy(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    candles = np.array(
+        [
+            (minute * ONE_MIN_MS, 100.0, 101.0, 99.0, 100.5, 2.0)
+            for minute in range(5)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    out = cm.standardize_gaps(
+        candles,
+        start_ts=0,
+        end_ts=4 * ONE_MIN_MS,
+        assume_sorted=True,
+    )
+
+    assert np.array_equal(out, candles)
+    assert not np.shares_memory(out, candles)
 
 
 def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
