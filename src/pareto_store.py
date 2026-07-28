@@ -196,8 +196,16 @@ class ParetoStore:
         self._bootstrap_from_disk()
 
     @staticmethod
-    def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[str, str], ...]:
-        return tuple((spec.metric, spec.goal) for spec in specs)
+    def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[Any, ...], ...]:
+        return tuple(
+            (
+                spec.metric,
+                spec.goal,
+                spec.to_config().get("scenario", "<inherit>"),
+                spec.aggregate,
+            )
+            for spec in specs
+        )
 
     def _apply_entry_scoring_specs(self, entry: dict) -> None:
         entry_specs = extract_objective_specs(entry)

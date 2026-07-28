@@ -1423,8 +1423,8 @@ RESERVED_CLI_ARGS = {
         "commands": {"optimize"},
         "group": {"optimize": "Optimizer"},
         "help": (
-            "Use one suite scenario for scoring objectives while keeping optimize.limits "
-            "evaluated against suite aggregates."
+            "Default suite scenario for scoring objectives. Per-objective scenario selectors "
+            "may override it; optimize.limits remain suite-aggregated."
         ),
     },
     "optimize.population_size": {

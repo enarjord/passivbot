@@ -1,5 +1,12 @@
+import pytest
+
 from config.metrics import canonicalize_metric_name, resolve_metric_value
-from config.scoring import default_objective_goal, normalize_scoring_entries
+from config.scoring import (
+    ScenarioSelection,
+    default_objective_goal,
+    normalize_scoring_entries,
+    resolve_objective_basis,
+)
 
 
 def test_default_objective_goal_recognizes_new_ratio_metrics():
@@ -94,3 +101,145 @@ def test_strategy_eq_recovery_max_resolves_legacy_peak_metric_value():
 
     assert resolve_metric_value(metrics, "strategy_eq_recovery_days_max") == 12.5
     assert resolve_metric_value(metrics, "strategy_eq_recovery_days_max_mean") == 9.0
+
+
+def test_scoring_basis_preserves_inherit_named_and_explicit_aggregate_scenarios():
+    specs, _ = normalize_scoring_entries(
+        [
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {
+                "metric": "strategy_eq_underwater_pct_mean",
+                "goal": "min",
+                "scenario": " stress ",
+            },
+            {
+                "metric": "strategy_eq_recovery_days_max",
+                "goal": "min",
+                "scenario": None,
+                "aggregate": " MAX ",
+            },
+        ]
+    )
+
+    assert specs[0].scenario is ScenarioSelection.INHERIT
+    assert specs[0].to_config() == {
+        "metric": "adg_strategy_eq",
+        "goal": "max",
+    }
+    assert specs[1].to_config() == {
+        "metric": "strategy_eq_underwater_pct_mean",
+        "goal": "min",
+        "scenario": "stress",
+    }
+    assert specs[2].to_config() == {
+        "metric": "strategy_eq_recovery_days_max",
+        "goal": "min",
+        "scenario": None,
+        "aggregate": "max",
+    }
+
+
+def test_scoring_basis_resolves_omitted_and_null_scenario_in_both_default_directions():
+    aggregate_cfg = {
+        "default": "mean",
+        "strategy_eq_recovery_days_max": "max",
+    }
+    specs, _ = normalize_scoring_entries(
+        [
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {
+                "metric": "strategy_eq_underwater_pct_mean",
+                "goal": "min",
+                "scenario": None,
+            },
+            {
+                "metric": "strategy_eq_recovery_days_max",
+                "goal": "min",
+                "scenario": None,
+            },
+            {
+                "metric": "position_held_days_max",
+                "goal": "min",
+                "scenario": "stress",
+            },
+        ]
+    )
+
+    assert resolve_objective_basis(
+        specs[0],
+        default_scenario="base",
+        aggregate_cfg=aggregate_cfg,
+    ).scenario == "base"
+    underwater_basis = resolve_objective_basis(
+        specs[1],
+        default_scenario="base",
+        aggregate_cfg=aggregate_cfg,
+    )
+    assert underwater_basis.scenario is None
+    assert underwater_basis.aggregate == "mean"
+    recovery_basis = resolve_objective_basis(
+        specs[2],
+        default_scenario="base",
+        aggregate_cfg=aggregate_cfg,
+    )
+    assert recovery_basis.scenario is None
+    assert recovery_basis.aggregate == "max"
+
+    inherited_aggregate = resolve_objective_basis(
+        specs[0],
+        default_scenario=None,
+        aggregate_cfg=aggregate_cfg,
+    )
+    assert inherited_aggregate.scenario is None
+    assert inherited_aggregate.aggregate == "mean"
+    named_override = resolve_objective_basis(
+        specs[3],
+        default_scenario=None,
+        aggregate_cfg=aggregate_cfg,
+    )
+    assert named_override.scenario == "stress"
+    assert named_override.aggregate is None
+
+
+@pytest.mark.parametrize(
+    ("entry", "match"),
+    [
+        (
+            {"metric": "adg_strategy_eq", "goal": "max", "stat": "mean"},
+            "unknown field",
+        ),
+        (
+            {
+                "metric": "adg_strategy_eq",
+                "goal": "max",
+                "scenario": "base",
+                "aggregate": "mean",
+            },
+            "cannot set both",
+        ),
+        (
+            {"metric": "adg_strategy_eq", "goal": "max", "scenario": ""},
+            "non-empty scenario",
+        ),
+        (
+            {"metric": "adg_strategy_eq", "goal": "max", "aggregate": "p95"},
+            "must be one of",
+        ),
+    ],
+)
+def test_scoring_basis_rejects_ambiguous_or_unknown_fields(entry, match):
+    with pytest.raises(ValueError, match=match):
+        normalize_scoring_entries([entry])
+
+
+def test_scoring_aggregate_override_requires_effective_aggregate_scenario():
+    specs, _ = normalize_scoring_entries(
+        [{"metric": "adg_strategy_eq", "goal": "max", "aggregate": "max"}]
+    )
+
+    with pytest.raises(ValueError, match="set scenario to null"):
+        resolve_objective_basis(
+            specs[0],
+            default_scenario="base",
+            aggregate_cfg={"default": "mean"},
+        )
