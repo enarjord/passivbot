@@ -184,6 +184,19 @@ def test_pareto_store_rejects_scored_entry_after_unscored_front(tmp_path):
         store.add_entry(_make_adg_candidate(2.0, include_scoring=True))
 
 
+def test_pareto_store_rejects_scoring_basis_mismatch(tmp_path):
+    first = _make_adg_candidate(1.0)
+    first["optimize"]["scoring"][0]["scenario"] = "base"
+    second = _make_adg_candidate(2.0)
+    second["optimize"]["scoring"][0]["scenario"] = None
+    second["optimize"]["scoring"][0]["aggregate"] = "mean"
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    assert store.add_entry(first)
+    with pytest.raises(ValueError, match="optimize.scoring differs"):
+        store.add_entry(second)
+
+
 def test_pareto_store_rejects_missing_objective_values(tmp_path):
     entry = {
         "metrics": {

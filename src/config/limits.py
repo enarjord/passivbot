@@ -10,7 +10,8 @@ import hjson
 from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name
 
 
-SUPPORTED_LIMIT_STATS = {"min", "max", "mean", "std", "median"}
+SUPPORTED_AGGREGATE_MODES = {"min", "max", "mean", "std", "median"}
+SUPPORTED_LIMIT_STATS = SUPPORTED_AGGREGATE_MODES
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:

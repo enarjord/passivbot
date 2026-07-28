@@ -89,6 +89,7 @@ from config.scoring import (
     extract_objective_specs,
     objective_index_map,
     objective_metric_names,
+    resolve_objective_basis,
     to_engine_value,
 )
 from config.parse import load_raw_config as load_hjson_config
@@ -1604,9 +1605,15 @@ class Evaluator:
         analyses_combined,
         *,
         limit_metrics=None,
+        objective_values: Sequence[float] | None = None,
         return_raw_objectives: bool = False,
     ):
         limit_metrics = analyses_combined if limit_metrics is None else limit_metrics
+        if objective_values is not None and len(objective_values) != len(self.scoring_specs):
+            raise ValueError(
+                "optimizer objective value count does not match optimize.scoring: "
+                f"{len(objective_values)} != {len(self.scoring_specs)}"
+            )
         per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
@@ -1632,9 +1639,15 @@ class Evaluator:
         engine_scores = []
         raw_objectives: Dict[str, float] = {}
         for idx, spec in enumerate(self.scoring_specs):
-            val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
-            if val is None and spec.metric.endswith(("_usd", "_btc")):
-                val = resolve_metric_value(analyses_combined, f"{spec.metric.rsplit('_', 1)[0]}_mean")
+            if objective_values is None:
+                val = resolve_metric_value(analyses_combined, f"{spec.metric}_mean")
+                if val is None and spec.metric.endswith(("_usd", "_btc")):
+                    val = resolve_metric_value(
+                        analyses_combined,
+                        f"{spec.metric.rsplit('_', 1)[0]}_mean",
+                    )
+            else:
+                val = objective_values[idx]
 
             if val is None:
                 raise ValueError(
@@ -1692,12 +1705,20 @@ class SuiteEvaluator:
         )
         if not self.objective_scenario:
             self.objective_scenario = None
-        if self.objective_scenario is not None:
-            labels = [ctx.label for ctx in self.contexts]
-            if self.objective_scenario not in labels:
+        labels = [ctx.label for ctx in self.contexts]
+        self.objective_bases = [
+            resolve_objective_basis(
+                spec,
+                default_scenario=self.objective_scenario,
+                aggregate_cfg=self.aggregate_cfg,
+            )
+            for spec in self.base.scoring_specs
+        ]
+        for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
+            if basis.scenario is not None and basis.scenario not in labels:
                 raise ValueError(
-                    "optimize.objective_scenario "
-                    f"{self.objective_scenario!r} is not present in backtest.scenarios; "
+                    f"scoring objective {spec.metric!r} selects scenario "
+                    f"{basis.scenario!r}, which is not present in backtest.scenarios; "
                     f"available labels: {', '.join(labels)}"
                 )
         self.base.build_limit_checks(self.aggregate_cfg)
@@ -2036,23 +2057,51 @@ class SuiteEvaluator:
         suite_payload = build_suite_metrics_payload(scenario_results, aggregate_summary)
         aggregate_stats = aggregate_summary.get("stats", {})
 
-        flat_stats = flatten_metric_stats(aggregate_stats)
+        aggregate_stats_flat = flatten_metric_stats(aggregate_stats)
+        flat_stats = dict(aggregate_stats_flat)
         # Override _mean with correctly aggregated values so calc_fitness
-        # respects the aggregate config (e.g. "max" instead of "mean").
+        # and limit defaults respect the aggregate config (e.g. "max" instead of "mean").
         aggregated_values = aggregate_summary.get("aggregated", {})
         for metric, agg_value in aggregated_values.items():
             flat_stats[f"{metric}_mean"] = agg_value
-        objective_stats = flat_stats
-        if self.objective_scenario is not None:
-            objective_result = next(
-                result
-                for result in scenario_results
-                if result.scenario.label == self.objective_scenario
-            )
-            objective_stats = flatten_metric_stats(objective_result.metrics.get("stats", {}))
+        required_scenario_labels = {
+            basis.scenario for basis in self.objective_bases if basis.scenario is not None
+        }
+        scenario_stats_by_label = {
+            result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
+            for result in scenario_results
+            if result.scenario.label in required_scenario_labels
+        }
+        objective_values: List[float] = []
+        for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
+            if basis.scenario is not None:
+                source_stats = scenario_stats_by_label[basis.scenario]
+                stat = "mean"
+            else:
+                source_stats = aggregate_stats_flat
+                stat = basis.aggregate or "mean"
+            value = resolve_metric_value(source_stats, f"{spec.metric}_{stat}")
+            if value is None and spec.metric.endswith(("_usd", "_btc")):
+                value = resolve_metric_value(
+                    source_stats,
+                    f"{spec.metric.rsplit('_', 1)[0]}_{stat}",
+                )
+            if value is None:
+                basis_label = (
+                    f"scenario {basis.scenario!r}"
+                    if basis.scenario is not None
+                    else f"aggregate {stat!r}"
+                )
+                raise ValueError(
+                    "missing optimizer scoring metric "
+                    f"{spec.metric!r} for {basis_label}; "
+                    f"available metrics: {_format_available_metric_keys(source_stats)}"
+                )
+            objective_values.append(float(value))
         objectives, total_penalty = self.base.calc_fitness(
-            objective_stats,
+            flat_stats,
             limit_metrics=flat_stats,
+            objective_values=objective_values,
         )
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
         _profile_add(timings, "fitness_payload_ms", phase_start)
