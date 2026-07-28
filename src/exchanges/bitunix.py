@@ -25,6 +25,7 @@ from ccxt.base.errors import (
 )
 
 from config.access import require_live_value
+from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from passivbot import logging
 from utils import symbol_to_coin
@@ -82,6 +83,8 @@ class BitunixClient:
     MAX_KLINE_PAGE_SIZE = 200
     MAX_FILL_PAGES = 1000
     TICKER_MAX_AGE_MS = 30_000
+    TICKER_WAIT_SECONDS = 8.0
+    MAX_DEPTH_FALLBACK_SYMBOLS = 8
 
     has = {
         "cancelOrder": True,
@@ -138,6 +141,11 @@ class BitunixClient:
         config = config or {}
         self.apiKey = str(config.get("apiKey") or config.get("key") or "")
         self.secret = str(config.get("secret") or "")
+        self.rest_url = str(config.get("restUrl") or self.REST_URL).rstrip("/")
+        self.headers = {
+            str(key): str(value)
+            for key, value in dict(config.get("headers") or {}).items()
+        }
         self.timeout = int(config.get("timeout") or 30_000)
         self.enableRateLimit = bool(config.get("enableRateLimit", True))
         self.options: dict[str, Any] = {}
@@ -239,13 +247,13 @@ class BitunixClient:
             if body is not None
             else ""
         )
-        headers = (
-            self._signed_headers(params, body_text)
-            if private
-            else {"Content-Type": "application/json"}
-        )
+        headers = dict(self.headers)
+        if private:
+            headers.update(self._signed_headers(params, body_text))
+        else:
+            headers["Content-Type"] = "application/json"
         query = urlencode(sorted(params.items()))
-        url = f"{self.REST_URL}{path}" + (f"?{query}" if query else "")
+        url = f"{self.rest_url}{path}" + (f"?{query}" if query else "")
         await self._throttle(cancel=cancel)
         session = await self._get_session()
         try:
@@ -452,6 +460,15 @@ class BitunixClient:
                 raise ValueError("Bitunix open position missing positionId")
             fresh_ids[(symbol, pside)] = position_id
             contracts = abs(_float(row.get("qty"), field="position.qty"))
+            entry_price = _float(
+                row.get("avgOpenPrice") or row.get("entryPrice"),
+                field="position entry price",
+                default=0.0 if contracts == 0.0 else None,
+            )
+            if contracts != 0.0 and entry_price <= 0.0:
+                raise ValueError(
+                    "Bitunix response has non-positive position entry price"
+                )
             raw_margin_mode = str(row.get("marginMode") or "").upper()
             if raw_margin_mode not in {"CROSS", "ISOLATION"}:
                 raise ValueError(
@@ -471,11 +488,7 @@ class BitunixClient:
                     "side": pside,
                     "contracts": contracts,
                     "contractSize": 1.0,
-                    "entryPrice": _float(
-                        row.get("avgOpenPrice") or row.get("entryPrice"),
-                        field="position.avgOpenPrice",
-                        default=0.0,
-                    ),
+                    "entryPrice": entry_price,
                     "markPrice": None,
                     "notional": _float(
                         row.get("entryValue"),
@@ -859,14 +872,24 @@ class BitunixClient:
         await self._ensure_markets()
         params = dict(params or {})
         until = params.pop("until", None)
+        explicit_end_time = params.pop("endTime", None)
+        snapshot_end = int(
+            until
+            if until is not None
+            else explicit_end_time
+            if explicit_end_time is not None
+            else self.milliseconds()
+        )
         page_size = min(self.MAX_PAGE_SIZE, max(1, int(limit or self.MAX_PAGE_SIZE)))
-        query: dict[str, Any] = {"skip": 0, "limit": page_size}
+        query: dict[str, Any] = {
+            "skip": 0,
+            "limit": page_size,
+            "endTime": snapshot_end,
+        }
         if symbol:
             query["symbol"] = self.market(symbol)["id"]
         if since is not None:
             query["startTime"] = int(since)
-        if until is not None:
-            query["endTime"] = int(until)
         query.update(params)
         rows: dict[str, dict] = {}
         for _ in range(self.MAX_FILL_PAGES):
@@ -959,8 +982,10 @@ class BitunixClient:
                 # Bitunix's live payload names are inverted relative to their
                 # units: quoteVol is base quantity, while baseVol is quote
                 # notional (baseVol / quoteVol is approximately price).
-                _float(row.get("quoteVol"), field="kline.quoteVol", default=0.0),
+                _float(row.get("quoteVol"), field="kline.quoteVol"),
             ]
+            if normalized[timestamp][5] < 0.0:
+                raise ValueError("Bitunix response has negative kline.quoteVol")
         return [normalized[key] for key in sorted(normalized)]
 
     async def _fetch_depth_ticker(self, symbol: str) -> dict:
@@ -985,6 +1010,7 @@ class BitunixClient:
             "ask": ask,
             "last": (bid + ask) / 2.0,
             "timestamp": self.milliseconds(),
+            "source": "bitunix_depth_mid",
             "info": data,
         }
 
@@ -1094,7 +1120,7 @@ class BitunixClient:
         for symbol in desired:
             self.market(symbol)
         self._ensure_ticker_tasks()
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + self.TICKER_WAIT_SECONDS
         while time.monotonic() < deadline:
             now = self.milliseconds()
             if all(
@@ -1121,9 +1147,15 @@ class BitunixClient:
             <= self.TICKER_MAX_AGE_MS
         }
         if symbols:
-            for symbol in desired:
-                if symbol not in result:
-                    result[symbol] = await self._fetch_depth_ticker(symbol)
+            missing = [symbol for symbol in desired if symbol not in result]
+            if len(missing) > self.MAX_DEPTH_FALLBACK_SYMBOLS:
+                raise NetworkError(
+                    "Bitunix ticker websocket missing "
+                    f"{len(missing)} symbols; REST depth fallback limited to "
+                    f"{self.MAX_DEPTH_FALLBACK_SYMBOLS}"
+                )
+            for symbol in missing:
+                result[symbol] = await self._fetch_depth_ticker(symbol)
         if not result:
             raise NetworkError("Bitunix ticker websocket produced no current quotes")
         return result
@@ -1292,7 +1324,11 @@ class BitunixOrderStream:
                             )
                         )
                     except OrderNotFound:
-                        continue
+                        fallback = deepcopy(row)
+                        fallback["symbol"] = self.rest.safe_symbol(
+                            str(row.get("symbol") or "")
+                        )
+                        enriched.append(fallback)
                 if enriched:
                     return enriched
             elif message.type in {
@@ -1322,6 +1358,22 @@ class BitunixBot(CCXTBot):
 
     def create_ccxt_sessions(self) -> None:
         ccxt_config = self._build_ccxt_config()
+        endpoint_override = getattr(self, "endpoint_override", None)
+        if endpoint_override is not None:
+            unsupported_keys = set(endpoint_override.rest_url_overrides) - {"api"}
+            if unsupported_keys:
+                raise CustomEndpointConfigError(
+                    "bitunix: unsupported REST URL override key(s): "
+                    + ", ".join(sorted(unsupported_keys))
+                    + "; use 'api' for the native REST base"
+                )
+            rest_urls = endpoint_override.apply_to_api_urls(
+                {"api": BitunixClient.REST_URL}
+            )
+            ccxt_config["restUrl"] = rest_urls["api"]
+            headers = dict(ccxt_config.get("headers") or {})
+            headers.update(endpoint_override.rest_extra_headers)
+            ccxt_config["headers"] = headers
         self.cca = BitunixClient(ccxt_config)
         self.cca.options.update(self.user_info.get("options", {}))
         if self.ws_enabled:

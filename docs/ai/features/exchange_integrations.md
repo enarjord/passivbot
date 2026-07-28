@@ -383,8 +383,13 @@ Handling:
    request spacing below the venue's documented UID/IP rolling limit.
 4. Authenticate the private WebSocket with its seconds-based signature, subscribe to `order`, and
    enrich each notification from REST order detail before publishing it. The raw push lacks enough
-   durable close-only metadata for authoritative reconciliation.
-5. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
+   durable close-only metadata for authoritative reconciliation. If REST reports that the order is
+   not found, publish the raw row as untrusted so the generic watcher requests an authoritative
+   account-state refresh instead of silently discarding the transition.
+5. Apply custom endpoint domain rewrites and `rest.url_overrides.api` to the native REST base, and
+   merge `rest.extra_headers` into every request without allowing them to replace authentication
+   headers. Honor `disable_ws` by using REST order polling.
+6. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
    this connector.
 
 Primary references: [Bitunix REST authentication](https://www.bitunix.com/api-docs/futures/common/sign.html),
@@ -409,9 +414,10 @@ Handling:
    all other position-side values invalid.
 4. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
    only trailing underscore padding before applying the closed order-status allowlist.
-5. Page trade history by `skip` to the reported total, deduplicate by `tradeId`, preserve
-   `realizedPNL` and fees, and enrich empty fill `clientId` values through order detail. This is the
-   canonical fill source for realized PnL, unstuck accounting, and HSL replay.
+5. Page trade history by `skip` to the reported total under one fixed `endTime` snapshot,
+   deduplicate by `tradeId`, preserve `realizedPNL` and fees, and enrich empty fill `clientId`
+   values through order detail. This is the canonical fill source for realized PnL, unstuck
+   accounting, and HSL replay.
 6. Reconstruct realized wallet balance as
    `available + frozen + margin - crossUnrealizedPNL - isolationUnrealizedPNL`; do not feed
    mark-to-market equity into Rust sizing.
@@ -426,17 +432,19 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for
 authoritative top-of-book and last price, splitting the active market set across connections
 because Bitunix permits at most 300 subscriptions per connection. A targeted ticker request may
-use one-row REST depth as a bounded startup fallback; broad operation must not fan out one depth
-request per market or substitute last trade for bid/ask.
+use one-row REST depth for at most eight missing symbols as a bounded startup fallback, with the
+bid/ask midpoint labeled as its synthetic last. Broad operation must fail instead of fanning out
+one depth request per market or substituting bid/ask for a last trade.
 
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
-volume so Passivbot's generic quote-volume calculation remains dimensionally correct. In live
-behavior, `startTime` does not anchor a response; the venue tail-anchors at `endTime`. Derive each
-forward page's `endTime` from `since + limit * timeframe`, filter to the requested bounds, sort
-ascending, and deduplicate. This pagination supports live warmup, restart reconstruction, and
-runtime indicators only. Bulk historical Bitunix data for backtesting or optimization is not a
-supported source.
+volume so Passivbot's generic quote-volume calculation remains dimensionally correct. Missing,
+non-finite, or negative base volume is invalid; an explicit zero remains valid. In live behavior,
+`startTime` does not anchor a response; the venue tail-anchors at `endTime`. Derive each forward
+page's `endTime` from `since + limit * timeframe`, filter to the requested bounds, sort ascending,
+and deduplicate. This pagination supports live warmup, restart reconstruction, and runtime
+indicators only. Bulk historical Bitunix data for backtesting or optimization is not a supported
+source.
 
 Primary references: [ticker WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/Tickers%20Channel.html),
 [REST depth](https://www.bitunix.com/api-docs/futures/market/get_depth.html), and

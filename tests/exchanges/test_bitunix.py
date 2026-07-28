@@ -1,17 +1,26 @@
+import asyncio
 import hashlib
+import json
+import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 from ccxt.base.errors import (
     AuthenticationError,
     InsufficientFunds,
     InvalidOrder,
     NetworkError,
+    OrderNotFound,
     RateLimitExceeded,
 )
 
 from ccxt_contracts import build_contract_bot, get_bot_class
+from custom_endpoint_overrides import (
+    CustomEndpointConfigError,
+    ResolvedEndpointOverride,
+)
 from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
 from fill_events_manager import BitunixFetcher, _build_fetcher_for_bot
 from candlestick_manager import CandlestickManager
@@ -92,6 +101,26 @@ def _trade_row(**overrides):
         "realizedPNL": "0",
         "ctime": 1_700_000_000_000,
         "roleType": "TAKER",
+    }
+    row.update(overrides)
+    return row
+
+
+def _position_row(**overrides):
+    row = {
+        "positionId": "position-1",
+        "symbol": "BTCUSDT",
+        "qty": "0.001",
+        "entryValue": "50",
+        "side": "LONG",
+        "positionMode": "HEDGE",
+        "marginMode": "CROSS",
+        "leverage": 3,
+        "unrealizedPNL": "0",
+        "realizedPNL": "0",
+        "avgOpenPrice": "50000",
+        "ctime": 1_700_000_000_000,
+        "mtime": 1_700_000_000_001,
     }
     row.update(overrides)
     return row
@@ -292,30 +321,24 @@ async def test_positions_accept_documented_and_live_hedge_side_aliases(
     raw_side, expected
 ):
     client = _prepared_client()
-    client._request = AsyncMock(
-        return_value=[
-            {
-                "positionId": "position-1",
-                "symbol": "BTCUSDT",
-                "qty": "0.001",
-                "entryValue": "50",
-                "side": raw_side,
-                "positionMode": "HEDGE",
-                "marginMode": "CROSS",
-                "leverage": 3,
-                "unrealizedPNL": "0",
-                "realizedPNL": "0",
-                "avgOpenPrice": "50000",
-                "ctime": 1_700_000_000_000,
-                "mtime": 1_700_000_000_001,
-            }
-        ]
-    )
+    client._request = AsyncMock(return_value=[_position_row(side=raw_side)])
 
     positions = await client.fetch_positions(["BTC/USDT:USDT"])
 
     assert positions[0]["side"] == expected
     assert client._position_ids[("BTC/USDT:USDT", expected)] == "position-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_price", [None, "", "0", "-1", "nan"])
+async def test_nonzero_position_requires_positive_finite_entry_price(entry_price):
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value=[_position_row(avgOpenPrice=entry_price)]
+    )
+
+    with pytest.raises(ValueError, match="entry price"):
+        await client.fetch_positions(["BTC/USDT:USDT"])
 
 
 @pytest.mark.asyncio
@@ -373,6 +396,32 @@ async def test_fill_history_paginates_and_normalizes_hedge_actions():
     assert trades[1]["side"] == "sell"
     assert trades[1]["info"]["positionSide"] == "LONG"
     assert client._request.await_args_list[1].kwargs["params"]["skip"] == 1
+    assert {
+        call.kwargs["params"]["endTime"]
+        for call in client._request.await_args_list
+    } == {1_700_001_000_000}
+
+
+@pytest.mark.asyncio
+async def test_fill_history_freezes_end_time_when_until_is_omitted(monkeypatch):
+    client = _prepared_client()
+    monkeypatch.setattr(client, "milliseconds", lambda: 1_700_001_000_000)
+    client._request = AsyncMock(
+        side_effect=[
+            {"tradeList": [_trade_row(tradeId="trade-2")], "total": 2},
+            {"tradeList": [_trade_row()], "total": 2},
+        ]
+    )
+
+    await client.fetch_my_trades(limit=1)
+
+    assert [
+        call.kwargs["params"]["skip"] for call in client._request.await_args_list
+    ] == [0, 1]
+    assert {
+        call.kwargs["params"]["endTime"]
+        for call in client._request.await_args_list
+    } == {1_700_001_000_000}
 
 
 @pytest.mark.asyncio
@@ -431,6 +480,252 @@ async def test_ohlcv_derives_forward_page_end_from_since_when_venue_ignores_star
     query = client._request.await_args.kwargs["params"]
     assert query["startTime"] == 60_000
     assert query["endTime"] == 60_000 + 200 * 60_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("volume", [None, "", "nan", "-1"])
+async def test_ohlcv_rejects_missing_or_invalid_base_volume(volume):
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value=[
+            {
+                "time": 60_000,
+                "open": "1",
+                "high": "2",
+                "low": "0.5",
+                "close": "1.5",
+                "quoteVol": volume,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="kline.quoteVol"):
+        await client.fetch_ohlcv("BTC/USDT:USDT", "1m", since=60_000)
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_accepts_explicit_zero_base_volume():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value=[
+            {
+                "time": 60_000,
+                "open": "1",
+                "high": "2",
+                "low": "0.5",
+                "close": "1.5",
+                "quoteVol": "0",
+            }
+        ]
+    )
+
+    candles = await client.fetch_ohlcv(
+        "BTC/USDT:USDT", "1m", since=60_000
+    )
+
+    assert candles[0][5] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_order_stream_surfaces_unenriched_row_when_detail_is_not_found():
+    client = _prepared_client()
+    client.fetch_order = AsyncMock(side_effect=OrderNotFound("not found"))
+    stream = BitunixOrderStream(client)
+    stream._ws = SimpleNamespace(
+        closed=False,
+        receive=AsyncMock(
+            return_value=SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "ch": "order",
+                        "data": {
+                            "orderId": "order-1",
+                            "symbol": "BTCUSDT",
+                            "status": "FILLED",
+                        },
+                    }
+                ),
+            )
+        ),
+    )
+
+    rows = await stream.watch_orders()
+
+    assert rows == [
+        {
+            "orderId": "order-1",
+            "symbol": "BTC/USDT:USDT",
+            "status": "FILLED",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unenriched_order_row_requests_account_state_refresh():
+    bot = build_contract_bot("bitunix")
+    bot.ccp = SimpleNamespace(has={"watchOrders": True})
+    bot.stop_websocket = False
+    bot._do_watch_orders = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "orderId": "order-1",
+                    "symbol": "BTC/USDT:USDT",
+                    "status": "FILLED",
+                }
+            ],
+            asyncio.CancelledError,
+        ]
+    )
+    bot._mark_account_critical_state_dirty = MagicMock()
+    bot.handle_order_update = MagicMock()
+
+    await bot.watch_orders()
+
+    bot._mark_account_critical_state_dirty.assert_called_once_with(
+        reason="order_ws_semantics_unavailable",
+        symbols={"BTC/USDT:USDT"},
+        source="bitunix_order_ws",
+        level=logging.DEBUG,
+    )
+    bot.handle_order_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ticker_depth_fallback_is_capped_before_any_rest_fanout():
+    client = _prepared_client()
+    eth_market = {
+        **_market(),
+        "id": "ETHUSDT",
+        "symbol": "ETH/USDT:USDT",
+    }
+    client.markets[eth_market["symbol"]] = eth_market
+    client.markets_by_id[eth_market["id"]] = eth_market
+    client.symbols.append(eth_market["symbol"])
+    client.TICKER_WAIT_SECONDS = 0.0
+    client.MAX_DEPTH_FALLBACK_SYMBOLS = 1
+    client._ensure_ticker_tasks = lambda: None
+    client._fetch_depth_ticker = AsyncMock()
+
+    with pytest.raises(NetworkError, match="fallback limited"):
+        await client.fetch_tickers(client.symbols)
+
+    client._fetch_depth_ticker.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_depth_ticker_uses_midpoint_as_synthetic_last():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={"bids": [["99", "1"]], "asks": [["101", "1"]]}
+    )
+    client.milliseconds = lambda: 1_700_000_000_000
+
+    ticker = await client._fetch_depth_ticker("BTC/USDT:USDT")
+
+    assert ticker["last"] == 100.0
+    assert ticker["source"] == "bitunix_depth_mid"
+
+
+class _ResponseContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _RecordingSession:
+    def __init__(self, response):
+        self.response = response
+        self.call = None
+
+    def request(self, *args, **kwargs):
+        self.call = (args, kwargs)
+        return _ResponseContext(self.response)
+
+
+@pytest.mark.asyncio
+async def test_native_request_uses_configured_rest_base_and_extra_headers():
+    client = BitunixClient(
+        {
+            "apiKey": "key",
+            "secret": "secret",
+            "restUrl": "https://proxy.example/base/",
+            "headers": {"X-Proxy": "enabled", "api-key": "must-not-win"},
+        }
+    )
+    response = SimpleNamespace(
+        status=200,
+        text=AsyncMock(return_value='{"code": 0, "data": []}'),
+    )
+    session = _RecordingSession(response)
+    client._get_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+
+    await client._request("GET", "/private", private=True)
+
+    args, kwargs = session.call
+    assert args[:2] == ("GET", "https://proxy.example/base/private")
+    assert kwargs["headers"]["X-Proxy"] == "enabled"
+    assert kwargs["headers"]["api-key"] == "key"
+
+
+def test_native_session_applies_bitunix_endpoint_override():
+    bot = build_contract_bot("bitunix")
+    bot.user_info = {
+        "exchange": "bitunix",
+        "key": "key",
+        "secret": "secret",
+        "headers": {"Existing": "header"},
+    }
+    bot.endpoint_override = ResolvedEndpointOverride(
+        exchange_id="bitunix",
+        rest_url_overrides={"api": "https://proxy.example/bitunix"},
+        rest_extra_headers={"X-Proxy": "enabled"},
+        disable_ws=True,
+    )
+    bot.ws_enabled = False
+
+    bot.create_ccxt_sessions()
+
+    assert bot.cca.rest_url == "https://proxy.example/bitunix"
+    assert bot.cca.headers == {
+        "Existing": "header",
+        "X-Proxy": "enabled",
+    }
+    assert bot.ccp is None
+
+
+def test_native_session_applies_bitunix_domain_rewrite():
+    bot = build_contract_bot("bitunix")
+    bot.endpoint_override = ResolvedEndpointOverride(
+        exchange_id="bitunix",
+        rest_domain_rewrites={
+            "https://fapi.bitunix.com": "https://proxy.example"
+        },
+    )
+    bot.ws_enabled = False
+
+    bot.create_ccxt_sessions()
+
+    assert bot.cca.rest_url == "https://proxy.example"
+
+
+def test_native_session_rejects_unsupported_endpoint_url_keys():
+    bot = build_contract_bot("bitunix")
+    bot.endpoint_override = ResolvedEndpointOverride(
+        exchange_id="bitunix",
+        rest_url_overrides={"private": "https://proxy.example"},
+    )
+    bot.ws_enabled = False
+
+    with pytest.raises(CustomEndpointConfigError, match="unsupported REST URL override"):
+        bot.create_ccxt_sessions()
 
 
 def test_bot_order_params_require_durable_hedge_semantics():
