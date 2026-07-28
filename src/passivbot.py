@@ -17640,17 +17640,19 @@ class Passivbot:
         self._orchestrator_ema_projection_details = {}
         forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] = {}
 
-        async def fetch_cached_forager_metric(
+        async def fetch_cached_forager_metrics(
             symbol: str,
-            span: float,
+            spans: list[float],
             metric_key: str,
             *,
             timeframe: str = "1m",
             diagnostic_key: Optional[str] = None,
-        ) -> Optional[float]:
+        ) -> dict[float, float]:
+            if not spans:
+                return {}
             max_staleness_ms = forager_cached_metric_max_age_by_symbol.get(symbol)
             if max_staleness_ms is None:
-                return None
+                return {}
             cached_age_ms: Optional[int] = None
             if timeframe == "1h":
                 # A newly finalized hourly bucket is one full candle interval
@@ -17665,38 +17667,63 @@ class Passivbot:
                     )
                     now_ms = int(self.cm._now_ms())
                 except Exception:
-                    return None
+                    return {}
                 latest_expected = (now_ms // period_ms) * period_ms - period_ms
                 if last_cached <= 0:
-                    return None
+                    return {}
                 if last_cached < latest_expected:
                     first_missing_finalized_at = last_cached + 2 * period_ms
                     cached_age_ms = max(0, now_ms - first_missing_finalized_at)
                     if cached_age_ms > int(max_staleness_ms):
-                        return None
+                        return {}
                 max_staleness_ms = int(max_staleness_ms) + 60 * ONE_MIN_MS
-            cached = await Passivbot._get_forager_cached_ema_metrics(
+            cached = await Passivbot._get_forager_cached_ema_metric_spans(
                 self,
                 symbol,
-                {metric_key: float(span)},
+                {metric_key: [float(span) for span in spans]},
                 max_staleness_ms=int(max_staleness_ms),
-                window_candles=max(1, int(math.ceil(float(span)))),
+                window_candles=max(
+                    1, int(math.ceil(max(float(span) for span in spans)))
+                ),
                 timeframe=timeframe,
             )
-            if metric_key not in cached:
-                return None
-            val = float(cached[metric_key])
-            if not math.isfinite(val):
-                return None
+            metric_values = cached.get(metric_key, {})
             if cached_age_ms is None:
                 try:
                     cached_age_ms = int(Passivbot._candle_staleness_ms(self, symbol))
                 except Exception:
                     cached_age_ms = -1
-            forager_cached_ema_fallbacks.setdefault(symbol, []).append(
-                (diagnostic_key or metric_key, float(span), int(cached_age_ms))
+            out: dict[float, float] = {}
+            for span in spans:
+                val = metric_values.get(float(span))
+                if val is None or not math.isfinite(float(val)):
+                    continue
+                out[float(span)] = float(val)
+                forager_cached_ema_fallbacks.setdefault(symbol, []).append(
+                    (
+                        diagnostic_key or metric_key,
+                        float(span),
+                        int(cached_age_ms),
+                    )
+                )
+            return out
+
+        async def fetch_cached_forager_metric(
+            symbol: str,
+            span: float,
+            metric_key: str,
+            *,
+            timeframe: str = "1m",
+            diagnostic_key: Optional[str] = None,
+        ) -> Optional[float]:
+            values = await fetch_cached_forager_metrics(
+                symbol,
+                [float(span)],
+                metric_key,
+                timeframe=timeframe,
+                diagnostic_key=diagnostic_key,
             )
-            return val
+            return values.get(float(span))
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
@@ -17707,16 +17734,48 @@ class Passivbot:
                 "m1_log_range": "log_range",
                 "forager_m1_log_range": "log_range",
             }.get(ema_type)
+            batched_values: Optional[dict[float, float]] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, ema_type
+                )
+            except Exception:
+                # A widest-window batch failure does not prove that each
+                # narrower span is unavailable. Retry spans independently
+                # before considering bounded cached fallback.
+                batched_values = None
+            cached_fallbacks: dict[float, float] = {}
+            if metric_key is not None and batched_values is not None:
+                fallback_spans = [
+                    float(span)
+                    for span in spans
+                    if float(span) not in batched_values
+                    or not math.isfinite(
+                        float(batched_values.get(float(span), float("nan")))
+                    )
+                ]
+                cached_fallbacks = await fetch_cached_forager_metrics(
+                    symbol, fallback_spans, metric_key
+                )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
-                    val = float(await fn(symbol, span))
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await fn(symbol, span)
+                    )
                 except Exception as e:
                     if metric_key is not None:
-                        fallback = await fetch_cached_forager_metric(
-                            symbol, span, metric_key
-                        )
+                        fallback = cached_fallbacks.get(span)
+                        if (
+                            fallback is None
+                            and batched_values is None
+                        ):
+                            fallback = await fetch_cached_forager_metric(
+                                symbol, span, metric_key
+                            )
                         if fallback is not None:
                             out[span] = fallback
                             continue
@@ -17728,9 +17787,14 @@ class Passivbot:
                     out[span] = val
                 else:
                     if metric_key is not None:
-                        fallback = await fetch_cached_forager_metric(
-                            symbol, span, metric_key
-                        )
+                        fallback = cached_fallbacks.get(span)
+                        if (
+                            fallback is None
+                            and batched_values is None
+                        ):
+                            fallback = await fetch_cached_forager_metric(
+                                symbol, span, metric_key
+                            )
                         if fallback is not None:
                             out[span] = fallback
                             continue
@@ -17758,11 +17822,41 @@ class Passivbot:
             if ema_type == "h1_log_range" and symbol in cache_only_symbols:
                 metric_key = "log_range"
                 metric_timeframe = "1h"
+            batched_values: Optional[dict[float, float]] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, ema_type
+                )
+            except Exception:
+                # Retry each span through the primary reader. A failed batch
+                # may only mean its widest window was incomplete.
+                batched_values = None
+            cached_fallbacks: dict[float, float] = {}
+            if metric_key is not None and batched_values is not None:
+                fallback_spans = [
+                    float(span)
+                    for span in spans
+                    if float(span) not in batched_values
+                    or not math.isfinite(
+                        float(batched_values.get(float(span), float("nan")))
+                    )
+                ]
+                cached_fallbacks = await fetch_cached_forager_metrics(
+                    symbol,
+                    fallback_spans,
+                    metric_key,
+                    timeframe=metric_timeframe,
+                    diagnostic_key=ema_type,
+                )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
                 try:
-                    val = float(await fn(symbol, span))
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await fn(symbol, span)
+                    )
                 except Exception as e:
                     reason = f"{type(e).__name__}: {e}"
                 else:
@@ -17771,13 +17865,18 @@ class Passivbot:
                         continue
                     reason = f"non-finite {ema_type} value {val}"
                 if metric_key is not None:
-                    fallback = await fetch_cached_forager_metric(
-                        symbol,
-                        span,
-                        metric_key,
-                        timeframe=metric_timeframe,
-                        diagnostic_key=ema_type,
-                    )
+                    fallback = cached_fallbacks.get(span)
+                    if (
+                        fallback is None
+                        and batched_values is None
+                    ):
+                        fallback = await fetch_cached_forager_metric(
+                            symbol,
+                            span,
+                            metric_key,
+                            timeframe=metric_timeframe,
+                            diagnostic_key=ema_type,
+                        )
                     if fallback is not None:
                         out[span] = fallback
                         continue
@@ -17897,13 +17996,26 @@ class Passivbot:
             max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
             prev_by_span = self._orchestrator_prev_close_ema.setdefault(symbol, {})
             primary_missing: list[tuple[float, str]] = []
+            batched_values: Optional[dict[float, float]] = None
+            try:
+                batched_values = await fetch_batched_ema_values(
+                    symbol, spans, "m1_close"
+                )
+            except Exception:
+                # Preserve usable shorter spans when the combined request's
+                # widest window cannot be loaded.
+                batched_values = None
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, "close_ema")
                 span = float(sp)
                 key = (symbol, span)
                 reason = None
                 try:
-                    val = float(await ema_close(symbol, span))
+                    val = float(
+                        batched_values[span]
+                        if batched_values is not None
+                        else await ema_close(symbol, span)
+                    )
                 except Exception as e:
                     reason = f"{type(e).__name__}: {e}"
                 else:
@@ -18088,6 +18200,49 @@ class Passivbot:
                     allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
+
+        async def fetch_batched_ema_values(
+            symbol: str,
+            spans: list[float],
+            ema_type: str,
+        ) -> Optional[dict[float, float]]:
+            """Use one candle load for compatible EMA spans when supported."""
+            method_on_type = getattr(
+                type(self.cm), "get_latest_ema_metric_spans", None
+            )
+            method = getattr(self.cm, "get_latest_ema_metric_spans", None)
+            if not callable(method_on_type) or not callable(method):
+                return None
+            metric_key = {
+                "m1_close": "close",
+                "m1_volume": "qv",
+                "m1_log_range": "log_range",
+                "forager_m1_log_range": "log_range",
+                "h1_log_range": "log_range",
+            }.get(ema_type)
+            if metric_key is None:
+                return None
+            timeframe = "1h" if ema_type == "h1_log_range" else "1m"
+            strict = ema_type in {"m1_volume", "forager_m1_log_range"}
+            values = await method(
+                symbol,
+                {metric_key: [float(span) for span in spans]},
+                max_age_ms=(
+                    h1_max_age_by_symbol.get(symbol, 600_000)
+                    if timeframe == "1h"
+                    else m1_max_age_by_symbol.get(symbol, 60_000)
+                ),
+                timeframe=timeframe,
+                allow_remote_fetch=symbol not in cache_only_symbols,
+                allow_provisional_internal_gaps=(
+                    False if strict else symbol not in cache_only_symbols
+                ),
+            )
+            metric_values = values.get(metric_key, {})
+            return {
+                float(span): float(value)
+                for span, value in metric_values.items()
+            }
 
         async def load_projected_open_tail_bundle(
             sym: str,
@@ -19322,6 +19477,72 @@ class Passivbot:
                 continue
             if math.isfinite(fval):
                 clean[str(key)] = fval
+        return clean
+
+    async def _get_forager_cached_ema_metric_spans(
+        self,
+        symbol: str,
+        spans_by_metric: dict[str, list[float]],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+        timeframe: str = "1m",
+    ) -> dict[str, dict[float, float]]:
+        """Read multiple bounded cache-derived EMA spans with one candle load."""
+        method_on_type = getattr(
+            type(self.cm), "get_latest_cached_ema_metric_spans", None
+        )
+        fn = getattr(self.cm, "get_latest_cached_ema_metric_spans", None)
+        if callable(method_on_type) and callable(fn):
+            try:
+                out = await fn(
+                    symbol,
+                    spans_by_metric,
+                    max_staleness_ms=max_staleness_ms,
+                    window_candles=window_candles,
+                    timeframe=timeframe,
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[ema] batched forager cached EMA unavailable %s metrics=%s error_type=%s",
+                    Passivbot._log_symbol(symbol),
+                    ",".join(sorted(str(k) for k in spans_by_metric)),
+                    type(exc).__name__,
+                )
+                return {}
+            if not isinstance(out, dict):
+                return {}
+            clean: dict[str, dict[float, float]] = {}
+            for metric_key, metric_values in out.items():
+                if not isinstance(metric_values, dict):
+                    continue
+                for span, val in metric_values.items():
+                    try:
+                        fspan = float(span)
+                        fval = float(val)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(fspan) and math.isfinite(fval):
+                        clean.setdefault(str(metric_key), {})[fspan] = fval
+            return clean
+
+        # Preserve compatibility with lightweight/custom candle manager
+        # implementations which only provide the legacy scalar-per-metric API.
+        clean: dict[str, dict[float, float]] = {}
+        for metric_key, spans in spans_by_metric.items():
+            for span in spans:
+                scalar = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    {str(metric_key): float(span)},
+                    max_staleness_ms=max_staleness_ms,
+                    window_candles=max(1, int(math.ceil(float(span)))),
+                    timeframe=timeframe,
+                )
+                if str(metric_key) in scalar:
+                    clean.setdefault(str(metric_key), {})[float(span)] = float(
+                        scalar[str(metric_key)]
+                    )
         return clean
 
     def _market_snapshot_signature(

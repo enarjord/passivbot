@@ -15,15 +15,33 @@ All notable user-facing changes will be documented in this file.
   Omitting `scenario` inherits `optimize.objective_scenario`; aggregate objectives without an
   explicit reducer inherit the metric-specific or default `backtest.aggregate` rule. Limits remain
   suite-aggregated.
+- Live EMA preparation now batches compatible spans per symbol and metric family, including bounded
+  cache-only fallbacks for stale forager candidates, and complete candle windows bypass redundant
+  Python gap reconstruction. A failed combined read retries each span through its primary reader
+  before using bounded fallback, preserving shorter complete EMA windows. Batched cache-only
+  fallbacks likewise validate coverage per span so a missing long-window prefix does not discard a
+  complete shorter fallback. Metadata-only candle refreshes no longer invalidate otherwise
+  identical open-tail projections, while candle-content and known-gap changes written by another
+  bot process invalidate the affected cached projection. This removes repeated candle-window loads
+  and projection recomputation. The final scalar EMA recurrence now runs in the Rust extension with
+  the same sequential floating-point and non-finite-sample semantics, without changing
+  completed-candle freshness, gap handling, or EMA math.
+- KuCoin aggregate position-cycle PnL reconciliation is now idempotent across overlapping fill
+  refreshes: a pending trade row no longer discards an already reconciled authoritative value, while
+  a genuinely revised position-history total still updates the affected lifecycle.
+- The in-memory order replacement churn gate now emits a compact account-wide admission-reason
+  summary every ten minutes, distinguishing allowed near-market, stable/new, risk-critical, and
+  allowance-backed creations from deferred candidates.
 - Gate multi-currency futures balance now remains stable while resting orders reserve and release
   margin, preventing balance-driven ideal-order resizing and reconciliation churn. Passivbot
   reconstructs account margin balance from Gate's available, position-margin, and order-margin
   fields instead of treating available margin as equity.
-- KuCoin 1m sparse-gap repair now includes the nearest real candle on both sides of an unresolved
-  interval, allowing one successful exchange payload to prove and materialize genuine no-trade
-  minutes without converting empty, one-sided, malformed, or partially recovered responses into
-  candles. Failed contextual verification preserves the persistent gap and restarts its bounded
-  retry cooldown instead of consuming REST capacity on every candle read. Background forager
+- KuCoin 1m sparse-gap repair now immediately includes the nearest real candle on both sides of an
+  unresolved interval, allowing one successful exchange payload to prove and materialize genuine
+  no-trade minutes without first exhausting empty-range retries or waiting seven days. Empty,
+  one-sided, malformed, or partially recovered responses are never converted into candles. Failed
+  contextual verification preserves the unresolved gap and starts an independent bounded proof
+  cooldown instead of consuming REST capacity on every candle read. Background forager
   refreshes also back off unchanged empty tails without ERROR spam while unexpected failures
   remain loud.
 - Trailing extrema now use the configured bounded active-candle tail projection for a missing open

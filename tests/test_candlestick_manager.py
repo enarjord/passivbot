@@ -85,6 +85,25 @@ def test_final_ema_matches_full_series_without_allocation(tmp_path, span):
     )
 
 
+@pytest.mark.parametrize("span", [1.0, 2.5, 10.0, 100.0, 2_000.0])
+def test_rust_ema_last_matches_python_reference(span):
+    import passivbot_rust as pbr
+
+    values = np.asarray(
+        [float("nan"), 1.0, 2.0, float("nan"), -3.0, 8.0, 13.0],
+        dtype=np.float64,
+    )
+    alpha = 2.0 / (span + 1.0)
+    expected = 1.0
+    for value in [2.0, -3.0, 8.0, 13.0]:
+        expected = alpha * value + (1.0 - alpha) * expected
+    assert pbr.ema_last(values, span) == pytest.approx(
+        expected,
+        rel=0.0,
+        abs=1e-15,
+    )
+
+
 @pytest.mark.asyncio
 async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
     class _Ex:
@@ -150,6 +169,124 @@ async def test_latest_cached_ema_metrics_carries_values_without_tail_zeroing(tmp
         window_candles=3,
     )
     assert too_stale == {}
+
+
+@pytest.mark.asyncio
+async def test_latest_cached_ema_metric_spans_loads_one_window_for_all_spans(
+    tmp_path,
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "BATCHED/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (
+                minute * ONE_MIN_MS,
+                100.0 + minute,
+                102.0 + minute,
+                99.0 + minute,
+                101.0 + minute,
+                2.0 + minute,
+            )
+            for minute in range(5, 10)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        candles,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    original_get_candles = cm.get_candles
+    calls = 0
+
+    async def counted_get_candles(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original_get_candles(*args, **kwargs)
+
+    cm.get_candles = counted_get_candles
+    out = await cm.get_latest_cached_ema_metric_spans(
+        symbol,
+        {"qv": [2.0, 4.0], "log_range": [2.0, 4.0]},
+        max_staleness_ms=0,
+    )
+
+    assert calls == 1
+    assert set(out) == {"qv", "log_range"}
+    assert set(out["qv"]) == {2.0, 4.0}
+    assert set(out["log_range"]) == {2.0, 4.0}
+    assert all(
+        math.isfinite(value)
+        for metric_values in out.values()
+        for value in metric_values.values()
+    )
+
+
+@pytest.mark.asyncio
+async def test_latest_cached_ema_metric_spans_preserves_complete_shorter_window(
+    tmp_path,
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MIXED/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (
+                minute * ONE_MIN_MS,
+                100.0 + minute,
+                102.0 + minute,
+                99.0 + minute,
+                101.0 + minute,
+                2.0 + minute,
+            )
+            for minute in range(5, 10)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        candles,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    original_get_candles = cm.get_candles
+    calls = 0
+
+    async def counted_get_candles(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await original_get_candles(*args, **kwargs)
+
+    cm.get_candles = counted_get_candles
+    out = await cm.get_latest_cached_ema_metric_spans(
+        symbol,
+        {"qv": [3.0, 8.0], "log_range": [3.0, 8.0]},
+        max_staleness_ms=0,
+        window_candles=8,
+    )
+
+    assert calls == 1
+    assert set(out["qv"]) == {3.0}
+    assert set(out["log_range"]) == {3.0}
+    assert all(
+        math.isfinite(value)
+        for metric_values in out.values()
+        for value in metric_values.values()
+    )
 
 
 @pytest.mark.asyncio
@@ -262,6 +399,31 @@ def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     # synthesized middle candle should have bv == 0 and c equal to previous close (102.0)
     assert float(res[1]["bv"]) == 0.0
     assert math.isclose(float(res[1]["c"]), 102.0, rel_tol=1e-6)
+
+
+def test_standardize_gaps_complete_range_returns_equal_independent_copy(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    candles = np.array(
+        [
+            (minute * ONE_MIN_MS, 100.0, 101.0, 99.0, 100.5, 2.0)
+            for minute in range(5)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    out = cm.standardize_gaps(
+        candles,
+        start_ts=0,
+        end_ts=4 * ONE_MIN_MS,
+        assume_sorted=True,
+    )
+
+    assert np.array_equal(out, candles)
+    assert not np.shares_memory(out, candles)
 
 
 def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
@@ -985,6 +1147,71 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
     for v in closes[1:]:
         expected = alpha * v + (1 - alpha) * expected
     assert pytest.approx(expected, rel=1e-9) == ema
+
+
+@pytest.mark.asyncio
+async def test_get_latest_ema_metric_spans_batches_and_matches_individual_helpers(
+    tmp_path, monkeypatch
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "BATCH/USDT"
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    rows = []
+    for index in range(12):
+        ts = end_ts - (11 - index) * ONE_MIN_MS
+        close = 100.0 + index
+        rows.append(
+            (
+                ts,
+                close,
+                close + 1.0,
+                close - 1.0,
+                close,
+                1.0 + index,
+            )
+        )
+    cm._cache[symbol] = np.array(rows, dtype=CANDLE_DTYPE)
+
+    original_get_candles = cm.get_candles
+    calls = {"count": 0}
+
+    async def counted_get_candles(*args, **kwargs):
+        calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "get_candles", counted_get_candles)
+    spans = {
+        "close": [3.0, 5.0, 8.5],
+        "qv": [4.0, 7.0],
+        "log_range": [6.0],
+    }
+    batched = await cm.get_latest_ema_metric_spans(symbol, spans)
+    assert calls["count"] == 1
+
+    cm._ema_cache.clear()
+    expected = {
+        "close": {
+            span: await cm.get_latest_ema_close(symbol, span)
+            for span in spans["close"]
+        },
+        "qv": {
+            span: await cm.get_latest_ema_quote_volume(symbol, span)
+            for span in spans["qv"]
+        },
+        "log_range": {
+            span: await cm.get_latest_ema_log_range(symbol, span)
+            for span in spans["log_range"]
+        },
+    }
+    for metric_key, values in expected.items():
+        for span, value in values.items():
+            assert batched[metric_key][span] == pytest.approx(value)
 
 
 @pytest.mark.asyncio
@@ -4229,7 +4456,10 @@ def test_kucoin_between_page_holes_recorded_as_expiring_auto_gaps(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_kucoin_contextual_retry_proves_persistent_sparse_gap(tmp_path, monkeypatch):
+@pytest.mark.parametrize("retry_count", [1, _GAP_MAX_RETRIES])
+async def test_kucoin_contextual_retry_proves_sparse_gap_immediately(
+    tmp_path, monkeypatch, retry_count
+):
     """A retry must include real rows on both sides of a sparse KuCoin gap.
 
     Querying only the absent timestamps returns an empty payload and leaves the
@@ -4272,11 +4502,8 @@ async def test_kucoin_contextual_retry_proves_persistent_sparse_gap(tmp_path, mo
         ONE_MIN_MS,
         22 * ONE_MIN_MS,
         reason=GAP_REASON_FETCH_FAILED,
-        retry_count=_GAP_MAX_RETRIES,
+        retry_count=retry_count,
     )
-    due_gaps = cm._get_known_gaps_enhanced(symbol)
-    due_gaps[0]["last_retry_at"] = now - _GAP_PERSISTENT_RETRY_MS - 1
-    cm._save_known_gaps_enhanced(symbol, due_gaps)
 
     result = await cm.get_candles(
         symbol,
@@ -4363,12 +4590,6 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
         reason=GAP_REASON_FETCH_FAILED,
         retry_count=_GAP_MAX_RETRIES,
     )
-    gaps = cm._get_known_gaps_enhanced(symbol)
-    gaps[0]["last_retry_at"] = (
-        clock["now"] - _GAP_PERSISTENT_RETRY_MS - 1
-    )
-    cm._save_known_gaps_enhanced(symbol, gaps)
-
     first = await cm.get_candles(
         symbol,
         start_ts=0,
@@ -4395,7 +4616,7 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
         for gap in unresolved
     )
     assert all(
-        int(gap["last_retry_at"]) == clock["now"]
+        int(gap["last_contextual_retry_at"]) == clock["now"]
         for gap in unresolved
     )
 
@@ -4409,7 +4630,7 @@ async def test_kucoin_contextual_retry_requires_complete_single_payload_proof_an
 
     due_again = cm._get_known_gaps_enhanced(symbol)
     for gap in due_again:
-        gap["last_retry_at"] = (
+        gap["last_contextual_retry_at"] = (
             clock["now"] - _GAP_PERSISTENT_RETRY_MS - 1
         )
     cm._save_known_gaps_enhanced(symbol, due_again)

@@ -2359,6 +2359,73 @@ async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery(caplog):
 
 
 @pytest.mark.asyncio
+async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        close_value=105.5,
+        prev_close_ema={span0: 90.0, span1: 91.0, span2: 92.0},
+    )
+    batch_requests = []
+    scalar_close_spans = []
+
+    async def fail_batch(
+        _cm,
+        _symbol,
+        spans_by_metric,
+        **_kwargs,
+    ):
+        batch_requests.append(dict(spans_by_metric))
+        raise RuntimeError("widest EMA window unavailable")
+
+    original_close = bot.cm.get_latest_ema_close
+
+    async def counted_close(_symbol, span, **kwargs):
+        scalar_close_spans.append(float(span))
+        return await original_close(_symbol, span, **kwargs)
+
+    monkeypatch.setattr(
+        type(bot.cm),
+        "get_latest_ema_metric_spans",
+        fail_batch,
+        raising=False,
+    )
+    monkeypatch.setattr(bot.cm, "get_latest_ema_close", counted_close)
+
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert set(scalar_close_spans) == {span0, span1, span2}
+    assert m1_close_emas[symbol] == pytest.approx(
+        {span0: 105.5, span1: 105.5, span2: 105.5}
+    )
+    assert m1_volume_emas[symbol][10.0] == pytest.approx(250000.0)
+    assert m1_log_range_emas[symbol][10.0] == pytest.approx(0.0015)
+    assert {next(iter(request)) for request in batch_requests} >= {
+        "close",
+        "qv",
+        "log_range",
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("h1_mode", ["timeout", "nan"])
 async def test_required_h1_log_range_ema_raises_when_missing(h1_mode):
     try:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 import math
 from typing import Mapping, Sequence
@@ -21,6 +21,7 @@ ORDER_CHURN_GATE_SUPPORTED_EXCHANGES = frozenset(
 )
 
 ORDER_CHURN_CONSOLE_REPEAT_SECONDS = 5.0 * 60.0
+ORDER_CHURN_ADMISSION_SUMMARY_SECONDS = 10.0 * 60.0
 
 
 def connector_supports_order_churn_gate(bot) -> bool:
@@ -240,6 +241,8 @@ class OrderChurnGateState:
         self.reset_count = 0
         self.history_started = False
         self.console_log_state: dict[str, dict[str, object]] = {}
+        self.admission_reason_counts: Counter[str] = Counter()
+        self.admission_summary_started_at: float | None = None
 
     def should_log_console_event(
         self,
@@ -276,6 +279,32 @@ class OrderChurnGateState:
     def begin_generation(self) -> int:
         self.generation += 1
         return self.generation
+
+    def record_admission_reasons(
+        self,
+        reasons: Mapping[str, int],
+        *,
+        now_monotonic: float,
+        interval_seconds: float = ORDER_CHURN_ADMISSION_SUMMARY_SECONDS,
+    ) -> dict[str, int] | None:
+        """Aggregate admission outcomes for a low-rate account-wide summary."""
+        if not math.isfinite(now_monotonic):
+            raise ValueError("admission summary timestamp must be finite")
+        if not math.isfinite(interval_seconds) or interval_seconds <= 0.0:
+            raise ValueError("admission summary interval must be finite and positive")
+        for reason, count in reasons.items():
+            count_i = int(count)
+            if count_i > 0:
+                self.admission_reason_counts[str(reason)] += count_i
+        if self.admission_summary_started_at is None:
+            self.admission_summary_started_at = now_monotonic
+            return None
+        if now_monotonic - self.admission_summary_started_at < interval_seconds:
+            return None
+        summary = dict(sorted(self.admission_reason_counts.items()))
+        self.admission_reason_counts.clear()
+        self.admission_summary_started_at = now_monotonic
+        return summary
 
     def clear_history(self) -> bool:
         had_history = bool(self.history_by_symbol)

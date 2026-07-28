@@ -203,8 +203,17 @@
     Forager projection requests close EMAs only; quote-volume and log-range
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
-    result keyed by the candle index mtime, cached-tail timestamp, requested
-    spans, and projection horizon; local candle persistence invalidates it.
+    result keyed by the cached-tail timestamp, requested spans, and projection
+    horizon. The key also includes the content-bearing shard and known-gap state
+    for the requested window, so another process writing the shared cache
+    invalidates stale projections. Candle content, synthetic provenance, or
+    known-gap coverage changes invalidate local entries; metadata-only refresh
+    writes do not force a full recomputation.
+    Compatible current and bounded cache-only EMA spans share one candle-window
+    load per metric policy. Cache-only coverage is validated independently per
+    span, preserving complete shorter spans when a longer requested window is
+    incomplete. Complete windows use a vectorized continuity check instead of
+    rebuilding every unchanged real row in Python.
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
     every intermediate value. Live provisional internal-gap tolerance is separate from the
@@ -225,10 +234,12 @@
     unavailable and the timeframe index bounds are recomputed from the remaining shards. Leading,
     trailing, failed-fetch, oversized, and unproven between-page gaps remain unavailable. For 1m
     gaps initially classified as `auto_detected` or `fetch_failed`, a targeted retry may expand to
-    the nearest cached real candle on each side. Only when one successful raw payload returns both
-    boundaries while omitting the intervening timestamps may that exact range be promoted to
-    verified `no_trades` continuity. Empty, one-sided, terminal, or rejected payloads do not prove
-    the gap.
+    the nearest cached real candle on each side as soon as those boundaries are available; this
+    proof does not wait for the ordinary retry count to become persistent. Only when one successful
+    raw payload returns both boundaries while omitting the intervening timestamps may that exact
+    range be promoted to verified `no_trades` continuity. Empty, one-sided, terminal, or rejected
+    payloads do not prove the gap and start a separate seven-day contextual-proof cooldown. Ordinary
+    missing-range retries retain their existing independent schedule.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.

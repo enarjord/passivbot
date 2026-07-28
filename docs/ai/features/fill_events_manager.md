@@ -115,6 +115,10 @@ logs, runtime windows, and immutable manifests.
    checkpoint. Bybit keeps the execution-time range narrow while rotating a separate
    closed-PnL `updatedTime` range toward the present; each auxiliary range spans at most
    one day.
+6. KuCoin position-history PnL is authoritative for a completed position cycle. Overlapping trade
+   refreshes may return the same close as pending again; they must preserve an already reconciled
+   cycle value. Reapplying an unchanged cycle observation is a no-op, while a changed authoritative
+   total is redistributed across that lifecycle and persisted.
 
 ## Failure Semantics And Risks
 

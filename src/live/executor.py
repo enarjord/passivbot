@@ -405,6 +405,27 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
                     "market_distance_threshold_pct": threshold * 100.0,
                 },
             )
+    admission_summary = state.record_admission_reasons(
+        Counter(
+            str(order.get("_churn_gate_reason") or "unknown")
+            for order in admission_orders
+        ),
+        now_monotonic=now_monotonic,
+    )
+    if admission_summary:
+        logging.info(
+            "[order] churn gate admission summary | candidates=%d reasons=%s "
+            "rolling_usage=%d activation_count=%d",
+            sum(admission_summary.values()),
+            ",".join(
+                f"{reason}:{count}"
+                for reason, count in sorted(admission_summary.items())
+            ),
+            state.action_attempt_count(
+                now_monotonic=now_monotonic, window_seconds=window_seconds
+            ),
+            activation_count,
+        )
     emitter = getattr(bot, "_emit_order_churn_admission_event", None)
     if callable(emitter):
         try:

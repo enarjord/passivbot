@@ -1,5 +1,6 @@
 use crate::constants::{LONG, SHORT};
 use crate::types::ExchangeParams;
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -129,6 +130,43 @@ pub fn hysteresis(val: f64, prev_val: f64, pct: f64) -> f64 {
     } else {
         prev_val
     }
+}
+
+pub fn ema_last_f64(values: &[f64], span: f64) -> f64 {
+    let alpha = 2.0 / (span + 1.0);
+    let one_minus = 1.0 - alpha;
+    let mut num: Option<f64> = None;
+    let mut den = 1.0;
+    for &value in values {
+        if !value.is_finite() {
+            continue;
+        }
+        match num {
+            None => num = Some(value),
+            Some(previous) => {
+                let next = alpha * value + one_minus * previous;
+                den = alpha + one_minus * den;
+                if den <= f64::MIN_POSITIVE {
+                    num = Some(alpha * value);
+                    den = alpha;
+                } else {
+                    num = Some(next);
+                }
+            }
+        }
+    }
+    num.map(|value| value / den).unwrap_or(f64::NAN)
+}
+
+#[pyfunction(name = "ema_last")]
+pub fn ema_last_py(values: PyReadonlyArray1<'_, f64>, span: f64) -> PyResult<f64> {
+    if !span.is_finite() || span <= 0.0 {
+        return Err(PyValueError::new_err(
+            "EMA span must be finite and greater than zero",
+        ));
+    }
+    let values = values.as_slice()?;
+    Ok(ema_last_f64(values, span))
 }
 
 #[pyfunction]
@@ -351,4 +389,22 @@ pub fn calc_ema_price_ask(
         order_book_ask,
         round_up(ema_bands_upper * (1.0 + ema_dist), price_step),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ema_last_f64;
+
+    #[test]
+    fn ema_last_matches_sequential_reference_and_skips_nonfinite_values() {
+        let values = [f64::NAN, 1.0, 2.0, f64::INFINITY, -3.0, 8.0, 13.0];
+        let span = 10.0;
+        let alpha = 2.0 / (span + 1.0);
+        let mut expected = 1.0;
+        for value in [2.0, -3.0, 8.0, 13.0] {
+            expected = alpha * value + (1.0 - alpha) * expected;
+        }
+        assert_eq!(ema_last_f64(&values, span), expected);
+        assert!(ema_last_f64(&[f64::NAN, f64::INFINITY], span).is_nan());
+    }
 }

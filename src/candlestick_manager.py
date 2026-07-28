@@ -62,6 +62,13 @@ from datetime import datetime, timezone
 import numpy as np
 import portalocker  # type: ignore
 
+try:
+    import passivbot_rust as pbr
+except ImportError:  # pragma: no cover - editable source-only tooling fallback
+    pbr = None
+
+_RUST_EMA_LAST = getattr(pbr, "ema_last", None) if pbr is not None else None
+
 from legacy_data_migrator import (
     standardize_cache_directories,
     migrate_legacy_data_all_on_init,
@@ -236,6 +243,7 @@ class GapEntry(TypedDict, total=False):
     reason: str  # "auto_detected", "exchange_downtime", "no_archive", "fetch_failed", "manual", "no_trades"
     added_at: int  # Timestamp when gap was first detected (ms)
     last_retry_at: int  # Timestamp of the latest remote attempt for this gap (ms)
+    last_contextual_retry_at: int  # Latest KuCoin boundary-proof attempt (ms)
 
 
 # Maximum fetch attempts before marking gap as persistent
@@ -812,7 +820,9 @@ class CandlestickManager:
 
         self._cache: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
-        self._index_mtime: Dict[str, Optional[float]] = {}
+        self._index_mtime: Dict[
+            str, Optional[Tuple[int, int, int]]
+        ] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
         # Compatibility attribute retained for older monitor/tool code.  The
@@ -827,13 +837,7 @@ class CandlestickManager:
         self._projected_open_tail_ema_cache: Dict[
             str,
             OrderedDict[
-                Tuple[
-                    int,
-                    int,
-                    int,
-                    int,
-                    Tuple[Tuple[str, Tuple[float, ...]], ...],
-                ],
+                Tuple[Any, ...],
                 Dict[str, Dict[float, float]],
             ],
         ] = {}
@@ -1785,7 +1789,12 @@ class CandlestickManager:
         existing = self._index.get(key)
         cached_mtime = self._index_mtime.get(key)
         try:
-            current_mtime = os.path.getmtime(idx_path)
+            stat = os.stat(idx_path)
+            current_mtime = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+                int(stat.st_ino),
+            )
         except FileNotFoundError:
             current_mtime = None
         except Exception:
@@ -1939,7 +1948,12 @@ class CandlestickManager:
         with portalocker.Lock(lock_path, timeout=5):
             self._atomic_write_bytes(idx_path, payload)
         try:
-            self._index_mtime[key] = os.path.getmtime(idx_path)
+            stat = os.stat(idx_path)
+            self._index_mtime[key] = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+                int(stat.st_ino),
+            )
         except Exception:
             self._index_mtime[key] = None
 
@@ -2669,7 +2683,37 @@ class CandlestickManager:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        candle_content_changed = True
+        replaces_synthetic = False
         if tf_norm == "1m":
+            cached_before = np.sort(
+                _ensure_dtype(self._ensure_symbol_cache(symbol)),
+                order="ts",
+            )
+            incoming_unique = self._merge_overwrite(
+                np.empty((0,), dtype=CANDLE_DTYPE),
+                arr,
+            )
+            if cached_before.size and incoming_unique.size:
+                positions = np.searchsorted(
+                    cached_before["ts"].astype(np.int64),
+                    incoming_unique["ts"].astype(np.int64),
+                )
+                if np.all(positions < cached_before.size):
+                    matched = cached_before[positions]
+                    candle_content_changed = not (
+                        np.array_equal(
+                            matched["ts"].astype(np.int64),
+                            incoming_unique["ts"].astype(np.int64),
+                        )
+                        and np.array_equal(matched, incoming_unique)
+                    )
+            synthetic = self._synthetic_timestamps.get(symbol, set())
+            replaces_synthetic = bool(
+                synthetic
+                and any(int(ts) in synthetic for ts in incoming_unique["ts"])
+            )
+        if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
 
         # Update inception_ts if this is new earliest data for 1m (defer save until end)
@@ -2696,11 +2740,13 @@ class CandlestickManager:
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
         if tf_norm == "1m":
-            self._trim_known_gaps_covered_by_rows(
+            gaps_changed = self._trim_known_gaps_covered_by_rows(
                 symbol,
                 arr,
                 defer_index=defer_index,
             )
+            if gaps_changed:
+                self._projected_open_tail_ema_cache.pop(symbol, None)
         observer = self._persist_batch_observer
         if observer is not None:
             try:
@@ -2928,6 +2974,9 @@ class CandlestickManager:
                         "last_retry_at": int(
                             it.get("last_retry_at", it.get("added_at", now_ms))
                         ),
+                        "last_contextual_retry_at": int(
+                            it.get("last_contextual_retry_at", 0)
+                        ),
                     }
                     if entry["start_ts"] <= entry["end_ts"]:
                         out.append(entry)
@@ -2981,6 +3030,10 @@ class CandlestickManager:
                         prev.get("last_retry_at", prev.get("added_at", 0)),
                         gap.get("last_retry_at", gap.get("added_at", 0)),
                     ),
+                    "last_contextual_retry_at": max(
+                        prev.get("last_contextual_retry_at", 0),
+                        gap.get("last_contextual_retry_at", 0),
+                    ),
                 }
         idx = self._ensure_symbol_index(symbol)
         idx["meta"]["known_gaps"] = [
@@ -2992,6 +3045,9 @@ class CandlestickManager:
                 "added_at": int(g.get("added_at", 0)),
                 "last_retry_at": int(
                     g.get("last_retry_at", g.get("added_at", 0))
+                ),
+                "last_contextual_retry_at": int(
+                    g.get("last_contextual_retry_at", 0)
                 ),
             }
             for g in merged
@@ -3006,16 +3062,16 @@ class CandlestickManager:
         rows: np.ndarray,
         *,
         defer_index: bool = False,
-    ) -> None:
+    ) -> bool:
         """Remove authoritative 1m timestamps from persisted known-gap ranges."""
         if rows.size == 0:
-            return
+            return False
         gaps = self._get_known_gaps_enhanced(symbol)
         if not gaps:
-            return
+            return False
         timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
         if timestamps.size == 0:
-            return
+            return False
         retained: List[GapEntry] = []
         changed = False
         for gap in gaps:
@@ -3054,6 +3110,7 @@ class CandlestickManager:
                 retained,
                 defer_index=defer_index,
             )
+        return changed
 
     def _save_known_gaps(self, symbol: str, gaps: List[Tuple[int, int]]) -> None:
         """Save gaps from simple tuples (backward compatibility wrapper)."""
@@ -3252,6 +3309,66 @@ class CandlestickManager:
             self._log(
                 "debug",
                 "persistent_gap_verification_deferred",
+                symbol=symbol,
+                start_ts=int(start_ts),
+                end_ts=int(end_ts),
+                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
+            )
+        return changed
+
+    def _kucoin_contextual_retry_due(
+        self,
+        gap: GapEntry,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
+        """Return whether a KuCoin sparse-gap boundary proof is due.
+
+        Boundary proof is independent of the ordinary missing-range retry
+        count.  A newly discovered sparse interval should be proved as soon as
+        real rows bracket it, rather than spending three empty-range retries
+        and then waiting for the persistent-gap cooldown.  Failed boundary
+        proofs retain their own cooldown so routine candle reads cannot cause
+        a REST treadmill.
+        """
+        if str(gap.get("reason", GAP_REASON_AUTO)) not in {
+            GAP_REASON_AUTO,
+            GAP_REASON_FETCH_FAILED,
+        }:
+            return False
+        now = self._now_ms() if now_ms is None else int(now_ms)
+        last_retry_at = int(gap.get("last_contextual_retry_at", 0))
+        return (
+            last_retry_at <= 0
+            or now - last_retry_at >= _GAP_PERSISTENT_RETRY_MS
+        )
+
+    def _defer_kucoin_contextual_gap_retry(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> bool:
+        """Restart only the KuCoin contextual-proof cooldown after failure."""
+        now = self._now_ms() if now_ms is None else int(now_ms)
+        changed = False
+        gaps = self._get_known_gaps_enhanced(symbol)
+        for gap in gaps:
+            if (
+                int(gap["start_ts"]) <= int(end_ts)
+                and int(gap["end_ts"]) >= int(start_ts)
+                and str(gap.get("reason", GAP_REASON_AUTO))
+                in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+            ):
+                gap["last_contextual_retry_at"] = now
+                changed = True
+        if changed:
+            self._save_known_gaps_enhanced(symbol, gaps)
+            self._log(
+                "debug",
+                "kucoin_contextual_gap_verification_deferred",
                 symbol=symbol,
                 start_ts=int(start_ts),
                 end_ts=int(end_ts),
@@ -5535,6 +5652,24 @@ class CandlestickManager:
                 self._log_strict_gaps_summary()
             return a[i0:i1]
 
+        # Complete ranges are overwhelmingly the common live path.  Avoid
+        # rebuilding every real candle through Python tuples when there is
+        # nothing to synthesize.  Keep returning a new array as documented.
+        i0 = int(np.searchsorted(ts_arr, effective_lo, side="left"))
+        i1 = int(np.searchsorted(ts_arr, effective_hi, side="right"))
+        expected_len = int((effective_hi - effective_lo) // ONE_MIN_MS) + 1
+        complete = a[i0:i1]
+        if (
+            complete.shape[0] == expected_len
+            and int(complete[0]["ts"]) == effective_lo
+            and int(complete[-1]["ts"]) == effective_hi
+            and (
+                expected_len == 1
+                or np.all(np.diff(_ts_index(complete)) == ONE_MIN_MS)
+            )
+        ):
+            return complete.copy()
+
         expected = np.arange(
             effective_lo,
             effective_hi + ONE_MIN_MS,
@@ -7781,15 +7916,13 @@ class CandlestickManager:
                         for gap in self._get_known_gaps_enhanced(symbol)
                     )
 
-                def persistent_unverified_gap_covering(
+                def unverified_gap_covering(
                     s: int, e: int
                 ) -> Optional[GapEntry]:
                     for gap in self._get_known_gaps_enhanced(symbol):
                         if (
                             int(gap["start_ts"]) <= int(s)
                             and int(gap["end_ts"]) >= int(e)
-                            and int(gap.get("retry_count", 0))
-                            >= _GAP_MAX_RETRIES
                             and str(gap.get("reason", GAP_REASON_AUTO))
                             in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
                         ):
@@ -7812,9 +7945,9 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    persistent_gap = persistent_unverified_gap_covering(s, e)
-                    if persistent_gap is None or not self._should_retry_gap(
-                        persistent_gap, now_ms=now
+                    unverified_gap = unverified_gap_covering(s, e)
+                    if unverified_gap is None or not self._kucoin_contextual_retry_due(
+                        unverified_gap, now_ms=now
                     ):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
@@ -7960,7 +8093,7 @@ class CandlestickManager:
                                     symbol, int(s), int(e)
                                 )
                             else:
-                                self._defer_persistent_gap_retry(
+                                self._defer_kucoin_contextual_gap_retry(
                                     symbol,
                                     int(s),
                                     int(e),
@@ -8135,6 +8268,9 @@ class CandlestickManager:
 
     def _ema(self, values: np.ndarray, span: float) -> float:
         """Return the final bias-corrected EMA without allocating a full series."""
+        if _RUST_EMA_LAST is not None:
+            contiguous = np.ascontiguousarray(values, dtype=np.float64)
+            return float(_RUST_EMA_LAST(contiguous, float(span)))
         n = int(values.shape[0])
         if n == 0:
             return float("nan")
@@ -8244,6 +8380,62 @@ class CandlestickManager:
             )
         raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
 
+    def _projection_shared_content_signature(
+        self,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        *,
+        timeframe: str,
+    ) -> Tuple[Any, ...]:
+        """Return content-bearing shared-cache state for a projection window.
+
+        The index is reloaded when another process atomically replaces it.
+        Shard checksums and gap coverage affect projection inputs; refresh and
+        retry timestamps intentionally do not.
+        """
+        idx = self._ensure_symbol_index(symbol, timeframe=timeframe)
+        shards = idx.get("shards", {})
+        shard_state: List[Tuple[Any, ...]] = []
+        if isinstance(shards, dict):
+            for date_key in self._date_keys_between(start_ts, end_ts):
+                shard = shards.get(date_key)
+                if not isinstance(shard, dict):
+                    continue
+                shard_state.append(
+                    (
+                        str(date_key),
+                        shard.get("min_ts"),
+                        shard.get("max_ts"),
+                        shard.get("count"),
+                        shard.get("crc32"),
+                    )
+                )
+
+        gap_state: List[Tuple[int, int, str]] = []
+        known_gaps = idx.get("meta", {}).get("known_gaps", [])
+        if isinstance(known_gaps, list):
+            for gap in known_gaps:
+                try:
+                    if isinstance(gap, dict):
+                        gap_start = int(gap.get("start_ts", 0))
+                        gap_end = int(gap.get("end_ts", 0))
+                        reason = str(gap.get("reason", GAP_REASON_AUTO))
+                    elif isinstance(gap, (list, tuple)) and len(gap) >= 2:
+                        gap_start = int(gap[0])
+                        gap_end = int(gap[1])
+                        reason = GAP_REASON_AUTO
+                    else:
+                        continue
+                except Exception:
+                    continue
+                clipped_start = max(int(start_ts), gap_start)
+                clipped_end = min(int(end_ts), gap_end)
+                if clipped_start <= clipped_end:
+                    gap_state.append((clipped_start, clipped_end, reason))
+
+        return (tuple(shard_state), tuple(sorted(gap_state)))
+
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,
@@ -8281,17 +8473,23 @@ class CandlestickManager:
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
             return {}
-        try:
-            index_mtime_ns = int(
-                os.stat(self._index_path(symbol, timeframe="1m")).st_mtime_ns
-            )
-        except (FileNotFoundError, OSError):
-            index_mtime_ns = 0
+        max_span = max(span for spans in normalized.values() for span in spans)
+        window_candles = max(1, int(math.ceil(max_span)))
+        start_ts = min(
+            int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
+            last_cached,
+        )
+        shared_content_signature = self._projection_shared_content_signature(
+            symbol,
+            start_ts,
+            latest_expected,
+            timeframe=timeframe,
+        )
         cache_key = (
             int(latest_expected),
             int(last_cached),
             int(max_tail_gap),
-            index_mtime_ns,
+            shared_content_signature,
             tuple(
                 (metric_key, tuple(float(span) for span in spans))
                 for metric_key, spans in sorted(normalized.items())
@@ -8307,13 +8505,6 @@ class CandlestickManager:
                 metric_key: dict(values)
                 for metric_key, values in cached.items()
             }
-        max_span = max(span for spans in normalized.values() for span in spans)
-        window_candles = max(1, int(math.ceil(max_span)))
-        start_ts = min(
-            int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
-            last_cached,
-        )
-
         before_cache_keys = set(self._ema_cache.get(symbol, {}).keys())
         before_synthetic = set(self._synthetic_timestamps.get(symbol, set()))
         arr = await self.get_candles(
@@ -8435,6 +8626,35 @@ class CandlestickManager:
         forward qv/log-range EMAs through a bounded unknown stale tail. It never
         fetches remote candles and never appends synthetic tail rows.
         """
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        nested = await self.get_latest_cached_ema_metric_spans(
+            symbol,
+            normalized,
+            max_staleness_ms=max_staleness_ms,
+            window_candles=window_candles,
+            timeframe=timeframe,
+        )
+        # Preserve the legacy one-value-per-metric API.  Callers historically
+        # supplied one span for each metric; if several are supplied, the
+        # largest normalized span retains the prior overwrite behavior.
+        out: Dict[str, float] = {}
+        for metric_key, spans in normalized.items():
+            metric_values = nested.get(metric_key, {})
+            for span in spans:
+                if span in metric_values:
+                    out[str(metric_key)] = float(metric_values[span])
+        return out
+
+    async def get_latest_cached_ema_metric_spans(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+        timeframe: str = "1m",
+    ) -> Dict[str, Dict[float, float]]:
+        """Return cache-only EMA values for multiple metrics and spans in one load."""
         period_ms = _tf_to_ms(timeframe)
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
@@ -8473,12 +8693,12 @@ class CandlestickManager:
             allow_remote_fetch=False,
             allow_provisional_internal_gaps=False,
         )
-        if raw.size == 0 or not candle_range_has_full_coverage(
-            raw, start_ts, int(last_cached), timeframe=timeframe
-        ):
+        if raw.size == 0:
             return {}
 
-        out: Dict[str, float] = {}
+        out: Dict[str, Dict[float, float]] = {
+            metric_key: {} for metric_key in normalized
+        }
         for metric_key, spans in normalized.items():
             for span in spans:
                 span_candles = max(1, int(math.ceil(span)))
@@ -8486,24 +8706,19 @@ class CandlestickManager:
                 tail = self._slice_ts_range(
                     raw, metric_start_ts, int(last_cached), assume_sorted=True
                 )
-                if period_ms == ONE_MIN_MS:
-                    tail = self.standardize_gaps(
-                        tail,
-                        start_ts=metric_start_ts,
-                        end_ts=int(last_cached),
-                        strict=False,
-                        fill_trailing_gaps=False,
-                        assume_sorted=True,
-                        symbol=symbol,
-                    )
-                if tail.size == 0:
+                if tail.size == 0 or not candle_range_has_full_coverage(
+                    tail,
+                    metric_start_ts,
+                    int(last_cached),
+                    timeframe=timeframe,
+                ):
                     continue
                 series = self._ema_metric_series(metric_key, tail)
                 if series.shape[0] == 0:
                     continue
                 val = float(self._ema(series, span))
                 if math.isfinite(val):
-                    out[str(metric_key)] = val
+                    out[str(metric_key)][float(span)] = val
         return out
 
     async def _latest_finalized_range(
@@ -9054,6 +9269,125 @@ class CandlestickManager:
                 int(now),
             )
 
+        return out
+
+    async def get_latest_ema_metric_spans(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        max_age_ms: Optional[int] = None,
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
+        allow_provisional_internal_gaps: Optional[bool] = None,
+    ) -> Dict[str, Dict[float, float]]:
+        """Compute multiple metrics and spans from one completed-candle load.
+
+        Results and cache keys intentionally match the individual latest-EMA
+        helpers.  This is the orchestration hot path: a symbol may need three
+        close spans plus volatility and volume metrics, and loading the same
+        candle window once per span is pure duplicate work.
+        """
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        if not normalized:
+            return {}
+        out_tf = timeframe if timeframe is not None else tf
+        period_ms = _tf_to_ms(out_tf)
+        if allow_provisional_internal_gaps is None:
+            allow_provisional_internal_gaps = bool(allow_remote_fetch)
+        now = self._now_ms()
+        tf_key = str(period_ms)
+        cache = self._ema_cache.setdefault(symbol, {})
+        out: Dict[str, Dict[float, float]] = {
+            metric_key: {} for metric_key in normalized
+        }
+        missing: Dict[str, List[float]] = {}
+        for metric_key, spans in normalized.items():
+            cache_metric_key = (
+                metric_key
+                if allow_provisional_internal_gaps
+                else f"{metric_key}:strict"
+            )
+            for span in spans:
+                _start_ts, end_ts = await self._latest_finalized_range(
+                    span, period_ms=period_ms
+                )
+                key = (cache_metric_key, float(span), tf_key)
+                if max_age_ms is not None and max_age_ms > 0 and key in cache:
+                    val, cached_end_ts, computed_at = cache[key]
+                    if (
+                        int(cached_end_ts) == int(end_ts)
+                        and now - int(computed_at) <= int(max_age_ms)
+                    ):
+                        out[metric_key][span] = float(val)
+                        continue
+                missing.setdefault(metric_key, []).append(span)
+        if not missing:
+            return out
+
+        max_span = max(span for spans in missing.values() for span in spans)
+        start_ts, end_ts = await self._latest_finalized_range(
+            max_span, period_ms=period_ms
+        )
+        raw = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=max_age_ms,
+            timeframe=out_tf,
+            allow_remote_fetch=allow_remote_fetch,
+            fill_trailing_gaps=False,
+            allow_provisional_internal_gaps=allow_provisional_internal_gaps,
+        )
+        if raw.size == 0:
+            for metric_key, spans in missing.items():
+                out[metric_key].update({span: float("nan") for span in spans})
+            return out
+
+        for metric_key, spans in missing.items():
+            cache_metric_key = (
+                metric_key
+                if allow_provisional_internal_gaps
+                else f"{metric_key}:strict"
+            )
+            for span in spans:
+                span_candles = max(1, int(math.ceil(span)))
+                metric_start_ts = int(
+                    end_ts - period_ms * (span_candles - 1)
+                )
+                tail = self._slice_ts_range(
+                    raw,
+                    metric_start_ts,
+                    end_ts,
+                    assume_sorted=True,
+                )
+                if tail.size == 0 or not self._ema_window_has_required_coverage(
+                    tail,
+                    metric_start_ts,
+                    end_ts,
+                    symbol=symbol,
+                    timeframe=out_tf,
+                ):
+                    out[metric_key][span] = float("nan")
+                    continue
+                if period_ms > ONE_MIN_MS and not self._candle_range_has_full_coverage(
+                    tail,
+                    metric_start_ts,
+                    end_ts,
+                    period_ms,
+                ):
+                    out[metric_key][span] = float("nan")
+                    continue
+                value = float(self._ema(self._ema_metric_series(metric_key, tail), span))
+                out[metric_key][span] = value
+                if not math.isfinite(value):
+                    continue
+                cache[(cache_metric_key, float(span), tf_key)] = (
+                    value,
+                    int(end_ts),
+                    int(now),
+                )
         return out
 
     async def get_latest_ema_log_range(
