@@ -71,6 +71,34 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 )
 
 
+def _set_authoritative_epoch_state(
+    bot,
+    *,
+    epoch: int = 1,
+    fresh: set[str] | frozenset[str] = frozenset(),
+    changed: set[str] | frozenset[str] = frozenset(),
+) -> FreshnessLedger:
+    """Seed one internally consistent authoritative cohort for focused tests."""
+    fresh_surfaces = set(fresh) | set(changed)
+    ledger = FreshnessLedger(now_ms=0)
+    previous_epoch = max(0, int(epoch) - 1)
+    ledger.epoch = previous_epoch
+    for surface in fresh_surfaces:
+        ledger.stamp(
+            surface,
+            (surface, "baseline"),
+            now_ms=1,
+            epoch=previous_epoch,
+        )
+    ledger.epoch = int(epoch)
+    for surface in fresh_surfaces:
+        signature = (surface, "changed" if surface in changed else "baseline")
+        ledger.stamp(surface, signature, now_ms=2, epoch=epoch)
+    bot.freshness_ledger = ledger
+    bot._authoritative_refresh_epoch = int(epoch)
+    return ledger
+
+
 def _hostile_runtime_error(detail: str) -> RuntimeError:
     error_cls = type("ApiKeySecretError", (RuntimeError,), {})
     return error_cls(detail)
@@ -665,11 +693,7 @@ def _counted_staged_account_refresh_bot(
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_pending_confirmations = dict(pending_confirmations or {})
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.recent_order_cancellations = []
@@ -714,14 +738,16 @@ def _counted_staged_account_refresh_bot(
     bot.fetch_open_orders = counted_fetch_open_orders
     bot.update_pnls = counted_update_pnls
 
-    # Seed the previous signatures so steady-state request-count tests do not
+    # Seed the previous ledger signatures so steady-state request-count tests do not
     # create follow-up confirmations just because the fake bot has no history.
-    bot._authoritative_surface_signatures = {
+    signatures = {
         "balance": round(float(balance), 12),
         "positions": Passivbot._positions_signature(bot, list(positions or [])),
         "open_orders": Passivbot._open_orders_signature(bot, list(open_orders or [])),
         "fills": (),
     }
+    for surface, signature in signatures.items():
+        bot.freshness_ledger.stamp(surface, signature, now_ms=1, epoch=0)
     return bot, counts
 
 
@@ -852,12 +878,7 @@ def test_diagnostic_event_emit_failure_is_noncritical():
 
 def test_authoritative_surface_record_survives_data_packet_finalize_failure():
     bot = Passivbot.__new__(Passivbot)
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_refresh_epoch = 1
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     def failing_finalize(*_args, **_kwargs):
         raise RuntimeError("diagnostic finalize failed")
@@ -865,8 +886,19 @@ def test_authoritative_surface_record_survives_data_packet_finalize_failure():
     bot._finalize_live_data_packet_metadata_inner = failing_finalize
 
     assert bot._record_authoritative_surface("balance", ("balance", "fresh")) is True
-    assert bot._authoritative_surface_signatures["balance"] == ("balance", "fresh")
+    assert bot.freshness_ledger.surface_signature("balance") == ("balance", "fresh")
     assert bot.freshness_ledger.surface_epoch("balance") == 1
+
+
+def test_freshness_ledger_bootstraps_legacy_authoritative_epoch_alias():
+    bot = Passivbot.__new__(Passivbot)
+    bot._authoritative_refresh_epoch = 7
+
+    ledger = bot._ensure_freshness_ledger()
+    bot._begin_authoritative_refresh_epoch()
+
+    assert ledger.epoch == 8
+    assert bot._authoritative_refresh_epoch == 8
 
 
 @pytest.mark.asyncio
@@ -3963,7 +3995,7 @@ def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkey
 def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     with caplog.at_level(logging.DEBUG):
         bot._log_staged_refresh_timings({"open_orders"}, {"open_orders": 250}, 250)
@@ -3982,13 +4014,13 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
             {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
             8500,
         )
-        bot._authoritative_refresh_epoch_changed = {"positions"}
+        _set_authoritative_epoch_state(bot, changed={"positions"})
         bot._log_staged_refresh_timings(
             {"balance", "positions", "open_orders", "fills"},
             {"balance": 1200, "positions": 1700, "open_orders": 900, "fills": 1300},
             4100,
         )
-        bot._authoritative_refresh_epoch_changed = set()
+        _set_authoritative_epoch_state(bot)
         bot._log_staged_refresh_timings(
             {"balance", "positions", "open_orders", "fills"},
             {"balance": 2500, "positions": 3000, "open_orders": 2000, "fills": 4000},
@@ -4030,7 +4062,7 @@ def test_log_staged_refresh_timings_keeps_meaningful_change_structured_at_info(c
     bot._live_event_current_cycle_id = "cy_refresh"
     bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = {"positions"}
+    _set_authoritative_epoch_state(bot, changed={"positions"})
 
     with caplog.at_level(logging.DEBUG):
         bot._log_staged_refresh_timings(
@@ -4077,7 +4109,7 @@ def test_log_staged_refresh_timings_skips_structured_debug_sample():
     bot._live_event_current_cycle_id = "cy_refresh_debug"
     bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     bot._log_staged_refresh_timings(
         {"balance", "positions", "open_orders", "fills"},
@@ -4247,9 +4279,12 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
     wave["create_posted"] = 1
     bot._track_order_wave_confirmation(wave)
 
-    bot._authoritative_refresh_epoch = 5
-    bot._authoritative_refresh_epoch_fresh = {"open_orders"}
-    bot._authoritative_refresh_epoch_changed = {"open_orders", "positions"}
+    _set_authoritative_epoch_state(
+        bot,
+        epoch=5,
+        fresh={"open_orders"},
+        changed={"open_orders", "positions"},
+    )
 
     with caplog.at_level(logging.INFO):
         blocked, details = bot._authoritative_execution_barrier_state()
@@ -6064,7 +6099,8 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._last_fill_refresh_pending_pnl_count == 0
-    assert "fills" not in getattr(bot, "_authoritative_surface_signatures", {})
+    ledger = getattr(bot, "freshness_ledger", None)
+    assert ledger is None or ledger.surface_signature("fills") is None
     assert bot._trailing_fill_fetch_generation == 7
     retry_state = getattr(bot, "_fill_coverage_retry_state", {})
     assert retry_state["next_retry_ms"] > wall_ms["value"]
@@ -6183,7 +6219,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
     bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
-    assert "fills" in getattr(bot, "_authoritative_surface_signatures", {})
+    assert bot.freshness_ledger.surface_signature("fills") is not None
     assert getattr(bot, "_fill_coverage_retry_state", {}) == {}
 
 
@@ -7067,11 +7103,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
     bot.recent_order_cancellations = []
     bot.fetch_balance = AsyncMock(return_value=123.45)
     bot.fetch_positions = AsyncMock(
@@ -7271,11 +7303,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
     bot.recent_order_cancellations = []
     seen = {}
 
@@ -7366,10 +7394,6 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
     bot.exchange = "binance"
     bot.stop_signal_received = False
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot.fetch_balance = AsyncMock(return_value=100.0)
     bot.fetch_positions = AsyncMock(return_value=[])
     bot.fetch_open_orders = AsyncMock(return_value=[])
@@ -7409,10 +7433,6 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.positions = {}
     bot.open_orders = {}
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
@@ -10806,11 +10826,8 @@ async def test_pre_create_snapshot_diagnostic_failures_are_redacted(caplog):
 def _make_open_order_guardrail_bot(*, epoch: int = 3):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
+    bot.freshness_ledger.epoch = epoch
     bot._authoritative_refresh_epoch = epoch
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_pending_confirmations = {}
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -11942,8 +11959,6 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot.positions = {}
     bot.open_orders = {}
     bot.PB_modes = {"long": {}, "short": {}}
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot._authoritative_refresh_epoch = 0
     bot._authoritative_pending_confirmations = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -13056,7 +13071,7 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
     now = {"value": 1_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     with caplog.at_level(logging.INFO):
         for i in range(60):
@@ -13082,7 +13097,7 @@ def test_staged_refresh_timing_summary_emits_structured_event(monkeypatch):
     bot._live_event_current_cycle_id = "cy_refresh_summary"
     bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     for i in range(60):
         bot._log_staged_refresh_timings(
@@ -13136,7 +13151,7 @@ def test_staged_refresh_timing_threshold_uses_structured_console_owner(caplog, m
         text_sink=text_sink,
     )
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
 
     with caplog.at_level(logging.DEBUG):
@@ -13190,7 +13205,7 @@ def test_staged_refresh_timing_uses_exact_legacy_fallback_without_console(caplog
         console_sink=None,
     )
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
 
     with caplog.at_level(logging.INFO):
@@ -13222,7 +13237,7 @@ def test_staged_refresh_timing_summary_uses_structured_console_owner(caplog, mon
         console_sink=console_sink,
     )
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
 
     with caplog.at_level(logging.INFO):
@@ -13253,7 +13268,7 @@ def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
     now = {"value": 2_000_000}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
     bot._authoritative_pending_confirmations = {}
-    bot._authoritative_refresh_epoch_changed = set()
+    _set_authoritative_epoch_state(bot)
 
     with caplog.at_level(logging.INFO):
         for _ in range(60):
@@ -13296,11 +13311,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_surface_signatures = {}
-    bot._authoritative_surface_generations = {}
     bot._authoritative_refresh_epoch = 0
-    bot._authoritative_refresh_epoch_fresh = set()
-    bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_pending_confirmations = {"open_orders": 1}
     bot.recent_order_cancellations = []
     bot.recent_order_executions = [
@@ -13478,8 +13489,11 @@ async def test_staged_account_refresh_request_counts_missing_self_order_escalate
         pending_confirmations={"open_orders": 1},
     )
     bot.open_orders = {"BTC/USDT:USDT": [dict(stale_order)]}
-    bot._authoritative_surface_signatures["open_orders"] = (
-        Passivbot._open_orders_signature(bot, [stale_order])
+    bot.freshness_ledger.stamp(
+        "open_orders",
+        Passivbot._open_orders_signature(bot, [stale_order]),
+        now_ms=2,
+        epoch=0,
     )
 
     result = await bot.refresh_authoritative_state()
