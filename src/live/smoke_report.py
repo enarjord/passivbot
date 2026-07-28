@@ -3146,28 +3146,6 @@ def _planning_snapshot_market_summary(value: Any) -> dict[str, Any]:
     return out
 
 
-def _planning_snapshot_availability(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, Any] = {}
-    record_count = _non_negative_int(value.get("record_count"))
-    if record_count is not None:
-        out["record_count"] = int(record_count)
-    status_counts = value.get("status_counts")
-    if isinstance(status_counts, dict):
-        safe_counts: Counter[str] = Counter()
-        for status, raw in status_counts.items():
-            parsed = _non_negative_int(raw)
-            safe_status = _data_packet_safe_text(status)
-            if parsed is not None and safe_status:
-                safe_counts[safe_status] += int(parsed)
-        if safe_counts:
-            out["status_counts"] = dict(
-                safe_counts.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
-            )
-    return out
-
-
 def _planning_snapshot_health_group(
     *,
     bot_key: str,
@@ -3202,9 +3180,6 @@ def _planning_snapshot_health_group(
         ),
         "latest_market_snapshots": _planning_snapshot_market_summary(
             payload.get("market_snapshot_summary")
-        ),
-        "latest_planning_availability": _planning_snapshot_availability(
-            payload.get("planning_availability")
         ),
         "latest_data_packet_count": (
             len(data_packets) if isinstance(data_packets, list) else 0
@@ -3257,14 +3232,12 @@ def _summarize_planning_snapshot_health(
     contexts: Counter[str] = Counter()
     required_surfaces: Counter[str] = Counter()
     market_sources: Counter[str] = Counter()
-    availability_statuses: Counter[str] = Counter()
     required_surface_count_total = 0
     market_snapshot_count_total = 0
     market_symbol_count_total = 0
     market_missing_count_total = 0
     market_max_age_ms_max = 0
     market_stale_bots = 0
-    planning_record_count_total = 0
     data_packet_count_total = 0
     for group in groups.values():
         contexts[str(group.get("latest_context") or "unknown")] += 1
@@ -3295,14 +3268,6 @@ def _summarize_planning_snapshot_health(
         sources = sources if isinstance(sources, dict) else {}
         for source in sources.get("sample") or []:
             market_sources[str(source)] += 1
-        availability = group.get("latest_planning_availability")
-        availability = availability if isinstance(availability, dict) else {}
-        planning_record_count_total += int(
-            _non_negative_int(availability.get("record_count")) or 0
-        )
-        status_counts = availability.get("status_counts")
-        if isinstance(status_counts, dict):
-            availability_statuses.update(status_counts)
         data_packet_count_total += int(group.get("latest_data_packet_count") or 0)
     compact_groups = [
         {
@@ -3329,10 +3294,6 @@ def _summarize_planning_snapshot_health(
         "latest_market_stale_bots": market_stale_bots,
         "latest_market_sources": dict(
             market_sources.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
-        ),
-        "latest_planning_record_count_total": planning_record_count_total,
-        "latest_planning_status_counts": dict(
-            availability_statuses.most_common(PLANNING_SNAPSHOT_VALUE_LIMIT)
         ),
         "latest_data_packet_count_total": data_packet_count_total,
         "groups_truncated": len(ordered) > PLANNING_SNAPSHOT_HEALTH_GROUP_LIMIT,
@@ -3539,7 +3500,6 @@ def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
     return event_type in {
         EventTypes.PLANNING_UNAVAILABLE,
         EventTypes.PLANNING_DEFER_SUMMARY,
-        EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.ENTRY_INITIAL_ELIGIBILITY,
     }
 
@@ -4022,10 +3982,7 @@ def _staged_readiness_group(
     detail_payload = details if isinstance(details, dict) else payload
     event_type = live_event.get("event_type") or row.get("kind")
     defer_summary = event_type == EventTypes.PLANNING_DEFER_SUMMARY
-    symbol_state = event_type == EventTypes.PLANNING_SYMBOL_STATE
     initial_eligibility = event_type == EventTypes.ENTRY_INITIAL_ELIGIBILITY
-    state_summary = payload.get("summary")
-    state_summary = state_summary if isinstance(state_summary, dict) else {}
     records_truncated = payload.get("records_truncated")
     records_truncated = (
         records_truncated if isinstance(records_truncated, bool) else None
@@ -4057,15 +4014,6 @@ def _staged_readiness_group(
     latest_will_retry = (
         _staged_readiness_text(payload.get("will_retry")) if defer_summary else None
     )
-    latest_symbol_state_symbols = (
-        _staged_readiness_symbol_summary(
-            payload,
-            symbols_key="unavailable_symbols",
-            count_key="unavailable_symbols_count",
-        )
-        if symbol_state
-        else {}
-    )
     return {
         "bot": bot_key,
         "event_type": event_type,
@@ -4088,37 +4036,6 @@ def _staged_readiness_group(
         "latest_defer_symbols": latest_defer_symbols,
         "latest_required_surfaces": required_surfaces,
         "latest_will_retry": latest_will_retry,
-        "latest_symbol_state_record_count": (
-            _non_negative_int(state_summary.get("record_count"))
-            if symbol_state
-            else None
-        ),
-        "latest_symbol_state_status_counts": (
-            _staged_readiness_count_map(state_summary.get("status_counts"))
-            if symbol_state
-            else {}
-        ),
-        "latest_symbol_state_unavailable_count": (
-            _non_negative_int(payload.get("unavailable_count"))
-            if symbol_state
-            else None
-        ),
-        "latest_symbol_state_unavailable_by_reason": (
-            _staged_readiness_count_map(payload.get("unavailable_by_reason"))
-            if symbol_state
-            else {}
-        ),
-        "latest_symbol_state_unavailable_by_order_class": (
-            _staged_readiness_count_map(payload.get("unavailable_by_order_class"))
-            if symbol_state
-            else {}
-        ),
-        "latest_symbol_state_unavailable_by_surface": (
-            _staged_readiness_count_map(payload.get("unavailable_by_surface"))
-            if symbol_state
-            else {}
-        ),
-        "latest_symbol_state_unavailable_symbols": latest_symbol_state_symbols,
         "latest_initial_entry_evaluated_count": (
             _non_negative_int(payload.get("evaluated_count"))
             if initial_eligibility
@@ -4207,13 +4124,6 @@ def _merge_staged_readiness_group(
             "latest_defer_symbols",
             "latest_required_surfaces",
             "latest_will_retry",
-            "latest_symbol_state_record_count",
-            "latest_symbol_state_status_counts",
-            "latest_symbol_state_unavailable_count",
-            "latest_symbol_state_unavailable_by_reason",
-            "latest_symbol_state_unavailable_by_order_class",
-            "latest_symbol_state_unavailable_by_surface",
-            "latest_symbol_state_unavailable_symbols",
             "latest_initial_entry_evaluated_count",
             "latest_initial_entry_records_total",
             "latest_initial_entry_outcome_counts",
@@ -4366,86 +4276,6 @@ def _summarize_staged_readiness_health(
                 limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
             ).get("sample", [])
             summary["latest_defer_symbols"] = {
-                "count": symbol_count,
-                "sample": sample,
-                "truncated": max(0, symbol_count - len(sample)),
-            }
-    symbol_state_groups = _latest_staged_readiness_groups_by_bot(
-        groups.values(),
-        event_type=EventTypes.PLANNING_SYMBOL_STATE,
-    )
-    if symbol_state_groups:
-        symbol_count = 0
-        symbols: Counter[str] = Counter()
-        for group in symbol_state_groups:
-            symbol_summary = group.get("latest_symbol_state_unavailable_symbols")
-            if not isinstance(symbol_summary, dict):
-                continue
-            symbol_count += int(_non_negative_int(symbol_summary.get("count")) or 0)
-            for symbol in symbol_summary.get("sample") or []:
-                symbols[str(symbol)] += 1
-        summary.update(
-            {
-                "latest_symbol_state_bots": len(symbol_state_groups),
-                "latest_symbol_state_record_total": sum(
-                    int(
-                        _non_negative_int(
-                            group.get("latest_symbol_state_record_count")
-                        )
-                        or 0
-                    )
-                    for group in symbol_state_groups
-                ),
-                "latest_symbol_state_status_counts": _staged_readiness_count_map(
-                    _sum_counter_maps(
-                        group.get("latest_symbol_state_status_counts")
-                        for group in symbol_state_groups
-                    )
-                ),
-                "latest_symbol_state_unavailable_total": sum(
-                    int(
-                        _non_negative_int(
-                            group.get("latest_symbol_state_unavailable_count")
-                        )
-                        or 0
-                    )
-                    for group in symbol_state_groups
-                ),
-                "latest_symbol_state_unavailable_by_reason": (
-                    _staged_readiness_count_map(
-                        _sum_counter_maps(
-                            group.get("latest_symbol_state_unavailable_by_reason")
-                            for group in symbol_state_groups
-                        )
-                    )
-                ),
-                "latest_symbol_state_unavailable_by_order_class": (
-                    _staged_readiness_count_map(
-                        _sum_counter_maps(
-                            group.get(
-                                "latest_symbol_state_unavailable_by_order_class"
-                            )
-                            for group in symbol_state_groups
-                        )
-                    )
-                ),
-                "latest_symbol_state_unavailable_by_surface": (
-                    _staged_readiness_count_map(
-                        _sum_counter_maps(
-                            group.get("latest_symbol_state_unavailable_by_surface")
-                            for group in symbol_state_groups
-                        )
-                    )
-                ),
-                "latest_symbol_state_unavailable_symbol_count_total": symbol_count,
-            }
-        )
-        if symbol_count:
-            sample = _symbol_sample(
-                symbols,
-                limit=STAGED_READINESS_SYMBOL_SAMPLE_LIMIT,
-            ).get("sample", [])
-            summary["latest_symbol_state_unavailable_symbols"] = {
                 "count": symbol_count,
                 "sample": sample,
                 "truncated": max(0, symbol_count - len(sample)),
@@ -10195,15 +10025,6 @@ def _summary_staged_readiness_health(
         "latest_defer_symbols",
         "latest_required_surfaces",
         "latest_will_retry",
-        "latest_symbol_state_bots",
-        "latest_symbol_state_record_total",
-        "latest_symbol_state_status_counts",
-        "latest_symbol_state_unavailable_total",
-        "latest_symbol_state_unavailable_by_reason",
-        "latest_symbol_state_unavailable_by_order_class",
-        "latest_symbol_state_unavailable_by_surface",
-        "latest_symbol_state_unavailable_symbol_count_total",
-        "latest_symbol_state_unavailable_symbols",
         "latest_initial_entry_eligibility_bots",
         "latest_initial_entry_evaluated_total",
         "latest_initial_entry_records_total",
@@ -11631,11 +11452,6 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_defer_symbols",
         "latest_required_surfaces",
         "latest_will_retry",
-        "latest_symbol_state_status_counts",
-        "latest_symbol_state_unavailable_by_reason",
-        "latest_symbol_state_unavailable_by_order_class",
-        "latest_symbol_state_unavailable_by_surface",
-        "latest_symbol_state_unavailable_symbols",
         "latest_initial_entry_outcome_counts",
         "latest_initial_entry_reason_counts",
     ):
@@ -11646,10 +11462,6 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "latest_defer_count_total",
         "latest_defer_window_s_max",
         "latest_defer_symbol_count_total",
-        "latest_symbol_state_bots",
-        "latest_symbol_state_record_total",
-        "latest_symbol_state_unavailable_total",
-        "latest_symbol_state_unavailable_symbol_count_total",
         "latest_initial_entry_eligibility_bots",
         "latest_initial_entry_evaluated_total",
         "latest_initial_entry_records_total",

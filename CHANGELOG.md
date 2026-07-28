@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Retired the diagnostic-only Python planning-availability Cartesian product
+  and its routine `planning.symbol_state` event. Snapshot provenance, actual
+  planning deferrals, EMA degradation, Rust results, reconciliation, and
+  initial-entry outcomes remain available through their canonical structured
+  events; live trading and readiness enforcement are unchanged.
 - Gate multi-currency futures balance now remains stable while resting orders reserve and release
   margin, preventing balance-driven ideal-order resizing and reconciliation churn. Passivbot
   reconstructs account margin balance from Gate's available, position-margin, and order-margin

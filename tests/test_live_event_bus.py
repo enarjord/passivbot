@@ -761,7 +761,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.WEBSOCKET_RECONNECT,
         EventTypes.FILLS_REFRESH_SUMMARY,
         EventTypes.PLANNING_DEFER_SUMMARY,
-        EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.HSL_RAW_RED_PENDING,
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,

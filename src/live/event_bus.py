@@ -177,7 +177,6 @@ class EventTypes:
     OPEN_ORDERS_SNAPSHOT_DELTA = "open_orders.snapshot_delta"
     PLANNING_UNAVAILABLE = "planning.unavailable"
     PLANNING_DEFER_SUMMARY = "planning.defer_summary"
-    PLANNING_SYMBOL_STATE = "planning.symbol_state"
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
     FORAGER_ELIGIBILITY_CHANGED = "forager.eligibility_changed"
@@ -403,7 +402,6 @@ class ReasonCodes:
     HSL_TIMELINE_REPLAY_STARTED = "hsl_timeline_replay_started"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
     SINK_PIPELINE_CLOSING = "pipeline_closing"
-    SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
     STARTUP_PHASE_READY = "startup_phase_ready"
     STAGED_REFRESH_PROGRESS = "staged_refresh_progress"
     STAGED_REFRESH_TIMING = "staged_refresh_timing"
@@ -524,7 +522,6 @@ PHASE1_EVENT_TYPES = {
     EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA,
     EventTypes.PLANNING_UNAVAILABLE,
     EventTypes.PLANNING_DEFER_SUMMARY,
-    EventTypes.PLANNING_SYMBOL_STATE,
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
     EventTypes.FORAGER_ELIGIBILITY_CHANGED,
@@ -1330,7 +1327,6 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=60_000
     ),
     EventTypes.PLANNING_DEFER_SUMMARY: EventRoute(console=False, text=False),
-    EventTypes.PLANNING_SYMBOL_STATE: EventRoute(console=False, text=False),
     EventTypes.FORAGER_SELECTION: EventRoute(
         console=True, text=True, throttle_interval_ms=5 * 60 * 1000
     ),

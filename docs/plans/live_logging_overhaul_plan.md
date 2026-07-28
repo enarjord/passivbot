@@ -67,9 +67,8 @@ instructions. At the baseline, the problem was fragmentation, not absence:
    `planning_unavailable` a typed path into monitor events, but the envelope is
    narrow: `kind`, `tags`, `payload`, `ts_ms`, `symbol`, `pside`.
 4. Structured freshness/planning models in `src/live/`.
-   `DataPacketMetadata`, `FreshnessLedger`, `PlanningSnapshot`, and
-   `PlanningAvailability` already model much of the information a proper event
-   stream needs.
+   `DataPacketMetadata`, `FreshnessLedger`, and `PlanningSnapshot` already model
+   much of the information a proper event stream needs.
 5. Domain-specific instrumentation hooks.
    `CandlestickManager` has remote fetch callback hooks. Fill refresh has fetch
    timing and coverage metadata. Order waves, staged refresh, HSL, EMA readiness,
@@ -191,7 +190,6 @@ stable names:
 - `snapshot.built`
 - `planning.unavailable`
 - `planning.defer_summary`
-- `planning.symbol_state`
 - `forager.selection`
 - `forager.feature_unavailable`
 - `ema.bundle.started`
@@ -408,8 +406,6 @@ The call to Rust should become a first-class event chain:
   Bounded summary plus hash for the full input payload, which is not persisted.
 - `rust_orchestrator.returned`
   Bounded summary plus hash for the output.
-- `planning.symbol_state`
-  Per-symbol non-tradable/deferred/reason state, compacted and throttled.
 - `action.planned`
   Per order or compact batch summary with reason and source.
 
