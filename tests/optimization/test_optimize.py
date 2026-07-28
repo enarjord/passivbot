@@ -3584,9 +3584,125 @@ class TestEvaluator:
 
         with pytest.raises(
             ValueError,
-            match="optimize.objective_scenario 'base' is not present",
+            match="selects scenario 'base'.*not present",
         ):
             SuiteEvaluator(base, [], {"default": "mean"})
+
+    def test_suite_scoring_resolves_mixed_scenario_and_aggregate_bases(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["objective_scenario"] = "base"
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {
+                "metric": "strategy_eq_underwater_pct_mean",
+                "goal": "min",
+                "scenario": None,
+            },
+            {
+                "metric": "strategy_eq_recovery_days_max",
+                "goal": "min",
+                "scenario": None,
+                "aggregate": "max",
+            },
+            {
+                "metric": "position_held_days_max",
+                "goal": "min",
+                "scenario": "stress",
+            },
+        ]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        def make_context(label):
+            return ScenarioEvalContext(
+                label=label,
+                config=deepcopy(mock_config),
+                exchanges=["binance"],
+                hlcvs_specs={},
+                btc_usd_specs={},
+                msss={"binance": {}},
+                timestamps={"binance": None},
+                shared_hlcvs_np={"binance": np.zeros((1, 1, 5))},
+                shared_btc_np={},
+                attachments={"hlcvs": {}, "btc": {}},
+                coin_indices={"binance": None},
+                overrides={},
+            )
+
+        evaluator = SuiteEvaluator(
+            base,
+            [make_context("base"), make_context("stress")],
+            {"default": "mean"},
+        )
+        individual = DummyIndividual(
+            config_to_individual(mock_config, base.bounds, base.sig_digits)
+        )
+
+        def metric_stats(value):
+            return {
+                "mean": value,
+                "min": value,
+                "max": value,
+                "std": 0.0,
+                "median": value,
+            }
+
+        scenario_metric_payloads = [
+            {
+                "stats": {
+                    "adg_strategy_eq": metric_stats(0.01),
+                    "strategy_eq_underwater_pct_mean": metric_stats(0.1),
+                    "strategy_eq_recovery_days_max": metric_stats(10.0),
+                    "position_held_days_max": metric_stats(5.0),
+                }
+            },
+            {
+                "stats": {
+                    "adg_strategy_eq": metric_stats(0.002),
+                    "strategy_eq_underwater_pct_mean": metric_stats(0.5),
+                    "strategy_eq_recovery_days_max": metric_stats(50.0),
+                    "position_held_days_max": metric_stats(20.0),
+                }
+            },
+        ]
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            side_effect=scenario_metric_payloads,
+        ):
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
+
+        assert objectives == pytest.approx((-0.01, 0.3, 50.0, 20.0))
+        assert penalty == 0.0
+        assert metrics["objectives"] == pytest.approx(
+            {"w_0": -0.01, "w_1": 0.3, "w_2": 50.0, "w_3": 20.0}
+        )
+        assert metrics["suite_metrics"]["metrics"]["adg_strategy_eq"]["scenarios"] == {
+            "base": 0.01,
+            "stress": 0.002,
+        }
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY

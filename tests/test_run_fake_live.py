@@ -1148,18 +1148,12 @@ async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
             event
             for event in events[post_panic_positions_packet_idx + 1 :]
             if event.get("event_type") == "snapshot.built"
-            and event.get("data", {}).get("planning_availability", {}).get("status_counts", {}).get(
-                "unavailable", 0
+            and any(
+                packet.get("kind") == "positions"
+                and packet.get("revision", 0)
+                >= post_panic_positions_packet["revision"]
+                for packet in event.get("data", {}).get("data_packets", [])
             )
-            == 0
-            and event.get("data", {}).get("planning_availability", {}).get(
-                "record_count", 0
-            )
-            > 0
-            and event.get("data", {}).get("planning_availability", {}).get(
-                "status_counts", {}
-            ).get("available", 0)
-            == event.get("data", {}).get("planning_availability", {}).get("record_count", 0)
         )
         assert any(
             packet.get("kind") == "positions"

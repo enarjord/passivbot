@@ -620,6 +620,11 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.
 - **scoring**:
   - The optimizer minimizes the configured objective list and keeps the Pareto front.
+  - Each object-form scoring entry accepts `metric`, `goal`, and optional suite-only `scenario`
+    and `aggregate` selectors. An omitted `scenario` inherits `optimize.objective_scenario`; a
+    named value selects that scenario; explicit `null` selects suite aggregation. `aggregate`
+    overrides the reducer for that objective and supports `mean`, `min`, `max`, `std`, and
+    `median`. It is invalid when the objective resolves to a named scenario.
   - The current default profile uses:
     - `adg_strategy_eq`
     - `adg_strategy_eq_w`
@@ -647,9 +652,11 @@ The optimizer reuses the backtest suite configuration when `--suite [y/n]` is en
 - **backtest.suite_enabled**: Can be toggled for optimizer runs via `--suite [y/n]` on `passivbot optimize`.
 - **backtest.aggregate**: Per-metric aggregation rules applied to scenario results before feeding into `optimize.scoring` and `optimize.limits`.
 - **backtest.scenarios**: Scenario dictionaries. Each one may override `coins`, `ignored_coins`, `start_date`, `end_date`, `exchanges`, `coin_sources`, and `overrides` (arbitrary config path overrides).
-- **optimize.objective_scenario**: Optional unique scenario label used for objective scoring.
-  Limits remain suite-aggregated, so a common pattern is `base` performance scoring with
-  worst-case stress limits.
+- **optimize.objective_scenario**: Default scoring scenario. Set it to a unique scenario label to
+  score objectives from that scenario by default, or to `null` to use suite aggregation by
+  default. Individual `optimize.scoring` entries may override the default with a named `scenario`
+  or explicit `scenario: null`, and aggregate-based entries may set their own `aggregate` reducer.
+  Limits remain suite-aggregated.
 
 Use `--suite-config path/to/file.json` to layer additional scenario definitions at runtime.
 

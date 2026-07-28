@@ -1,6 +1,6 @@
 # Live Logging Overhaul Current Status
 
-Updated: 2026-07-25.
+Updated: 2026-07-28.
 
 This is the compact resume point for the live logging overhaul. Historical PR,
 deployment, and smoke evidence remains in
@@ -20,6 +20,10 @@ The original architecture is substantially established:
 - lifecycle, readiness, planning, execution, fills, positions, balance, risk,
   HSL, trailing, unstuck, candles, EMA, forager, and remote-call producers have
   structured coverage;
+- the speculative per-snapshot planning-availability Cartesian product is not
+  part of the event contract; actual snapshot provenance, readiness failures,
+  Rust results, reconciliation, and entry outcomes retain separate canonical
+  evidence;
 - redaction and bounded-payload rules cover the primary live-event and
   diagnostic paths.
 

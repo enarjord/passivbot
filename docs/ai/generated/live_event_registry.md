@@ -79,7 +79,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `order_wave.completed`
 - `order_wave.started`
 - `planning.defer_summary`
-- `planning.symbol_state`
 - `planning.unavailable`
 - `position.changed`
 - `remote_call.failed`
@@ -234,7 +233,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `required_candle_disk_coverage`
 - `required_ema_unavailable`
 - `rust_output_actions`
-- `snapshot_symbol_state`
 - `staged_refresh_progress`
 - `staged_refresh_timing`
 - `startup_phase_ready`
