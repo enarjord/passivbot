@@ -357,7 +357,6 @@ Stable per-record reason-count values are:
 - `conversion_zero_or_duplicate`
 - `debug_mode`
 - `exact_reconciliation_match`
-- `freshness_creation_guardrail`
 - `hsl_replay_pending`
 - `account_cancel_first_barrier`
 - `limit_order_create_market_distance`
