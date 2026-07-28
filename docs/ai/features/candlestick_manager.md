@@ -203,8 +203,10 @@
     Forager projection requests close EMAs only; quote-volume and log-range
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
-    result keyed by the candle index mtime, cached-tail timestamp, requested
-    spans, and projection horizon; local candle persistence invalidates it.
+    result keyed by the cached-tail timestamp, requested spans, and projection
+    horizon. Persistence invalidates it only when candle content, synthetic
+    provenance, or known-gap coverage changes; metadata-only refresh writes do
+    not force a full recomputation.
     Latest-value EMA calculations use a scalar recurrence rather than allocating
     a full output series. Full EMA series remain available to callers that need
     every intermediate value. Live provisional internal-gap tolerance is separate from the

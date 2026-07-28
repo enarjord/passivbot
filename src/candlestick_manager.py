@@ -2670,7 +2670,37 @@ class CandlestickManager:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        candle_content_changed = True
+        replaces_synthetic = False
         if tf_norm == "1m":
+            cached_before = np.sort(
+                _ensure_dtype(self._ensure_symbol_cache(symbol)),
+                order="ts",
+            )
+            incoming_unique = self._merge_overwrite(
+                np.empty((0,), dtype=CANDLE_DTYPE),
+                arr,
+            )
+            if cached_before.size and incoming_unique.size:
+                positions = np.searchsorted(
+                    cached_before["ts"].astype(np.int64),
+                    incoming_unique["ts"].astype(np.int64),
+                )
+                if np.all(positions < cached_before.size):
+                    matched = cached_before[positions]
+                    candle_content_changed = not (
+                        np.array_equal(
+                            matched["ts"].astype(np.int64),
+                            incoming_unique["ts"].astype(np.int64),
+                        )
+                        and np.array_equal(matched, incoming_unique)
+                    )
+            synthetic = self._synthetic_timestamps.get(symbol, set())
+            replaces_synthetic = bool(
+                synthetic
+                and any(int(ts) in synthetic for ts in incoming_unique["ts"])
+            )
+        if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
 
         # Update inception_ts if this is new earliest data for 1m (defer save until end)
@@ -2697,11 +2727,13 @@ class CandlestickManager:
 
         self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
         if tf_norm == "1m":
-            self._trim_known_gaps_covered_by_rows(
+            gaps_changed = self._trim_known_gaps_covered_by_rows(
                 symbol,
                 arr,
                 defer_index=defer_index,
             )
+            if gaps_changed:
+                self._projected_open_tail_ema_cache.pop(symbol, None)
         observer = self._persist_batch_observer
         if observer is not None:
             try:
@@ -3017,16 +3049,16 @@ class CandlestickManager:
         rows: np.ndarray,
         *,
         defer_index: bool = False,
-    ) -> None:
+    ) -> bool:
         """Remove authoritative 1m timestamps from persisted known-gap ranges."""
         if rows.size == 0:
-            return
+            return False
         gaps = self._get_known_gaps_enhanced(symbol)
         if not gaps:
-            return
+            return False
         timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
         if timestamps.size == 0:
-            return
+            return False
         retained: List[GapEntry] = []
         changed = False
         for gap in gaps:
@@ -3065,6 +3097,7 @@ class CandlestickManager:
                 retained,
                 defer_index=defer_index,
             )
+        return changed
 
     def _save_known_gaps(self, symbol: str, gaps: List[Tuple[int, int]]) -> None:
         """Save gaps from simple tuples (backward compatibility wrapper)."""
@@ -8350,17 +8383,16 @@ class CandlestickManager:
         normalized = self._normalize_spans_by_metric(spans_by_metric)
         if not normalized:
             return {}
-        try:
-            index_mtime_ns = int(
-                os.stat(self._index_path(symbol, timeframe="1m")).st_mtime_ns
-            )
-        except (FileNotFoundError, OSError):
-            index_mtime_ns = 0
+        max_span = max(span for spans in normalized.values() for span in spans)
+        window_candles = max(1, int(math.ceil(max_span)))
+        start_ts = min(
+            int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
+            last_cached,
+        )
         cache_key = (
             int(latest_expected),
             int(last_cached),
             int(max_tail_gap),
-            index_mtime_ns,
             tuple(
                 (metric_key, tuple(float(span) for span in spans))
                 for metric_key, spans in sorted(normalized.items())
@@ -8376,13 +8408,6 @@ class CandlestickManager:
                 metric_key: dict(values)
                 for metric_key, values in cached.items()
             }
-        max_span = max(span for spans in normalized.values() for span in spans)
-        window_candles = max(1, int(math.ceil(max_span)))
-        start_ts = min(
-            int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
-            last_cached,
-        )
-
         before_cache_keys = set(self._ema_cache.get(symbol, {}).keys())
         before_synthetic = set(self._synthetic_timestamps.get(symbol, set()))
         arr = await self.get_candles(

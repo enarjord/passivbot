@@ -4,8 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Live EMA preparation now batches compatible spans per symbol and metric family, removing repeated
-  candle-window loads without changing completed-candle freshness, gap handling, or EMA math.
+- Live EMA preparation now batches compatible spans per symbol and metric family, and metadata-only
+  candle refreshes no longer invalidate otherwise identical open-tail projections. This removes
+  repeated candle-window loads and projection recomputation without changing completed-candle
+  freshness, gap handling, or EMA math.
 - KuCoin aggregate position-cycle PnL reconciliation is now idempotent across overlapping fill
   refreshes: a pending trade row no longer discards an already reconciled authoritative value, while
   a genuinely revised position-history total still updates the affected lifecycle.

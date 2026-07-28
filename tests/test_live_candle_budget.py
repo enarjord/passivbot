@@ -5176,6 +5176,60 @@ async def test_projected_open_tail_known_gap_is_replaced_by_late_real_candles(
 
 
 @pytest.mark.asyncio
+async def test_projected_open_tail_cache_survives_metadata_only_candle_refresh(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "UNCHANGED/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    real = np.array(
+        [
+            (t58, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (t59, 101.0, 102.0, 100.0, 101.0, 2.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = real.copy()
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    cache_before = dict(cm._projected_open_tail_ema_cache[symbol])
+
+    cm._persist_batch(
+        symbol,
+        real[-1:],
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+
+    assert cm._projected_open_tail_ema_cache[symbol] == cache_before
+    again = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    assert again == projected
+
+
+@pytest.mark.asyncio
 async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
     tmp_path, monkeypatch
 ):
