@@ -528,6 +528,38 @@ def test_limit_entry_can_select_scenario_without_projecting_candidates(
     assert limits[0]["scenario"] == "bull"
 
 
+def test_ordinary_filter_uses_stored_legacy_suite_aggregate(tmp_path: Path):
+    pareto_dir = tmp_path / "legacy_suite" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    payload = {
+        "optimize": {
+            "scoring": [
+                {"metric": "metric_a", "goal": "max"},
+                {"metric": "metric_b", "goal": "min"},
+            ]
+        },
+        "backtest": {"aggregate": {"default": "max"}},
+        "suite_metrics": {
+            "aggregate": {
+                "aggregated": {
+                    "metric_a": 0.8,
+                    "metric_b": 0.4,
+                }
+            }
+        },
+    }
+    (pareto_dir / "candidate.json").write_text(json.dumps(payload), encoding="utf-8")
+    _pareto_dir, candidates, _specs = load_candidates(pareto_dir)
+
+    filtered, _limits = filter_candidates(
+        candidates,
+        limits_payload=None,
+        limit_entries=["metric_b<0.5"],
+    )
+
+    assert [candidate.path.name for candidate in filtered] == ["candidate.json"]
+
+
 def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
     scenario_pareto_dir: Path,
 ):

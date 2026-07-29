@@ -171,6 +171,7 @@ from suite_runner import (
     filter_scenarios_by_label,
     load_suite_override_config,
     aggregate_metrics,
+    build_scenarios,
     build_suite_metrics_payload,
 )
 from metrics_schema import MetricAggregationError, build_scenario_metrics, flatten_metric_stats
@@ -183,6 +184,7 @@ from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get
 from optimization.backend_shared import cancel_pending_async_results, stream_async_results
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
+from optimization.starting_config_selection import select_starting_config_artifacts
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
     get_optimization_key_paths,
@@ -2224,9 +2226,8 @@ def add_extra_options(parser, *, help_all: bool):
         dest="starting_configs",
         default=None,
         help=(
-            "Start with given live configs. With --fine-tune-params, these configs are fixed-param anchors."
-            if help_all
-            else argparse.SUPPRESS
+            "Start with configs or Pareto artifacts from a JSON file or directory. "
+            "With --fine-tune-params, these configs are fixed-param anchors."
         ),
     )
     parser.add_argument(
@@ -2270,6 +2271,30 @@ def add_extra_options(parser, *, help_all: bool):
     )
 
 
+def add_starting_config_selection_options(parser) -> None:
+    parser.add_argument(
+        "--filter-starting-configs",
+        action="store_true",
+        dest="filter_starting_configs",
+        help=(
+            "Before optimization, filter metric-bearing -t/--start Pareto artifacts using "
+            "the final effective optimize limits. Stored metrics are not revalidated."
+        ),
+    )
+    parser.add_argument(
+        "--compress-starting-configs",
+        "--starting-configs-max",
+        type=int,
+        default=None,
+        metavar="N",
+        dest="starting_configs_max",
+        help=(
+            "Select at most N metric-bearing -t/--start artifacts with the same "
+            "anchors-farthest method as pareto-compress."
+        ),
+    )
+
+
 def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | None:
     raw_limits_payload = getattr(args, "optimize.limits", None)
     raw_limit_entries = list(getattr(args, "limit_entries", []) or [])
@@ -2286,6 +2311,27 @@ def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | Non
     if raw_limit_entries:
         replacement.extend(parse_limit_cli_entries(raw_limit_entries))
     return normalize_limit_entries(replacement)
+
+
+def _validate_starting_config_selection_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    filter_starting_configs = bool(getattr(args, "filter_starting_configs", False))
+    starting_configs_max = getattr(args, "starting_configs_max", None)
+    selection_requested = filter_starting_configs or starting_configs_max is not None
+    if not selection_requested:
+        return
+    if not getattr(args, "starting_configs", None):
+        parser.error(
+            "--filter-starting-configs and --compress-starting-configs require -t/--start"
+        )
+    if getattr(args, "resume", None):
+        parser.error(
+            "--filter-starting-configs and --compress-starting-configs cannot be used with --resume"
+        )
+    if starting_configs_max is not None and int(starting_configs_max) <= 0:
+        parser.error("--compress-starting-configs must be a positive integer")
 
 
 def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
@@ -2557,6 +2603,8 @@ def install_anchored_fine_tune_plan(
     config: dict,
     fine_tune_params: list[str],
     starting_configs_path: str,
+    *,
+    starting_configs_override: Sequence[dict] | None = None,
 ) -> None:
     flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params = (
         _resolve_fine_tune_key_sets(config, fine_tune_params)
@@ -2583,7 +2631,12 @@ def install_anchored_fine_tune_plan(
     }
     sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
     clamp_collector = {}
-    for raw_anchor in iter_starting_configs(starting_configs_path):
+    starting_configs = (
+        iter(starting_configs_override)
+        if starting_configs_override is not None
+        else iter_starting_configs(starting_configs_path)
+    )
+    for raw_anchor in starting_configs:
         try:
             anchor_cfg = _build_starting_seed_config(raw_anchor)
             anchor_strategy_kind = normalize_strategy_kind(
@@ -2738,6 +2791,50 @@ def iter_starting_configs(starting_configs: str):
                 yield from iter_starting_configs(entry.path)
         return
     yield from iter_extract_configs(starting_configs)
+
+
+def preselect_starting_configs(
+    starting_configs_path: str,
+    config: Mapping[str, Any],
+    *,
+    filter_by_limits: bool,
+    max_count: int | None,
+    aggregate_cfg: Mapping[str, Any] | None,
+    scenario_labels: Sequence[str] | None = None,
+) -> list[dict]:
+    optimize_cfg = config.get("optimize")
+    limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    effective_aggregate_cfg = (
+        aggregate_cfg if isinstance(aggregate_cfg, Mapping) else {"default": "mean"}
+    )
+    selection = select_starting_config_artifacts(
+        starting_configs_path,
+        limits=limits,
+        aggregate_cfg=effective_aggregate_cfg,
+        scenario_labels=scenario_labels,
+        filter_by_limits=filter_by_limits,
+        max_count=max_count,
+    )
+    current_specs = extract_objective_specs(config)
+    if (
+        selection.selected_count < selection.filtered_count
+        and current_specs != list(selection.scoring_specs)
+    ):
+        logging.warning(
+            "Stored starting-config optimize.scoring differs from this optimization run; "
+            "anchors-farthest compression used the stored objectives."
+        )
+    return [
+        _extract_starting_config(candidate.entry, source=str(candidate.path))
+        for candidate in selection.candidates
+    ]
+
+
+def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | None:
+    if not suite_cfg.get("enabled"):
+        return None
+    scenarios, _aggregate_cfg = build_scenarios(dict(suite_cfg))
+    return [scenario.label for scenario in scenarios]
 
 
 def iter_anchored_fine_tune_seed_configs(config: dict):
@@ -2914,10 +3011,12 @@ async def main():
         dest="clear_limits",
         help="Replace optimize.limits with an empty list before applying any --limits/--limit entries.",
     )
+    add_starting_config_selection_options(optimize_common_group)
     add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    _validate_starting_config_selection_args(parser, args)
     polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
     polish_bounds_mode = getattr(args, "polish_bounds_mode", "clamp")
     if polish_bounds_pct is not None and (
@@ -2955,6 +3054,47 @@ async def main():
         TEMPLATE_CONFIG_MODE,
         ",".join(objective_metric_names(config)),
     )
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(args.suite_config)
+        if _suite_config_implies_suite_mode(args):
+            recursive_config_update(
+                config, "backtest.suite_enabled", True, verbose=True
+            )
+    suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [
+            label.strip() for label in scenario_filter.split(",") if label.strip()
+        ]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(
+            suite_cfg.get("scenarios", []), labels
+        )
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
+    if args.suite is not None:
+        recursive_config_update(
+            config, "backtest.suite_enabled", bool(args.suite), verbose=True
+        )
+        suite_cfg["enabled"] = bool(args.suite)
+
+    preselected_starting_configs = None
+    if args.filter_starting_configs or args.starting_configs_max is not None:
+        preselected_starting_configs = preselect_starting_configs(
+            args.starting_configs,
+            config,
+            filter_by_limits=bool(args.filter_starting_configs),
+            max_count=args.starting_configs_max,
+            aggregate_cfg=(
+                suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
+            ),
+            scenario_labels=_active_suite_scenario_labels(suite_cfg),
+        )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
         if getattr(args, "fine_tune_params", "")
@@ -2968,29 +3108,14 @@ async def main():
     if polish_bounds_pct is not None:
         apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
     if fine_tune_params and args.starting_configs:
-        install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
+        install_anchored_fine_tune_plan(
+            config,
+            fine_tune_params,
+            args.starting_configs,
+            starting_configs_override=preselected_starting_configs,
+        )
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
-        if _suite_config_implies_suite_mode(args):
-            recursive_config_update(config, "backtest.suite_enabled", True, verbose=True)
-    suite_cfg = extract_suite_config(config, suite_override)
-
-    # Handle --scenarios filter (implies --suite y)
-    scenario_filter = getattr(args, "scenarios", None)
-    if scenario_filter:
-        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
-        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
-        suite_cfg["enabled"] = True  # --scenarios implies suite mode
-        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
-
-    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
-    if args.suite is not None:
-        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
-        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
@@ -3200,6 +3325,8 @@ async def main():
         logging.info("Selected optimizer backend: %s", backend_name)
         backend_runner = get_backend_runner(backend_name)
         starting_config_iter = iter_starting_configs
+        if preselected_starting_configs is not None:
+            starting_config_iter = lambda _path: iter(preselected_starting_configs)
         if get_anchor_plan(config) is not None:
             starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(config)
         backend_result = backend_runner(

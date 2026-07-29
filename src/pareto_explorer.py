@@ -26,6 +26,7 @@ from config.scoring import (
     from_engine_value,
     objective_spec_by_metric,
 )
+from limit_utils import resolve_auto_limit_entries
 from metrics_schema import flatten_metric_stats
 from pareto_core import detect_latest_pareto_dir
 
@@ -420,12 +421,18 @@ def build_parser() -> argparse.ArgumentParser:
 def _extract_suite_metrics(
     entry: Mapping[str, Any],
     aggregate_cfg: Mapping[str, Any] | None = None,
+    scenario_labels: Sequence[str] | None = None,
 ) -> tuple[Dict[str, float], Dict[str, float]]:
     aggregated_values: Dict[str, float] = {}
     stats_flat: Dict[str, float] = {}
     suite_metrics = entry.get("suite_metrics")
     if not isinstance(suite_metrics, Mapping):
         return stats_flat, aggregated_values
+    selected_labels = (
+        tuple(dict.fromkeys(str(label) for label in scenario_labels))
+        if scenario_labels is not None
+        else None
+    )
     effective_aggregate_cfg = (
         aggregate_cfg
         if aggregate_cfg is not None
@@ -440,13 +447,45 @@ def _extract_suite_metrics(
                 continue
             aggregated = payload.get("aggregated")
             stats = payload.get("stats") or {}
-            if aggregated is None and isinstance(stats, Mapping):
+            if selected_labels is not None:
+                scenarios = payload.get("scenarios")
+                selected_values: list[float] = []
+                if isinstance(scenarios, Mapping):
+                    for label in selected_labels:
+                        value = scenarios.get(label)
+                        if not isinstance(value, (int, float)) or not math.isfinite(
+                            float(value)
+                        ):
+                            selected_values = []
+                            break
+                        selected_values.append(float(value))
+                if len(selected_values) == len(selected_labels) and selected_values:
+                    values = np.asarray(selected_values, dtype=float)
+                    stats = {
+                        "mean": float(np.mean(values)),
+                        "min": float(np.min(values)),
+                        "max": float(np.max(values)),
+                        "std": float(np.std(values)),
+                        "median": float(np.median(values)),
+                    }
+                else:
+                    stats = {}
+                aggregated = None
+            if aggregate_cfg is not None or selected_labels is not None:
+                aggregated = None
+                if isinstance(stats, Mapping) and stats:
+                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    aggregated = stats.get(mode)
+            elif aggregated is None and isinstance(stats, Mapping):
                 mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
                 aggregated = stats.get(mode, stats.get("mean"))
             if isinstance(aggregated, (int, float)) and math.isfinite(float(aggregated)):
                 aggregated_values[str(metric)] = float(aggregated)
-            if isinstance(stats, Mapping):
+            if isinstance(stats, Mapping) and stats:
                 stats_flat.update(flatten_metric_stats({str(metric): dict(stats)}))
+        return stats_flat, aggregated_values
+
+    if selected_labels is not None:
         return stats_flat, aggregated_values
 
     aggregate = suite_metrics.get("aggregate") or {}
@@ -455,7 +494,16 @@ def _extract_suite_metrics(
         if isinstance(stats, Mapping):
             stats_flat.update(flatten_metric_stats(dict(stats)))
         aggregated = aggregate.get("aggregated") or {}
-        if isinstance(aggregated, Mapping):
+        if aggregate_cfg is not None:
+            if isinstance(stats, Mapping) and stats:
+                for metric, metric_stats in stats.items():
+                    if not isinstance(metric_stats, Mapping):
+                        continue
+                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    value = metric_stats.get(mode)
+                    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                        aggregated_values[str(metric)] = float(value)
+        elif isinstance(aggregated, Mapping):
             for metric, value in aggregated.items():
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     aggregated_values[str(metric)] = float(value)
@@ -625,8 +673,13 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
 
 
 def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCandidate], List[ObjectiveSpec]]:
-    pareto_dir = resolve_pareto_directory(path)
-    json_paths = sorted(pareto_dir.glob("*.json"))
+    raw_path = Path(path).expanduser()
+    if raw_path.is_file():
+        pareto_dir = raw_path.parent.resolve()
+        json_paths = [raw_path.resolve()]
+    else:
+        pareto_dir = resolve_pareto_directory(raw_path)
+        json_paths = sorted(pareto_dir.glob("*.json"))
     if not json_paths:
         raise ValueError(f"No Pareto JSON files found in {pareto_dir}")
 
@@ -855,6 +908,7 @@ def _resolve_limit_value(
     candidate: ParetoCandidate,
     entry: Mapping[str, Any],
     aggregate_cfg: Mapping[str, Any] | None = None,
+    scenario_labels: Sequence[str] | None = None,
 ) -> Optional[float]:
     metric = str(entry.get("metric", "")).strip()
     if not metric:
@@ -878,12 +932,22 @@ def _resolve_limit_value(
         and "scenario" in entry
         and entry.get("scenario") is None
     )
+    applies_current_suite_aggregate = aggregate_cfg is not None and isinstance(
+        candidate.entry.get("suite_metrics"), Mapping
+    )
+    applies_current_scenario_set = scenario_labels is not None and isinstance(
+        candidate.entry.get("suite_metrics"), Mapping
+    )
     stats_flat = candidate.stats_flat
     aggregated_values = candidate.aggregated_values
-    if explicit_suite_basis:
+    if explicit_suite_basis or (
+        (aggregate_cfg is not None or scenario_labels is not None)
+        and isinstance(candidate.entry.get("suite_metrics"), Mapping)
+    ):
         stats_flat, aggregated_values = _extract_suite_metrics(
             candidate.entry,
             aggregate_cfg=aggregate_cfg,
+            scenario_labels=scenario_labels,
         )
     if candidate.scenario is not None and "stat" in entry and not explicit_suite_basis:
         requested_stat = str(entry.get("stat", "")).strip().lower()
@@ -901,7 +965,12 @@ def _resolve_limit_value(
     value = resolve_metric_value(stats_flat, key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
-    if "stat" not in entry and not explicit_suite_basis:
+    if (
+        "stat" not in entry
+        and not explicit_suite_basis
+        and not applies_current_suite_aggregate
+        and not applies_current_scenario_set
+    ):
         fallback = _resolve_candidate_metric_value(candidate, metric)
         if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
             return float(fallback)
@@ -938,7 +1007,7 @@ def _limit_rejects(entry: Mapping[str, Any], value: float) -> bool:
         return value < float(low) or value > float(high)
     if mode == "inside_range":
         low, high = entry["range"]
-        return float(low) <= value <= float(high)
+        return float(low) < value < float(high)
     raise ValueError(f"Unsupported limit mode {mode!r}")
 
 
@@ -953,21 +1022,37 @@ def filter_candidates(
         normalized_limits.extend(normalize_limit_entries(limits_payload))
     if limit_entries:
         normalized_limits.extend(parse_limit_cli_entries(list(limit_entries)))
-    normalized_limits = normalize_limit_entries(normalized_limits)
+    return filter_candidates_with_limits(candidates, normalized_limits)
+
+
+def filter_candidates_with_limits(
+    candidates: Sequence[ParetoCandidate],
+    limits: Sequence[Mapping[str, Any]],
+    *,
+    aggregate_cfg: Mapping[str, Any] | None = None,
+    scenario_labels: Sequence[str] | None = None,
+    scoring_weights: Mapping[str, float] | None = None,
+) -> tuple[List[ParetoCandidate], List[Dict[str, Any]]]:
+    normalized_limits = normalize_limit_entries(list(limits))
+    if scoring_weights is not None:
+        normalized_limits = resolve_auto_limit_entries(
+            normalized_limits,
+            dict(scoring_weights),
+        )
     enabled_limits = [entry for entry in normalized_limits if bool(entry.get("enabled", True))]
     if not enabled_limits:
         return list(candidates), enabled_limits
-    aggregate_cfg = None
-    if candidates:
-        backtest_cfg = candidates[0].entry.get("backtest")
-        if isinstance(backtest_cfg, Mapping):
-            aggregate_cfg = backtest_cfg.get("aggregate")
 
     filtered: List[ParetoCandidate] = []
     for candidate in candidates:
         rejected = False
         for entry in enabled_limits:
-            value = _resolve_limit_value(candidate, entry, aggregate_cfg)
+            value = _resolve_limit_value(
+                candidate,
+                entry,
+                aggregate_cfg,
+                scenario_labels,
+            )
             if value is None:
                 metric = str(entry.get("metric", "")).strip() or "<missing>"
                 available = _format_available_limit_metrics(candidate)
