@@ -1005,6 +1005,9 @@ class CandlestickManager:
             self._record_payload_gaps_as_known = True
             # KuCoin since behaves as exclusive for 1m OHLCV.
             self._ccxt_since_exclusive = True
+        if isinstance(self._ex_id, str) and "bitunix" in self._ex_id.lower():
+            # Bitunix futures caps every kline response at 200 rows.
+            self._ccxt_limit_default = 200
 
         # Optional per-page range logging for selected symbols (debug pagination)
         self._page_debug_all = False

@@ -21424,6 +21424,10 @@ def setup_bot(config):
         from exchanges.bitget import BitgetBot
 
         bot = BitgetBot(config)
+    elif user_info["exchange"] == "bitunix":
+        from exchanges.bitunix import BitunixBot
+
+        bot = BitunixBot(config)
     elif user_info["exchange"] == "binance":
         from exchanges.binance import BinanceBot
 

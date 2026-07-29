@@ -15,6 +15,7 @@ def test_order_churn_rollout_allowlist_matches_supported_connector_contract():
     assert ORDER_CHURN_GATE_SUPPORTED_EXCHANGES == {
         "binance",
         "bitget",
+        "bitunix",
         "bybit",
         "fake",
         "gateio",
@@ -24,6 +25,7 @@ def test_order_churn_rollout_allowlist_matches_supported_connector_contract():
         "weex",
     }
     assert connector_supports_order_churn_gate(SimpleNamespace(exchange="weex")) is True
+    assert connector_supports_order_churn_gate(SimpleNamespace(exchange="bitunix")) is True
     assert connector_supports_order_churn_gate(SimpleNamespace(exchange="kraken")) is False
 
 
