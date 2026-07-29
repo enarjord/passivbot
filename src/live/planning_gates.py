@@ -35,7 +35,7 @@ def staged_planner_surface_min_epochs(
     bot, required: set[str] | frozenset[str]
 ) -> dict[str, int]:
     """Return minimum acceptable ledger epoch per staged planner input surface."""
-    current_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    current_epoch = int(bot._ensure_freshness_ledger().epoch)
     pending = dict(getattr(bot, "_authoritative_pending_confirmations", {}) or {})
     min_epochs: dict[str, int] = {}
     for surface in required:
@@ -110,7 +110,7 @@ def staged_planner_precondition_state(
     return not missing, {
         "missing": sorted(set(missing)),
         "required": sorted(required),
-        "epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
+        "epoch": int(ledger.epoch),
         "min_epochs": min_epochs,
         "invalid": invalid,
     }
@@ -449,7 +449,7 @@ def build_protective_planning_snapshot(
     )
     required = frozenset({"balance", "positions", "open_orders", "market_snapshot"})
     ledger = bot._ensure_freshness_ledger()
-    current_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    current_epoch = int(ledger.epoch)
     required_epoch = max(1, current_epoch)
     min_epochs = {surface: required_epoch for surface in required}
     missing = sorted(

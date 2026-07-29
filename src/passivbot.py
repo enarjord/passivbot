@@ -395,6 +395,7 @@ from pure_funcs import (
 
 ONE_MIN_MS = 60_000
 _FORAGER_TERMINAL_EMPTY_RETRY_MS = 15 * ONE_MIN_MS
+_FORAGER_TRANSIENT_FAILURE_RETRY_MS = ONE_MIN_MS
 _COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
@@ -1218,7 +1219,6 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self._authoritative_refresh_epoch = 0
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
         self._trailing_fill_refresh_started_generation = 0
@@ -10337,8 +10337,7 @@ class Passivbot:
 
     def _begin_authoritative_refresh_epoch(self) -> None:
         """Start a new authoritative state refresh cohort for execution gating."""
-        ledger = self._ensure_freshness_ledger()
-        self._authoritative_refresh_epoch = ledger.begin_epoch(now_ms=utc_ms())
+        self._ensure_freshness_ledger().begin_epoch(now_ms=utc_ms())
 
     def _record_authoritative_surface(self, surface: str, signature) -> bool:
         """Record a fresh authoritative surface snapshot and whether it changed."""
@@ -10425,9 +10424,6 @@ class Passivbot:
         ledger = getattr(self, "freshness_ledger", None)
         if ledger is None:
             ledger = FreshnessLedger(now_ms=utc_ms())
-            ledger.epoch = int(
-                getattr(self, "_authoritative_refresh_epoch", 0) or 0
-            )
             self.freshness_ledger = ledger
         return ledger
 
@@ -10456,7 +10452,7 @@ class Passivbot:
         response_received_ts_ms: int,
     ) -> None:
         """Stage fetch metadata for account-critical packets without mutating trading state."""
-        cycle_hint = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        cycle_hint = int(self._ensure_freshness_ledger().epoch)
         source = f"{getattr(self, 'exchange', '') or 'exchange'}.staged_refresh"
 
         def stage(kind: str, value, raw_payload=None) -> None:
@@ -10526,7 +10522,7 @@ class Passivbot:
                 kind=surface,
                 value=signature,
                 raw_payload=None,
-                cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+                cycle_hint=int(self._ensure_freshness_ledger().epoch),
                 response_received_ts_ms=utc_ms(),
                 source="authoritative_surface",
                 quality="ok",
@@ -10534,7 +10530,7 @@ class Passivbot:
             )
         packet = pending.with_revision(
             revision,
-            cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+            cycle_hint=int(self._ensure_freshness_ledger().epoch),
         )
         self._live_data_packets[surface] = packet
         emit_diagnostic_event(
@@ -10805,7 +10801,7 @@ class Passivbot:
         target_epoch = int(
             min_epoch
             if min_epoch is not None
-            else int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
+            else int(self._ensure_freshness_ledger().epoch) + 1
         )
         current_wave = getattr(self, "_order_wave_in_progress", None)
         if isinstance(current_wave, dict):
@@ -10917,18 +10913,6 @@ class Passivbot:
                 {"balance", "positions", "open_orders", "fills"}
             )
 
-    def _order_matches_known_self_emission(
-        self, order: dict, max_age_ms=FOREIGN_PASSIVBOT_LOOKBACK_MS
-    ) -> bool:
-        """Return True when an open order is known to have been emitted by this process."""
-        return reconciler.order_matches_known_self_emission(
-            self, order, max_age_ms=max_age_ms
-        )
-
-    def _flag_disappeared_self_order_guardrail(self, order: dict) -> None:
-        """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
-        return reconciler.flag_disappeared_self_order_guardrail(self, order)
-
     def _mark_account_critical_state_dirty(
         self,
         *,
@@ -10941,12 +10925,6 @@ class Passivbot:
         return reconciler.mark_account_critical_state_dirty(
             self, reason=reason, symbols=symbols, source=source, level=level
         )
-
-    def _freshness_creation_blocked_symbols(self) -> dict[str, object]:
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is None:
-            return {}
-        return ledger.blocked_symbols()
 
     def _staged_planner_required_surfaces(
         self, *, include_market_snapshot: bool = True
@@ -11476,39 +11454,6 @@ class Passivbot:
         return planning_gates.current_planning_snapshot_invalid_for_creations(
             self, symbols
         )
-
-    def _apply_freshness_creation_guardrails(
-        self, orders: list[dict]
-    ) -> tuple[list[dict], int]:
-        blocked = self._freshness_creation_blocked_symbols()
-        if not blocked:
-            return orders, 0
-        kept = []
-        skipped = 0
-        logged_symbols = set()
-        for order in orders:
-            symbol = str(order.get("symbol") or "")
-            block = blocked.get(symbol)
-            if block is None:
-                kept.append(order)
-                continue
-            skipped += 1
-            if symbol not in logged_symbols:
-                missing = []
-                ledger = getattr(self, "freshness_ledger", None)
-                if ledger is not None:
-                    missing = ledger.surfaces_missing_after(
-                        block.required_surfaces, block.min_epoch
-                    )
-                logging.info(
-                    "[state] freshness guardrail blocking order creation | symbol=%s | reason=%s | missing=%s | min_epoch=%s",
-                    Passivbot._log_symbol(symbol),
-                    block.reason,
-                    ",".join(missing) if missing else "unknown",
-                    block.min_epoch,
-                )
-                logged_symbols.add(symbol)
-        return kept, skipped
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -15549,8 +15494,6 @@ class Passivbot:
                 unexpected_open_orders_change = True
                 schedule_update_positions = True
                 unexpected_removed_symbols.add(order["symbol"])
-                if self._order_matches_known_self_emission(order):
-                    self._flag_disappeared_self_order_guardrail(order)
                 if len(removed_orders) <= 20:
                     self.log_order_action(
                         order, "missing order", "fetch_open_orders", level=logging.INFO
@@ -15593,19 +15536,14 @@ class Passivbot:
         if balance_reconciled:
             await self.handle_balance_update(source="REST+open_orders")
         if schedule_update_positions:
+            self.execution_scheduled = True
+            self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             if allow_followup_positions_refresh:
                 await asyncio.sleep(1.5)
                 await self.update_positions_and_balance()
-            else:
-                self.execution_scheduled = True
-                self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
-                self._request_authoritative_confirmation(
-                    {"balance", "positions", "open_orders", "fills"}
-                )
         elif unexpected_open_orders_change and not allow_followup_positions_refresh:
-            self._request_authoritative_confirmation(
-                {"balance", "positions", "open_orders", "fills"}
-            )
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
         return True
 
     async def _fetch_and_apply_positions(self):
@@ -19558,7 +19496,6 @@ class Passivbot:
             ideal_orders,
             actual_symbols=actual_symbols,
             actual_psides_by_symbol=actual_psides_by_symbol,
-            apply_creation_guardrails=False,
             apply_mode_filters=False,
             collect_fresh_entry_eligibility=False,
         )
@@ -20288,15 +20225,11 @@ class Passivbot:
             and utc_ms() - refresh_started_ms >= max_refresh_ms
         ):
             return
-        budget = self._forager_refresh_budget(
-            max_calls,
-            max_cycle_budget=min(cycle_cap, len(stale)),
-            initial_tokens=cycle_cap,
-            consume=True,
-        )
-        if budget <= 0:
-            return
-        to_refresh = stale[:budget]
+        # The earlier non-consuming peek bounds this cycle. Consume one token
+        # immediately before each actual REST attempt below. Reserving the
+        # whole selected batch here lets one slow surface exhaust the wall-time
+        # cap while charging unattempted surfaces against the account budget.
+        to_refresh = stale[: min(int(budget), int(cycle_cap), len(stale))]
         if not to_refresh:
             return
         stale_by_surface = {
@@ -20374,6 +20307,14 @@ class Passivbot:
                     refreshed_count=int(refreshed_count),
                     total_count=len(to_refresh),
                 )
+                break
+            attempt_budget = self._forager_refresh_budget(
+                max_calls,
+                max_cycle_budget=1,
+                initial_tokens=cycle_cap,
+                consume=True,
+            )
+            if attempt_budget <= 0:
                 break
             try:
                 period_ms = ONE_MIN_MS if timeframe == "1m" else 60 * ONE_MIN_MS
@@ -20491,6 +20432,12 @@ class Passivbot:
                     )
                     last_progress_ms = now_ms
             except TimeoutError as exc:
+                surface_failure_retry_after[(sym, timeframe)] = int(
+                    utc_ms() + _FORAGER_TRANSIENT_FAILURE_RETRY_MS
+                )
+                self._forager_surface_failure_retry_after_ms = (
+                    surface_failure_retry_after
+                )
                 paused_by_cap = bool(
                     max_refresh_ms > 0
                     and utc_ms() - refresh_started_ms >= max_refresh_ms
@@ -20663,7 +20610,6 @@ class Passivbot:
                 "completed_candles",
                 signature,
                 now_ms=now,
-                epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
             return True
         except Exception as e:

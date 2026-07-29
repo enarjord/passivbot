@@ -268,7 +268,7 @@ def test_live_event_cycle_helpers_emit_structured_events():
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
-            self._authoritative_refresh_epoch = 7
+            self.freshness_ledger = SimpleNamespace(epoch=7)
             self.execution_scheduled = True
             self._live_event_cycle_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3871,7 +3871,7 @@ async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
-            self._authoritative_refresh_epoch = 17
+            self.freshness_ledger = SimpleNamespace(epoch=17)
             self._authoritative_pending_confirmations = {"open_orders": 18}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3929,7 +3929,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
             self.bot_id = "bot_1"
             self.live_event_debug_profiles = ("remote_calls",)
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {"open_orders": 22}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3978,7 +3978,7 @@ async def test_authoritative_timed_fetch_failure_emits_classification_only():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = None
-            self._authoritative_refresh_epoch = 19
+            self.freshness_ledger = SimpleNamespace(epoch=19)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -4021,7 +4021,7 @@ async def test_authoritative_timed_fetch_emit_failure_does_not_skip_fetch():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 20
+            self.freshness_ledger = SimpleNamespace(epoch=20)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self.fetch_called = False
@@ -4056,7 +4056,7 @@ async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception(
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_13"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
 
@@ -5222,6 +5222,7 @@ async def test_execute_orders_parent_records_order_opened_event():
             pb_mod.Passivbot._is_market_execution_order
         )
         _log_market_execution_notice = pb_mod.Passivbot._log_market_execution_notice
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -5232,6 +5233,8 @@ async def test_execute_orders_parent_records_order_opened_event():
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
             self._order_wave_in_progress = {"id": 7, "event_id": "ow_7"}
+            self.freshness_ledger = SimpleNamespace(epoch=0)
+            self._authoritative_pending_confirmations = {}
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5698,6 +5701,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
         _request_authoritative_confirmation = (
             pb_mod.Passivbot._request_authoritative_confirmation
         )
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _cancel_result_requires_full_authoritative_confirmation = (
             pb_mod.Passivbot._cancel_result_requires_full_authoritative_confirmation
         )
@@ -5709,7 +5713,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             self.live_event_debug_profiles = ("execution",)
             self._live_event_current_cycle_id = "cy_12"
             self._authoritative_pending_confirmations = {}
-            self._authoritative_refresh_epoch = 4
+            self.freshness_ledger = SimpleNamespace(epoch=4)
             self._order_wave_in_progress = {"id": 9, "event_id": "ow_9"}
             self._health_orders_cancelled = 0
             self.state_change_detected_by_symbol = set()

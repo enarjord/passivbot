@@ -1494,7 +1494,6 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     bot.positions = {}
     bot.fetched_positions = []
     bot.fetched_open_orders = []
-    bot._authoritative_refresh_epoch = 0
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
     bot.recent_order_cancellations = []
