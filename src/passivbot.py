@@ -1219,7 +1219,6 @@ class Passivbot:
         self.state_change_detected_by_symbol = set()
         self.recent_order_executions = []
         self.recent_order_cancellations = []
-        self._authoritative_refresh_epoch = 0
         self._authoritative_refresh_plan_surfaces = set()
         self._authoritative_pending_confirmations = {}
         self._trailing_fill_refresh_started_generation = 0
@@ -10338,8 +10337,7 @@ class Passivbot:
 
     def _begin_authoritative_refresh_epoch(self) -> None:
         """Start a new authoritative state refresh cohort for execution gating."""
-        ledger = self._ensure_freshness_ledger()
-        self._authoritative_refresh_epoch = ledger.begin_epoch(now_ms=utc_ms())
+        self._ensure_freshness_ledger().begin_epoch(now_ms=utc_ms())
 
     def _record_authoritative_surface(self, surface: str, signature) -> bool:
         """Record a fresh authoritative surface snapshot and whether it changed."""
@@ -10426,9 +10424,6 @@ class Passivbot:
         ledger = getattr(self, "freshness_ledger", None)
         if ledger is None:
             ledger = FreshnessLedger(now_ms=utc_ms())
-            ledger.epoch = int(
-                getattr(self, "_authoritative_refresh_epoch", 0) or 0
-            )
             self.freshness_ledger = ledger
         return ledger
 
@@ -10457,7 +10452,7 @@ class Passivbot:
         response_received_ts_ms: int,
     ) -> None:
         """Stage fetch metadata for account-critical packets without mutating trading state."""
-        cycle_hint = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        cycle_hint = int(self._ensure_freshness_ledger().epoch)
         source = f"{getattr(self, 'exchange', '') or 'exchange'}.staged_refresh"
 
         def stage(kind: str, value, raw_payload=None) -> None:
@@ -10527,7 +10522,7 @@ class Passivbot:
                 kind=surface,
                 value=signature,
                 raw_payload=None,
-                cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+                cycle_hint=int(self._ensure_freshness_ledger().epoch),
                 response_received_ts_ms=utc_ms(),
                 source="authoritative_surface",
                 quality="ok",
@@ -10535,7 +10530,7 @@ class Passivbot:
             )
         packet = pending.with_revision(
             revision,
-            cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+            cycle_hint=int(self._ensure_freshness_ledger().epoch),
         )
         self._live_data_packets[surface] = packet
         emit_diagnostic_event(
@@ -10806,7 +10801,7 @@ class Passivbot:
         target_epoch = int(
             min_epoch
             if min_epoch is not None
-            else int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
+            else int(self._ensure_freshness_ledger().epoch) + 1
         )
         current_wave = getattr(self, "_order_wave_in_progress", None)
         if isinstance(current_wave, dict):
@@ -20615,7 +20610,6 @@ class Passivbot:
                 "completed_candles",
                 signature,
                 now_ms=now,
-                epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
             return True
         except Exception as e:

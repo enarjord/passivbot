@@ -160,7 +160,8 @@ Compatibility mapping:
 - Current monitor `kind` maps to `event_type`.
 - Current monitor `payload` maps to `data`.
 - Current text tags map to `tags`.
-- `_authoritative_refresh_epoch` should become or feed `cycle_id`.
+- `FreshnessLedger.epoch` feeds authoritative cohort diagnostics; `cycle_id`
+  remains the separate execution-loop lifecycle correlation id.
 - `PlanningSnapshot.snapshot_id` should pass through unchanged.
 
 ## Event Registry
