@@ -682,6 +682,10 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
     assert caplog.text.count("error_type=RuntimeError") == 1
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
+    assert (
+        bot._forager_surface_failure_retry_after_ms[("TIMEOUT/USDT:USDT", "1m")]
+        == now_ms + pb_mod._FORAGER_TRANSIENT_FAILURE_RETRY_MS
+    )
 
 
 @pytest.mark.asyncio
@@ -4375,6 +4379,11 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
         def _get_fetch_delay_seconds(self):
             return 0.0
 
+        def _forager_refresh_budget(self, *args, **kwargs):
+            self.budget_calls = getattr(self, "budget_calls", [])
+            self.budget_calls.append(dict(kwargs))
+            return pb_mod.Passivbot._forager_refresh_budget(self, *args, **kwargs)
+
         def bp(self, pside, key, symbol):
             if key == "forager_volume_ema_span_1m":
                 return 10.0
@@ -4383,7 +4392,6 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
             return 0.0
 
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
-        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
@@ -4393,6 +4401,11 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
         await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert len(bot.cm.calls) == 2
+    assert [
+        call.get("max_cycle_budget")
+        for call in bot.budget_calls
+        if call.get("consume", True)
+    ] == [1, 1]
     assert "forager refresh paused by wall-time cap" in caplog.text
 
 
