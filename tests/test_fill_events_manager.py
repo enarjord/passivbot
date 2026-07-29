@@ -8106,6 +8106,23 @@ def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
     assert events[-1]["pprice"] == pytest.approx(expected_pprice)
 
 
+def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
+    add, close = _hyperliquid_same_millisecond_events()
+    # A missing close-and-reopen round trip can return to the same size with a
+    # different basis, so size continuity alone is insufficient across time.
+    add["timestamp"] = close["timestamp"] + 1
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_stale_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(54.439)
+    assert events[-1]["pprice"] != pytest.approx(expected_stale_pprice)
+
+
 def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     buy_1, sell_1 = _hyperliquid_same_millisecond_events()
     buy_1["id"] = "buy-1"

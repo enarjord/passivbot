@@ -925,7 +925,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
     """
-    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float]]] = {}
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
     for ev in events:
         components = _hyperliquid_raw_position_components(ev)
         candidates = [
@@ -999,8 +999,14 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         ordered_components = [components[index] for index in component_order]
         first_before = ordered_components[0][0]
         previous = recovered_state.get(key)
+        event_timestamp = int(ev.get("timestamp") or 0)
         basis: Optional[float] = None
-        if previous is not None and _is_same_position_size(previous[0], first_before):
+        if (
+            previous is not None
+            and event_timestamp > 0
+            and previous[2] == event_timestamp
+            and _is_same_position_size(previous[0], first_before)
+        ):
             basis = previous[1]
         position_size = first_before
         for (
@@ -1034,7 +1040,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             ev["pprice"] = 0.0
         elif basis is not None and basis > 0.0:
             ev["pprice"] = basis
-        recovered_state[key] = (position_size, basis)
+        recovered_state[key] = (position_size, basis, event_timestamp)
 
 
 def _is_same_position_size(lhs: float, rhs: float) -> bool:

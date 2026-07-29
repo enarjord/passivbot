@@ -124,9 +124,10 @@ logs, runtime windows, and immutable manifests.
    preceding each fill (Hyperliquid `startPosition`), retain each execution boundary and reorder an
    unambiguous cohort along that chain before annotation. Expand older coalesced Hyperliquid cache
    rows back into their raw components, and propagate a basis recovered from a reduction through
-   chained additions so the terminal size and VWAP are both authoritative. If the chain is
-   ambiguous, prefer only a unique after-state match to the exchange position; otherwise keep the
-   existing order.
+   chained additions in the same nonzero timestamp cohort so the terminal size and VWAP are both
+   authoritative. A matching position size at a later timestamp does not prove continuity across a
+   potentially incomplete history window. If the chain is ambiguous, prefer only a unique
+   after-state match to the exchange position; otherwise keep the existing order.
 
 ## Failure Semantics And Risks
 
