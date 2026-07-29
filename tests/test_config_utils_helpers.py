@@ -879,6 +879,14 @@ def test_parse_limit_cli_entry_supports_scenario_selector():
     }
 
 
+def test_parse_limit_cli_entry_preserves_none_scenario_label():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq > 0.5 scenario=none"
+    )
+
+    assert entry["scenario"] == "none"
+
+
 def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options():
     entry = config_utils.parse_limit_cli_entry(
         "drawdown_worst_strategy_eq<=0.7 scenario=null stat=max"

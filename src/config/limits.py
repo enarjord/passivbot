@@ -169,7 +169,7 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         if key == "stat":
             entry["stat"] = value
         elif key == "scenario":
-            entry["scenario"] = None if value.lower() in {"null", "none"} else value
+            entry["scenario"] = None if value.lower() == "null" else value
         elif key == "enabled":
             entry["enabled"] = _parse_cli_bool(value)
         else:

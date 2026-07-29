@@ -238,6 +238,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         raw_configs[config_id] = entry
         base = {"_id": config_id}
         suite_values, scenario_values, scenario_labels = _extract_suite_metrics(entry)
+        suite_aggregated_metric_names = _suite_aggregated_metric_names(entry)
         objective_values, objective_labels, objective_cols = _extract_objectives(entry)
         params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
@@ -245,7 +246,9 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         for key in row:
             if key.startswith("bot."):
                 param_cols.add(key)
-            elif key != "_id" and not _looks_like_stat_column(key):
+            elif key != "_id" and not _looks_like_stat_column(
+                key, suite_aggregated_metric_names
+            ):
                 aggregated_cols.add(key)
         for scenario, metric_values in scenario_values.items():
             for metric, value in metric_values.items():
@@ -383,7 +386,36 @@ def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
     return mask
 
 
-def _looks_like_stat_column(name: str) -> bool:
+def _suite_aggregated_metric_names(entry: dict) -> set[str]:
+    suite_metrics = entry.get("suite_metrics")
+    if not isinstance(suite_metrics, dict):
+        return set()
+    metrics = suite_metrics.get("metrics")
+    if isinstance(metrics, dict):
+        return {
+            str(metric)
+            for metric, payload in metrics.items()
+            if isinstance(payload, dict)
+            and _ensure_float(payload.get("aggregated")) is not None
+        }
+    aggregate = suite_metrics.get("aggregate")
+    if not isinstance(aggregate, dict):
+        return set()
+    aggregated = aggregate.get("aggregated")
+    if not isinstance(aggregated, dict):
+        return set()
+    return {
+        str(metric)
+        for metric, value in aggregated.items()
+        if _ensure_float(value) is not None
+    }
+
+
+def _looks_like_stat_column(
+    name: str, aggregated_metric_names: Iterable[str] = ()
+) -> bool:
+    if name in aggregated_metric_names:
+        return False
     lowered = name.lower()
     return lowered.endswith(("_mean", "_min", "_max", "_std", "_median"))
 

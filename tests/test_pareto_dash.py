@@ -57,6 +57,35 @@ def test_load_pareto_dataframe_handles_suite_and_params(tmp_path):
     assert np.isclose(df["objective.adg_usd"].iloc[0], 1.0)
 
 
+def test_load_pareto_dataframe_keeps_median_named_aggregated_metric(tmp_path):
+    run_dir = tmp_path / "run"
+    pareto_dir = run_dir / "pareto"
+    entry = {
+        "suite_metrics": {
+            "metrics": {
+                "position_held_days_median": {
+                    "aggregated": 2.5,
+                    "stats": {
+                        "mean": 2.5,
+                        "min": 2.0,
+                        "max": 3.0,
+                        "std": 0.5,
+                        "median": 2.5,
+                    },
+                    "scenarios": {"base": 2.0, "stress": 3.0},
+                }
+            },
+            "scenario_labels": ["base", "stress"],
+        }
+    }
+    _write_pareto_entry(pareto_dir / "0001_hash.json", entry)
+
+    run_data = pareto_dash.load_pareto_dataframe(str(run_dir))
+
+    assert "position_held_days_median" in run_data.aggregated_metrics
+    assert "position_held_days_median_mean" not in run_data.aggregated_metrics
+
+
 def test_load_history_dataframe_emits_iterations(tmp_path):
     run_dir = tmp_path / "run"
     pareto_dir = run_dir / "pareto"
