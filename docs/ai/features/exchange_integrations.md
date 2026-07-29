@@ -384,12 +384,14 @@ Handling:
 4. Authenticate the private WebSocket with its seconds-based signature, subscribe to `order`, and
    enrich each notification from REST order detail before publishing it. The raw push lacks enough
    durable close-only metadata for authoritative reconciliation. If REST reports that the order is
-   not found, publish the raw row as untrusted so the generic watcher requests an authoritative
-   account-state refresh instead of silently discarding the transition.
+   not found or returns semantically invalid order detail, publish only that raw row as untrusted so
+   the generic watcher requests an authoritative account-state refresh instead of silently
+   discarding the transition. Transport failures still fail the batch and reconnect.
 5. Apply custom endpoint domain rewrites and `rest.url_overrides.api` to the native REST base, and
-   merge `rest.extra_headers` into every request without allowing them to replace authentication
-   headers. Honor `disable_ws` for both private orders and public tickers: use REST order polling
-   and request only explicit, bounded symbol sets through REST depth.
+   merge `rest.extra_headers` into every request. Reject authentication header names
+   case-insensitively in configured headers so proxy or user headers cannot collide with generated
+   signatures. Honor `disable_ws` for both private orders and public tickers: use REST order
+   polling and request only explicit, bounded symbol sets through REST depth.
 6. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
    this connector.
 
@@ -413,8 +415,9 @@ Handling:
    `reduceOnly`; never reuse placement-side semantics while parsing a response.
 3. Accept both documented `LONG`/`SHORT` and observed `BUY`/`SELL` aliases on position rows. Keep
    all other position-side values invalid.
-4. Require a positive finite request price for every limit order and every open order. Only
-   terminal market-order detail may omit the request price.
+4. Require a positive finite quantity on every normalized order and a positive finite request
+   price for every limit order and every open order. Only terminal market-order detail may omit the
+   request price.
 5. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
    only trailing underscore padding before applying the closed order-status allowlist.
 6. Page pending orders by `skip` to the required, stable reported total under one fixed `endTime`
@@ -439,13 +442,14 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 
 The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for
 authoritative top-of-book and last price, splitting the active market set across connections
-because Bitunix permits at most 300 subscriptions per connection. A targeted ticker request may
-use one-row REST depth for at most eight missing symbols as a bounded startup fallback, with the
-bid/ask midpoint labeled as its synthetic last. Broad operation must fail instead of fanning out
-one depth request per market or substituting bid/ask for a last trade. When WebSockets are
-explicitly disabled, live market snapshots select this targeted REST path directly without opening
-or waiting for a public ticker socket; unbounded bulk requests and requests above the eight-symbol
-limit fail closed.
+because Bitunix permits at most 300 subscriptions per connection. Refresh those subscriptions when
+the active market-ID set changes. A targeted ticker request may use one-row REST depth for at most
+eight missing symbols as a bounded startup fallback, with the bid/ask midpoint labeled as its
+synthetic last through ticker normalization and into snapshot provenance. Broad operation must fail
+instead of fanning out one depth request per market or substituting bid/ask for a last trade. When
+WebSockets are explicitly disabled, live market snapshots select this targeted REST path directly
+without opening or waiting for a public ticker socket; unbounded bulk requests and requests above
+the eight-symbol limit fail closed.
 
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base

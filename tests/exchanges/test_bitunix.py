@@ -285,6 +285,14 @@ def test_limit_order_requires_positive_finite_price(price):
         client._normalize_order(_order_row(price=price))
 
 
+@pytest.mark.parametrize("qty", [None, "", "0", "-1", "nan"])
+def test_order_requires_positive_finite_quantity(qty):
+    client = _prepared_client()
+
+    with pytest.raises(ValueError, match="order.qty"):
+        client._normalize_order(_order_row(qty=qty))
+
+
 def test_terminal_market_order_allows_missing_request_price():
     client = _prepared_client()
 
@@ -764,6 +772,78 @@ async def test_order_stream_surfaces_unenriched_row_when_detail_is_not_found():
 
 
 @pytest.mark.asyncio
+async def test_order_stream_isolates_malformed_rest_detail_to_its_row():
+    client = _prepared_client()
+    valid_order = client._normalize_order(_order_row(orderId="order-2"))
+    client.fetch_order = AsyncMock(
+        side_effect=[ValueError("malformed order detail"), valid_order]
+    )
+    stream = BitunixOrderStream(client)
+    stream._ws = SimpleNamespace(
+        closed=False,
+        receive=AsyncMock(
+            return_value=SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "ch": "order",
+                        "data": [
+                            {
+                                "orderId": "order-1",
+                                "symbol": "BTCUSDT",
+                                "status": "FILLED",
+                            },
+                            {
+                                "orderId": "order-2",
+                                "symbol": "BTCUSDT",
+                                "status": "FILLED",
+                            },
+                        ],
+                    }
+                ),
+            )
+        ),
+    )
+
+    rows = await stream.watch_orders()
+
+    assert rows[0] == {
+        "orderId": "order-1",
+        "symbol": "BTC/USDT:USDT",
+        "status": "FILLED",
+    }
+    assert rows[1] == valid_order
+
+
+@pytest.mark.asyncio
+async def test_order_stream_propagates_rest_transport_failure():
+    client = _prepared_client()
+    client.fetch_order = AsyncMock(side_effect=NetworkError("unavailable"))
+    stream = BitunixOrderStream(client)
+    stream._ws = SimpleNamespace(
+        closed=False,
+        receive=AsyncMock(
+            return_value=SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "ch": "order",
+                        "data": {
+                            "orderId": "order-1",
+                            "symbol": "BTCUSDT",
+                            "status": "FILLED",
+                        },
+                    }
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(NetworkError, match="unavailable"):
+        await stream.watch_orders()
+
+
+@pytest.mark.asyncio
 async def test_unenriched_order_row_requests_account_state_refresh():
     bot = build_contract_bot("bitunix")
     bot.ccp = SimpleNamespace(has={"watchOrders": True})
@@ -865,6 +945,72 @@ async def test_depth_ticker_uses_midpoint_as_synthetic_last():
     assert ticker["source"] == "bitunix_depth_mid"
 
 
+@pytest.mark.asyncio
+async def test_bot_ticker_normalization_preserves_source_and_timestamp():
+    bot = build_contract_bot("bitunix")
+    symbol = "BTC/USDT:USDT"
+    bot.markets_dict = {symbol: _market()}
+    bot.cca = SimpleNamespace(
+        fetch_tickers=AsyncMock(
+            return_value={
+                symbol: {
+                    "bid": 99.0,
+                    "ask": 101.0,
+                    "last": 100.0,
+                    "timestamp": 1_700_000_000_000,
+                    "source": "bitunix_depth_mid",
+                }
+            }
+        )
+    )
+
+    tickers = await bot.fetch_tickers_for_symbols([symbol])
+
+    assert tickers[symbol] == {
+        "bid": 99.0,
+        "ask": 101.0,
+        "last": 100.0,
+        "timestamp": 1_700_000_000_000,
+        "source": "bitunix_depth_mid",
+    }
+
+
+def test_ticker_tasks_restart_when_active_market_ids_change():
+    client = _prepared_client()
+    existing_task = MagicMock()
+    existing_task.done.return_value = False
+    client._ticker_tasks = [existing_task]
+    client._ticker_subscription_ids = ("BTCUSDT",)
+    created_tasks = []
+
+    def fake_create_task(coroutine, *, name):
+        coroutine.close()
+        task = MagicMock()
+        task.done.return_value = False
+        created_tasks.append((task, name))
+        return task
+
+    with patch(
+        "exchanges.bitunix.asyncio.create_task", side_effect=fake_create_task
+    ) as create_task:
+        client._ensure_ticker_tasks()
+        create_task.assert_not_called()
+        existing_task.cancel.assert_not_called()
+
+        eth_market = {
+            **_market(),
+            "id": "ETHUSDT",
+            "symbol": "ETH/USDT:USDT",
+        }
+        client.markets[eth_market["symbol"]] = eth_market
+        client._ensure_ticker_tasks()
+
+    existing_task.cancel.assert_called_once_with()
+    assert client._ticker_subscription_ids == ("BTCUSDT", "ETHUSDT")
+    assert len(created_tasks) == 1
+    assert client._ticker_tasks == [created_tasks[0][0]]
+
+
 class _ResponseContext:
     def __init__(self, response):
         self.response = response
@@ -893,7 +1039,7 @@ async def test_native_request_uses_configured_rest_base_and_extra_headers():
             "apiKey": "key",
             "secret": "secret",
             "restUrl": "https://proxy.example/base/",
-            "headers": {"X-Proxy": "enabled", "api-key": "must-not-win"},
+            "headers": {"X-Proxy": "enabled"},
         }
     )
     response = SimpleNamespace(
@@ -910,6 +1056,22 @@ async def test_native_request_uses_configured_rest_base_and_extra_headers():
     assert args[:2] == ("GET", "https://proxy.example/base/private")
     assert kwargs["headers"]["X-Proxy"] == "enabled"
     assert kwargs["headers"]["api-key"] == "key"
+
+
+@pytest.mark.parametrize(
+    "header_name", ["api-key", "Api-Key", "NONCE", "Timestamp", "sIgN"]
+)
+def test_native_session_rejects_case_insensitive_auth_header_collision(
+    header_name,
+):
+    with pytest.raises(ValueError, match="reserved authentication header"):
+        BitunixClient(
+            {
+                "apiKey": "key",
+                "secret": "secret",
+                "headers": {header_name: "must-not-win"},
+            }
+        )
 
 
 def test_native_session_applies_bitunix_endpoint_override():

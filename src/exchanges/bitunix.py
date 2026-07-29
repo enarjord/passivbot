@@ -86,6 +86,7 @@ class BitunixClient:
     TICKER_MAX_AGE_MS = 30_000
     TICKER_WAIT_SECONDS = 8.0
     MAX_DEPTH_FALLBACK_SYMBOLS = 8
+    RESERVED_AUTH_HEADERS = frozenset({"api-key", "nonce", "timestamp", "sign"})
 
     has = {
         "cancelOrder": True,
@@ -143,10 +144,21 @@ class BitunixClient:
         self.apiKey = str(config.get("apiKey") or config.get("key") or "")
         self.secret = str(config.get("secret") or "")
         self.rest_url = str(config.get("restUrl") or self.REST_URL).rstrip("/")
-        self.headers = {
+        configured_headers = {
             str(key): str(value)
             for key, value in dict(config.get("headers") or {}).items()
         }
+        reserved_headers = sorted(
+            key
+            for key in configured_headers
+            if key.lower() in self.RESERVED_AUTH_HEADERS
+        )
+        if reserved_headers:
+            raise ValueError(
+                "Bitunix headers may not override reserved authentication header(s): "
+                + ", ".join(reserved_headers)
+            )
+        self.headers = configured_headers
         self.timeout = int(config.get("timeout") or 30_000)
         self.enableRateLimit = bool(config.get("enableRateLimit", True))
         self.ws_enabled = bool(config.get("wsEnabled", True))
@@ -160,6 +172,7 @@ class BitunixClient:
         self._position_ids: dict[tuple[str, str], str] = {}
         self._ticker_cache: dict[str, dict] = {}
         self._ticker_tasks: list[asyncio.Task] = []
+        self._ticker_subscription_ids: tuple[str, ...] = ()
         self._ticker_ready = asyncio.Event()
         self._closed = False
 
@@ -574,7 +587,9 @@ class BitunixClient:
                 if reduce_only
                 else ("long" if action_side == "buy" else "short")
             )
-        qty = abs(_float(row.get("qty"), field="order.qty"))
+        qty = _float(row.get("qty"), field="order.qty")
+        if qty <= 0.0:
+            raise ValueError("Bitunix response has non-positive order.qty")
         filled = abs(
             _float(
                 row.get("tradeQty") or row.get("dealAmount"),
@@ -1198,19 +1213,22 @@ class BitunixClient:
     def _ensure_ticker_tasks(self) -> None:
         if not self.ws_enabled:
             return
+        market_ids = tuple(
+            sorted(
+                str(market["id"])
+                for market in self.markets.values()
+                if market.get("active")
+            )
+        )
         if self._ticker_tasks and all(
             not task.done() for task in self._ticker_tasks
-        ):
+        ) and market_ids == self._ticker_subscription_ids:
             return
         for task in self._ticker_tasks:
             task.cancel()
         self._ticker_tasks = []
+        self._ticker_subscription_ids = market_ids
         self._ticker_ready.clear()
-        market_ids = [
-            str(market["id"])
-            for market in self.markets.values()
-            if market.get("active")
-        ]
         for index in range(0, len(market_ids), 300):
             chunk = tuple(market_ids[index : index + 300])
             self._ticker_tasks.append(
@@ -1455,7 +1473,7 @@ class BitunixOrderStream:
                                 self.rest.safe_symbol(str(row.get("symbol") or "")),
                             )
                         )
-                    except OrderNotFound:
+                    except (OrderNotFound, ValueError):
                         fallback = deepcopy(row)
                         fallback["symbol"] = self.rest.safe_symbol(
                             str(row.get("symbol") or "")
@@ -1519,6 +1537,17 @@ class BitunixBot(CCXTBot):
         if not self.ws_enabled:
             return "symbols"
         return super()._market_snapshot_ticker_strategy()
+
+    def _normalize_tickers(self, fetched: dict) -> dict:
+        tickers = super()._normalize_tickers(fetched)
+        for symbol, ticker in tickers.items():
+            raw = fetched[symbol]
+            if raw.get("timestamp") is not None:
+                ticker["timestamp"] = int(raw["timestamp"])
+            source = raw.get("source")
+            if isinstance(source, str) and source.strip():
+                ticker["source"] = source.strip()
+        return tickers
 
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()
