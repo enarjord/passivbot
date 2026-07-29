@@ -21,6 +21,11 @@ All notable user-facing changes will be documented in this file.
   an omitted or null `scenario` keep using suite aggregation and their explicit `stat` or
   `backtest.aggregate` fallback. Named-scenario limits use that scenario's metric value and reject
   an accompanying `stat`.
+- Optimizer starting configs may now be pre-filtered from stored Pareto metrics with
+  `--filter-starting-configs` and optionally reduced with the same `anchors-farthest` selection as
+  `pareto-compress` via `--compress-starting-configs N` (`--starting-configs-max N`). The optimizer
+  warns that stored metrics are not verified against the new run and fails loudly when metric
+  artifacts are missing, malformed, or all rejected.
 - Live EMA preparation now batches compatible spans per symbol and metric family, including bounded
   cache-only fallbacks for stale forager candidates, and complete candle windows bypass redundant
   Python gap reconstruction. A failed combined read retries each span through its primary reader

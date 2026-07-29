@@ -440,7 +440,10 @@ def _extract_suite_metrics(
                 continue
             aggregated = payload.get("aggregated")
             stats = payload.get("stats") or {}
-            if aggregated is None and isinstance(stats, Mapping):
+            if aggregate_cfg is not None and isinstance(stats, Mapping) and stats:
+                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                aggregated = stats.get(mode, stats.get("mean"))
+            elif aggregated is None and isinstance(stats, Mapping):
                 mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
                 aggregated = stats.get(mode, stats.get("mean"))
             if isinstance(aggregated, (int, float)) and math.isfinite(float(aggregated)):
@@ -455,7 +458,15 @@ def _extract_suite_metrics(
         if isinstance(stats, Mapping):
             stats_flat.update(flatten_metric_stats(dict(stats)))
         aggregated = aggregate.get("aggregated") or {}
-        if isinstance(aggregated, Mapping):
+        if aggregate_cfg is not None and isinstance(stats, Mapping) and stats:
+            for metric, metric_stats in stats.items():
+                if not isinstance(metric_stats, Mapping):
+                    continue
+                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                value = metric_stats.get(mode, metric_stats.get("mean"))
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    aggregated_values[str(metric)] = float(value)
+        elif isinstance(aggregated, Mapping):
             for metric, value in aggregated.items():
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     aggregated_values[str(metric)] = float(value)
@@ -880,7 +891,9 @@ def _resolve_limit_value(
     )
     stats_flat = candidate.stats_flat
     aggregated_values = candidate.aggregated_values
-    if explicit_suite_basis:
+    if explicit_suite_basis or (
+        aggregate_cfg is not None and isinstance(candidate.entry.get("suite_metrics"), Mapping)
+    ):
         stats_flat, aggregated_values = _extract_suite_metrics(
             candidate.entry,
             aggregate_cfg=aggregate_cfg,
@@ -953,12 +966,20 @@ def filter_candidates(
         normalized_limits.extend(normalize_limit_entries(limits_payload))
     if limit_entries:
         normalized_limits.extend(parse_limit_cli_entries(list(limit_entries)))
-    normalized_limits = normalize_limit_entries(normalized_limits)
+    return filter_candidates_with_limits(candidates, normalized_limits)
+
+
+def filter_candidates_with_limits(
+    candidates: Sequence[ParetoCandidate],
+    limits: Sequence[Mapping[str, Any]],
+    *,
+    aggregate_cfg: Mapping[str, Any] | None = None,
+) -> tuple[List[ParetoCandidate], List[Dict[str, Any]]]:
+    normalized_limits = normalize_limit_entries(list(limits))
     enabled_limits = [entry for entry in normalized_limits if bool(entry.get("enabled", True))]
     if not enabled_limits:
         return list(candidates), enabled_limits
-    aggregate_cfg = None
-    if candidates:
+    if aggregate_cfg is None and candidates:
         backtest_cfg = candidates[0].entry.get("backtest")
         if isinstance(backtest_cfg, Mapping):
             aggregate_cfg = backtest_cfg.get("aggregate")
