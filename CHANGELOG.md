@@ -23,6 +23,15 @@ All notable user-facing changes will be documented in this file.
   case-insensitive authentication-header collisions, isolates malformed order-detail rows, retains
   synthetic ticker provenance, refreshes public ticker subscriptions as markets change, times
   ticker-cache freshness locally, and reconciles malformed private-WebSocket rows.
+- Fills sharing a single millisecond are now ordered by the position chain the exchange reports
+  with each fill instead of by arbitrary response order. Hyperliquid emits a `startPosition` per
+  fill, so a cohort executed within one millisecond forms an unambiguous chain; previously the
+  cached order could end on a fill whose after-state was not the account's final position, leaving
+  live trailing confirmation permanently in `fill_after_state_mismatch` and the symbol nontradable
+  until an unrelated new fill arrived. Trailing anchor selection also prefers the chain terminal, so
+  caches already written out of order recover without a rewrite. Cohorts without chain evidence keep
+  their existing order.
+
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.

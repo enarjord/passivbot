@@ -38,6 +38,7 @@ from src.fill_events_manager import (
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
+    order_same_timestamp_fills,
 )
 
 # ---------------------------------------------------------------------------
@@ -8035,3 +8036,80 @@ async def test_refresh_does_not_reattribute_legacy_cached_fill(tmp_path: Path):
     data_files = [path for path in tmp_path.glob("*.json") if path.name != "metadata.json"]
     persisted = json.loads(data_files[0].read_text())
     assert "provenance" not in persisted[0]
+
+
+def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
+    """Hyperliquid cohort sharing a millisecond, cached in reverse order."""
+
+    def _fill(trade_id: str, side: str, qty: float, price: float, start: str, direction: str):
+        return {
+            "id": trade_id,
+            "symbol": "HYPE/USDC:USDC",
+            "position_side": "long",
+            "timestamp": 1_785_241_167_526,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": -0.343558 if side == "sell" else 0.0,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": trade_id,
+                        "side": side,
+                        "amount": qty,
+                        "price": price,
+                        "info": {
+                            "tid": trade_id,
+                            "side": side,
+                            "sz": str(qty),
+                            "px": str(price),
+                            "startPosition": start,
+                            "dir": direction,
+                        },
+                    },
+                }
+            ],
+        }
+
+    return [
+        _fill("1109260071634171", "buy", 2.04, 54.439, "653.02", "Open Long"),
+        _fill("952357507764053", "sell", 0.19, 54.438, "653.21", "Close Long"),
+    ]
+
+
+def test_order_same_timestamp_fills_follows_hyperliquid_position_chain():
+    events = _hyperliquid_same_millisecond_events()
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == [
+        "952357507764053",
+        "1109260071634171",
+    ]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events, {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)})
+
+    assert events[-1]["psize"] == pytest.approx(655.06)
+
+
+def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():
+    events = _hyperliquid_same_millisecond_events()
+    for ev in events:
+        ev["raw"][0]["data"]["info"].pop("startPosition")
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original
+
+
+def test_order_same_timestamp_fills_keeps_distinct_timestamps_untouched():
+    events = _hyperliquid_same_millisecond_events()
+    events[1]["timestamp"] = events[0]["timestamp"] + 1
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original

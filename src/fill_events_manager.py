@@ -1016,6 +1016,106 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
                 )
 
 
+def _hyperliquid_fill_position_chain(
+    ev: Dict[str, object]
+) -> Optional[Tuple[float, float]]:
+    """Return (before, after) position magnitudes from raw Hyperliquid fills.
+
+    Hyperliquid reports the position size preceding every component fill, which
+    is the only ordering evidence available for fills sharing a millisecond.
+    """
+    starts: List[float] = []
+    ends: List[float] = []
+    reducing_flags: List[bool] = []
+    for item in _normalize_raw_field(ev.get("raw")):
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        if not isinstance(info, dict) or "startPosition" not in info:
+            continue
+        try:
+            start_position = abs(float(info.get("startPosition") or 0.0))
+            qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0.0:
+            continue
+        side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
+        position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
+        if position_side == "short":
+            reducing = side == "buy"
+        elif position_side == "long":
+            reducing = side == "sell"
+        else:
+            continue
+        starts.append(start_position)
+        ends.append(max(0.0, start_position - qty) if reducing else start_position + qty)
+        reducing_flags.append(reducing)
+
+    if not starts or len(set(reducing_flags)) != 1:
+        return None
+    if reducing_flags[0]:
+        return max(starts), min(ends)
+    return min(starts), max(ends)
+
+
+def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
+    """Order fills sharing a millisecond by the exchange's position chain.
+
+    Position reconstruction replays fills in list order, but exchange responses
+    and caches keep no intra-millisecond ordering.  When the exchange reports
+    the position size preceding each fill, the cohort forms a chain whose order
+    is unambiguous; ambiguous cohorts are left untouched.
+    """
+    grouped: Dict[Tuple[str, str, int], List[int]] = defaultdict(list)
+    for index, ev in enumerate(events):
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            int(ev.get("timestamp") or 0),
+        )
+        grouped[key].append(index)
+
+    for indexes in grouped.values():
+        if len(indexes) < 2:
+            continue
+        chains = [_hyperliquid_fill_position_chain(events[index]) for index in indexes]
+        if any(chain is None for chain in chains):
+            continue
+
+        def _is_same_size(lhs: float, rhs: float) -> bool:
+            return abs(lhs - rhs) <= max(1e-12, 1e-9 * max(1.0, abs(lhs), abs(rhs)))
+
+        remaining = dict(zip(indexes, chains))
+        ends = [chain[1] for chain in chains]
+        heads = [
+            index
+            for index, chain in remaining.items()
+            if not any(_is_same_size(chain[0], end) for end in ends)
+        ]
+        if len(heads) != 1:
+            continue
+        ordered: List[int] = [heads[0]]
+        while len(ordered) < len(indexes):
+            _, current_end = remaining[ordered[-1]]
+            successors = [
+                index
+                for index, chain in remaining.items()
+                if index not in ordered and _is_same_size(chain[0], current_end)
+            ]
+            if len(successors) != 1:
+                break
+            ordered.append(successors[0])
+        if len(ordered) != len(indexes):
+            continue
+        reordered = [events[index] for index in ordered]
+        for slot, ev in zip(sorted(indexes), reordered):
+            events[slot] = ev
+
+
 def annotate_positions_inplace(
     events: List[Dict[str, object]],
     state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
@@ -3484,6 +3584,7 @@ class FillEventsManager:
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
+                order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
                 apply_hyperliquid_raw_psize_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
@@ -4292,6 +4393,7 @@ class FillEventsManager:
         for ev in payload:
             ev["pnl_contract"] = PNL_CONTRACT_CURRENT
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         compute_psize_pprice(payload)
         apply_hyperliquid_raw_psize_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
@@ -4703,6 +4805,7 @@ class FillEventsManager:
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
+            order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
             apply_hyperliquid_raw_psize_overrides(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)

@@ -7031,3 +7031,61 @@ async def test_orders_sorted_by_market_diff(monkeypatch):
 
     assert [order["price"] for order in to_cancel] == [102.0, 97.0]
     assert [order["price"] for order in to_create] == [101.0, 95.0]
+
+
+def _same_millisecond_cohort(symbol: str) -> list:
+    """Two fills sharing one millisecond, cached in reverse execution order."""
+    closing_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        1_785_241_167_526,
+        "952357507764053",
+        psize=653.02,
+        pprice=56.2462,
+        side="sell",
+        qty=0.19,
+        price=54.438,
+    )
+    opening_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        1_785_241_167_526,
+        "1109260071634171",
+        psize=655.06,
+        pprice=56.2405,
+        side="buy",
+        qty=2.04,
+        price=54.439,
+    )
+    return [opening_fill, closing_fill]
+
+
+def test_latest_fill_anchor_prefers_intra_millisecond_chain_terminal():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(_same_millisecond_cohort(symbol))
+
+    anchors = bot._latest_fill_position_change_anchors()
+
+    anchor = anchors[(symbol, "long")]
+    assert anchor["psize"] == 655.06
+    assert anchor["epoch"].endswith("1109260071634171")
+    assert bot._fill_anchor_matches_position_state(
+        symbol, "long", (655.06, 56.2405), anchor
+    )
+
+
+def test_latest_fill_anchor_keeps_list_order_for_ambiguous_cohort():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    events = _same_millisecond_cohort(symbol)
+    # A cohort that does not chain (both fills claim the same predecessor)
+    # stays ambiguous, so the cached order remains authoritative.
+    events[1].psize = 651.17
+    bot._pnls_manager = _DummyPnlsManager(events)
+
+    anchors = bot._latest_fill_position_change_anchors()
+
+    assert anchors[(symbol, "long")]["psize"] == 651.17

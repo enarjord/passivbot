@@ -119,6 +119,11 @@ logs, runtime windows, and immutable manifests.
    refreshes may return the same close as pending again; they must preserve an already reconciled
    cycle value. Reapplying an unchanged cycle observation is a no-op, while a changed authoritative
    total is redistributed across that lifecycle and persisted.
+7. Fills sharing one millisecond carry no execution order in exchange responses or caches, yet
+   position reconstruction replays them in list order. When the exchange reports the position size
+   preceding each fill (Hyperliquid `startPosition`), the cohort is reordered along that chain
+   before annotation so the last cached fill's after-state is the account's actual position.
+   Cohorts without chain evidence, or whose chain is ambiguous, keep their existing order.
 
 ## Failure Semantics And Risks
 
