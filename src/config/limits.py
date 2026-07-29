@@ -94,7 +94,7 @@ _INLINE_LIMIT_OP_RE = re.compile(
 
 def _tokenize_cli_limit_entry(raw_entry: str) -> List[str]:
     tokens = shlex.split(raw_entry)
-    if len(tokens) >= 3:
+    if len(tokens) >= 3 and not _INLINE_LIMIT_OP_RE.match(tokens[0]):
         return tokens
 
     match = _INLINE_LIMIT_OP_RE.match(raw_entry)

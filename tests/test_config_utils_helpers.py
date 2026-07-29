@@ -879,6 +879,20 @@ def test_parse_limit_cli_entry_supports_scenario_selector():
     }
 
 
+def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq<=0.7 scenario=null stat=max"
+    )
+
+    assert entry == {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "value": 0.7,
+        "scenario": None,
+        "stat": "max",
+    }
+
+
 def test_parse_limit_cli_entries_supports_json_object_strings():
     entries = config_utils.parse_limit_cli_entries(
         ['{"metric":"adg","penalize_if":"<","value":0.001,"stat":"mean"}']

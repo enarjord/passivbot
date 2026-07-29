@@ -873,7 +873,19 @@ def _resolve_limit_value(
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
         return None
-    if candidate.scenario is not None and "stat" in entry:
+    explicit_suite_basis = (
+        candidate.scenario is not None
+        and "scenario" in entry
+        and entry.get("scenario") is None
+    )
+    stats_flat = candidate.stats_flat
+    aggregated_values = candidate.aggregated_values
+    if explicit_suite_basis:
+        stats_flat, aggregated_values = _extract_suite_metrics(
+            candidate.entry,
+            aggregate_cfg=aggregate_cfg,
+        )
+    if candidate.scenario is not None and "stat" in entry and not explicit_suite_basis:
         requested_stat = str(entry.get("stat", "")).strip().lower()
         if requested_stat != "mean":
             raise ValueError(
@@ -882,14 +894,14 @@ def _resolve_limit_value(
             )
     stat = basis.stat
     if "stat" not in entry:
-        value = resolve_metric_value(candidate.aggregated_values, metric)
+        value = resolve_metric_value(aggregated_values, metric)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
     key = f"{metric}_{stat}"
-    value = resolve_metric_value(candidate.stats_flat, key)
+    value = resolve_metric_value(stats_flat, key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
-    if "stat" not in entry:
+    if "stat" not in entry and not explicit_suite_basis:
         fallback = _resolve_candidate_metric_value(candidate, metric)
         if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
             return float(fallback)

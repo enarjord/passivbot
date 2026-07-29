@@ -329,11 +329,11 @@ def _select_closest_to_ideal(df: pd.DataFrame, metrics: List[str]) -> Optional[p
 
 
 LIMIT_PATTERNS = [
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less_equal),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*<=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less_equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
+    (re.compile(r"^\s*(?P<key>.+?)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
+    (re.compile(r"^\s*(?P<key>.+?)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
 ]
 
 

@@ -528,6 +528,42 @@ def test_limit_entry_can_select_scenario_without_projecting_candidates(
     assert limits[0]["scenario"] == "bull"
 
 
+def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
+    scenario_pareto_dir: Path,
+):
+    _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
+    projected = project_candidates_to_scenario(candidates, specs, "bull")
+
+    filtered, limits = filter_candidates(
+        projected,
+        limits_payload=None,
+        limit_entries=["metric_a<0.6 scenario=null"],
+    )
+
+    assert [candidate.path.stem for candidate in filtered] == [
+        "a",
+        "b",
+        "c_dominated",
+        "d",
+    ]
+    assert "scenario" in limits[0]
+    assert limits[0]["scenario"] is None
+
+    filtered_max, max_limits = filter_candidates(
+        projected,
+        limits_payload=None,
+        limit_entries=["metric_a<0.6 scenario=null stat=max"],
+    )
+
+    assert [candidate.path.stem for candidate in filtered_max] == [
+        "a",
+        "b",
+        "c_dominated",
+        "d",
+    ]
+    assert max_limits[0]["stat"] == "max"
+
+
 def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(
     scenario_pareto_dir: Path,
     capsys,

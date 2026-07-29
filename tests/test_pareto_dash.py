@@ -3,6 +3,7 @@ from pathlib import Path
 
 import msgpack
 import numpy as np
+import pandas as pd
 
 from tools import pareto_dash
 
@@ -97,3 +98,22 @@ def test_default_limit_expressions_target_scenario_columns():
     )
 
     assert expressions == ["base__adg_usd>=0.08", "adg_usd_min>=0.05"]
+
+
+def test_scenario_limit_expression_supports_punctuation_in_label():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "metric": "adg",
+                "penalize_if": "greater_than",
+                "scenario": "bear-market",
+                "value": 0.08,
+            }
+        ]
+    )
+    dataframe = pd.DataFrame({"bear-market__adg_usd": [0.07, 0.09]})
+
+    mask = pareto_dash._apply_limits(dataframe, "\n".join(expressions))
+
+    assert expressions == ["bear-market__adg_usd<=0.08"]
+    assert mask.tolist() == [True, False]
