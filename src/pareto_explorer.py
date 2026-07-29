@@ -26,6 +26,7 @@ from config.scoring import (
     from_engine_value,
     objective_spec_by_metric,
 )
+from limit_utils import resolve_auto_limit_entries
 from metrics_schema import flatten_metric_stats
 from pareto_core import detect_latest_pareto_dir
 
@@ -636,8 +637,13 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
 
 
 def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCandidate], List[ObjectiveSpec]]:
-    pareto_dir = resolve_pareto_directory(path)
-    json_paths = sorted(pareto_dir.glob("*.json"))
+    raw_path = Path(path).expanduser()
+    if raw_path.is_file():
+        pareto_dir = raw_path.parent.resolve()
+        json_paths = [raw_path.resolve()]
+    else:
+        pareto_dir = resolve_pareto_directory(raw_path)
+        json_paths = sorted(pareto_dir.glob("*.json"))
     if not json_paths:
         raise ValueError(f"No Pareto JSON files found in {pareto_dir}")
 
@@ -951,7 +957,7 @@ def _limit_rejects(entry: Mapping[str, Any], value: float) -> bool:
         return value < float(low) or value > float(high)
     if mode == "inside_range":
         low, high = entry["range"]
-        return float(low) <= value <= float(high)
+        return float(low) < value < float(high)
     raise ValueError(f"Unsupported limit mode {mode!r}")
 
 
@@ -974,8 +980,14 @@ def filter_candidates_with_limits(
     limits: Sequence[Mapping[str, Any]],
     *,
     aggregate_cfg: Mapping[str, Any] | None = None,
+    scoring_weights: Mapping[str, float] | None = None,
 ) -> tuple[List[ParetoCandidate], List[Dict[str, Any]]]:
     normalized_limits = normalize_limit_entries(list(limits))
+    if scoring_weights is not None:
+        normalized_limits = resolve_auto_limit_entries(
+            normalized_limits,
+            dict(scoring_weights),
+        )
     enabled_limits = [entry for entry in normalized_limits if bool(entry.get("enabled", True))]
     if not enabled_limits:
         return list(candidates), enabled_limits

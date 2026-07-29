@@ -2798,9 +2798,14 @@ def preselect_starting_configs(
     *,
     filter_by_limits: bool,
     max_count: int | None,
+    aggregate_cfg_override: Mapping[str, Any] | None = None,
 ) -> list[dict]:
     backtest_cfg = config.get("backtest")
-    aggregate_cfg = backtest_cfg.get("aggregate") if isinstance(backtest_cfg, Mapping) else None
+    aggregate_cfg = (
+        backtest_cfg.get("aggregate") if isinstance(backtest_cfg, Mapping) else None
+    )
+    if aggregate_cfg_override is not None:
+        aggregate_cfg = aggregate_cfg_override
     optimize_cfg = config.get("optimize")
     limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
     selection = select_starting_config_artifacts(
@@ -3042,6 +3047,15 @@ async def main():
         TEMPLATE_CONFIG_MODE,
         ",".join(objective_metric_names(config)),
     )
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(args.suite_config)
+        if _suite_config_implies_suite_mode(args):
+            recursive_config_update(
+                config, "backtest.suite_enabled", True, verbose=True
+            )
+    suite_cfg = extract_suite_config(config, suite_override)
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
         preselected_starting_configs = preselect_starting_configs(
@@ -3049,6 +3063,7 @@ async def main():
             config,
             filter_by_limits=bool(args.filter_starting_configs),
             max_count=args.starting_configs_max,
+            aggregate_cfg_override=suite_cfg.get("aggregate"),
         )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
@@ -3071,14 +3086,6 @@ async def main():
         )
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
-        if _suite_config_implies_suite_mode(args):
-            recursive_config_update(config, "backtest.suite_enabled", True, verbose=True)
-    suite_cfg = extract_suite_config(config, suite_override)
-
     # Handle --scenarios filter (implies --suite y)
     scenario_filter = getattr(args, "scenarios", None)
     if scenario_filter:

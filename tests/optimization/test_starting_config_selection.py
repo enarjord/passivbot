@@ -135,6 +135,73 @@ def test_compression_without_filtering_uses_all_metric_bearing_candidates(
     ]
 
 
+def test_metric_preselection_accepts_one_pareto_artifact_and_ignores_siblings(
+    sample_pareto_dir: Path,
+):
+    (sample_pareto_dir / "ordinary_config.json").write_text(
+        json.dumps({"bot": {"long": {}, "short": {}}}),
+        encoding="utf-8",
+    )
+
+    result = select_starting_config_artifacts(
+        str(sample_pareto_dir / "middle.json"),
+        limits=[],
+        aggregate_cfg={"default": "mean"},
+        filter_by_limits=False,
+        max_count=None,
+    )
+
+    assert result.loaded_count == 1
+    assert [candidate.path.name for candidate in result.candidates] == ["middle.json"]
+
+
+def test_filtering_resolves_auto_limit_direction_like_optimizer(
+    sample_pareto_dir: Path,
+):
+    result = select_starting_config_artifacts(
+        str(sample_pareto_dir),
+        limits=[
+            {
+                "metric": "adg_strategy_eq",
+                "penalize_if": "auto",
+                "value": 0.0015,
+            }
+        ],
+        aggregate_cfg={"default": "mean"},
+        filter_by_limits=True,
+        max_count=None,
+    )
+
+    assert result.filtered_count == 3
+    assert "low_drawdown_anchor.json" not in {
+        candidate.path.name for candidate in result.candidates
+    }
+
+
+def test_inside_range_filter_preserves_boundary_candidates(
+    sample_pareto_dir: Path,
+):
+    result = select_starting_config_artifacts(
+        str(sample_pareto_dir),
+        limits=[
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "inside_range",
+                "range": [0.10, 0.25],
+            }
+        ],
+        aggregate_cfg={"default": "mean"},
+        filter_by_limits=True,
+        max_count=None,
+    )
+
+    assert {candidate.path.name for candidate in result.candidates} == {
+        "low_drawdown_anchor.json",
+        "middle.json",
+        "adg_anchor.json",
+    }
+
+
 def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
     tmp_path: Path,
 ):

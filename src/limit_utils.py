@@ -17,6 +17,29 @@ _KNOWN_LIMIT_METRICS = (
 )
 
 
+def resolve_auto_limit_entries(
+    limits: Iterable[Dict[str, Any]],
+    scoring_weights: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    """Resolve legacy ``penalize_if=auto`` entries using optimizer scoring directions."""
+    weights = scoring_weights or {}
+    resolved: List[Dict[str, Any]] = []
+    for raw_entry in limits:
+        entry = deepcopy(raw_entry)
+        mode = entry.get("penalize_if") or "greater_than"
+        if mode == "auto":
+            metric = entry.get("metric")
+            if not metric:
+                continue
+            canonical_metric = canonical_metric_name(str(metric))
+            weight = weights.get(canonical_metric)
+            if weight is None:
+                continue
+            entry["penalize_if"] = "less_than" if weight < 0 else "greater_than"
+        resolved.append(entry)
+    return resolved
+
+
 def expand_limit_checks(
     limits: Iterable[Dict[str, Any]],
     scoring_weights: Dict[str, float],
@@ -32,8 +55,8 @@ def expand_limit_checks(
         return []
     weights = scoring_weights or {}
     checks: List[Dict[str, Any]] = []
-    for raw_entry in limits:
-        entry = deepcopy(raw_entry)
+    for entry in resolve_auto_limit_entries(limits, weights):
+        raw_entry = entry
         if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
             continue
         metric = entry.get("metric")
@@ -42,11 +65,6 @@ def expand_limit_checks(
         metric = canonical_metric_name(str(metric))
         _validate_limit_metric(metric, raw_entry)
         mode = entry.get("penalize_if") or "greater_than"
-        if mode == "auto":
-            weight = weights.get(metric)
-            if weight is None:
-                continue
-            mode = "less_than" if weight < 0 else "greater_than"
         if mode in {
             "greater_than",
             "greater_than_or_equal",

@@ -705,6 +705,70 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     )
 
 
+def test_preselect_starting_configs_uses_effective_suite_aggregate_override(tmp_path):
+    config = get_template_config()
+    config["backtest"]["aggregate"] = {"default": "max"}
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+    config["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "value": 0.5,
+        }
+    ]
+    artifact = deepcopy(config)
+    artifact["metrics"] = {
+        "objectives": {
+            "adg_strategy_eq": 0.002,
+            "drawdown_worst_strategy_eq": 0.8,
+        },
+        "stats": {
+            "adg_strategy_eq": {
+                "mean": 0.002,
+                "min": 0.002,
+                "max": 0.002,
+                "std": 0.0,
+                "median": 0.002,
+            },
+            "drawdown_worst_strategy_eq": {
+                "mean": 0.2,
+                "min": 0.2,
+                "max": 0.8,
+                "std": 0.3,
+                "median": 0.2,
+            },
+        },
+    }
+    artifact["suite_metrics"] = {
+        "metrics": {
+            "adg_strategy_eq": {
+                "aggregated": 0.002,
+                "stats": artifact["metrics"]["stats"]["adg_strategy_eq"],
+            },
+            "drawdown_worst_strategy_eq": {
+                "aggregated": 0.8,
+                "stats": artifact["metrics"]["stats"]["drawdown_worst_strategy_eq"],
+            },
+        }
+    }
+    artifact_path = tmp_path / "candidate.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    selected = preselect_starting_configs(
+        str(artifact_path),
+        config,
+        filter_by_limits=True,
+        max_count=None,
+        aggregate_cfg_override={"default": "mean"},
+    )
+
+    assert len(selected) == 1
+    assert selected[0]["_starting_config_source"].endswith("candidate.json")
+
+
 def test_optimize_parser_accepts_short_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from config.scoring import ObjectiveSpec
+from config.scoring import ObjectiveSpec, default_scoring_weights
 from pareto_compress import compress_candidates
 from pareto_explorer import (
     ParetoCandidate,
@@ -29,11 +29,18 @@ class StartingConfigSelection:
 def _require_metric_bearing_artifacts(
     pareto_dir: Path,
     candidates: Sequence[ParetoCandidate],
+    source_path: str,
 ) -> None:
     candidate_paths = {candidate.path.resolve() for candidate in candidates}
+    raw_source = Path(source_path).expanduser()
+    json_paths = (
+        [raw_source.resolve()]
+        if raw_source.is_file()
+        else sorted(pareto_dir.glob("*.json"))
+    )
     unsupported = [
         path.name
-        for path in sorted(pareto_dir.glob("*.json"))
+        for path in json_paths
         if path.name not in _IGNORED_METADATA_FILENAMES
         and path.resolve() not in candidate_paths
     ]
@@ -73,7 +80,7 @@ def select_starting_config_artifacts(
             "Omit --filter-starting-configs and --compress-starting-configs to re-evaluate "
             "ordinary seed configs."
         ) from exc
-    _require_metric_bearing_artifacts(pareto_dir, loaded)
+    _require_metric_bearing_artifacts(pareto_dir, loaded, path)
 
     candidates = list(loaded)
     active_limits: list[dict[str, Any]] = []
@@ -82,6 +89,7 @@ def select_starting_config_artifacts(
             candidates,
             limits,
             aggregate_cfg=aggregate_cfg,
+            scoring_weights=default_scoring_weights(),
         )
         if not candidates:
             raise ValueError(
