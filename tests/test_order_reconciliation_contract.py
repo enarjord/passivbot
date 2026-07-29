@@ -85,6 +85,41 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
+def test_bitget_uta_websocket_order_uses_native_hold_side():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.is_uta = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "sell",
+        "amount": 0.1,
+        "info": {
+            "holdMode": "hedge_mode",
+            "holdSide": "long",
+            "side": "sell",
+            "tradeSide": "close",
+        },
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["side"] == "sell"
+    assert normalized["position_side"] == "long"
+    assert normalized["qty"] == 0.1
+
+
+def test_bitget_uta_websocket_order_rejects_conflicting_native_psides():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.hedge_mode = True
+    bot.is_uta = True
+
+    with pytest.raises(ValueError, match="authoritative position-side"):
+        bot._get_position_side_for_order(
+            {"info": {"posSide": "short", "holdSide": "long"}}
+        )
+
+
 @pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
 def test_sparse_websocket_order_update_uses_passivbot_client_pside(bot_cls):
     bot = bot_cls.__new__(bot_cls)
