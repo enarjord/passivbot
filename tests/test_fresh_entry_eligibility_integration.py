@@ -113,7 +113,6 @@ def _reconciliation_bot(symbol: str, actual_orders: list[dict]) -> Passivbot:
     bot.is_pside_enabled = lambda pside: pside == "long"
     bot._annotate_order_deltas = lambda cancel, create: (cancel, create)
     bot._apply_order_match_tolerance = lambda cancel, create: (cancel, create, 0)
-    bot._apply_freshness_creation_guardrails = lambda create: (create, 0)
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
 
     async def keep_sort(self, orders, _label):

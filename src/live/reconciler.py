@@ -888,94 +888,6 @@ async def detect_foreign_passivbot_orders(bot, open_orders: list[dict]) -> None:
         )
 
 
-def order_matches_known_self_emission(bot, order: dict, max_age_ms: int) -> bool:
-    """Return True when an open order is known to have been emitted by this process."""
-    if not isinstance(order, dict):
-        return False
-    if bot.order_matches_recent_execution(order, max_age_ms=max_age_ms):
-        return True
-    now_ts = (
-        int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
-    )
-    cutoff = now_ts - int(max_age_ms)
-    exchange_id = extract_order_exchange_id(order)
-    custom_id = extract_order_custom_id(order)
-    canonical_custom_id = canonical_passivbot_custom_id(custom_id)
-    pb_type = (
-        _pb_attr("custom_id_to_snake")(custom_id)
-        if custom_id
-        else bot._resolve_pb_order_type(order)
-    )
-    fingerprint = order_identity_fingerprint(order, pb_type)
-    for record in emitted_order_records(bot):
-        record_ts_raw = record.get("timestamp")
-        if record_ts_raw is None:
-            continue
-        try:
-            record_ts = int(record_ts_raw)
-        except (TypeError, ValueError):
-            continue
-        if record_ts < cutoff:
-            continue
-        record_exchange_id = str(record.get("exchange_id") or "")
-        if (
-            exchange_id
-            and record_exchange_id
-            and str(exchange_id) == record_exchange_id
-        ):
-            return True
-        record_custom_id = str(record.get("canonical_custom_id") or "")
-        if (
-            canonical_custom_id
-            and record_custom_id
-            and canonical_custom_id == record_custom_id
-        ):
-            return True
-        if (
-            fingerprint
-            and record.get("fingerprint")
-            and record.get("fingerprint") == fingerprint
-        ):
-            return True
-    return False
-
-
-def flag_disappeared_self_order_guardrail(bot, order: dict) -> None:
-    """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
-    symbol = str(order.get("symbol") or "")
-    if not symbol:
-        return
-    ledger = bot._ensure_freshness_ledger()
-    min_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0) + 1
-    details = {
-        "order_id": str(order.get("id") or ""),
-        "side": str(order.get("side") or ""),
-        "position_side": str(order.get("position_side") or ""),
-        "price": order.get("price"),
-        "qty": order.get("qty", order.get("amount")),
-    }
-    ledger.flag_symbol_block(
-        symbol,
-        reason="self_order_disappeared_position_may_be_stale",
-        required_surfaces=ACCOUNT_SURFACES,
-        min_epoch=min_epoch,
-        detected_ms=_utc_ms(),
-        details=details,
-    )
-    bot.execution_scheduled = True
-    if not hasattr(bot, "state_change_detected_by_symbol"):
-        bot.state_change_detected_by_symbol = set()
-    bot.state_change_detected_by_symbol.add(symbol)
-    bot._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
-    logging.debug(
-        "[state] freshness guardrail armed | symbol=%s | reason=self_order_disappeared_position_may_be_stale | required=%s | min_epoch=%s | order_id=%s",
-        _pb_attr("Passivbot")._log_symbol(symbol),
-        ",".join(sorted(ACCOUNT_SURFACES)),
-        min_epoch,
-        details["order_id"],
-    )
-
-
 def mark_account_critical_state_dirty(
     bot,
     *,
@@ -1251,7 +1163,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     *,
     actual_symbols: Optional[Iterable[str]] = None,
     actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
-    apply_creation_guardrails: bool = True,
     apply_mode_filters: bool = True,
     collect_fresh_entry_eligibility: bool = True,
 ):
@@ -1420,26 +1331,12 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         )
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
-    if apply_creation_guardrails:
-        before_creation_guardrails = list(to_create)
-        to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
-        trace = _trace_record(
-            trace,
-            "record_blocked_orders",
-            _orders_removed_by_identity(before_creation_guardrails, to_create),
-            "freshness_creation_guardrail",
-        )
-    else:
-        freshness_skipped = 0
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)
         total_pre_create = sum(p[3] for p in plan_summaries)
         total_create = len(to_create)
-        total_skipped = (
-            sum(p[5] for p in plan_summaries)
-            + freshness_skipped
-        )
+        total_skipped = sum(p[5] for p in plan_summaries)
         detail_parts = []
         untouched_cancel = total_pre_cancel - total_cancel
         untouched_create = total_pre_create - total_create

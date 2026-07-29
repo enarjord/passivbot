@@ -10956,18 +10956,6 @@ class Passivbot:
                 {"balance", "positions", "open_orders", "fills"}
             )
 
-    def _order_matches_known_self_emission(
-        self, order: dict, max_age_ms=FOREIGN_PASSIVBOT_LOOKBACK_MS
-    ) -> bool:
-        """Return True when an open order is known to have been emitted by this process."""
-        return reconciler.order_matches_known_self_emission(
-            self, order, max_age_ms=max_age_ms
-        )
-
-    def _flag_disappeared_self_order_guardrail(self, order: dict) -> None:
-        """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
-        return reconciler.flag_disappeared_self_order_guardrail(self, order)
-
     def _mark_account_critical_state_dirty(
         self,
         *,
@@ -10980,12 +10968,6 @@ class Passivbot:
         return reconciler.mark_account_critical_state_dirty(
             self, reason=reason, symbols=symbols, source=source, level=level
         )
-
-    def _freshness_creation_blocked_symbols(self) -> dict[str, object]:
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is None:
-            return {}
-        return ledger.blocked_symbols()
 
     def _staged_planner_required_surfaces(
         self, *, include_market_snapshot: bool = True
@@ -11515,39 +11497,6 @@ class Passivbot:
         return planning_gates.current_planning_snapshot_invalid_for_creations(
             self, symbols
         )
-
-    def _apply_freshness_creation_guardrails(
-        self, orders: list[dict]
-    ) -> tuple[list[dict], int]:
-        blocked = self._freshness_creation_blocked_symbols()
-        if not blocked:
-            return orders, 0
-        kept = []
-        skipped = 0
-        logged_symbols = set()
-        for order in orders:
-            symbol = str(order.get("symbol") or "")
-            block = blocked.get(symbol)
-            if block is None:
-                kept.append(order)
-                continue
-            skipped += 1
-            if symbol not in logged_symbols:
-                missing = []
-                ledger = getattr(self, "freshness_ledger", None)
-                if ledger is not None:
-                    missing = ledger.surfaces_missing_after(
-                        block.required_surfaces, block.min_epoch
-                    )
-                logging.info(
-                    "[state] freshness guardrail blocking order creation | symbol=%s | reason=%s | missing=%s | min_epoch=%s",
-                    Passivbot._log_symbol(symbol),
-                    block.reason,
-                    ",".join(missing) if missing else "unknown",
-                    block.min_epoch,
-                )
-                logged_symbols.add(symbol)
-        return kept, skipped
 
     def add_new_order(self, order, source="WS"):
         """No-op placeholder; subclasses update open orders through REST synchronisation."""
@@ -15588,8 +15537,6 @@ class Passivbot:
                 unexpected_open_orders_change = True
                 schedule_update_positions = True
                 unexpected_removed_symbols.add(order["symbol"])
-                if self._order_matches_known_self_emission(order):
-                    self._flag_disappeared_self_order_guardrail(order)
                 if len(removed_orders) <= 20:
                     self.log_order_action(
                         order, "missing order", "fetch_open_orders", level=logging.INFO
@@ -15632,19 +15579,14 @@ class Passivbot:
         if balance_reconciled:
             await self.handle_balance_update(source="REST+open_orders")
         if schedule_update_positions:
+            self.execution_scheduled = True
+            self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             if allow_followup_positions_refresh:
                 await asyncio.sleep(1.5)
                 await self.update_positions_and_balance()
-            else:
-                self.execution_scheduled = True
-                self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
-                self._request_authoritative_confirmation(
-                    {"balance", "positions", "open_orders", "fills"}
-                )
         elif unexpected_open_orders_change and not allow_followup_positions_refresh:
-            self._request_authoritative_confirmation(
-                {"balance", "positions", "open_orders", "fills"}
-            )
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
         return True
 
     async def _fetch_and_apply_positions(self):
@@ -19597,7 +19539,6 @@ class Passivbot:
             ideal_orders,
             actual_symbols=actual_symbols,
             actual_psides_by_symbol=actual_psides_by_symbol,
-            apply_creation_guardrails=False,
             apply_mode_filters=False,
             collect_fresh_entry_eligibility=False,
         )
