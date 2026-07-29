@@ -171,6 +171,7 @@ class BitunixClient:
         self._last_request_monotonic = 0.0
         self._position_ids: dict[tuple[str, str], str] = {}
         self._ticker_cache: dict[str, dict] = {}
+        self._ticker_received_monotonic: dict[str, float] = {}
         self._ticker_tasks: list[asyncio.Task] = []
         self._ticker_subscription_ids: tuple[str, ...] = ()
         self._ticker_ready = asyncio.Event()
@@ -1172,7 +1173,9 @@ class BitunixClient:
                                 continue
                             data = payload.get("data")
                             rows = data if isinstance(data, list) else [data]
-                            timestamp = int(payload.get("ts") or self.milliseconds())
+                            received_at = self.milliseconds()
+                            received_monotonic = time.monotonic()
+                            timestamp = int(payload.get("ts") or received_at)
                             for row in rows:
                                 if not isinstance(row, dict):
                                     continue
@@ -1193,6 +1196,9 @@ class BitunixClient:
                                     "timestamp": timestamp,
                                     "info": deepcopy(row),
                                 }
+                                self._ticker_received_monotonic[
+                                    market["symbol"]
+                                ] = received_monotonic
                             if self._ticker_cache:
                                 self._ticker_ready.set()
                         elif message.type in {
@@ -1238,6 +1244,17 @@ class BitunixClient:
                 )
             )
 
+    def _ticker_is_fresh(
+        self, symbol: str, now_monotonic: float
+    ) -> bool:
+        if symbol not in self._ticker_cache:
+            return False
+        received_monotonic = self._ticker_received_monotonic.get(symbol)
+        if received_monotonic is None:
+            return False
+        age_ms = (now_monotonic - received_monotonic) * 1000.0
+        return 0.0 <= age_ms <= self.TICKER_MAX_AGE_MS
+
     async def fetch_tickers(
         self, symbols: list[str] | None = None, params: dict | None = None
     ) -> dict[str, dict]:
@@ -1272,11 +1289,9 @@ class BitunixClient:
         self._ensure_ticker_tasks()
         deadline = time.monotonic() + self.TICKER_WAIT_SECONDS
         while time.monotonic() < deadline:
-            now = self.milliseconds()
+            now_monotonic = time.monotonic()
             if all(
-                symbol in self._ticker_cache
-                and now - int(self._ticker_cache[symbol]["timestamp"])
-                <= self.TICKER_MAX_AGE_MS
+                self._ticker_is_fresh(symbol, now_monotonic)
                 for symbol in desired
             ):
                 break
@@ -1288,13 +1303,11 @@ class BitunixClient:
                 self._ticker_ready.clear()
             except asyncio.TimeoutError:
                 pass
-        now = self.milliseconds()
+        now_monotonic = time.monotonic()
         result = {
             symbol: deepcopy(self._ticker_cache[symbol])
             for symbol in desired
-            if symbol in self._ticker_cache
-            and now - int(self._ticker_cache[symbol]["timestamp"])
-            <= self.TICKER_MAX_AGE_MS
+            if self._ticker_is_fresh(symbol, now_monotonic)
         }
         if symbols:
             missing = [symbol for symbol in desired if symbol not in result]
@@ -1465,6 +1478,12 @@ class BitunixOrderStream:
                 enriched = []
                 for row in rows:
                     if not isinstance(row, dict) or not row.get("orderId"):
+                        fallback = {"info": {"raw": deepcopy(row)}}
+                        if isinstance(row, dict) and row.get("symbol"):
+                            fallback["symbol"] = self.rest.safe_symbol(
+                                str(row["symbol"])
+                            )
+                        enriched.append(fallback)
                         continue
                     try:
                         enriched.append(

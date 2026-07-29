@@ -844,6 +844,62 @@ async def test_order_stream_propagates_rest_transport_failure():
 
 
 @pytest.mark.asyncio
+async def test_order_stream_forwards_malformed_rows_for_account_refresh():
+    client = _prepared_client()
+    client.fetch_order = AsyncMock()
+    stream = BitunixOrderStream(client)
+    stream._ws = SimpleNamespace(
+        closed=False,
+        receive=AsyncMock(
+            return_value=SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(
+                    {
+                        "ch": "order",
+                        "data": [
+                            {"symbol": "BTCUSDT", "status": "FILLED"},
+                            "malformed",
+                        ],
+                    }
+                ),
+            )
+        ),
+    )
+
+    rows = await stream.watch_orders()
+
+    assert rows == [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "info": {
+                "raw": {"symbol": "BTCUSDT", "status": "FILLED"}
+            },
+        },
+        {"info": {"raw": "malformed"}},
+    ]
+    client.fetch_order.assert_not_awaited()
+
+    bot = build_contract_bot("bitunix")
+    bot.ccp = SimpleNamespace(has={"watchOrders": True})
+    bot.stop_websocket = False
+    bot._do_watch_orders = AsyncMock(
+        side_effect=[rows, asyncio.CancelledError]
+    )
+    bot._mark_account_critical_state_dirty = MagicMock()
+    bot.handle_order_update = MagicMock()
+
+    await bot.watch_orders()
+
+    bot._mark_account_critical_state_dirty.assert_called_once_with(
+        reason="order_ws_semantics_unavailable",
+        symbols={"BTC/USDT:USDT"},
+        source="bitunix_order_ws",
+        level=logging.DEBUG,
+    )
+    bot.handle_order_update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_unenriched_order_row_requests_account_state_refresh():
     bot = build_contract_bot("bitunix")
     bot.ccp = SimpleNamespace(has={"watchOrders": True})
@@ -943,6 +999,38 @@ async def test_depth_ticker_uses_midpoint_as_synthetic_last():
 
     assert ticker["last"] == 100.0
     assert ticker["source"] == "bitunix_depth_mid"
+
+
+@pytest.mark.asyncio
+async def test_future_exchange_timestamp_does_not_extend_cache_freshness():
+    client = _prepared_client()
+    symbol = "BTC/USDT:USDT"
+    client.TICKER_WAIT_SECONDS = 0.0
+    client._ensure_ticker_tasks = lambda: None
+    client.milliseconds = lambda: 100_000
+    client._ticker_cache[symbol] = {
+        "symbol": symbol,
+        "bid": 99.0,
+        "ask": 101.0,
+        "last": 100.0,
+        "timestamp": 10**15,
+    }
+    client._ticker_received_monotonic[symbol] = 60.0
+    fallback = {
+        "symbol": symbol,
+        "bid": 98.0,
+        "ask": 102.0,
+        "last": 100.0,
+        "timestamp": 100_000,
+        "source": "bitunix_depth_mid",
+    }
+    client._fetch_depth_ticker = AsyncMock(return_value=fallback)
+
+    with patch("exchanges.bitunix.time.monotonic", return_value=100.0):
+        tickers = await client.fetch_tickers([symbol])
+
+    assert tickers == {symbol: fallback}
+    client._fetch_depth_ticker.assert_awaited_once_with(symbol)
 
 
 @pytest.mark.asyncio

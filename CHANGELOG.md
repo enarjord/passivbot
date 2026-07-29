@@ -21,7 +21,8 @@ All notable user-facing changes will be documented in this file.
   acknowledgements, strict complete open-order pagination, and bounded REST ticker snapshots when
   WebSockets are explicitly disabled. The connector rejects invalid order quantities and
   case-insensitive authentication-header collisions, isolates malformed order-detail rows, retains
-  synthetic ticker provenance, and refreshes public ticker subscriptions as markets change.
+  synthetic ticker provenance, refreshes public ticker subscriptions as markets change, times
+  ticker-cache freshness locally, and reconciles malformed private-WebSocket rows.
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.
