@@ -282,6 +282,8 @@ CANDLE_DTYPE = np.dtype(
     ]
 )
 
+_LIVE_WS_OVERLAY_RETENTION_MS = 2 * 60 * ONE_MIN_MS
+
 EMA_SERIES_DTYPE = np.dtype(
     [
         ("ts", "int64"),
@@ -819,6 +821,9 @@ class CandlestickManager:
         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
 
         self._cache: Dict[str, np.ndarray] = {}
+        # Finalized public websocket rows used only to bridge the live 1m tail.
+        # They are never persisted and never prove a no-trade minute by silence.
+        self._live_ws_ohlcv_overlay: Dict[str, np.ndarray] = {}
         self._index: Dict[str, dict] = {}
         self._index_mtime: Dict[
             str, Optional[Tuple[int, int, int]]
@@ -2713,6 +2718,26 @@ class CandlestickManager:
                 synthetic
                 and any(int(ts) in synthetic for ts in incoming_unique["ts"])
             )
+            ws_overlay = self._live_ws_ohlcv_overlay.get(symbol)
+            if (
+                isinstance(ws_overlay, np.ndarray)
+                and ws_overlay.size
+                and incoming_unique.size
+            ):
+                authoritative_timestamps = incoming_unique["ts"].astype(np.int64)
+                authoritative_mask = np.isin(
+                    ws_overlay["ts"].astype(np.int64),
+                    authoritative_timestamps,
+                )
+                if np.any(authoritative_mask):
+                    retained_ws = ws_overlay[~authoritative_mask]
+                    if retained_ws.size:
+                        self._live_ws_ohlcv_overlay[symbol] = retained_ws
+                    else:
+                        self._live_ws_ohlcv_overlay.pop(symbol, None)
+                    # The source of these timestamps changed from provisional
+                    # WS overlay to authoritative REST, and content may differ.
+                    candle_content_changed = True
         if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
 
@@ -3944,6 +3969,7 @@ class CandlestickManager:
 
             disk_arr = np.empty((0,), dtype=CANDLE_DTYPE)
             runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+            ws_overlay_arr = np.empty((0,), dtype=CANDLE_DTYPE)
             combined = np.empty((0,), dtype=CANDLE_DTYPE)
             if end_ts >= start_ts:
                 try:
@@ -3976,7 +4002,12 @@ class CandlestickManager:
                             error_type=bounded_exception_type(exc),
                         )
                         runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
+                    ws_overlay_arr = self._live_ws_overlay_range(
+                        symbol, start_ts, end_ts
+                    )
                 combined = self._merge_overwrite(disk_arr, runtime_arr)
+                if step_ms == ONE_MIN_MS:
+                    combined = self._merge_overwrite(combined, ws_overlay_arr)
                 combined = self._slice_ts_range(combined, start_ts, end_ts, assume_sorted=True)
 
             missing = (
@@ -3998,6 +4029,11 @@ class CandlestickManager:
             last_runtime_ts: Optional[int] = None
             if runtime_arr.size:
                 last_runtime_ts = int(np.max(runtime_arr["ts"].astype(np.int64)))
+            last_ws_overlay_ts: Optional[int] = None
+            if ws_overlay_arr.size:
+                last_ws_overlay_ts = int(
+                    np.max(ws_overlay_arr["ts"].astype(np.int64))
+                )
 
             synthetic_count = 0
             if step_ms == ONE_MIN_MS:
@@ -4067,6 +4103,7 @@ class CandlestickManager:
                 "loaded_rows": int(combined.shape[0]),
                 "disk_loaded_rows": int(disk_arr.shape[0]),
                 "runtime_loaded_rows": int(runtime_arr.shape[0]),
+                "ws_overlay_loaded_rows": int(ws_overlay_arr.shape[0]),
                 "missing_spans": missing,
                 "missing_spans_preview": top_spans,
                 "missing_candles": int(missing_candles),
@@ -4085,6 +4122,12 @@ class CandlestickManager:
                 ),
                 "last_disk_ts": last_disk_ts,
                 "last_runtime_ts": last_runtime_ts,
+                "last_ws_overlay_ts": last_ws_overlay_ts,
+                "ws_overlay_contributed_to_tail": bool(
+                    last_ws_overlay_ts is not None
+                    and last_cached_ts is not None
+                    and int(last_ws_overlay_ts) == int(last_cached_ts)
+                ),
                 "last_refresh_ms": int(last_refresh_ms),
                 "refresh_age_ms": (
                     int(max(0, ts_now - int(last_refresh_ms))) if int(last_refresh_ms) > 0 else None
@@ -4924,6 +4967,86 @@ class CandlestickManager:
                 keep[i - 1] = False
             last = ts[i]
         return arr[keep]
+
+    def _live_ws_overlay_range(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> np.ndarray:
+        arr = self._live_ws_ohlcv_overlay.get(symbol)
+        if not isinstance(arr, np.ndarray) or arr.size == 0:
+            return np.empty((0,), dtype=CANDLE_DTYPE)
+        return self._slice_ts_range(
+            _ensure_dtype(arr),
+            int(start_ts),
+            int(end_ts),
+            assume_sorted=True,
+        )
+
+    def get_last_live_ws_ohlcv_ts(self, symbol: str) -> int:
+        """Return the newest finalized non-persistent WS candle timestamp."""
+        arr = self._live_ws_ohlcv_overlay.get(symbol)
+        if not isinstance(arr, np.ndarray) or arr.size == 0:
+            return 0
+        return int(arr[-1]["ts"])
+
+    def clear_live_ws_ohlcv_overlay(self, symbol: str) -> None:
+        """Discard one symbol's non-persistent WS tail."""
+        if self._live_ws_ohlcv_overlay.pop(symbol, None) is not None:
+            self._invalidate_ema_cache(symbol, timeframe="1m")
+            self._projected_open_tail_ema_cache.pop(symbol, None)
+
+    def ingest_live_ws_ohlcv(
+        self,
+        symbol: str,
+        rows: list,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> int:
+        """Admit finalized WS rows newer than the authoritative REST/disk tail.
+
+        Returns the number of newly added or corrected overlay rows. The current
+        in-progress minute, malformed rows, and rows already authoritative on
+        disk are ignored. No missing minute is synthesized.
+        """
+        now = int(self._now_ms() if now_ms is None else now_ms)
+        latest_finalized = _floor_minute(now) - ONE_MIN_MS
+        if latest_finalized < 0:
+            return 0
+        arr = self._normalize_ccxt_ohlcv(rows)
+        if arr.size == 0:
+            return 0
+        authoritative_last = int(self.get_last_final_ts(symbol) or 0)
+        arr = arr[
+            (arr["ts"].astype(np.int64) <= int(latest_finalized))
+            & (arr["ts"].astype(np.int64) > authoritative_last)
+        ]
+        if arr.size == 0:
+            return 0
+        cutoff = int(latest_finalized - _LIVE_WS_OVERLAY_RETENTION_MS + ONE_MIN_MS)
+        arr = arr[arr["ts"].astype(np.int64) >= cutoff]
+        if arr.size == 0:
+            return 0
+        existing = self._live_ws_ohlcv_overlay.get(
+            symbol, np.empty((0,), dtype=CANDLE_DTYPE)
+        )
+        existing = _ensure_dtype(existing)
+        if existing.size:
+            existing = existing[
+                (existing["ts"].astype(np.int64) > authoritative_last)
+                & (existing["ts"].astype(np.int64) >= cutoff)
+            ]
+        merged = self._merge_overwrite(existing, arr)
+        changed = 0
+        incoming_by_ts = {int(row["ts"]): row for row in arr}
+        existing_by_ts = {int(row["ts"]): row for row in existing}
+        for ts, row in incoming_by_ts.items():
+            prior = existing_by_ts.get(ts)
+            if prior is None or not np.array_equal(prior, row):
+                changed += 1
+        self._live_ws_ohlcv_overlay[symbol] = merged
+        if changed:
+            self._invalidate_ema_cache(symbol, timeframe="1m")
+            self._projected_open_tail_ema_cache.pop(symbol, None)
+        return int(changed)
 
     def _rejected_ccxt_ohlcv_timestamps(
         self,
@@ -8662,6 +8785,11 @@ class CandlestickManager:
         last_cached = int(
             self.get_last_final_ts(symbol, timeframe=timeframe) or 0
         )
+        if period_ms == ONE_MIN_MS:
+            last_cached = max(
+                last_cached,
+                int(self.get_last_live_ws_ohlcv_ts(symbol) or 0),
+            )
         last_cached = (last_cached // period_ms) * period_ms
         if last_cached <= 0:
             return {}
@@ -8693,6 +8821,14 @@ class CandlestickManager:
             allow_remote_fetch=False,
             allow_provisional_internal_gaps=False,
         )
+        if period_ms == ONE_MIN_MS:
+            raw = self._merge_overwrite(
+                raw,
+                self._live_ws_overlay_range(symbol, start_ts, int(last_cached)),
+            )
+            raw = self._slice_ts_range(
+                raw, start_ts, int(last_cached), assume_sorted=True
+            )
         if raw.size == 0:
             return {}
 
@@ -8864,6 +9000,14 @@ class CandlestickManager:
             fill_trailing_gaps=False,
             allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
+        if period_ms == ONE_MIN_MS and not allow_remote_fetch:
+            arr = self._merge_overwrite(
+                arr,
+                self._live_ws_overlay_range(symbol, start_ts, end_ts),
+            )
+            arr = self._slice_ts_range(
+                arr, start_ts, end_ts, assume_sorted=True
+            )
         if arr.size == 0:
             return float("nan")
         if not self._ema_window_has_required_coverage(
@@ -9115,6 +9259,14 @@ class CandlestickManager:
             fill_trailing_gaps=False,
             allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
+        if period_ms == ONE_MIN_MS and not allow_remote_fetch:
+            arr = self._merge_overwrite(
+                arr,
+                self._live_ws_overlay_range(symbol, start_ts, end_ts),
+            )
+            arr = self._slice_ts_range(
+                arr, start_ts, end_ts, assume_sorted=True
+            )
         if arr.size == 0:
             return float("nan")
         if not self._ema_window_has_required_coverage(
@@ -9340,6 +9492,14 @@ class CandlestickManager:
             fill_trailing_gaps=False,
             allow_provisional_internal_gaps=allow_provisional_internal_gaps,
         )
+        if period_ms == ONE_MIN_MS and not allow_remote_fetch:
+            raw = self._merge_overwrite(
+                raw,
+                self._live_ws_overlay_range(symbol, start_ts, end_ts),
+            )
+            raw = self._slice_ts_range(
+                raw, start_ts, end_ts, assume_sorted=True
+            )
         if raw.size == 0:
             for metric_key, spans in missing.items():
                 out[metric_key].update({span: float("nan") for span in spans})

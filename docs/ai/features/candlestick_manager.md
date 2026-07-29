@@ -123,6 +123,14 @@
    requirements, empty results, partial pagination failures, and other failed fetches remain
    eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
    entry slots are open.
+   When enabled and supported by CCXT Pro, finalized public 1m WebSocket rows may bridge only the
+   in-memory tail for flat forager candidates. The current in-progress minute is rejected by
+   timestamp, WebSocket silence and reconnect gaps remain missing, and the overlay is never written
+   to candle shards or index metadata. REST/disk data remains authoritative for startup basis,
+   historical and internal gaps, delayed corrections, active positions/open orders, persistence,
+   and a configured periodic overlap audit. An authoritative REST row replaces the same overlay
+   timestamp and invalidates affected EMA state. Dynamic subscriptions follow the flat approved
+   forager universe and are removed when a symbol enters the urgent active-candle universe.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing

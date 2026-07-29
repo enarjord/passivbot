@@ -55,7 +55,7 @@ from fill_events_manager import (
     fill_event_pnl_pending,
     signed_fee_paid_from_payload,
 )
-from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -8089,6 +8089,13 @@ class Passivbot:
             last_final = int(self.cm.get_last_final_ts(symbol) or 0)
         except Exception:
             last_final = 0
+        try:
+            last_final = max(
+                last_final,
+                int(self.cm.get_last_live_ws_ohlcv_ts(symbol) or 0),
+            )
+        except Exception:
+            pass
         if last_final > 0:
             return max(0, int(latest_final - last_final))
         try:
@@ -8153,6 +8160,11 @@ class Passivbot:
                     and missing_candles == tail_gap_candles,
                     "leading_gap_only": leading_gap_only,
                     "no_basis": no_basis,
+                    "last_refresh_ms": int(report.get("last_refresh_ms", 0) or 0),
+                    "last_ws_overlay_ts": report.get("last_ws_overlay_ts"),
+                    "ws_overlay_contributed_to_tail": bool(
+                        report.get("ws_overlay_contributed_to_tail")
+                    ),
                 }
         except Exception:
             # Compatibility fallback for lightweight candle-manager doubles and
@@ -8179,6 +8191,32 @@ class Passivbot:
             "no_basis": age_ms >= now,
             "last_cached_ts": None,
         }
+
+    def _forager_ws_rest_audit_due(
+        self,
+        timeframe: str,
+        surface_health: Dict[str, Any],
+        *,
+        now_ms: int,
+    ) -> bool:
+        """Return whether a WS-assisted 1m tail needs authoritative overlap."""
+        if str(timeframe) != "1m" or not bool(
+            surface_health.get("ws_overlay_contributed_to_tail")
+        ):
+            return False
+        audit_minutes_raw = get_optional_live_value(
+            self.config,
+            "forager_ws_candle_rest_audit_minutes",
+            30.0,
+        )
+        try:
+            audit_ms = int(float(audit_minutes_raw) * 60_000)
+        except (TypeError, ValueError):
+            audit_ms = 30 * 60_000
+        last_refresh_ms = int(surface_health.get("last_refresh_ms", 0) or 0)
+        return last_refresh_ms <= 0 or int(now_ms) - last_refresh_ms >= max(
+            60_000, audit_ms
+        )
 
     def _rank_symbols_by_candle_staleness(
         self, symbols: Iterable[str], *, now_ms: Optional[int] = None
@@ -20246,9 +20284,15 @@ class Passivbot:
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
+            ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                self,
+                timeframe,
+                surface_health,
+                now_ms=now,
+            )
             if age_ms <= target_age_ms and (
                 bool(surface_health.get("coverage_ok")) or tail_only
-            ):
+            ) and not ws_rest_audit_due:
                 surface_checks[surface_key] = checked_ms
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
@@ -20820,6 +20864,8 @@ class Passivbot:
             maintainer_names.append("maintain_monitor_snapshot")
         if self.ws_enabled:
             maintainer_names.append("watch_orders")
+            if candle_ws.forager_ws_candles_enabled(self):
+                maintainer_names.append("maintain_forager_ws_candles")
         else:
             logging.info(
                 "Websocket maintainers skipped (ws disabled via custom endpoints)."
@@ -20831,7 +20877,9 @@ class Passivbot:
         if hsl_replay_task is not None and not hsl_replay_task.done():
             self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
-    # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
+    async def maintain_forager_ws_candles(self):
+        """Maintain the non-persistent flat-forager 1m candle overlay."""
+        return await candle_ws.maintain_forager_ws_candles(self)
 
     async def calc_log_range(
         self,

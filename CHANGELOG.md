@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Flat forager candidates can now use finalized public 1m WebSocket candles as a
+  non-persistent tail overlay, reducing routine candle REST pressure while
+  keeping REST authoritative for startup, gaps, corrections, active symbols,
+  persistence, and periodic overlap audits. WebSocket silence never creates a
+  synthetic no-trade candle.
 - Background forager candle refresh now charges its REST budget per attempted
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing
