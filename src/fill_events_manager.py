@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 import passivbot_rust as pbr
-from ccxt.base.errors import RateLimitExceeded
+from ccxt.base.errors import OrderNotFound, RateLimitExceeded
 from bitget_normalization import (
     deduce_side_pside,
     deduce_uta_side_pside as _deduce_uta_side_pside,
@@ -6033,6 +6033,148 @@ class HyperliquidFetcher(BaseFetcher):
         }
 
 
+class BitunixFetcher(BaseFetcher):
+    """Fetch canonical Bitunix futures fills from its native trade history."""
+
+    def __init__(self, api, *, trade_limit: int = 100) -> None:
+        self.api = api
+        self.trade_limit = max(1, min(100, int(trade_limit)))
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        params = {}
+        if until_ms is not None:
+            params["until"] = int(until_ms)
+        trades = await self.api.fetch_my_trades(
+            symbol=None,
+            since=int(since_ms) if since_ms is not None else None,
+            limit=self.trade_limit,
+            params=params,
+        )
+        events = [self._normalize_trade(trade) for trade in trades]
+        events.sort(key=lambda event: event["timestamp"])
+        await self._enrich_client_order_ids(events, detail_cache)
+        if on_batch and events:
+            on_batch(events)
+        for event in events:
+            detail_cache[str(event["id"])] = (
+                str(event.get("client_order_id") or ""),
+                str(event.get("pb_order_type") or "unknown"),
+            )
+        return events
+
+    async def _enrich_client_order_ids(
+        self,
+        events: List[Dict[str, object]],
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> None:
+        missing_by_order: Dict[
+            Tuple[str, str], List[Dict[str, object]]
+        ] = defaultdict(list)
+        for event in events:
+            cached = detail_cache.get(str(event["id"]))
+            if cached:
+                event["client_order_id"], event["pb_order_type"] = cached
+            elif not event.get("client_order_id"):
+                missing_by_order[
+                    (str(event["order_id"]), str(event["symbol"]))
+                ].append(event)
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(key: Tuple[str, str]):
+            order_id, symbol = key
+            try:
+                async with semaphore:
+                    order = await self.api.fetch_order(order_id, symbol)
+            except OrderNotFound:
+                return key, ""
+            info = order.get("info") if isinstance(order, dict) else {}
+            client_order_id = (
+                str(order.get("clientOrderId") or "")
+                if isinstance(order, dict)
+                else ""
+            )
+            if not client_order_id and isinstance(info, dict):
+                client_order_id = str(info.get("clientId") or "")
+            return key, client_order_id
+
+        if missing_by_order:
+            results = await asyncio.gather(
+                *(fetch_detail(key) for key in missing_by_order)
+            )
+            for key, client_order_id in results:
+                pb_order_type = (
+                    custom_id_to_snake(client_order_id)
+                    if client_order_id
+                    else "unknown"
+                )
+                for event in missing_by_order[key]:
+                    event["client_order_id"] = client_order_id
+                    event["pb_order_type"] = pb_order_type
+
+        for event in events:
+            if not event.get("pb_order_type"):
+                event["pb_order_type"] = "unknown"
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info") or {}
+        trade_id = str(trade.get("id") or info.get("tradeId") or "")
+        order_id = str(trade.get("order") or info.get("orderId") or "")
+        timestamp = int(trade.get("timestamp") or info.get("ctime") or 0)
+        symbol = str(trade.get("symbol") or "")
+        side = str(trade.get("side") or "").lower()
+        position_side = str(info.get("positionSide") or "").lower()
+        if not trade_id or not order_id or timestamp <= 0 or not symbol:
+            raise ValueError(
+                "Bitunix fill is missing id, order id, timestamp, or symbol"
+            )
+        if side not in {"buy", "sell"}:
+            raise ValueError(f"Bitunix fill has invalid side: {side!r}")
+        if position_side not in {"long", "short"}:
+            raise ValueError(
+                f"Bitunix fill has invalid positionSide: {position_side!r}"
+            )
+        qty = abs(float(trade.get("amount") or info.get("qty") or 0.0))
+        price = float(trade.get("price") or info.get("price") or 0.0)
+        if "realizedPNL" not in info:
+            raise ValueError("Bitunix fill is missing realizedPNL")
+        pnl = float(info["realizedPNL"])
+        if not all(math.isfinite(value) for value in (qty, price, pnl)):
+            raise ValueError("Bitunix fill has non-finite qty, price, or realizedPNL")
+        if qty <= 0.0 or price <= 0.0:
+            raise ValueError("Bitunix fill has non-positive qty or price")
+        client_order_id = str(
+            trade.get("clientOrderId") or info.get("clientId") or ""
+        )
+        pb_order_type = (
+            custom_id_to_snake(client_order_id) if client_order_id else "unknown"
+        )
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": trade.get("fees") or trade.get("fee"),
+            "pb_order_type": pb_order_type,
+            "position_side": position_side,
+            "client_order_id": client_order_id,
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
+            "c_mult": 1.0,
+        }
+
+
 class WeexFetcher(BaseFetcher):
     """Fetch canonical WEEX V3 futures fills through CCXT.
 
@@ -7610,6 +7752,7 @@ def normalize_uta_fill_payload(
 EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "binance": ("exchanges.binance", "BinanceBot"),
     "bitget": ("exchanges.bitget", "BitgetBot"),
+    "bitunix": ("exchanges.bitunix", "BitunixBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
     "fake": ("exchanges.fake", "FakeBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
@@ -7759,6 +7902,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
             api=bot.cca,
             symbol_resolver=lambda value: resolver(value),
         )
+    if exchange == "bitunix":
+        return BitunixFetcher(api=bot.cca)
     if exchange == "bybit":
         return BybitFetcher(api=bot.cca)
     if exchange == "fake":
@@ -7778,7 +7923,9 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return OkxFetcher(api=bot.cca)
     if exchange == "weex":
         return WeexFetcher(api=bot.cca)
-    supported = "binance, bitget, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
+    supported = (
+        "binance, bitget, bitunix, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
+    )
     raise ValueError(
         f"Unsupported exchange '{exchange}' for live fill events; realized PnL, "
         f"unstuck accounting, and HSL replay require an exchange-specific fetcher. "

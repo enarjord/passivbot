@@ -14,6 +14,15 @@ All notable user-facing changes will be documented in this file.
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing
   one slow symbol from consuming the batch budget and starving other candidates.
+- Added production Bitunix USDT perpetual-futures support through a native signed REST and
+  WebSocket connector, including complete market metadata and top-of-book coverage, live-candle
+  pagination, hedge-mode order and position reconciliation, account configuration, realized-PnL
+  fill events, long/short reduce-only order lifecycles, honest identifier-only market-order
+  acknowledgements, strict complete open-order pagination, and bounded REST ticker snapshots when
+  WebSockets are explicitly disabled. The connector rejects invalid order quantities and
+  case-insensitive authentication-header collisions, isolates malformed order-detail rows, retains
+  synthetic ticker provenance, refreshes public ticker subscriptions as markets change, times
+  ticker-cache freshness locally, and reconciles malformed private-WebSocket rows.
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.
