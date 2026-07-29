@@ -25,6 +25,7 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
         _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
         _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
         _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _is_market_execution_order = staticmethod(
             pb_mod.Passivbot._is_market_execution_order
         )

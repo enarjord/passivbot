@@ -43,6 +43,14 @@ even beyond the normal foreign-writer lookback. Recovered rows always force an
 authoritative account refresh. Sparse foreign, explicitly one-way,
 identity-conflicting, or unmarked notifications remain rejected.
 
+Bitget UTA websocket rows use the exchange-native `holdSide` field for hedge
+position attribution, while classic rows use `posSide`. Hyperliquid may deliver
+an order-open websocket row before the concurrent create request returns its
+exchange order ID. While a create is still freshly submitted, the connector may
+briefly yield for that acknowledgement and retry the row, but recovery still
+requires the exact acknowledged exchange ID and all existing contradiction
+checks. Price, quantity, side, or order shape alone never prove ownership.
+
 A successful private-websocket read and a valid individual order row are separate health
 boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,
 quantity, or close-only semantics cannot be normalized, it discards that row, requests an

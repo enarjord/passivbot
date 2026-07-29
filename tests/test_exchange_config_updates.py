@@ -734,6 +734,7 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
             pb_mod.Passivbot._emit_execution_create_filter_event
         )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
@@ -830,6 +831,7 @@ async def test_low_balance_create_skip_uses_event_console_when_available(caplog)
             pb_mod.Passivbot._emit_execution_create_filter_event
         )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 

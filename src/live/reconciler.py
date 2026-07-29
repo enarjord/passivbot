@@ -897,7 +897,7 @@ def mark_account_critical_state_dirty(
     level: int = logging.DEBUG,
 ) -> None:
     """Force a coherent account-state refresh before the next execution cycle."""
-    min_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0) + 1
+    min_epoch = int(bot._ensure_freshness_ledger().epoch) + 1
     bot._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
     bot.execution_scheduled = True
     normalized_symbols = sorted({str(symbol) for symbol in (symbols or []) if symbol})

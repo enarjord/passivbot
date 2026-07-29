@@ -144,6 +144,31 @@ class CCXTBot(Passivbot):
         order["qty"] = order["amount"]
         return order
 
+    @staticmethod
+    def _ws_order_update_has_fill_progress(order: dict) -> bool:
+        """Return whether an order update proves that some quantity filled."""
+
+        def _number(key: str) -> float | None:
+            for source in (order, order.get("info", {})):
+                if not isinstance(source, dict) or source.get(key) in (None, ""):
+                    continue
+                try:
+                    value = float(source[key])
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                return value if math.isfinite(value) and value >= 0.0 else None
+            return None
+
+        filled = _number("filled")
+        if filled is not None and filled > 0.0:
+            return True
+        amount = _number("amount")
+        remaining = _number("remaining")
+        if amount is None or remaining is None:
+            return False
+        tolerance = max(1e-12, amount * 1e-12)
+        return remaining < amount - tolerance
+
     def _sparse_ws_order_has_emitted_identity(self, order: dict) -> bool:
         """Return whether a sparse WS row identifies an order emitted by this process.
 

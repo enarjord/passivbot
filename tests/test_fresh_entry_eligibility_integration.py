@@ -195,6 +195,8 @@ async def test_malformed_open_order_snapshot_blocks_every_account_action():
 
 
 class _CreateBot:
+    _ensure_freshness_ledger = Passivbot._ensure_freshness_ledger
+
     def __init__(self, trace: FreshEntryEligibilityTrace):
         self._fresh_entry_eligibility_trace = trace
         self._order_wave_in_progress = {"event_id": "ow_1"}
