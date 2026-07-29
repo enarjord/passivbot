@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- WEEX Futures orders now carry Passivbot's registered broker ID in the required
+  `newClientOrderId` prefix while preserving Passivbot order-type markers for
+  reconciliation and fill diagnostics.
 - Retired the diagnostic-only Python planning-availability Cartesian product
   and its routine `planning.symbol_state` event. Snapshot provenance, actual
   planning deferrals, EMA degradation, Rust results, reconciliation, and

@@ -67,6 +67,16 @@ Handling in Passivbot:
 4. For each broker-agreement exchange, verify the actual signed CCXT/raw request includes the required broker field/header/tag.
 5. Add regression tests at the request-construction boundary when changing exchange sessions, signing, or order payload code.
 
+### WEEX broker client-order IDs
+
+WEEX attributes both Spot and Futures API volume when `newClientOrderId` starts with
+`b-{brokerId}-`. Passivbot's WEEX connector is Futures-only and the V3 Futures order endpoint
+limits this field to 36 characters, so every generated ID uses
+`b-{brokerId}-0xTTTT{random}` within that limit. The `0xTTTT` Passivbot order-type marker must
+remain intact for ownership, reconciliation, and fill-event diagnostics. Reject invalid or
+unattributed IDs before submission; do not rely on CCXT's WEEX `partner` default because CCXT
+ignores it when the caller supplies a client order ID.
+
 ## Exchange Hedge Mode Versus Strategy Hedge Mode
 
 `live.hedge_mode=false` disables simultaneous long and short strategy exposure; it does not put an
