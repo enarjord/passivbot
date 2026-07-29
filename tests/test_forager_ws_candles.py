@@ -29,10 +29,24 @@ def _manager(tmp_path, *, now_ms: int) -> CandlestickManager:
     return cm
 
 
-def test_ws_overlay_accepts_only_finalized_rows_and_is_not_persisted(tmp_path):
+@pytest.mark.asyncio
+async def test_ws_requires_canonical_basis_then_persists_only_finalized_rows(
+    tmp_path,
+):
     now_ms = 5 * ONE_MIN_MS + 10_000
     cm = _manager(tmp_path, now_ms=now_ms)
     symbol = "BTC/USDT:USDT"
+
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[4 * ONE_MIN_MS, 101, 103, 100, 102, 4]],
+            now_ms=now_ms,
+        )
+        == 0
+    )
+    assert cm.get_last_final_ts(symbol) == 0
+
     cm._persist_batch(
         symbol,
         _candles(
@@ -44,7 +58,7 @@ def test_ws_overlay_accepts_only_finalized_rows_and_is_not_persisted(tmp_path):
         last_refresh_ms=now_ms,
     )
 
-    changed = cm.ingest_live_ws_ohlcv(
+    changed = await cm.ingest_live_ws_ohlcv(
         symbol,
         [
             [4 * ONE_MIN_MS, 101, 103, 100, 102, 4],
@@ -55,14 +69,18 @@ def test_ws_overlay_accepts_only_finalized_rows_and_is_not_persisted(tmp_path):
 
     assert changed == 1
     assert cm.get_last_live_ws_ohlcv_ts(symbol) == 4 * ONE_MIN_MS
-    assert cm.get_last_final_ts(symbol) == 3 * ONE_MIN_MS
+    assert cm.get_last_final_ts(symbol) == 4 * ONE_MIN_MS
     disk = cm._load_from_disk(
         symbol,
         2 * ONE_MIN_MS,
         5 * ONE_MIN_MS,
         timeframe="1m",
     )
-    assert list(disk["ts"]) == [2 * ONE_MIN_MS, 3 * ONE_MIN_MS]
+    assert list(disk["ts"]) == [
+        2 * ONE_MIN_MS,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+    ]
 
 
 @pytest.mark.asyncio
@@ -80,7 +98,7 @@ async def test_cached_forager_ema_uses_contiguous_ws_tail(tmp_path):
         merge_cache=True,
         last_refresh_ms=now_ms,
     )
-    cm.ingest_live_ws_ohlcv(
+    await cm.ingest_live_ws_ohlcv(
         symbol,
         [[4 * ONE_MIN_MS, 101, 102, 101, 102, 3]],
         now_ms=now_ms,
@@ -112,7 +130,48 @@ async def test_cached_forager_ema_uses_contiguous_ws_tail(tmp_path):
     assert set(primary["log_range"]) == {3.0}
 
 
-def test_ws_reconnect_gap_and_silence_remain_missing(tmp_path):
+@pytest.mark.asyncio
+async def test_persisted_ws_tail_is_reproducible_after_manager_restart(tmp_path):
+    now_ms = 5 * ONE_MIN_MS + 10_000
+    symbol = "BTC/USDT:USDT"
+    first = _manager(tmp_path, now_ms=now_ms)
+    first._persist_batch(
+        symbol,
+        _candles(
+            (2 * ONE_MIN_MS, 100, 100, 100, 100, 1),
+            (3 * ONE_MIN_MS, 100, 101, 100, 101, 2),
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=3 * ONE_MIN_MS,
+    )
+    await first.ingest_live_ws_ohlcv(
+        symbol,
+        [[4 * ONE_MIN_MS, 101, 102, 101, 102, 3]],
+        now_ms=now_ms,
+    )
+    expected = await first.get_latest_cached_ema_metrics(
+        symbol,
+        {"close": 3},
+        max_staleness_ms=10 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+
+    restarted = _manager(tmp_path, now_ms=now_ms)
+    actual = await restarted.get_latest_cached_ema_metrics(
+        symbol,
+        {"close": 3},
+        max_staleness_ms=10 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+
+    assert restarted.get_last_final_ts(symbol) == 4 * ONE_MIN_MS
+    assert restarted.get_last_live_ws_ohlcv_ts(symbol) == 4 * ONE_MIN_MS
+    assert actual["close"] == pytest.approx(expected["close"])
+
+
+@pytest.mark.asyncio
+async def test_ws_reconnect_gap_and_silence_remain_missing(tmp_path):
     now_ms = 4 * ONE_MIN_MS + 5_000
     cm = _manager(tmp_path, now_ms=now_ms)
     symbol = "BTC/USDT:USDT"
@@ -124,8 +183,8 @@ def test_ws_reconnect_gap_and_silence_remain_missing(tmp_path):
         last_refresh_ms=now_ms,
     )
 
-    assert cm.ingest_live_ws_ohlcv(symbol, [], now_ms=now_ms) == 0
-    cm.ingest_live_ws_ohlcv(
+    assert await cm.ingest_live_ws_ohlcv(symbol, [], now_ms=now_ms) == 0
+    await cm.ingest_live_ws_ohlcv(
         symbol,
         [[3 * ONE_MIN_MS, 101, 101, 101, 101, 1]],
         now_ms=now_ms,
@@ -142,7 +201,7 @@ def test_ws_reconnect_gap_and_silence_remain_missing(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_authoritative_rest_row_replaces_ws_overlay_and_ema(tmp_path):
+async def test_rest_correction_replaces_persisted_ws_row_and_invalidates_ema(tmp_path):
     now_ms = 3 * ONE_MIN_MS + 5_000
     cm = _manager(tmp_path, now_ms=now_ms)
     symbol = "BTC/USDT:USDT"
@@ -153,7 +212,7 @@ async def test_authoritative_rest_row_replaces_ws_overlay_and_ema(tmp_path):
         merge_cache=True,
         last_refresh_ms=now_ms,
     )
-    cm.ingest_live_ws_ohlcv(
+    await cm.ingest_live_ws_ohlcv(
         symbol,
         [[2 * ONE_MIN_MS, 100, 102, 99, 101, 2]],
         now_ms=now_ms,
@@ -180,8 +239,122 @@ async def test_authoritative_rest_row_replaces_ws_overlay_and_ema(tmp_path):
         timeframe="1m",
     )
 
-    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 2 * ONE_MIN_MS
+    assert cm.get_last_live_ws_persist_ms(symbol) < cm.get_last_refresh_ms(symbol)
     assert after["close"] == pytest.approx(102.0)
+
+
+@pytest.mark.asyncio
+async def test_successor_timestamp_proves_unchanged_preceding_candle_final(
+    tmp_path,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    row = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [row],
+            now_ms=2 * ONE_MIN_MS + 50_000,
+        )
+        == 0
+    )
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[3 * ONE_MIN_MS, 100.5, 101, 100, 100.7, 0.2]],
+            now_ms=3 * ONE_MIN_MS + 1_000,
+        )
+        == 1
+    )
+    assert cm.get_last_final_ts(symbol) == 2 * ONE_MIN_MS
+
+
+@pytest.mark.asyncio
+async def test_delayed_ws_correction_overwrites_persisted_row(tmp_path):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+
+    await cm.ingest_live_ws_ohlcv(
+        symbol,
+        [[2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]],
+        now_ms=3 * ONE_MIN_MS + 1_000,
+    )
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[2 * ONE_MIN_MS, 100, 102, 99, 101.5, 3]],
+            now_ms=3 * ONE_MIN_MS + 2_000,
+        )
+        == 1
+    )
+
+    disk = cm._load_from_disk(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    corrected = disk[disk["ts"] == 2 * ONE_MIN_MS]
+    assert corrected.shape[0] == 1
+    assert float(corrected[0]["c"]) == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_rest_omission_does_not_delete_validated_ws_candle(tmp_path):
+    symbol = "BTC/USDT:USDT"
+    now_ms = 5 * ONE_MIN_MS + 1_000
+    cm = _manager(tmp_path, now_ms=now_ms)
+    cm._persist_batch(
+        symbol,
+        _candles(
+            (ONE_MIN_MS, 100, 100, 100, 100, 1),
+            (2 * ONE_MIN_MS, 100, 100, 100, 100, 1),
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=2 * ONE_MIN_MS,
+    )
+    await cm.ingest_live_ws_ohlcv(
+        symbol,
+        [[3 * ONE_MIN_MS, 100, 101, 99, 100.5, 1]],
+        now_ms=4 * ONE_MIN_MS + 1_000,
+    )
+
+    cm._persist_batch(
+        symbol,
+        _candles((4 * ONE_MIN_MS, 100.5, 101, 100, 100.7, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    disk = cm._load_from_disk(
+        symbol,
+        ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    assert list(disk["ts"]) == [
+        ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+    ]
 
 
 class _BlockingCCP:
@@ -251,6 +424,42 @@ def test_zero_ohlcv_budget_disables_forager_ws_network_path():
     assert candle_ws.forager_ws_candles_enabled(bot) is False
 
 
+@pytest.mark.parametrize(
+    ("feature_enabled", "ws_enabled", "capability"),
+    [
+        (False, True, True),
+        (True, False, True),
+        (True, True, False),
+    ],
+)
+def test_ws_disabled_or_unsupported_preserves_rest_only_mode(
+    feature_enabled, ws_enabled, capability
+):
+    bot = SimpleNamespace(
+        config={
+            "live": {
+                "enable_forager_ws_candles": feature_enabled,
+                "max_ohlcv_fetches_per_minute": 30,
+            }
+        },
+        ws_enabled=ws_enabled,
+        ccp=SimpleNamespace(
+            has={"watchOHLCV": capability},
+            watch_ohlcv=(lambda *_args: None),
+        ),
+        is_forager_mode=lambda _pside=None: True,
+    )
+
+    assert candle_ws.forager_ws_candles_enabled(bot) is False
+
+
+def test_repeated_ws_failures_enter_rest_fallback_cooldown():
+    assert candle_ws.reconnect_delay_seconds(1) == 1.0
+    assert candle_ws.reconnect_delay_seconds(4) == 8.0
+    assert candle_ws.reconnect_delay_seconds(5) == 300.0
+    assert candle_ws.reconnect_delay_seconds(50) == 300.0
+
+
 @pytest.mark.asyncio
 async def test_dynamic_subscriptions_follow_flat_forager_universe():
     ccp = _BlockingCCP()
@@ -262,9 +471,9 @@ async def test_dynamic_subscriptions_follow_flat_forager_universe():
         stop_signal_received=False,
         approved_coins_minus_ignored_coins={
             "long": {"A/USDT:USDT", "ACTIVE/USDT:USDT"},
-            "short": set(),
+            "short": {"SHORT_ONLY/USDT:USDT"},
         },
-        is_forager_mode=lambda: True,
+        is_forager_mode=lambda pside=None: pside in {None, "long"},
         _urgent_active_candle_symbols=lambda: ["ACTIVE/USDT:USDT"],
     )
     tasks: dict[str, asyncio.Task] = {}
@@ -300,7 +509,8 @@ def test_ws_tail_rest_audit_is_periodic_and_one_minute_only():
     )
     now_ms = 100 * ONE_MIN_MS
     health = {
-        "ws_overlay_contributed_to_tail": True,
+        "ws_persisted_contributed_to_tail": True,
+        "last_ws_persist_ms": now_ms - ONE_MIN_MS,
         "last_refresh_ms": now_ms - 29 * ONE_MIN_MS,
     }
 
@@ -323,13 +533,19 @@ def test_ws_tail_rest_audit_is_periodic_and_one_minute_only():
         )
         is False
     )
+    health["last_refresh_ms"] = now_ms
+    assert (
+        Passivbot._forager_ws_rest_audit_due(
+            bot, "1m", health, now_ms=now_ms
+        )
+        is False
+    )
 
 
-def test_forager_staleness_uses_ws_tail_without_changing_rest_index():
+def test_forager_staleness_uses_persisted_ws_canonical_tail():
     bot = SimpleNamespace(
         cm=SimpleNamespace(
-            get_last_final_ts=lambda _symbol: 10 * ONE_MIN_MS,
-            get_last_live_ws_ohlcv_ts=lambda _symbol: 12 * ONE_MIN_MS,
+            get_last_final_ts=lambda _symbol: 12 * ONE_MIN_MS,
             get_last_refresh_ms=lambda _symbol: 9 * ONE_MIN_MS,
         )
     )

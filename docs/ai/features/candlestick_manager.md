@@ -123,14 +123,19 @@
    requirements, empty results, partial pagination failures, and other failed fetches remain
    eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
    entry slots are open.
-   When enabled and supported by CCXT Pro, finalized public 1m WebSocket rows may bridge only the
-   in-memory tail for flat forager candidates. The current in-progress minute is rejected by
-   timestamp, WebSocket silence and reconnect gaps remain missing, and the overlay is never written
-   to candle shards or index metadata. REST/disk data remains authoritative for startup basis,
-   historical and internal gaps, delayed corrections, active positions/open orders, persistence,
-   and a configured periodic overlap audit. An authoritative REST row replaces the same overlay
-   timestamp and invalidates affected EMA state. Dynamic subscriptions follow the flat approved
-   forager universe and are removed when a symbol enters the urgent active-candle universe.
+   When enabled and supported by CCXT Pro, proven-final public 1m WebSocket rows for flat forager
+   candidates are persisted through the same canonical candle path as REST rows. Because CCXT may
+   repeat a sliding cache, admission requires fresh or changed row provenance, a minute-boundary
+   crossing between observations, or a fresh successor timestamp proving the preceding bucket
+   closed. The current in-progress minute is rejected, an existing canonical basis is required, and
+   WebSocket silence and reconnect gaps remain missing. A later changed row for the same timestamp
+   overwrites the candle and invalidates affected EMA state. REST remains the complete fallback for
+   startup basis, historical and internal gaps, prolonged silence, reconnect recovery, and a
+   configured periodic integrity audit; a successful REST omission alone does not disprove a
+   validated WebSocket candle. Repeated stream errors enter a bounded cooldown while REST continues,
+   then retry automatically. Dynamic subscriptions include only sides currently using forager mode,
+   follow their flat approved universe, and are removed when a symbol enters the urgent
+   active-candle universe.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing

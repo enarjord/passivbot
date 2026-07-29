@@ -4,11 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Flat forager candidates can now use finalized public 1m WebSocket candles as a
-  non-persistent tail overlay, reducing routine candle REST pressure while
-  keeping REST authoritative for startup, gaps, corrections, active symbols,
-  persistence, and periodic overlap audits. WebSocket silence never creates a
-  synthetic no-trade candle.
+- Flat forager candidates can now persist proven-final public 1m WebSocket
+  candles through the canonical candle path, reducing routine candle REST
+  pressure while retaining REST for startup basis, gaps, reconnect recovery,
+  prolonged silence, and periodic integrity audits. CCXT cache provenance and
+  successor timestamps prove finality; WebSocket silence never creates a
+  synthetic no-trade candle, and unstable streams cool down to REST-only
+  maintenance before retrying automatically.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

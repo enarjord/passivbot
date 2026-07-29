@@ -1,13 +1,15 @@
-"""Best-effort WebSocket candle tails for flat forager candidates.
+"""Best-effort WebSocket candle ingestion for flat forager candidates.
 
-The WebSocket stream is an in-memory freshness aid only.  CandlestickManager's
-REST/disk path remains authoritative for startup, historical coverage, gaps,
-periodic overlap audits, corrections, and persistence.
+Proven-final public 1m rows are persisted through CandlestickManager's
+canonical candle path. REST remains the complete fallback for startup basis,
+historical coverage, gaps, prolonged silence, reconnect recovery, and periodic
+integrity audits.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import Any
 
@@ -17,6 +19,19 @@ from live.diagnostic_safety import bounded_exception_type
 
 _SUBSCRIPTION_RECONCILE_SECONDS = 5.0
 _MAX_RECONNECT_DELAY_SECONDS = 30.0
+_FAILURES_BEFORE_COOLDOWN = 5
+_UNSTABLE_COOLDOWN_SECONDS = 300.0
+
+
+def reconnect_delay_seconds(consecutive_failures: int) -> float:
+    """Return bounded retry delay, cooling persistently unstable streams."""
+    failures = max(1, int(consecutive_failures))
+    if failures >= _FAILURES_BEFORE_COOLDOWN:
+        return _UNSTABLE_COOLDOWN_SECONDS
+    return min(
+        _MAX_RECONNECT_DELAY_SECONDS,
+        float(2 ** max(0, failures - 1)),
+    )
 
 
 def forager_ws_candles_enabled(bot: Any) -> bool:
@@ -59,12 +74,16 @@ def desired_forager_ws_symbols(bot: Any) -> set[str]:
     if not forager_ws_candles_enabled(bot):
         return set()
     approved = getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}
-    candidates = {
-        str(symbol)
-        for pside in ("long", "short")
-        for symbol in (approved.get(pside, set()) or set())
-        if symbol
-    }
+    is_forager_mode = getattr(bot, "is_forager_mode", None)
+    candidates = set()
+    for pside in ("long", "short"):
+        if not callable(is_forager_mode) or not bool(is_forager_mode(pside)):
+            continue
+        candidates.update(
+            str(symbol)
+            for symbol in (approved.get(pside, set()) or set())
+            if symbol
+        )
     urgent_fn = getattr(bot, "_urgent_active_candle_symbols", None)
     urgent = set(urgent_fn() or []) if callable(urgent_fn) else set()
     return candidates - urgent
@@ -103,18 +122,20 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 if callable(ingest):
                     # Some venues return hundreds of cached rows on every
                     # update. Only the current/finalized tail can contribute
-                    # to this overlay; reconnect gaps deliberately fall back
-                    # to REST rather than replaying a large WS snapshot.
+                    # to canonical ingestion; reconnect gaps deliberately use
+                    # REST instead of replaying a large WS snapshot.
                     tail_rows = rows[-3:] if isinstance(rows, list) else rows
-                    ingest(symbol, tail_rows)
+                    result = ingest(symbol, tail_rows)
+                    if inspect.isawaitable(result):
+                        await result
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 consecutive_failures += 1
-                delay_s = min(
-                    _MAX_RECONNECT_DELAY_SECONDS,
-                    float(2 ** max(0, consecutive_failures - 1)),
-                )
+                delay_s = reconnect_delay_seconds(consecutive_failures)
+                clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
+                if callable(clear_state):
+                    clear_state(symbol)
                 warning_state = getattr(bot, "_forager_ws_candle_warning_ms", None)
                 if not isinstance(warning_state, dict):
                     warning_state = {}
@@ -157,11 +178,12 @@ async def reconcile_forager_ws_tasks(
         task = tasks.pop(symbol)
         task.cancel()
         removed_tasks.append(task)
-        clear_overlay = getattr(bot.cm, "clear_live_ws_ohlcv_overlay", None)
-        if callable(clear_overlay):
-            clear_overlay(symbol)
     if removed_tasks:
         await asyncio.gather(*removed_tasks, return_exceptions=True)
+    clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
+    if callable(clear_state):
+        for symbol in sorted(removed):
+            clear_state(symbol)
     for symbol in sorted(added):
         tasks[symbol] = asyncio.create_task(
             watch_forager_ws_symbol(bot, symbol),
@@ -175,8 +197,8 @@ async def maintain_forager_ws_candles(bot: Any) -> None:
     tasks: dict[str, asyncio.Task] = {}
     bot.WS_ohlcvs_1m_tasks = tasks
     logging.info(
-        "[candle] starting finalized 1m websocket overlay for flat forager candidates "
-        "| rest_authoritative=true"
+        "[candle] starting finalized 1m websocket ingestion for flat forager candidates "
+        "| persist=true rest_fallback=true"
     )
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):

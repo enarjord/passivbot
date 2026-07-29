@@ -8088,13 +8088,6 @@ class Passivbot:
             last_final = int(self.cm.get_last_final_ts(symbol) or 0)
         except Exception:
             last_final = 0
-        try:
-            last_final = max(
-                last_final,
-                int(self.cm.get_last_live_ws_ohlcv_ts(symbol) or 0),
-            )
-        except Exception:
-            pass
         if last_final > 0:
             return max(0, int(latest_final - last_final))
         try:
@@ -8160,9 +8153,12 @@ class Passivbot:
                     "leading_gap_only": leading_gap_only,
                     "no_basis": no_basis,
                     "last_refresh_ms": int(report.get("last_refresh_ms", 0) or 0),
-                    "last_ws_overlay_ts": report.get("last_ws_overlay_ts"),
-                    "ws_overlay_contributed_to_tail": bool(
-                        report.get("ws_overlay_contributed_to_tail")
+                    "last_ws_final_ts": report.get("last_ws_final_ts"),
+                    "last_ws_persist_ms": int(
+                        report.get("last_ws_persist_ms", 0) or 0
+                    ),
+                    "ws_persisted_contributed_to_tail": bool(
+                        report.get("ws_persisted_contributed_to_tail")
                     ),
                 }
         except Exception:
@@ -8198,9 +8194,9 @@ class Passivbot:
         *,
         now_ms: int,
     ) -> bool:
-        """Return whether a WS-assisted 1m tail needs authoritative overlap."""
+        """Return whether a WS-advanced 1m tail needs its REST integrity audit."""
         if str(timeframe) != "1m" or not bool(
-            surface_health.get("ws_overlay_contributed_to_tail")
+            surface_health.get("ws_persisted_contributed_to_tail")
         ):
             return False
         audit_minutes_raw = get_optional_live_value(
@@ -8213,6 +8209,11 @@ class Passivbot:
         except (TypeError, ValueError):
             audit_ms = 30 * 60_000
         last_refresh_ms = int(surface_health.get("last_refresh_ms", 0) or 0)
+        last_ws_persist_ms = int(
+            surface_health.get("last_ws_persist_ms", 0) or 0
+        )
+        if last_ws_persist_ms <= last_refresh_ms:
+            return False
         return last_refresh_ms <= 0 or int(now_ms) - last_refresh_ms >= max(
             60_000, audit_ms
         )
@@ -20813,7 +20814,7 @@ class Passivbot:
             self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
     async def maintain_forager_ws_candles(self):
-        """Maintain the non-persistent flat-forager 1m candle overlay."""
+        """Maintain persistent finalized 1m WS ingestion for flat forager candidates."""
         return await candle_ws.maintain_forager_ws_candles(self)
 
     async def calc_log_range(
