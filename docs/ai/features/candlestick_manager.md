@@ -111,7 +111,10 @@
    Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
    candidate's 1m and native 1h health surfaces,
-   keep discovered-but-unfetched stale surfaces pending, charge tokens only for selected fetches,
+   keep discovered-but-unfetched stale surfaces pending, and charge one token immediately before
+   each actual fetch attempt rather than reserving tokens for a batch which may be cut short by
+   the wall-time cap. A timed-out candidate surface receives a short in-memory retry delay so one
+   blocked symbol cannot monopolize successive refresh cycles,
    and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
    only surfaces handled by this background
    refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
