@@ -40,6 +40,8 @@ class HyperliquidBot(CCXTBot):
     # Full HIP-3 dex sweeps are safety sweeps. Startup and unknown-dex WS events still force
     # immediate full coverage, but steady-state refreshes should prefer active dexes.
     HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 30 * 60_000
+    ORDER_WS_CREATE_ACK_GRACE_SECONDS = 1.0
+    ORDER_WS_SUBMITTED_LOOKBACK_MS = 5_000
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -604,6 +606,36 @@ class HyperliquidBot(CCXTBot):
                         untrusted.append((order, exc))
                         continue
                     normalized.append(order)
+                if untrusted and self._hl_recent_create_ack_pending():
+                    # Hyperliquid may publish the private WS open event before
+                    # the concurrent create request returns its exchange ID.
+                    # Yield briefly, then require the same exact acknowledged
+                    # ID contract as every other sparse update. Shape alone is
+                    # never used to attribute ownership or trading semantics.
+                    await asyncio.sleep(self.ORDER_WS_CREATE_ACK_GRACE_SECONDS)
+                    still_untrusted = []
+                    for order, exc in untrusted:
+                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        if recovered is None:
+                            still_untrusted.append((order, exc))
+                            continue
+                        position_side, reduce_only = recovered
+                        order["position_side"] = position_side
+                        order["reduceOnly"] = reduce_only
+                        order["_pb_order_semantics_source"] = (
+                            "acknowledged_exchange_order_id"
+                        )
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order[
+                                "_pb_order_update_requires_authoritative_refresh"
+                            ] = True
+                        try:
+                            order["qty"] = order["amount"]
+                        except (KeyError, TypeError, ValueError) as retry_exc:
+                            still_untrusted.append((order, retry_exc))
+                            continue
+                        normalized.append(order)
+                    untrusted = still_untrusted
                 if untrusted:
                     symbols = {
                         str(order.get("symbol") or "")
@@ -660,6 +692,22 @@ class HyperliquidBot(CCXTBot):
                 )
                 await asyncio.sleep(1)
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
+
+    def _hl_recent_create_ack_pending(self) -> bool:
+        """Return whether a just-submitted create may still acquire its exchange ID."""
+        now_ms = (
+            int(self.get_exchange_time())
+            if callable(getattr(self, "get_exchange_time", None))
+            else utc_ms()
+        )
+        return any(
+            str(record.get("status") or "") == "submitted"
+            and 0
+            <= now_ms - int(record.get("timestamp", 0) or 0)
+            <= self.ORDER_WS_SUBMITTED_LOOKBACK_MS
+            for record in self._emitted_order_records()
+            if isinstance(record, dict)
+        )
 
     def _hl_acknowledged_ws_order_semantics(
         self, order: dict
@@ -847,30 +895,9 @@ class HyperliquidBot(CCXTBot):
                     return None
         return position_side, reduce_only
 
-    @staticmethod
-    def _hl_ws_order_has_fill_progress(order: dict) -> bool:
-        """Whether an open WS row proves that an acknowledged order has filled."""
-
-        def _number(key: str) -> float | None:
-            for source in (order, order.get("info", {})):
-                if not isinstance(source, dict) or source.get(key) in (None, ""):
-                    continue
-                try:
-                    value = float(source[key])
-                except (TypeError, ValueError, OverflowError):
-                    return None
-                return value if math.isfinite(value) and value >= 0.0 else None
-            return None
-
-        filled = _number("filled")
-        if filled is not None and filled > 0.0:
-            return True
-        amount = _number("amount")
-        remaining = _number("remaining")
-        if amount is None or remaining is None:
-            return False
-        tolerance = max(1e-12, amount * 1e-12)
-        return remaining < amount - tolerance
+    def _hl_ws_order_has_fill_progress(self, order: dict) -> bool:
+        """Compatibility wrapper for the shared CCXT fill-progress contract."""
+        return self._ws_order_update_has_fill_progress(order)
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a
@@ -1526,8 +1553,19 @@ class HyperliquidBot(CCXTBot):
             # Could not recover - re-raise to trigger restart_bot_on_too_many_errors
             raise
 
+    async def _execute_order_and_record_ack(self, order: dict) -> dict:
+        """Publish each create acknowledgement before sibling batch tasks finish."""
+        executed = await self.execute_order(order)
+        if self.did_create_order(executed):
+            acknowledged = dict(executed)
+            for key, value in order.items():
+                if acknowledged.get(key) is None:
+                    acknowledged[key] = value
+            self._record_emitted_order_custom_id(acknowledged)
+        return executed
+
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+        return await self.execute_multiple(orders, "_execute_order_and_record_ack")
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Bitget UTA private order updates now use the native `holdSide` field for
+  hedge position attribution. Hyperliquid briefly retries a sparse order-open
+  event when a concurrent local create is still awaiting its exchange ID, then
+  accepts it only through the existing exact acknowledged-ID contract. These
+  fixes avoid unnecessary authoritative REST refreshes without weakening
+  foreign or ambiguous order handling.
 - Background forager candle refresh now charges its REST budget per attempted
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing

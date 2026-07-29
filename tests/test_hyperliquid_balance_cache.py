@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import logging as pylogging
 import sys
@@ -227,6 +228,141 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_exact_acknowledged_i
     )
 
 
+@pytest.mark.asyncio
+async def test_hyperliquid_ws_open_race_waits_for_exact_create_ack(
+    stubbed_modules, monkeypatch, caplog
+):
+    hyperliquid_module = importlib.import_module("exchanges.hyperliquid")
+    HyperliquidBot = hyperliquid_module.HyperliquidBot
+    caplog.set_level(pylogging.WARNING)
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.stop_websocket = False
+    bot._health_ws_reconnects = 0
+    bot._health_rate_limits = 0
+    bot._log_symbols = lambda symbols, limit=8: ",".join(symbols[:limit])
+    bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
+    bot.get_exchange_time = lambda: 1_000
+    submitted = {
+        "timestamp": 900,
+        "exchange_id": "",
+        "side": "buy",
+        "position_side": "long",
+        "reduce_only": False,
+        "pb_type": "entry_initial_normal_long",
+        "status": "submitted",
+    }
+    bot.orders_emitted_to_exchange = [submitted]
+    handled = []
+    dirty = []
+    bot.handle_order_update = lambda orders: handled.append(orders)
+    bot._mark_account_critical_state_dirty = lambda **kwargs: dirty.append(kwargs)
+    delays = []
+
+    async def acknowledge_during_grace(delay):
+        delays.append(delay)
+        submitted["exchange_id"] = "123"
+        submitted["status"] = "acknowledged"
+
+    monkeypatch.setattr(hyperliquid_module.asyncio, "sleep", acknowledge_during_grace)
+
+    async def watch_orders():
+        bot.stop_websocket = True
+        return [
+            {
+                "id": "123",
+                "symbol": "BTC/USDC:USDC",
+                "status": "open",
+                "side": "buy",
+                "amount": 0.01,
+                "info": {"oid": 123, "side": "B", "sz": "0.01"},
+            }
+        ]
+
+    bot.ccp = types.SimpleNamespace(watch_orders=watch_orders)
+
+    await bot.watch_orders()
+
+    assert delays == [bot.ORDER_WS_CREATE_ACK_GRACE_SECONDS]
+    assert dirty == []
+    assert len(handled) == 1
+    assert handled[0][0]["position_side"] == "long"
+    assert (
+        handled[0][0]["_pb_order_semantics_source"]
+        == "acknowledged_exchange_order_id"
+    )
+    assert not any(
+        "lacked authoritative order semantics" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_create_records_fast_ack_before_slow_sibling_finishes(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    slow_release = asyncio.Event()
+    fast_finished = asyncio.Event()
+    recorded = []
+
+    async def execute_order(order):
+        if order["symbol"] == "SLOW/USDC:USDC":
+            await slow_release.wait()
+        else:
+            fast_finished.set()
+        return {
+            "id": order["exchange_id"],
+            "status": "open",
+            "info": {"resting": {}},
+        }
+
+    async def handle_failures(_failures):
+        return None
+
+    bot.execute_order = execute_order
+    bot._handle_order_write_failures = handle_failures
+    bot._record_emitted_order_custom_id = lambda order, **_kwargs: recorded.append(
+        dict(order)
+    )
+    orders = [
+        {
+            "symbol": "SLOW/USDC:USDC",
+            "exchange_id": "1",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+        },
+        {
+            "symbol": "FAST/USDC:USDC",
+            "exchange_id": "2",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+        },
+    ]
+
+    batch = asyncio.create_task(bot.execute_orders(orders))
+    await fast_finished.wait()
+    await asyncio.sleep(0)
+
+    assert not batch.done()
+    assert recorded == [
+        {
+            "id": "2",
+            "status": "open",
+            "info": {"resting": {}},
+            **orders[1],
+        }
+    ]
+
+    slow_release.set()
+    results = await batch
+
+    assert [result["id"] for result in results] == ["1", "2"]
+    assert [order["id"] for order in recorded] == ["2", "1"]
+
+
 def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = HyperliquidBot.__new__(HyperliquidBot)
@@ -241,6 +377,29 @@ def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules)
             "status": "acknowledged",
         }
         for timestamp in (1, 2)
+    ]
+
+    assert (
+        bot._hl_acknowledged_ws_order_semantics(
+            {"id": "123", "side": "buy", "amount": 0.01}
+        )
+        is None
+    )
+
+
+def test_hyperliquid_ws_order_rejects_unacknowledged_submitted_id(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": 1,
+            "exchange_id": "123",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "pb_type": "entry_initial_normal_long",
+            "status": "submitted",
+        }
     ]
 
     assert (
