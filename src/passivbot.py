@@ -15540,19 +15540,14 @@ class Passivbot:
         if balance_reconciled:
             await self.handle_balance_update(source="REST+open_orders")
         if schedule_update_positions:
+            self.execution_scheduled = True
+            self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             if allow_followup_positions_refresh:
                 await asyncio.sleep(1.5)
                 await self.update_positions_and_balance()
-            else:
-                self.execution_scheduled = True
-                self.state_change_detected_by_symbol.update(unexpected_removed_symbols)
-                self._request_authoritative_confirmation(
-                    {"balance", "positions", "open_orders", "fills"}
-                )
         elif unexpected_open_orders_change and not allow_followup_positions_refresh:
-            self._request_authoritative_confirmation(
-                {"balance", "positions", "open_orders", "fills"}
-            )
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
         return True
 
     async def _fetch_and_apply_positions(self):

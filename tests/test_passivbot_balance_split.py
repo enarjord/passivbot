@@ -11099,6 +11099,39 @@ async def test_unexpected_order_disappearance_waits_for_full_confirmation():
 
 
 @pytest.mark.asyncio
+async def test_default_open_order_refresh_preserves_disappearance_confirmation(
+    monkeypatch,
+):
+    bot = _make_open_order_snapshot_bot(epoch=3)
+    order = _snapshot_order()
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.stop_signal_received = False
+    bot.fetch_open_orders = AsyncMock(return_value=[])
+    bot.update_positions_and_balance = AsyncMock(return_value=(True, True))
+    sleep = AsyncMock()
+    monkeypatch.setattr(passivbot_module.asyncio, "sleep", sleep)
+
+    ok = await Passivbot.update_open_orders(bot)
+
+    assert ok is True
+    bot.fetch_open_orders.assert_awaited_once_with()
+    sleep.assert_awaited_once_with(1.5)
+    bot.update_positions_and_balance.assert_awaited_once_with()
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 4 for surface in ACCOUNT_SURFACES
+    }
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is True
+    assert set(details["missing"]) == set(ACCOUNT_SURFACES)
+
+
+@pytest.mark.asyncio
 async def test_bot_cancelled_order_disappearance_does_not_request_confirmation():
     bot = _make_open_order_snapshot_bot(epoch=5)
     order = _snapshot_order()
