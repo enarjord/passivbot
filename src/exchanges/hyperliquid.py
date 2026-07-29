@@ -895,30 +895,9 @@ class HyperliquidBot(CCXTBot):
                     return None
         return position_side, reduce_only
 
-    @staticmethod
-    def _hl_ws_order_has_fill_progress(order: dict) -> bool:
-        """Whether an open WS row proves that an acknowledged order has filled."""
-
-        def _number(key: str) -> float | None:
-            for source in (order, order.get("info", {})):
-                if not isinstance(source, dict) or source.get(key) in (None, ""):
-                    continue
-                try:
-                    value = float(source[key])
-                except (TypeError, ValueError, OverflowError):
-                    return None
-                return value if math.isfinite(value) and value >= 0.0 else None
-            return None
-
-        filled = _number("filled")
-        if filled is not None and filled > 0.0:
-            return True
-        amount = _number("amount")
-        remaining = _number("remaining")
-        if amount is None or remaining is None:
-            return False
-        tolerance = max(1e-12, amount * 1e-12)
-        return remaining < amount - tolerance
+    def _hl_ws_order_has_fill_progress(self, order: dict) -> bool:
+        """Compatibility wrapper for the shared CCXT fill-progress contract."""
+        return self._ws_order_update_has_fill_progress(order)
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a
@@ -1574,8 +1553,19 @@ class HyperliquidBot(CCXTBot):
             # Could not recover - re-raise to trigger restart_bot_on_too_many_errors
             raise
 
+    async def _execute_order_and_record_ack(self, order: dict) -> dict:
+        """Publish each create acknowledgement before sibling batch tasks finish."""
+        executed = await self.execute_order(order)
+        if self.did_create_order(executed):
+            acknowledged = dict(executed)
+            for key, value in order.items():
+                if acknowledged.get(key) is None:
+                    acknowledged[key] = value
+            self._record_emitted_order_custom_id(acknowledged)
+        return executed
+
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+        return await self.execute_multiple(orders, "_execute_order_and_record_ack")
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)

@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import logging as pylogging
 import sys
@@ -293,6 +294,73 @@ async def test_hyperliquid_ws_open_race_waits_for_exact_create_ack(
         "lacked authoritative order semantics" in rec.message
         for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_create_records_fast_ack_before_slow_sibling_finishes(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    slow_release = asyncio.Event()
+    fast_finished = asyncio.Event()
+    recorded = []
+
+    async def execute_order(order):
+        if order["symbol"] == "SLOW/USDC:USDC":
+            await slow_release.wait()
+        else:
+            fast_finished.set()
+        return {
+            "id": order["exchange_id"],
+            "status": "open",
+            "info": {"resting": {}},
+        }
+
+    async def handle_failures(_failures):
+        return None
+
+    bot.execute_order = execute_order
+    bot._handle_order_write_failures = handle_failures
+    bot._record_emitted_order_custom_id = lambda order, **_kwargs: recorded.append(
+        dict(order)
+    )
+    orders = [
+        {
+            "symbol": "SLOW/USDC:USDC",
+            "exchange_id": "1",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+        },
+        {
+            "symbol": "FAST/USDC:USDC",
+            "exchange_id": "2",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+        },
+    ]
+
+    batch = asyncio.create_task(bot.execute_orders(orders))
+    await fast_finished.wait()
+    await asyncio.sleep(0)
+
+    assert not batch.done()
+    assert recorded == [
+        {
+            "id": "2",
+            "status": "open",
+            "info": {"resting": {}},
+            **orders[1],
+        }
+    ]
+
+    slow_release.set()
+    results = await batch
+
+    assert [result["id"] for result in results] == ["1", "2"]
+    assert [order["id"] for order in recorded] == ["2", "1"]
 
 
 def test_hyperliquid_ws_order_rejects_ambiguous_acknowledged_id(stubbed_modules):

@@ -173,6 +173,8 @@ class BitgetBot(CCXTBot):
         order["side"] = self._determine_side(order)
         order["position_side"] = self._get_position_side_for_order(order)
         order["qty"] = order["amount"]
+        if self._ws_order_update_has_fill_progress(order):
+            order["_pb_order_update_requires_authoritative_refresh"] = True
         return order
 
     def _determine_side(self, order: dict) -> str:
