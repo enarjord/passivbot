@@ -77,10 +77,9 @@ rules. Keep them narrow, visible, and test-covered.
 
 - [x] Define a formal freshness ledger for live inputs.
 - [x] Track freshness per surface: positions, fills, balance, open orders, completed candles, market snapshot.
-- [x] Track symbol-level freshness where relevant.
 - [x] Add planner precondition checks for required surfaces.
-- [x] Add execution precondition checks for disappeared self-order creation safety.
-- [x] Add DEBUG/INFO logs explaining disappeared-order freshness blocks.
+- [x] Route unexpected disappeared-order safety through the full-account confirmation barrier and
+  the existing same-wave symbol latch.
 - [x] Add tests for stale required inputs blocking order creation.
 
 ### 2. Market Snapshot Provider
@@ -266,14 +265,13 @@ rules. Keep them narrow, visible, and test-covered.
 
 ### 8. Duplicate-Order Guardrail
 
-- [x] Track known bot-emitted orders by exchange/client/order id with symbol, side, position side, qty, and price.
-- [x] Detect when a known bot-created order disappears from open orders.
-- [x] If a known bot-created order disappears, conservatively mark the symbol as suspect fill/stale position.
-- [x] Block order creations for suspect symbols until positions, fills, and open orders are refreshed coherently.
+- [x] Detect when a previously observed order disappears unexpectedly.
+- [x] Require a coherent next-epoch account refresh after an unexpected disappearance.
+- [x] Block same-wave creations for the affected symbol while that confirmation is pending.
 - [x] Prefer blocking creations over risking duplicate entries.
 - [x] Keep cancellation behavior conservative but avoid churn under ambiguous state.
-- [x] Add tests for bot cancel, unknown manual/exchange cancel, disappeared self-order with stale state,
-  full-refresh recovery, emitted-record matching, and restart/inherited-order recovery.
+- [x] Add tests for bot cancel, unknown manual/exchange disappearance, full-refresh recovery, and
+  restart/inherited-order recovery.
 
 ### 9. Websocket-Triggered Reconciliation
 
@@ -385,14 +383,11 @@ changing behavior during extraction commits.
 - [x] Verified Bybit Ctrl-C shutdown smoke on `ebybitsub03`: signal during warmup jitter
   aborted immediately, skipped further warmup/index rebuild work, closed sessions cleanly, and
   exited with code 0 without traceback.
-- [x] Added a `FreshnessLedger` for live surfaces and symbol-level blocks; staged refresh now
-  stamps account surfaces, market snapshots, and active completed-candle refreshes.
-- [x] Added a disappeared-self-order guardrail: when a bot-created order vanishes without a
-  known bot cancellation, new creations for that symbol are blocked until the next full account
-  freshness cohort confirms balance, positions, open orders, and fills.
-- [x] Added deterministic fake-cycle verification that the disappeared-self-order guardrail blocks
-  a real order-planner create for the affected symbol, logs the freshness block, and clears after
-  a full account freshness cohort.
+- [x] Added a `FreshnessLedger` for live surfaces; staged refresh stamps account surfaces, market
+  snapshots, and active completed-candle refreshes.
+- [x] Consolidated unexpected disappeared-order safety into the existing full-account next-epoch
+  confirmation barrier and same-wave symbol latch. The later symbol-block layer was removed after
+  proving it could not outlive the barrier into normal planning.
 - [x] Verified Bybit DEBUG smoke on `ebybitsub03` after freshness-ledger changes:
   three staged market-snapshot cycles, 27/27 symbols resolved from bulk `fetch_tickers()`,
   no `ERROR`, `Traceback`, `RecursionError`, or freshness guardrail block in the persisted log.
@@ -453,9 +448,8 @@ changing behavior during extraction commits.
   is missing, has non-market invalidation, or does not cover the creation symbol. Pure
   market-snapshot staleness is refreshed at the pre-create gate because ticker freshness is the
   intended final guard before order writes.
-- [x] Completed the duplicate-order guardrail test matrix for bot-cancel confirmation, unknown
-  manual/exchange disappearance, self-emitted order disappearance, full-refresh recovery, and
-  restart/inherited-order recovery.
+- [x] Completed the disappearance confirmation test matrix for bot-cancel confirmation, unknown
+  manual/exchange disappearance, full-refresh recovery, and restart/inherited-order recovery.
 - [x] Added startup readiness timing logs for account-ready, active-candle-ready, first
   market-ready, startup-ready, and full-warmup-ready milestones.
 - [x] Kept broad forager candidate candle refresh out of the order execution critical path.

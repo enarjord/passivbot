@@ -50,7 +50,7 @@ Current code already has useful pieces to build on:
 - `src/live/executor.py`
   - order emit/cancel parent paths
 - `src/live/freshness.py`
-  - freshness surfaces and symbol blocks
+  - freshness surfaces and cohort epochs
 - `src/fill_events_manager.py`
   - canonical fill/PnL ingestion
 - `src/exchanges/fake.py`
@@ -270,7 +270,7 @@ Replay tests should assert:
 - structured event sequence
 - authoritative refresh barriers
 - no duplicate unsafe order creation
-- expected symbol blocks when state is ambiguous
+- expected same-wave symbol suppression when state changes after planning begins
 - expected recovery once authoritative surfaces refresh
 
 This gives better coverage for live bot behavior under synthetic data without requiring exchange

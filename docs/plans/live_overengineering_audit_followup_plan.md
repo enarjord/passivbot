@@ -99,10 +99,13 @@ consumers, and a deletion-first proposal. Do not implement until the
 account-wide versus scoped safety boundary is explicit.
 
 Current result: `FreshnessLedger` is the sole owner of per-surface freshness
-and change facts. Remaining candidates are the scalar
-`_authoritative_refresh_epoch` compatibility alias and the overlapping
-disappeared-self-order confirmation, symbol-block, and same-wave state-change
-representations. Audit their direct callers before further deletion.
+and change facts. The disappeared-self-order symbol-block state machine was
+also removed after direct-caller and runtime analysis showed that the existing
+full-account `N+1` confirmation barrier always settled first in normal
+execution. The generic same-wave symbol latch remains because it also protects
+against late websocket changes and uncertain cancellation results. The scalar
+`_authoritative_refresh_epoch` compatibility alias remains a smaller follow-up
+candidate.
 
 ### 2. Fill and realized-PnL reconstruction
 
