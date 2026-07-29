@@ -8173,6 +8173,38 @@ def test_order_same_timestamp_fills_accepts_tiny_head_at_large_position_size():
     assert [event["id"] for event in events] == ["tiny-head", "large-successor"]
 
 
+def test_order_same_timestamp_fills_distinguishes_small_consecutive_links():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "first-small-add"
+    first["qty"] = 0.0004
+    first["raw"][0]["data"]["id"] = "first-small-add"
+    first["raw"][0]["data"]["amount"] = 0.0004
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "first-small-add",
+            "sz": "0.0004",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "second-small-add"
+    second["raw"][0]["data"]["id"] = "second-small-add"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "second-small-add",
+            "startPosition": "1000000.0004",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == [
+        "first-small-add",
+        "second-small-add",
+    ]
+
+
 def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
     events = _hyperliquid_same_millisecond_events()
 
@@ -8240,6 +8272,46 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
 
     assert [event["id"] for event in expanded] == ["buy-1", "buy-2", "sell-1"]
     assert all(len(event["raw"]) == 1 for event in expanded)
+
+
+@pytest.mark.parametrize("mismatch", ["component_ids", "signed_qty", "pnl", "fees"])
+def test_expand_hyperliquid_coalesced_event_preserves_unreconciled_aggregate(
+    mismatch,
+):
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "buy-1"
+    first["qty"] = 1.0
+    first["raw"][0]["data"]["id"] = "buy-1"
+    first["raw"][0]["data"]["amount"] = 1.0
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-1",
+            "sz": "1.0",
+            "startPosition": "0.0",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "buy-2"
+    second["raw"][0]["data"]["id"] = "buy-2"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-2",
+            "startPosition": "1.0",
+        }
+    )
+    aggregate = fem._coalesce_events([first, second])[0]
+    if mismatch == "component_ids":
+        aggregate["id"] = "aggregate"
+    elif mismatch == "signed_qty":
+        aggregate["qty"] = 3.0
+    elif mismatch == "pnl":
+        aggregate["pnl"] = 1.0
+    elif mismatch == "fees":
+        aggregate["fee_paid"] = -1.0
+
+    expanded = fem._expand_hyperliquid_coalesced_events([aggregate])
+
+    assert expanded == [aggregate]
 
 
 def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():

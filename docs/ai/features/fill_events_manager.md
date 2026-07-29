@@ -129,7 +129,9 @@ logs, runtime windows, and immutable manifests.
    potentially incomplete history window. If the chain is ambiguous, keep the existing order and
    do not choose a different anchor from mutable exchange position state. Hyperliquid's incremental
    overlap counts timestamp cohorts rather than individual executions so a same-millisecond burst
-   cannot consume the full recent-fill window and strand a late-arriving component.
+   cannot consume the full recent-fill window and strand a late-arriving component. Expand a legacy
+   coalesced row only when its component identities, signed effective quantity, gross PnL, and signed
+   fees reconcile to the aggregate; otherwise retain the aggregate as the more complete record.
 
 ## Failure Semantics And Risks
 

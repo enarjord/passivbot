@@ -1044,7 +1044,12 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
 
 
 def _is_same_position_size(lhs: float, rhs: float) -> bool:
-    return abs(lhs - rhs) <= max(1e-12, 1e-9 * max(1.0, abs(lhs), abs(rhs)))
+    if lhs == rhs:
+        return True
+    if not math.isfinite(lhs) or not math.isfinite(rhs):
+        return False
+    scale = max(1.0, abs(lhs), abs(rhs))
+    return abs(lhs - rhs) <= max(1e-12, 16.0 * math.ulp(scale))
 
 
 def _unique_position_chain_order(
@@ -1161,6 +1166,64 @@ def _hyperliquid_fill_position_chain(
     return ordered[0][0], ordered[-1][1]
 
 
+def _hyperliquid_signed_effective_qty(
+    payload: Dict[str, object],
+) -> Optional[float]:
+    side = str(payload.get("side") or "").lower()
+    if side not in {"buy", "sell"}:
+        return None
+    try:
+        qty = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
+        qty *= _payload_contract_multiplier(payload)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(qty):
+        return None
+    return qty if side == "buy" else -qty
+
+
+def _hyperliquid_coalesced_reconciliation_failure(
+    event: Dict[str, object],
+    children: Sequence[Dict[str, object]],
+) -> Optional[str]:
+    """Return the aggregate field that prevents safe component expansion."""
+    parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+    child_ids = [str(child.get("id") or "") for child in children]
+    if (
+        len(parent_ids) != len(children)
+        or len(set(parent_ids)) != len(parent_ids)
+        or set(parent_ids) != set(child_ids)
+    ):
+        return "component_ids"
+
+    parent_qty = _hyperliquid_signed_effective_qty(event)
+    child_qtys = [_hyperliquid_signed_effective_qty(child) for child in children]
+    if parent_qty is None or any(qty is None for qty in child_qtys):
+        return "signed_qty"
+
+    try:
+        parent_pnl = float(event.get("pnl") or 0.0)
+        child_pnl = sum(float(child.get("pnl") or 0.0) for child in children)
+        parent_fee = signed_fee_paid_from_payload(event)
+        child_fee = sum(signed_fee_paid_from_payload(child) for child in children)
+    except (TypeError, ValueError, OverflowError):
+        return "accounting"
+    values = (parent_qty, *child_qtys, parent_pnl, child_pnl, parent_fee, child_fee)
+    if not all(math.isfinite(float(value)) for value in values):
+        return "accounting"
+
+    def _reconciles(lhs: float, rhs: float) -> bool:
+        return math.isclose(lhs, rhs, rel_tol=1e-12, abs_tol=1e-12)
+
+    if not _reconciles(parent_qty, sum(qty for qty in child_qtys if qty is not None)):
+        return "signed_qty"
+    if not _reconciles(parent_pnl, child_pnl):
+        return "pnl"
+    if not _reconciles(parent_fee, child_fee):
+        return "fees"
+    return None
+
+
 def _expand_hyperliquid_coalesced_events(
     events: List[Dict[str, object]],
 ) -> List[Dict[str, object]]:
@@ -1205,6 +1268,17 @@ def _expand_hyperliquid_coalesced_events(
             if event.get("provenance"):
                 child["provenance"] = deepcopy(event["provenance"])
             children.append(child)
+        failure = _hyperliquid_coalesced_reconciliation_failure(event, children)
+        if failure is not None:
+            logger.warning(
+                "[fills] preserving unreconciled Hyperliquid cache aggregate | "
+                "id=%s components=%d reason=%s",
+                str(event.get("id") or ""),
+                len(children),
+                failure,
+            )
+            expanded.append(event)
+            continue
         expanded.extend(children)
     return expanded
 

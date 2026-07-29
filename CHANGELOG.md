@@ -31,7 +31,9 @@ All notable user-facing changes will be documented in this file.
   authoritative position without carrying an unproven basis across a history gap. If a position
   chain is ambiguous, trailing anchor selection keeps the existing fill order independently of
   mutable position state. Hyperliquid's recent-fill overlap counts timestamp cohorts, preventing
-  a same-millisecond execution burst from excluding a late-arriving component.
+  a same-millisecond execution burst from excluding a late-arriving component. Legacy coalesced
+  cache rows are split only when their component identities, quantity, PnL, and fees reconcile,
+  preserving the aggregate when its raw execution list is incomplete.
 
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
