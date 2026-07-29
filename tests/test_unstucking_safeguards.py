@@ -7093,7 +7093,40 @@ def test_latest_fill_anchor_keeps_list_order_for_ambiguous_cohort():
     assert anchors[(symbol, "long")]["psize"] == 651.17
 
 
-def test_latest_fill_anchor_uses_exchange_state_for_alternating_raw_cohort():
+def test_latest_fill_anchor_terminal_accepts_tiny_fill_at_large_position_size():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    timestamp = 1_785_241_167_526
+    events = [
+        _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            "large-head",
+            psize=1_000_000.0,
+            pprice=100.0,
+            side="buy",
+            qty=1.0,
+            price=100.0,
+        ),
+        _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            "tiny-terminal",
+            psize=1_000_000.0005,
+            pprice=100.0,
+            side="buy",
+            qty=0.0005,
+            price=100.0,
+        ),
+    ]
+
+    assert bot._terminal_same_timestamp_fill_index(events, [0, 1]) == 1
+
+
+def test_latest_fill_anchor_ignores_position_state_for_ambiguous_raw_cohort():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -7147,8 +7180,10 @@ def test_latest_fill_anchor_uses_exchange_state_for_alternating_raw_cohort():
     bot.positions[symbol]["long"] = {"size": 1.0, "price": 102.0}
     bot._pnls_manager = _DummyPnlsManager(events)
 
-    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+    first_anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+    bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
+    second_anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
 
-    assert anchor["epoch"].endswith("buy-2")
-    assert anchor["psize"] == 1.0
-    assert anchor["pprice"] == 102.0
+    assert first_anchor == second_anchor
+    assert first_anchor["epoch"].endswith("sell-1")
+    assert first_anchor["psize"] == 0.0

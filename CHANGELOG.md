@@ -29,8 +29,9 @@ All notable user-facing changes will be documented in this file.
   components before reconstruction. Within the same timestamp cohort, a recovered close basis is
   propagated through a following add, so both the terminal size and VWAP can confirm the
   authoritative position without carrying an unproven basis across a history gap. If a position
-  chain is ambiguous, trailing anchor selection uses a unique after-state match to the exchange
-  position or keeps the existing order.
+  chain is ambiguous, trailing anchor selection keeps the existing fill order independently of
+  mutable position state. Hyperliquid's recent-fill overlap counts timestamp cohorts, preventing
+  a same-millisecond execution burst from excluding a late-arriving component.
 
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for

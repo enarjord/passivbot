@@ -50,6 +50,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     _hyperliquid_fill_position_chain,
+    _unique_position_chain_order,
     compute_psize_pprice,
     fee_policy_kwargs_from_config,
     fill_event_net_pnl,
@@ -8495,30 +8496,19 @@ class Passivbot:
         """
         if len(indexes) < 2:
             return indexes[-1] if indexes else None
-        after_sizes: dict[int, float] = {}
-        before_sizes: list[float] = []
+        chains = []
         for index in indexes:
             event = events[index]
             chain = cls._fill_position_size_chain(event)
             if chain is None:
                 return None
-            before_size, after_size = chain
             if not all(math.isfinite(value) for value in chain):
                 return None
-            after_sizes[index] = after_size
-            before_sizes.append(before_size)
-
-        def _is_same_size(lhs: float, rhs: float) -> bool:
-            return abs(lhs - rhs) <= max(1e-12, 1e-9 * max(1.0, abs(lhs), abs(rhs)))
-
-        terminals = [
-            index
-            for index, after_size in after_sizes.items()
-            if not any(_is_same_size(after_size, before) for before in before_sizes)
-        ]
-        if len(terminals) != 1:
+            chains.append(chain)
+        chain_order = _unique_position_chain_order(chains)
+        if chain_order is None:
             return None
-        return terminals[0]
+        return indexes[chain_order[-1]]
 
     def _latest_fill_position_change_anchors(self) -> dict[tuple[str, str], dict]:
         """Return the newest known fill anchor for each symbol and position side."""
@@ -8549,44 +8539,8 @@ class Passivbot:
             elif timestamp == latest_timestamp:
                 cohort.append(event_index)
         preferred_indexes = set()
-        for key, cohort in latest_cohorts.items():
+        for cohort in latest_cohorts.values():
             terminal = self._terminal_same_timestamp_fill_index(events, cohort)
-            if terminal is None:
-                position = self.positions.get(key[0], {}).get(key[1], {})
-                try:
-                    position_state = (
-                        float(position["size"]),
-                        float(position["price"]),
-                    )
-                except (KeyError, TypeError, ValueError, OverflowError):
-                    position_state = None
-                matching_indexes = []
-                if position_state is not None:
-                    for event_index in cohort:
-                        event = events[event_index]
-                        candidate = {"timestamp": int(event.timestamp)}
-                        for field in ("psize", "pprice", "qty", "price", "c_mult"):
-                            try:
-                                value = float(getattr(event, field))
-                            except (
-                                AttributeError,
-                                TypeError,
-                                ValueError,
-                                OverflowError,
-                            ):
-                                continue
-                            if math.isfinite(value):
-                                candidate[field] = value
-                        match_kind = self._fill_anchor_position_state_match_kind(
-                            key[0], key[1], position_state, candidate
-                        )
-                        if match_kind in {
-                            "recorded_after_state",
-                            "recorded_after_state_price_tolerance",
-                        }:
-                            matching_indexes.append(event_index)
-                if len(matching_indexes) == 1:
-                    terminal = matching_indexes[0]
             if terminal is not None:
                 preferred_indexes.add(terminal)
         for event_index in range(len(events) - 1, -1, -1):

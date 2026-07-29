@@ -4275,6 +4275,55 @@ async def test_manager_refresh_latest_uses_overlap(tmp_path: Path, sample_events
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_refresh_latest_counts_timestamp_cohorts_for_overlap(
+    tmp_path: Path, sample_events
+):
+    base_timestamp = int(sample_events[0]["timestamp"])
+    burst_timestamp = base_timestamp + 1_000
+
+    def _event(event_id: str, timestamp: int) -> Dict[str, object]:
+        return {
+            "id": event_id,
+            "timestamp": timestamp,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "qty": 0.01,
+            "price": 10.0,
+            "pnl": 0.0,
+            "pb_order_type": "entry",
+            "position_side": "long",
+            "client_order_id": f"cid-{event_id}",
+        }
+
+    anchor = _event("anchor", base_timestamp)
+    burst = [_event(f"burst-{index}", burst_timestamp) for index in range(25)]
+    late_fill = _event("late-fill", base_timestamp)
+    fetcher = _SequencedFetcher(
+        [
+            [anchor, *burst],
+            [anchor, late_fill, *burst],
+        ]
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "hyperliquid_cohort_overlap",
+    )
+
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = burst_timestamp + 1_000
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=10_000)
+
+    assert fetcher.calls[1][0] == base_timestamp
+    assert "late-fill" in {event.id for event in manager.get_events()}
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_latest_can_bound_start_from_last_successful_refresh(
     tmp_path: Path, sample_events
 ):
@@ -8090,6 +8139,38 @@ def test_order_same_timestamp_fills_follows_hyperliquid_position_chain():
     compute_psize_pprice(events, {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)})
 
     assert events[-1]["psize"] == pytest.approx(655.06)
+
+
+def test_order_same_timestamp_fills_accepts_tiny_head_at_large_position_size():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "tiny-head"
+    first["qty"] = 0.0005
+    first["raw"][0]["data"]["id"] = "tiny-head"
+    first["raw"][0]["data"]["amount"] = 0.0005
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "tiny-head",
+            "sz": "0.0005",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "large-successor"
+    second["qty"] = 1.0
+    second["raw"][0]["data"]["id"] = "large-successor"
+    second["raw"][0]["data"]["amount"] = 1.0
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "large-successor",
+            "sz": "1.0",
+            "startPosition": "1000000.0005",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == ["tiny-head", "large-successor"]
 
 
 def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():

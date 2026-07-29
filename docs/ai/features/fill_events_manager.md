@@ -126,8 +126,10 @@ logs, runtime windows, and immutable manifests.
    rows back into their raw components, and propagate a basis recovered from a reduction through
    chained additions in the same nonzero timestamp cohort so the terminal size and VWAP are both
    authoritative. A matching position size at a later timestamp does not prove continuity across a
-   potentially incomplete history window. If the chain is ambiguous, prefer only a unique
-   after-state match to the exchange position; otherwise keep the existing order.
+   potentially incomplete history window. If the chain is ambiguous, keep the existing order and
+   do not choose a different anchor from mutable exchange position state. Hyperliquid's incremental
+   overlap counts timestamp cohorts rather than individual executions so a same-millisecond burst
+   cannot consume the full recent-fill window and strand a late-arriving component.
 
 ## Failure Semantics And Risks
 

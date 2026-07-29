@@ -1232,32 +1232,11 @@ def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
         chains = [_hyperliquid_fill_position_chain(events[index]) for index in indexes]
         if any(chain is None for chain in chains):
             continue
-
-        remaining = dict(zip(indexes, chains))
-        ends = [chain[1] for chain in chains]
-        heads = [
-            index
-            for index, chain in remaining.items()
-            if not any(_is_same_position_size(chain[0], end) for end in ends)
-        ]
-        if len(heads) != 1:
+        chain_order = _unique_position_chain_order(chains)
+        if chain_order is None:
             continue
-        ordered: List[int] = [heads[0]]
-        while len(ordered) < len(indexes):
-            _, current_end = remaining[ordered[-1]]
-            successors = [
-                index
-                for index, chain in remaining.items()
-                if index not in ordered
-                and _is_same_position_size(chain[0], current_end)
-            ]
-            if len(successors) != 1:
-                break
-            ordered.append(successors[0])
-        if len(ordered) != len(indexes):
-            continue
-        reordered = [events[index] for index in ordered]
-        for slot, ev in zip(sorted(indexes), reordered):
+        reordered = [events[indexes[chain_index]] for chain_index in chain_order]
+        for slot, ev in zip(indexes, reordered):
             events[slot] = ev
 
 
@@ -5003,14 +4982,30 @@ class FillEventsManager:
         overlap: int = 20,
         last_refresh_overlap_ms: Optional[int] = None,
     ) -> None:
-        """Fetch only the most recent fills, overlapping by `overlap` events."""
+        """Fetch recent fills, overlapping Hyperliquid by timestamp cohort."""
         await self.ensure_loaded()
         if not self._events:
             logger.debug("[fills] refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
         if self._events:
-            idx = max(0, len(self._events) - overlap)
-            start_ms = self._events[idx].timestamp
+            overlap = max(1, int(overlap))
+            if self.exchange.lower() == "hyperliquid":
+                # Hyperliquid may emit many executions in one millisecond. Count
+                # timestamp cohorts so retaining raw component boundaries does
+                # not shrink the effective recent-fill overlap.
+                cohort_count = 0
+                previous_timestamp = None
+                for event in reversed(self._events):
+                    timestamp = int(event.timestamp)
+                    if previous_timestamp is None or timestamp != previous_timestamp:
+                        cohort_count += 1
+                        previous_timestamp = timestamp
+                    start_ms = timestamp
+                    if cohort_count >= overlap:
+                        break
+            else:
+                idx = max(0, len(self._events) - overlap)
+                start_ms = self._events[idx].timestamp
         if last_refresh_overlap_ms is not None:
             metadata = self.cache.load_metadata()
             last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
