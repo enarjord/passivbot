@@ -26,12 +26,16 @@ def resolve_auto_limit_entries(
     resolved: List[Dict[str, Any]] = []
     for raw_entry in limits:
         entry = deepcopy(raw_entry)
+        if not bool(entry.get("enabled", True)):
+            resolved.append(entry)
+            continue
         mode = entry.get("penalize_if") or "greater_than"
         if mode == "auto":
             metric = entry.get("metric")
             if not metric:
                 continue
             canonical_metric = canonical_metric_name(str(metric))
+            _validate_limit_metric(canonical_metric, raw_entry)
             weight = weights.get(canonical_metric)
             if weight is None:
                 continue

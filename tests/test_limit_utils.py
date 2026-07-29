@@ -69,6 +69,28 @@ def test_auto_penalize_if_respects_scoring_weight_sign():
     assert violation == (0.0005 - 0.0001) * 3
 
 
+def test_auto_limit_without_scoring_weight_is_ignored_after_validation():
+    entry = {"metric": "adg", "penalize_if": "auto", "value": 0.0005}
+    assert expand_limit_checks([entry], {}, penalty_weight=1000.0) == []
+
+
+def test_unknown_auto_limit_metric_raises_before_weight_lookup():
+    entry = {"metric": "adgg", "penalize_if": "auto", "value": 0.0005}
+
+    with pytest.raises(ValueError, match="unknown optimizer limit metric 'adgg'"):
+        expand_limit_checks([entry], {}, penalty_weight=1000.0)
+
+
+def test_disabled_unknown_auto_limit_is_skipped():
+    entry = {
+        "metric": "adgg",
+        "penalize_if": "auto",
+        "value": 0.0005,
+        "enabled": False,
+    }
+    assert expand_limit_checks([entry], {}, penalty_weight=1000.0) == []
+
+
 def test_disabled_limit_entry_is_skipped():
     entry = {
         "metric": "drawdown_worst",

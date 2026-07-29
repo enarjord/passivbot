@@ -178,6 +178,28 @@ def test_filtering_resolves_auto_limit_direction_like_optimizer(
     }
 
 
+def test_filtering_rejects_unknown_auto_limit_metric(
+    sample_pareto_dir: Path,
+):
+    with pytest.raises(
+        ValueError,
+        match="unknown optimizer limit metric 'adg_strategy_eqq'",
+    ):
+        select_starting_config_artifacts(
+            str(sample_pareto_dir),
+            limits=[
+                {
+                    "metric": "adg_strategy_eqq",
+                    "penalize_if": "auto",
+                    "value": 0.0015,
+                }
+            ],
+            aggregate_cfg={"default": "mean"},
+            filter_by_limits=True,
+            max_count=None,
+        )
+
+
 def test_inside_range_filter_preserves_boundary_candidates(
     sample_pareto_dir: Path,
 ):
