@@ -171,6 +171,7 @@ from suite_runner import (
     filter_scenarios_by_label,
     load_suite_override_config,
     aggregate_metrics,
+    build_scenarios,
     build_suite_metrics_payload,
 )
 from metrics_schema import MetricAggregationError, build_scenario_metrics, flatten_metric_stats
@@ -2829,6 +2830,13 @@ def preselect_starting_configs(
     ]
 
 
+def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | None:
+    if not suite_cfg.get("enabled"):
+        return None
+    scenarios, _aggregate_cfg = build_scenarios(dict(suite_cfg))
+    return [scenario.label for scenario in scenarios]
+
+
 def iter_anchored_fine_tune_seed_configs(config: dict):
     anchor_plan = get_anchor_plan(config)
     if anchor_plan is None:
@@ -3085,15 +3093,7 @@ async def main():
             aggregate_cfg=(
                 suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
             ),
-            scenario_labels=(
-                [
-                    str(scenario["label"])
-                    for scenario in suite_cfg.get("scenarios", [])
-                    if isinstance(scenario, Mapping) and "label" in scenario
-                ]
-                if suite_cfg.get("enabled")
-                else None
-            ),
+            scenario_labels=_active_suite_scenario_labels(suite_cfg),
         )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]

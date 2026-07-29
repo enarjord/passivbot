@@ -780,6 +780,23 @@ def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
     assert len(selected_non_suite) == 1
 
 
+def test_active_suite_scenario_labels_use_canonical_fallbacks():
+    assert optimize._active_suite_scenario_labels(
+        {
+            "enabled": True,
+            "scenarios": [
+                {},
+                {"label": "named"},
+                {"label": ""},
+                {"label": None},
+            ],
+        }
+    ) == ["scenario_01", "named", "scenario_03", "scenario_04"]
+    assert optimize._active_suite_scenario_labels(
+        {"enabled": False, "scenarios": [{}]}
+    ) is None
+
+
 def test_optimize_parser_accepts_short_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",
