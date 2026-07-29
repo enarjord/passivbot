@@ -121,9 +121,12 @@ logs, runtime windows, and immutable manifests.
    total is redistributed across that lifecycle and persisted.
 7. Fills sharing one millisecond carry no execution order in exchange responses or caches, yet
    position reconstruction replays them in list order. When the exchange reports the position size
-   preceding each fill (Hyperliquid `startPosition`), the cohort is reordered along that chain
-   before annotation so the last cached fill's after-state is the account's actual position.
-   Cohorts without chain evidence, or whose chain is ambiguous, keep their existing order.
+   preceding each fill (Hyperliquid `startPosition`), retain each execution boundary and reorder an
+   unambiguous cohort along that chain before annotation. Expand older coalesced Hyperliquid cache
+   rows back into their raw components, and propagate a basis recovered from a reduction through
+   chained additions so the terminal size and VWAP are both authoritative. If the chain is
+   ambiguous, prefer only a unique after-state match to the exchange position; otherwise keep the
+   existing order.
 
 ## Failure Semantics And Risks
 

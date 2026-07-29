@@ -925,60 +925,27 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
     """
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float]]] = {}
     for ev in events:
-        candidates: List[Tuple[float, float, float, bool]] = []
-        for item in _normalize_raw_field(ev.get("raw")):
-            if not isinstance(item, dict):
-                continue
-            data = item.get("data")
-            if not isinstance(data, dict):
-                continue
-            info = data.get("info")
-            if not isinstance(info, dict) or "startPosition" not in info:
-                continue
-            try:
-                start_position = abs(float(info.get("startPosition") or 0.0))
-                qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
-                price = float(data.get("price") or info.get("px") or 0.0)
-                pnl = float(data.get("pnl") or info.get("closedPnl") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if qty <= 0.0:
-                continue
-
-            side = str(
-                data.get("side") or info.get("side") or ev.get("side") or ""
-            ).lower()
-            position_side = str(
-                ev.get("position_side") or ev.get("pside") or ""
-            ).lower()
-            if not position_side:
-                direction = str(info.get("dir") or "").lower()
-                if "short" in direction:
-                    position_side = "short"
-                elif "long" in direction:
-                    position_side = "long"
-            if position_side == "short":
-                reducing = side == "buy"
-            elif position_side == "long":
-                reducing = side == "sell"
-            else:
-                continue
-
-            after_size = (
-                max(0.0, start_position - qty) if reducing else start_position + qty
-            )
-            entry_price = 0.0
-            if reducing and qty > 0.0 and price > 0.0:
-                if position_side == "short":
-                    entry_price = price + (pnl / qty)
-                else:
-                    entry_price = price - (pnl / qty)
-            elif not reducing and start_position <= 1e-12:
-                entry_price = price
-            candidates.append((after_size, qty, entry_price, reducing))
+        components = _hyperliquid_raw_position_components(ev)
+        candidates = [
+            (after_size, qty, entry_price, reducing)
+            for (
+                _before_size,
+                after_size,
+                qty,
+                _price,
+                entry_price,
+                reducing,
+            ) in components
+        ]
 
         if not candidates:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            recovered_state.pop(key, None)
             continue
 
         reducing_candidates = [item for item in candidates if item[3]]
@@ -987,47 +954,131 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             if after_size <= 1e-12:
                 ev["psize"] = 0.0
                 ev["pprice"] = 0.0
-                continue
-            weighted_qty = sum(
-                item[1] for item in reducing_candidates if item[2] > 0.0
-            )
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(
-                        item[1] * item[2]
-                        for item in reducing_candidates
-                        if item[2] > 0.0
-                    )
-                    / weighted_qty
+            else:
+                weighted_qty = sum(
+                    item[1] for item in reducing_candidates if item[2] > 0.0
                 )
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in reducing_candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+                ev["psize"] = round(after_size, 12)
+        else:
+            after_size = max(item[0] for item in candidates)
             ev["psize"] = round(after_size, 12)
+            if after_size <= 1e-12:
+                ev["pprice"] = 0.0
+            elif all(item[0] - item[1] <= 1e-12 for item in candidates):
+                weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+        )
+        component_order = _unique_position_chain_order(
+            [(component[0], component[1]) for component in components]
+        )
+        if component_order is None:
+            recovered_state.pop(key, None)
             continue
 
-        after_size = max(item[0] for item in candidates)
-        ev["psize"] = round(after_size, 12)
-        if after_size <= 1e-12:
+        ordered_components = [components[index] for index in component_order]
+        first_before = ordered_components[0][0]
+        previous = recovered_state.get(key)
+        basis: Optional[float] = None
+        if previous is not None and _is_same_position_size(previous[0], first_before):
+            basis = previous[1]
+        position_size = first_before
+        for (
+            before_size,
+            after_size,
+            qty,
+            price,
+            entry_price,
+            reducing,
+        ) in ordered_components:
+            if not _is_same_position_size(position_size, before_size):
+                basis = None
+            if reducing:
+                if entry_price > 0.0:
+                    basis = entry_price
+                position_size = after_size
+                if position_size <= 1e-12:
+                    position_size = 0.0
+                    basis = 0.0
+            else:
+                if before_size <= 1e-12:
+                    basis = price if price > 0.0 else None
+                elif basis is not None and basis > 0.0 and after_size > 0.0:
+                    basis = ((before_size * basis) + (qty * price)) / after_size
+                else:
+                    basis = None
+                position_size = after_size
+
+        ev["psize"] = round(position_size, 12)
+        if position_size <= 1e-12:
             ev["pprice"] = 0.0
-        elif all(item[0] - item[1] <= 1e-12 for item in candidates):
-            weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(item[1] * item[2] for item in candidates if item[2] > 0.0)
-                    / weighted_qty
-                )
+        elif basis is not None and basis > 0.0:
+            ev["pprice"] = basis
+        recovered_state[key] = (position_size, basis)
 
 
-def _hyperliquid_fill_position_chain(
-    ev: Dict[str, object]
-) -> Optional[Tuple[float, float]]:
-    """Return (before, after) position magnitudes from raw Hyperliquid fills.
+def _is_same_position_size(lhs: float, rhs: float) -> bool:
+    return abs(lhs - rhs) <= max(1e-12, 1e-9 * max(1.0, abs(lhs), abs(rhs)))
 
-    Hyperliquid reports the position size preceding every component fill, which
-    is the only ordering evidence available for fills sharing a millisecond.
-    """
-    starts: List[float] = []
-    ends: List[float] = []
-    reducing_flags: List[bool] = []
-    for item in _normalize_raw_field(ev.get("raw")):
+
+def _unique_position_chain_order(
+    chains: Sequence[Tuple[float, float]],
+) -> Optional[List[int]]:
+    if not chains:
+        return None
+    if len(chains) == 1:
+        return [0]
+    heads = [
+        index
+        for index, chain in enumerate(chains)
+        if not any(
+            other_index != index and _is_same_position_size(chain[0], other[1])
+            for other_index, other in enumerate(chains)
+        )
+    ]
+    if len(heads) != 1:
+        return None
+    ordered = [heads[0]]
+    while len(ordered) < len(chains):
+        current_end = chains[ordered[-1]][1]
+        successors = [
+            index
+            for index, chain in enumerate(chains)
+            if index not in ordered and _is_same_position_size(chain[0], current_end)
+        ]
+        if len(successors) != 1:
+            return None
+        ordered.append(successors[0])
+    return ordered
+
+
+def _hyperliquid_raw_position_components(
+    ev: Dict[str, object],
+) -> List[Tuple[float, float, float, float, float, bool]]:
+    """Return raw Hyperliquid (before, after, qty, price, basis, reducing) rows."""
+    components: List[Tuple[float, float, float, float, float, bool]] = []
+    raw_items = _normalize_raw_field(ev.get("raw"))
+    for item in raw_items:
         if not isinstance(item, dict):
             continue
         data = item.get("data")
@@ -1039,27 +1090,117 @@ def _hyperliquid_fill_position_chain(
         try:
             start_position = abs(float(info.get("startPosition") or 0.0))
             qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
+            price = float(data.get("price") or info.get("px") or 0.0)
+            pnl_value = (
+                data["pnl"]
+                if "pnl" in data
+                else info["closedPnl"]
+                if "closedPnl" in info
+                else ev.get("pnl")
+                if len(raw_items) == 1
+                else 0.0
+            )
+            pnl = float(pnl_value or 0.0)
         except (TypeError, ValueError):
             continue
         if qty <= 0.0:
             continue
         side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
         position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
+        if not position_side:
+            direction = str(info.get("dir") or "").lower()
+            if "short" in direction:
+                position_side = "short"
+            elif "long" in direction:
+                position_side = "long"
         if position_side == "short":
             reducing = side == "buy"
         elif position_side == "long":
             reducing = side == "sell"
         else:
             continue
-        starts.append(start_position)
-        ends.append(max(0.0, start_position - qty) if reducing else start_position + qty)
-        reducing_flags.append(reducing)
+        after_size = (
+            max(0.0, start_position - qty) if reducing else start_position + qty
+        )
+        entry_price = 0.0
+        if reducing and price > 0.0:
+            entry_price = (
+                price + (pnl / qty)
+                if position_side == "short"
+                else price - (pnl / qty)
+            )
+        elif start_position <= 1e-12:
+            entry_price = price
+        components.append(
+            (start_position, after_size, qty, price, entry_price, reducing)
+        )
+    return components
 
-    if not starts or len(set(reducing_flags)) != 1:
+
+def _hyperliquid_fill_position_chain(
+    ev: Dict[str, object]
+) -> Optional[Tuple[float, float]]:
+    """Return (before, after) position magnitudes from raw Hyperliquid fills.
+
+    Hyperliquid reports the position size preceding every component fill, which
+    is the only ordering evidence available for fills sharing a millisecond.
+    """
+    components = _hyperliquid_raw_position_components(ev)
+    component_order = _unique_position_chain_order(
+        [(component[0], component[1]) for component in components]
+    )
+    if component_order is None:
         return None
-    if reducing_flags[0]:
-        return max(starts), min(ends)
-    return min(starts), max(ends)
+    ordered = [components[index] for index in component_order]
+    return ordered[0][0], ordered[-1][1]
+
+
+def _expand_hyperliquid_coalesced_events(
+    events: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """Restore per-execution events from older Hyperliquid cache rows."""
+    expanded: List[Dict[str, object]] = []
+    for event in events:
+        raw_trades = [
+            item.get("data")
+            for item in _normalize_raw_field(event.get("raw"))
+            if isinstance(item, dict)
+            and item.get("source") == "fetch_my_trades"
+            and isinstance(item.get("data"), dict)
+        ]
+        unique_trades: List[Dict[str, object]] = []
+        seen_ids: set[str] = set()
+        for trade in raw_trades:
+            trade_id = str(
+                trade.get("id")
+                or (trade.get("info") or {}).get("tid")
+                or (trade.get("info") or {}).get("hash")
+                or ""
+            )
+            if not trade_id or trade_id in seen_ids:
+                continue
+            seen_ids.add(trade_id)
+            unique_trades.append(trade)
+        if len(unique_trades) <= 1:
+            expanded.append(event)
+            continue
+
+        children: List[Dict[str, object]] = []
+        for trade in unique_trades:
+            child = HyperliquidFetcher._normalize_trade(trade)
+            client_order_id = str(child.get("client_order_id") or "")
+            child["pb_order_type"] = (
+                custom_id_to_snake(client_order_id)
+                if client_order_id
+                else str(event.get("pb_order_type") or "unknown")
+            )
+            if not child["pb_order_type"]:
+                child["pb_order_type"] = "unknown"
+            if event.get("provenance"):
+                child["provenance"] = deepcopy(event["provenance"])
+            children.append(child)
+        expanded.extend(children)
+    return expanded
 
 
 def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
@@ -1086,15 +1227,12 @@ def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
         if any(chain is None for chain in chains):
             continue
 
-        def _is_same_size(lhs: float, rhs: float) -> bool:
-            return abs(lhs - rhs) <= max(1e-12, 1e-9 * max(1.0, abs(lhs), abs(rhs)))
-
         remaining = dict(zip(indexes, chains))
         ends = [chain[1] for chain in chains]
         heads = [
             index
             for index, chain in remaining.items()
-            if not any(_is_same_size(chain[0], end) for end in ends)
+            if not any(_is_same_position_size(chain[0], end) for end in ends)
         ]
         if len(heads) != 1:
             continue
@@ -1104,7 +1242,8 @@ def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
             successors = [
                 index
                 for index, chain in remaining.items()
-                if index not in ordered and _is_same_size(chain[0], current_end)
+                if index not in ordered
+                and _is_same_position_size(chain[0], current_end)
             ]
             if len(successors) != 1:
                 break
@@ -3581,6 +3720,8 @@ class FillEventsManager:
             # operate on the original files.
             if self._events and not allow_legacy_contract:
                 payload = [ev.to_dict() for ev in self._events]
+                if self.exchange.lower() == "hyperliquid":
+                    payload = _expand_hyperliquid_coalesced_events(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
@@ -6071,8 +6212,10 @@ class HyperliquidFetcher(BaseFetcher):
                 )
                 break
 
+        # Hyperliquid's startPosition is per execution. Preserve those component
+        # boundaries: coalescing same-side fills can merge disjoint links from an
+        # alternating same-millisecond position chain.
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
-        events = _coalesce_events(events)
         # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         for event in events:

@@ -845,6 +845,7 @@ class _DummyFillEvent:
         client_order_id: str = "",
         source_ids: list[str] | None = None,
         c_mult: float | None = None,
+        raw: list[dict] | None = None,
     ):
         self.symbol = symbol
         self.position_side = position_side
@@ -856,6 +857,7 @@ class _DummyFillEvent:
         self.price = price
         self.client_order_id = client_order_id
         self.source_ids = list(source_ids or [])
+        self.raw = list(raw or [])
         if psize is not None:
             self.psize = psize
         if pprice is not None:
@@ -7089,3 +7091,64 @@ def test_latest_fill_anchor_keeps_list_order_for_ambiguous_cohort():
     anchors = bot._latest_fill_position_change_anchors()
 
     assert anchors[(symbol, "long")]["psize"] == 651.17
+
+
+def test_latest_fill_anchor_uses_exchange_state_for_alternating_raw_cohort():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    timestamp = 1_785_241_167_526
+
+    def _event(
+        event_id: str,
+        side: str,
+        start_position: float,
+        psize: float,
+        pprice: float,
+    ):
+        qty = 1.0
+        return _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            event_id,
+            psize=psize,
+            pprice=pprice,
+            side=side,
+            qty=qty if side == "buy" else -qty,
+            price=pprice,
+            source_ids=[event_id],
+            raw=[
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": event_id,
+                        "side": side,
+                        "amount": qty,
+                        "price": pprice,
+                        "info": {
+                            "tid": event_id,
+                            "side": side,
+                            "sz": str(qty),
+                            "px": str(pprice),
+                            "startPosition": str(start_position),
+                            "dir": "Open Long" if side == "buy" else "Close Long",
+                        },
+                    },
+                }
+            ],
+        )
+
+    events = [
+        _event("buy-1", "buy", 0.0, 1.0, 100.0),
+        _event("buy-2", "buy", 0.0, 1.0, 102.0),
+        _event("sell-1", "sell", 1.0, 0.0, 0.0),
+    ]
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 102.0}
+    bot._pnls_manager = _DummyPnlsManager(events)
+
+    anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert anchor["epoch"].endswith("buy-2")
+    assert anchor["psize"] == 1.0
+    assert anchor["pprice"] == 102.0

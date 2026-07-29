@@ -49,6 +49,7 @@ from fill_events_manager import (
     PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
+    _hyperliquid_fill_position_chain,
     compute_psize_pprice,
     fee_policy_kwargs_from_config,
     fill_event_net_pnl,
@@ -8447,8 +8448,21 @@ class Passivbot:
         return f"fill:{timestamp}:{event_id}"
 
     @staticmethod
-    def _fill_before_position_size(event) -> float | None:
-        """Return the position size a fill started from, per its own after-state."""
+    def _fill_position_size_chain(event) -> tuple[float, float] | None:
+        """Return one fill event's unambiguous before/after position sizes."""
+        raw = getattr(event, "raw", None)
+        if raw:
+            chain = _hyperliquid_fill_position_chain(
+                {
+                    "raw": raw,
+                    "side": getattr(event, "side", ""),
+                    "position_side": getattr(event, "position_side", ""),
+                }
+            )
+            # Raw component boundaries are authoritative. Do not invent a
+            # predecessor from an aggregate qty when those components do not
+            # themselves form one unambiguous chain.
+            return chain
         try:
             after_size = abs(float(getattr(event, "psize")))
             qty = abs(float(getattr(event, "qty")))
@@ -8464,7 +8478,8 @@ class Passivbot:
             adds = side == "buy"
         else:
             return None
-        return after_size - qty if adds else after_size + qty
+        before_size = after_size - qty if adds else after_size + qty
+        return before_size, after_size
 
     @classmethod
     def _terminal_same_timestamp_fill_index(
@@ -8484,12 +8499,11 @@ class Passivbot:
         before_sizes: list[float] = []
         for index in indexes:
             event = events[index]
-            try:
-                after_size = abs(float(getattr(event, "psize")))
-            except (AttributeError, TypeError, ValueError, OverflowError):
+            chain = cls._fill_position_size_chain(event)
+            if chain is None:
                 return None
-            before_size = cls._fill_before_position_size(event)
-            if before_size is None or not math.isfinite(after_size):
+            before_size, after_size = chain
+            if not all(math.isfinite(value) for value in chain):
                 return None
             after_sizes[index] = after_size
             before_sizes.append(before_size)
@@ -8537,6 +8551,42 @@ class Passivbot:
         preferred_indexes = set()
         for key, cohort in latest_cohorts.items():
             terminal = self._terminal_same_timestamp_fill_index(events, cohort)
+            if terminal is None:
+                position = self.positions.get(key[0], {}).get(key[1], {})
+                try:
+                    position_state = (
+                        float(position["size"]),
+                        float(position["price"]),
+                    )
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    position_state = None
+                matching_indexes = []
+                if position_state is not None:
+                    for event_index in cohort:
+                        event = events[event_index]
+                        candidate = {"timestamp": int(event.timestamp)}
+                        for field in ("psize", "pprice", "qty", "price", "c_mult"):
+                            try:
+                                value = float(getattr(event, field))
+                            except (
+                                AttributeError,
+                                TypeError,
+                                ValueError,
+                                OverflowError,
+                            ):
+                                continue
+                            if math.isfinite(value):
+                                candidate[field] = value
+                        match_kind = self._fill_anchor_position_state_match_kind(
+                            key[0], key[1], position_state, candidate
+                        )
+                        if match_kind in {
+                            "recorded_after_state",
+                            "recorded_after_state_price_tolerance",
+                        }:
+                            matching_indexes.append(event_index)
+                if len(matching_indexes) == 1:
+                    terminal = matching_indexes[0]
             if terminal is not None:
                 preferred_indexes.add(terminal)
         for event_index in range(len(events) - 1, -1, -1):

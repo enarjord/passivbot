@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 import types
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -4024,15 +4025,12 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
         until_ms=base_ts + 10,
         detail_cache={},
     )
-    assert len(events) == 1
-    event = events[0]
-    assert event["id"] == "tid-hl-1+tid-hl-1b"
-    assert event["pb_order_type"] == "unknown"
-    assert event["pnl"] == pytest.approx(2.0)
-    assert event["qty"] == pytest.approx(0.30000000000000004)
-    assert event["client_order_id"] == "0xabc"
-    assert isinstance(event["fees"], dict)
-    assert event["fees"]["cost"] == pytest.approx(0.7)
+    assert [event["id"] for event in events] == ["tid-hl-1", "tid-hl-1b"]
+    assert [event["pb_order_type"] for event in events] == ["unknown", "unknown"]
+    assert [event["pnl"] for event in events] == pytest.approx([1.5, 0.5])
+    assert [event["qty"] for event in events] == pytest.approx([0.1, 0.2])
+    assert [event["client_order_id"] for event in events] == ["0xabc", "0xabc"]
+    assert [float(event["fees"]["cost"]) for event in events] == pytest.approx([0.5, 0.2])
     assert api.calls[0]["since"] == base_ts - 1
     assert api.calls[0]["limit"] == fetcher.trade_limit
     assert api.calls[0]["params"] == {}
@@ -8092,6 +8090,58 @@ def test_order_same_timestamp_fills_follows_hyperliquid_position_chain():
     compute_psize_pprice(events, {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)})
 
     assert events[-1]["psize"] == pytest.approx(655.06)
+
+
+def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
+    events = _hyperliquid_same_millisecond_events()
+
+    ensure_qty_signage(events)
+    order_same_timestamp_fills(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["id"] == "1109260071634171"
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(expected_pprice)
+
+
+def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
+    buy_1, sell_1 = _hyperliquid_same_millisecond_events()
+    buy_1["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["info"]["tid"] = "buy-1"
+    buy_1["qty"] = 1.0
+    buy_1["raw"][0]["data"]["amount"] = 1.0
+    buy_1["raw"][0]["data"]["info"]["sz"] = "1.0"
+    buy_1["raw"][0]["data"]["info"]["startPosition"] = "0.0"
+    buy_2 = deepcopy(buy_1)
+    buy_2["id"] = "buy-2"
+    buy_2["price"] = 102.0
+    buy_2["raw"][0]["data"]["id"] = "buy-2"
+    buy_2["raw"][0]["data"]["price"] = 102.0
+    buy_2["raw"][0]["data"]["info"]["tid"] = "buy-2"
+    buy_2["raw"][0]["data"]["info"]["px"] = "102.0"
+    sell_1["id"] = "sell-1"
+    sell_1["qty"] = 1.0
+    sell_1["price"] = 101.0
+    sell_1["raw"][0]["data"]["id"] = "sell-1"
+    sell_1["raw"][0]["data"]["amount"] = 1.0
+    sell_1["raw"][0]["data"]["price"] = 101.0
+    sell_1["raw"][0]["data"]["info"].update(
+        {
+            "tid": "sell-1",
+            "sz": "1.0",
+            "px": "101.0",
+            "startPosition": "1.0",
+        }
+    )
+    coalesced = fem._coalesce_events([buy_1, sell_1, buy_2])
+
+    expanded = fem._expand_hyperliquid_coalesced_events(coalesced)
+
+    assert [event["id"] for event in expanded] == ["buy-1", "buy-2", "sell-1"]
+    assert all(len(event["raw"]) == 1 for event in expanded)
 
 
 def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():
