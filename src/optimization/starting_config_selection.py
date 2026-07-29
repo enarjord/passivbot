@@ -64,6 +64,7 @@ def select_starting_config_artifacts(
     aggregate_cfg: Mapping[str, Any] | None,
     filter_by_limits: bool,
     max_count: int | None,
+    scenario_labels: Sequence[str] | None = None,
 ) -> StartingConfigSelection:
     logging.warning(
         "Starting-config metric preselection trusts stored Pareto metrics and objectives "
@@ -89,6 +90,7 @@ def select_starting_config_artifacts(
             candidates,
             limits,
             aggregate_cfg=aggregate_cfg,
+            scenario_labels=scenario_labels,
             scoring_weights=default_scoring_weights(),
         )
         if not candidates:

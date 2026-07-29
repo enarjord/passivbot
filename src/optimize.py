@@ -2799,6 +2799,7 @@ def preselect_starting_configs(
     filter_by_limits: bool,
     max_count: int | None,
     aggregate_cfg: Mapping[str, Any] | None,
+    scenario_labels: Sequence[str] | None = None,
 ) -> list[dict]:
     optimize_cfg = config.get("optimize")
     limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
@@ -2809,6 +2810,7 @@ def preselect_starting_configs(
         starting_configs_path,
         limits=limits,
         aggregate_cfg=effective_aggregate_cfg,
+        scenario_labels=scenario_labels,
         filter_by_limits=filter_by_limits,
         max_count=max_count,
     )
@@ -3082,6 +3084,15 @@ async def main():
             max_count=args.starting_configs_max,
             aggregate_cfg=(
                 suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
+            ),
+            scenario_labels=(
+                [
+                    str(scenario["label"])
+                    for scenario in suite_cfg.get("scenarios", [])
+                    if isinstance(scenario, Mapping) and "label" in scenario
+                ]
+                if suite_cfg.get("enabled")
+                else None
             ),
         )
     fine_tune_params = (
