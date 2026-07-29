@@ -441,9 +441,11 @@ def _extract_suite_metrics(
                 continue
             aggregated = payload.get("aggregated")
             stats = payload.get("stats") or {}
-            if aggregate_cfg is not None and isinstance(stats, Mapping) and stats:
-                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
-                aggregated = stats.get(mode, stats.get("mean"))
+            if aggregate_cfg is not None:
+                aggregated = None
+                if isinstance(stats, Mapping) and stats:
+                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    aggregated = stats.get(mode)
             elif aggregated is None and isinstance(stats, Mapping):
                 mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
                 aggregated = stats.get(mode, stats.get("mean"))
@@ -459,14 +461,15 @@ def _extract_suite_metrics(
         if isinstance(stats, Mapping):
             stats_flat.update(flatten_metric_stats(dict(stats)))
         aggregated = aggregate.get("aggregated") or {}
-        if aggregate_cfg is not None and isinstance(stats, Mapping) and stats:
-            for metric, metric_stats in stats.items():
-                if not isinstance(metric_stats, Mapping):
-                    continue
-                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
-                value = metric_stats.get(mode, metric_stats.get("mean"))
-                if isinstance(value, (int, float)) and math.isfinite(float(value)):
-                    aggregated_values[str(metric)] = float(value)
+        if aggregate_cfg is not None:
+            if isinstance(stats, Mapping) and stats:
+                for metric, metric_stats in stats.items():
+                    if not isinstance(metric_stats, Mapping):
+                        continue
+                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    value = metric_stats.get(mode)
+                    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                        aggregated_values[str(metric)] = float(value)
         elif isinstance(aggregated, Mapping):
             for metric, value in aggregated.items():
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
@@ -895,10 +898,14 @@ def _resolve_limit_value(
         and "scenario" in entry
         and entry.get("scenario") is None
     )
+    applies_current_suite_aggregate = aggregate_cfg is not None and isinstance(
+        candidate.entry.get("suite_metrics"), Mapping
+    )
     stats_flat = candidate.stats_flat
     aggregated_values = candidate.aggregated_values
     if explicit_suite_basis or (
-        aggregate_cfg is not None and isinstance(candidate.entry.get("suite_metrics"), Mapping)
+        aggregate_cfg is not None
+        and isinstance(candidate.entry.get("suite_metrics"), Mapping)
     ):
         stats_flat, aggregated_values = _extract_suite_metrics(
             candidate.entry,
@@ -920,7 +927,11 @@ def _resolve_limit_value(
     value = resolve_metric_value(stats_flat, key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
-    if "stat" not in entry and not explicit_suite_basis:
+    if (
+        "stat" not in entry
+        and not explicit_suite_basis
+        and not applies_current_suite_aggregate
+    ):
         fallback = _resolve_candidate_metric_value(candidate, metric)
         if isinstance(fallback, (int, float)) and math.isfinite(float(fallback)):
             return float(fallback)

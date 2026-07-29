@@ -696,6 +696,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
         config,
         filter_by_limits=True,
         max_count=None,
+        aggregate_cfg=config["backtest"]["aggregate"],
     )
 
     assert len(selected) == 1
@@ -705,7 +706,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     )
 
 
-def test_preselect_starting_configs_uses_effective_suite_aggregate_override(tmp_path):
+def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
     config = get_template_config()
     config["backtest"]["aggregate"] = {"default": "max"}
     config["optimize"]["scoring"] = [
@@ -762,11 +763,21 @@ def test_preselect_starting_configs_uses_effective_suite_aggregate_override(tmp_
         config,
         filter_by_limits=True,
         max_count=None,
-        aggregate_cfg_override={"default": "mean"},
+        aggregate_cfg={"default": "mean"},
     )
 
     assert len(selected) == 1
     assert selected[0]["_starting_config_source"].endswith("candidate.json")
+
+    selected_non_suite = preselect_starting_configs(
+        str(artifact_path),
+        config,
+        filter_by_limits=True,
+        max_count=None,
+        aggregate_cfg=None,
+    )
+
+    assert len(selected_non_suite) == 1
 
 
 def test_optimize_parser_accepts_short_limit_alias():

@@ -2798,20 +2798,17 @@ def preselect_starting_configs(
     *,
     filter_by_limits: bool,
     max_count: int | None,
-    aggregate_cfg_override: Mapping[str, Any] | None = None,
+    aggregate_cfg: Mapping[str, Any] | None,
 ) -> list[dict]:
-    backtest_cfg = config.get("backtest")
-    aggregate_cfg = (
-        backtest_cfg.get("aggregate") if isinstance(backtest_cfg, Mapping) else None
-    )
-    if aggregate_cfg_override is not None:
-        aggregate_cfg = aggregate_cfg_override
     optimize_cfg = config.get("optimize")
     limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    effective_aggregate_cfg = (
+        aggregate_cfg if isinstance(aggregate_cfg, Mapping) else {"default": "mean"}
+    )
     selection = select_starting_config_artifacts(
         starting_configs_path,
         limits=limits,
-        aggregate_cfg=aggregate_cfg if isinstance(aggregate_cfg, Mapping) else None,
+        aggregate_cfg=effective_aggregate_cfg,
         filter_by_limits=filter_by_limits,
         max_count=max_count,
     )
@@ -3056,6 +3053,26 @@ async def main():
                 config, "backtest.suite_enabled", True, verbose=True
             )
     suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [
+            label.strip() for label in scenario_filter.split(",") if label.strip()
+        ]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(
+            suite_cfg.get("scenarios", []), labels
+        )
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
+    if args.suite is not None:
+        recursive_config_update(
+            config, "backtest.suite_enabled", bool(args.suite), verbose=True
+        )
+        suite_cfg["enabled"] = bool(args.suite)
+
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
         preselected_starting_configs = preselect_starting_configs(
@@ -3063,7 +3080,9 @@ async def main():
             config,
             filter_by_limits=bool(args.filter_starting_configs),
             max_count=args.starting_configs_max,
-            aggregate_cfg_override=suite_cfg.get("aggregate"),
+            aggregate_cfg=(
+                suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
+            ),
         )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
@@ -3086,18 +3105,6 @@ async def main():
         )
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    # Handle --scenarios filter (implies --suite y)
-    scenario_filter = getattr(args, "scenarios", None)
-    if scenario_filter:
-        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
-        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
-        suite_cfg["enabled"] = True  # --scenarios implies suite mode
-        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
-
-    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
-    if args.suite is not None:
-        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
-        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
