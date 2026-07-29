@@ -4739,6 +4739,7 @@ class FillEventsManager:
         backup_path = self._backup_cache_for_repair()
         payload = [ev.to_dict() for ev in self._events]
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
         compute_psize_pprice(repaired_payload)
         self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
