@@ -395,6 +395,7 @@ from pure_funcs import (
 
 ONE_MIN_MS = 60_000
 _FORAGER_TERMINAL_EMPTY_RETRY_MS = 15 * ONE_MIN_MS
+_FORAGER_TRANSIENT_FAILURE_RETRY_MS = ONE_MIN_MS
 _COMPLETED_CANDLE_SYMBOL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:/._-]{0,159}")
 bot = None
 
@@ -20288,15 +20289,11 @@ class Passivbot:
             and utc_ms() - refresh_started_ms >= max_refresh_ms
         ):
             return
-        budget = self._forager_refresh_budget(
-            max_calls,
-            max_cycle_budget=min(cycle_cap, len(stale)),
-            initial_tokens=cycle_cap,
-            consume=True,
-        )
-        if budget <= 0:
-            return
-        to_refresh = stale[:budget]
+        # The earlier non-consuming peek bounds this cycle. Consume one token
+        # immediately before each actual REST attempt below. Reserving the
+        # whole selected batch here lets one slow surface exhaust the wall-time
+        # cap while charging unattempted surfaces against the account budget.
+        to_refresh = stale[: min(int(budget), int(cycle_cap), len(stale))]
         if not to_refresh:
             return
         stale_by_surface = {
@@ -20374,6 +20371,14 @@ class Passivbot:
                     refreshed_count=int(refreshed_count),
                     total_count=len(to_refresh),
                 )
+                break
+            attempt_budget = self._forager_refresh_budget(
+                max_calls,
+                max_cycle_budget=1,
+                initial_tokens=cycle_cap,
+                consume=True,
+            )
+            if attempt_budget <= 0:
                 break
             try:
                 period_ms = ONE_MIN_MS if timeframe == "1m" else 60 * ONE_MIN_MS
@@ -20491,6 +20496,12 @@ class Passivbot:
                     )
                     last_progress_ms = now_ms
             except TimeoutError as exc:
+                surface_failure_retry_after[(sym, timeframe)] = int(
+                    utc_ms() + _FORAGER_TRANSIENT_FAILURE_RETRY_MS
+                )
+                self._forager_surface_failure_retry_after_ms = (
+                    surface_failure_retry_after
+                )
                 paused_by_cap = bool(
                     max_refresh_ms > 0
                     and utc_ms() - refresh_started_ms >= max_refresh_ms

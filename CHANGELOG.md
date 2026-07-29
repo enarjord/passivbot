@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Background forager candle refresh now charges its REST budget per attempted
+  symbol/timeframe fetch instead of reserving a whole batch before execution.
+  Wall-time or lock timeouts briefly defer only the affected surface, preventing
+  one slow symbol from consuming the batch budget and starving other candidates.
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.
