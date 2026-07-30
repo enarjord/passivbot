@@ -1270,15 +1270,12 @@ def _expand_hyperliquid_coalesced_events(
             children.append(child)
         failure = _hyperliquid_coalesced_reconciliation_failure(event, children)
         if failure is not None:
-            logger.warning(
-                "[fills] preserving unreconciled Hyperliquid cache aggregate | "
-                "id=%s components=%d reason=%s",
-                str(event.get("id") or ""),
-                len(children),
-                failure,
+            raise FillEventCacheContractError(
+                "unreconciled Hyperliquid cache aggregate cannot be mixed with "
+                "individually fetched components; quarantine and rebuild the cache "
+                f"from exchange fills; id={str(event.get('id') or '')!r} "
+                f"components={len(children)} reason={failure}"
             )
-            expanded.append(event)
-            continue
         expanded.extend(children)
     return expanded
 

@@ -33,7 +33,8 @@ All notable user-facing changes will be documented in this file.
   mutable position state. Hyperliquid's recent-fill overlap counts timestamp cohorts, preventing
   a same-millisecond execution burst from excluding a late-arriving component. Legacy coalesced
   cache rows are split only when their component identities, quantity, PnL, and fees reconcile,
-  preserving the aggregate when its raw execution list is incomplete.
+  while an unreconciled aggregate triggers a recoverable cache quarantine and exchange rebuild
+  before individual components are accepted.
 
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for

@@ -8275,7 +8275,7 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
 
 
 @pytest.mark.parametrize("mismatch", ["component_ids", "signed_qty", "pnl", "fees"])
-def test_expand_hyperliquid_coalesced_event_preserves_unreconciled_aggregate(
+def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
     mismatch,
 ):
     first = deepcopy(_hyperliquid_same_millisecond_events()[0])
@@ -8309,9 +8309,63 @@ def test_expand_hyperliquid_coalesced_event_preserves_unreconciled_aggregate(
     elif mismatch == "fees":
         aggregate["fee_paid"] = -1.0
 
-    expanded = fem._expand_hyperliquid_coalesced_events([aggregate])
+    with pytest.raises(FillEventCacheContractError, match=mismatch):
+        fem._expand_hyperliquid_coalesced_events([aggregate])
 
-    assert expanded == [aggregate]
+
+@pytest.mark.asyncio
+async def test_unreconciled_hyperliquid_aggregate_is_quarantined_before_refresh(
+    tmp_path: Path,
+):
+    def _component(event_id: str, start_position: float) -> Dict[str, object]:
+        event = deepcopy(_hyperliquid_same_millisecond_events()[0])
+        event["id"] = event_id
+        event["qty"] = 1.0
+        event["pb_order_type"] = "unknown"
+        event["client_order_id"] = ""
+        event["raw"][0]["data"]["id"] = event_id
+        event["raw"][0]["data"]["amount"] = 1.0
+        event["raw"][0]["data"]["info"].update(
+            {
+                "tid": event_id,
+                "sz": "1.0",
+                "startPosition": str(start_position),
+            }
+        )
+        return event
+
+    components = [
+        _component("1", 0.0),
+        _component("2", 1.0),
+        _component("3", 2.0),
+    ]
+    aggregate = fem._coalesce_events(components)[0]
+    aggregate["raw"] = [
+        raw
+        for raw in aggregate["raw"]
+        if str(raw["data"]["id"]) in {"1", "3"}
+    ]
+    cache_path = tmp_path / "unreconciled_hyperliquid_aggregate"
+    FillEventCache(cache_path).save([FillEvent.from_dict(aggregate)])
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher(components),
+        cache_path=cache_path,
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild"):
+        await manager.ensure_loaded()
+
+    quarantine_path = manager.quarantine_cache_for_rebuild(
+        reason="unreconciled_hyperliquid_aggregate"
+    )
+    await manager.refresh(start_ms=components[0]["timestamp"], end_ms=None)
+
+    assert quarantine_path is not None
+    assert Path(quarantine_path).exists()
+    assert [event.id for event in manager.get_events()] == ["1", "2", "3"]
+    assert sum(abs(event.qty) for event in manager.get_events()) == pytest.approx(3.0)
 
 
 def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():
