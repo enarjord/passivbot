@@ -126,16 +126,18 @@ logs, runtime windows, and immutable manifests.
    preceding each fill (Hyperliquid `startPosition`), retain each execution boundary and reorder an
    unambiguous cohort along that chain before annotation. Expand older coalesced Hyperliquid cache
    rows back into their raw components, and propagate a basis recovered from a reduction through
-   chained additions in the same nonzero timestamp cohort so the terminal size and VWAP are both
-   authoritative. A matching position size at a later timestamp does not prove continuity across a
-   potentially incomplete history window. If the chain is ambiguous, keep the existing order and
-   do not choose a different anchor from mutable exchange position state. Hyperliquid's incremental
-   overlap counts timestamp cohorts rather than individual executions so a same-millisecond burst
-   cannot consume the full recent-fill window and strand a late-arriving component. Expand a legacy
-   coalesced row only when component identities and cohort fields match, position-chain data is
-   finite, and weighted price, signed effective quantity, gross PnL, and signed fees reconcile to the
-   aggregate. An unreconciled aggregate is a cache-contract failure: quarantine the cache and rebuild
-   the configured lookback before accepting individually fetched components.
+   chained additions in the same nonzero timestamp cohort only when the raw close component
+   explicitly reports PnL. A normalized default of zero does not prove zero realized PnL. A matching
+   position size at a later timestamp does not prove continuity across a potentially incomplete
+   history window. If the chain is ambiguous, keep the existing order and do not choose a different
+   anchor from mutable exchange position state. Hyperliquid's incremental overlap counts timestamp
+   cohorts rather than individual executions so a same-millisecond burst cannot consume the full
+   recent-fill window and strand a late-arriving component. Expand a legacy coalesced row only when
+   its composite ID, canonical `source_ids`, component identities, and cohort fields match,
+   position-chain data is finite, and weighted price, signed effective quantity, gross PnL, and
+   signed fees reconcile to the aggregate. An unreconciled aggregate is a cache-contract failure:
+   quarantine the cache and rebuild the configured lookback before accepting individually fetched
+   components.
 
 ## Failure Semantics And Risks
 

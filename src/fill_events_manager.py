@@ -1102,16 +1102,16 @@ def _hyperliquid_raw_position_components(
             start_position = abs(float(info.get("startPosition") or 0.0))
             qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
             price = float(data.get("price") or info.get("px") or 0.0)
-            pnl_value = (
-                data["pnl"]
-                if "pnl" in data
-                else info["closedPnl"]
-                if "closedPnl" in info
-                else ev.get("pnl")
-                if len(raw_items) == 1
-                else 0.0
-            )
-            pnl = float(pnl_value or 0.0)
+            explicit_pnl = False
+            if "pnl" in data and data["pnl"] not in (None, ""):
+                pnl_value = data["pnl"]
+                explicit_pnl = True
+            elif "closedPnl" in info and info["closedPnl"] not in (None, ""):
+                pnl_value = info["closedPnl"]
+                explicit_pnl = True
+            else:
+                pnl_value = 0.0
+            pnl = float(pnl_value)
         except (TypeError, ValueError):
             continue
         if qty <= 0.0:
@@ -1134,7 +1134,7 @@ def _hyperliquid_raw_position_components(
             max(0.0, start_position - qty) if reducing else start_position + qty
         )
         entry_price = 0.0
-        if reducing and price > 0.0:
+        if reducing and price > 0.0 and explicit_pnl:
             entry_price = (
                 price + (pnl / qty)
                 if position_side == "short"
@@ -1259,6 +1259,13 @@ def _hyperliquid_coalesced_reconciliation_failure(
         or set(parent_ids) != set(child_ids)
     ):
         return "component_ids"
+    source_ids = [str(value) for value in event.get("source_ids") or [] if value]
+    if source_ids and (
+        len(source_ids) != len(children)
+        or len(set(source_ids)) != len(source_ids)
+        or set(source_ids) != set(child_ids)
+    ):
+        return "source_ids"
 
     for child in children:
         failure = _hyperliquid_component_validation_failure(event, child)

@@ -8174,7 +8174,7 @@ def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
     """Hyperliquid cohort sharing a millisecond, cached in reverse order."""
 
     def _fill(trade_id: str, side: str, qty: float, price: float, start: str, direction: str):
-        return {
+        event = {
             "id": trade_id,
             "symbol": "HYPE/USDC:USDC",
             "position_side": "long",
@@ -8205,6 +8205,9 @@ def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
                 }
             ],
         }
+        if side == "sell":
+            event["raw"][0]["data"]["pnl"] = event["pnl"]
+        return event
 
     return [
         _fill("1109260071634171", "buy", 2.04, 54.439, "653.02", "Open Long"),
@@ -8306,6 +8309,43 @@ def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
     assert events[-1]["pprice"] == pytest.approx(expected_pprice)
 
 
+def test_hyperliquid_raw_basis_ignores_normalized_zero_when_close_pnl_is_absent():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"].pop("pnl")
+    close["raw"][0]["data"]["info"].pop("closedPnl", None)
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)},
+    )
+    expected_pprices = [event["pprice"] for event in events]
+
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    assert [event["pprice"] for event in events] == pytest.approx(expected_pprices)
+
+
+def test_hyperliquid_raw_basis_accepts_explicit_zero_close_pnl():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"]["pnl"] = 0.0
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 60.0)},
+    )
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * close["price"]) + (2.04 * add["price"])) / 655.06
+    assert events[0]["pprice"] == pytest.approx(close["price"])
+    assert events[1]["pprice"] == pytest.approx(expected_pprice)
+
+
 def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
     add, close = _hyperliquid_same_millisecond_events()
     # A missing close-and-reopen round trip can return to the same size with a
@@ -8365,6 +8405,7 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     "mismatch",
     [
         "component_ids",
+        "source_ids",
         "signed_qty",
         "pnl",
         "fees",
@@ -8403,6 +8444,8 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
     aggregate = fem._coalesce_events([first, second])[0]
     if mismatch == "component_ids":
         aggregate["id"] = "aggregate"
+    elif mismatch == "source_ids":
+        aggregate["source_ids"] = ["buy-1", "buy-2", "buy-3"]
     elif mismatch == "signed_qty":
         aggregate["qty"] = 3.0
     elif mismatch == "pnl":
