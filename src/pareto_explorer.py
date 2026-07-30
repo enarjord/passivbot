@@ -21,6 +21,7 @@ from config.metrics import resolve_metric_value
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
+    default_scoring_weights,
     dominates_objectives,
     extract_objective_specs,
     from_engine_value,
@@ -1038,7 +1039,11 @@ def filter_candidates(
         normalized_limits.extend(normalize_limit_entries(limits_payload))
     if limit_entries:
         normalized_limits.extend(parse_limit_cli_entries(list(limit_entries)))
-    return filter_candidates_with_limits(candidates, normalized_limits)
+    return filter_candidates_with_limits(
+        candidates,
+        normalized_limits,
+        scoring_weights=default_scoring_weights(),
+    )
 
 
 def filter_candidates_with_limits(

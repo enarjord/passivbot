@@ -528,6 +528,30 @@ def test_limit_entry_can_select_scenario_without_projecting_candidates(
     assert limits[0]["scenario"] == "bull"
 
 
+def test_filter_candidates_resolves_auto_limit_with_optimizer_direction(
+    scenario_pareto_dir: Path,
+):
+    _pareto_dir, candidates, _specs = load_candidates(scenario_pareto_dir)
+
+    filtered, limits = filter_candidates(
+        candidates,
+        limits_payload=json.dumps(
+            [
+                {
+                    "metric": "sharpe_ratio_strategy_eq",
+                    "penalize_if": "auto",
+                    "scenario": "bull",
+                    "value": 1.1,
+                }
+            ]
+        ),
+        limit_entries=None,
+    )
+
+    assert [candidate.path.stem for candidate in filtered] == ["a"]
+    assert limits[0]["penalize_if"] == "less_than"
+
+
 def test_ordinary_filter_uses_stored_legacy_suite_aggregate(tmp_path: Path):
     pareto_dir = tmp_path / "legacy_suite" / "pareto"
     pareto_dir.mkdir(parents=True)
