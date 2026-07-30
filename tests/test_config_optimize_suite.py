@@ -74,6 +74,30 @@ def test_optimizer_scoring_basis_round_trip_preserves_omitted_named_and_null_sce
     assert formatted["optimize"]["scoring"] == base["optimize"]["scoring"]
 
 
+def test_optimizer_limit_basis_round_trip_preserves_named_and_null_scenarios():
+    base = get_template_config()
+    base["_raw"] = deepcopy(base)
+    base["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+
+    formatted = format_config(deepcopy(base), verbose=False)
+
+    assert formatted["optimize"]["limits"] == base["optimize"]["limits"]
+
+
 def test_optimizer_preserves_explicit_hsl_aggregate_config():
     """Optimizer must not inherit template metric-specific aggregate overrides."""
     cfg = load_prepared_config("configs/examples/hsl_npos1.json", verbose=False)

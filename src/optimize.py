@@ -157,7 +157,7 @@ from opt_utils import make_json_serializable, generate_incremental_diff, round_f
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
-from typing import Sequence, Tuple, List, Dict, Any, Optional
+from typing import Sequence, Tuple, List, Dict, Any, Mapping, Optional
 from shared_arrays import SharedArrayManager, attach_shared_array
 from ohlcv_utils import align_and_aggregate_hlcvs
 from optimize_suite import (
@@ -171,6 +171,7 @@ from suite_runner import (
     filter_scenarios_by_label,
     load_suite_override_config,
     aggregate_metrics,
+    build_scenarios,
     build_suite_metrics_payload,
 )
 from metrics_schema import MetricAggregationError, build_scenario_metrics, flatten_metric_stats
@@ -183,6 +184,7 @@ from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get
 from optimization.backend_shared import cancel_pending_async_results, stream_async_results
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
+from optimization.starting_config_selection import select_starting_config_artifacts
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
     get_optimization_key_paths,
@@ -1605,6 +1607,7 @@ class Evaluator:
         analyses_combined,
         *,
         limit_metrics=None,
+        scenario_limit_metrics: Mapping[str, Mapping[str, float]] | None = None,
         objective_values: Sequence[float] | None = None,
         return_raw_objectives: bool = False,
     ):
@@ -1617,12 +1620,33 @@ class Evaluator:
         per_objective_modifier = [0.0] * len(self.scoring_specs)
         global_modifier = 0.0
         for check in self.limit_checks:
-            val = resolve_metric_value(limit_metrics, check["metric_key"])
+            scenario = check.get("scenario")
+            check_metrics = limit_metrics
+            if scenario is not None:
+                if scenario_limit_metrics is None:
+                    raise ValueError(
+                        f"scenario-specific optimizer limit on {check['metric']!r} "
+                        f"requires suite mode (scenario {scenario!r})"
+                    )
+                check_metrics = scenario_limit_metrics.get(scenario)
+                if check_metrics is None:
+                    available = ", ".join(sorted(scenario_limit_metrics)) or "<none>"
+                    raise ValueError(
+                        f"optimizer limit on {check['metric']!r} selects unknown scenario "
+                        f"{scenario!r}; available labels: {available}"
+                    )
+            val = resolve_metric_value(check_metrics, check["metric_key"])
             if val is None:
+                basis = (
+                    f"scenario {scenario!r}"
+                    if scenario is not None
+                    else f"suite stat {check['stat']!r}"
+                )
                 raise ValueError(
                     "missing optimizer limit metric "
-                    f"{check['metric_key']!r} for limit on {check['metric']!r}; "
-                    f"available metrics: {_format_available_metric_keys(limit_metrics)}"
+                    f"{check['metric_key']!r} for limit on {check['metric']!r} "
+                    f"from {basis}; "
+                    f"available metrics: {_format_available_metric_keys(check_metrics)}"
                 )
             penalty = compute_limit_violation(check, val)
             if not penalty:
@@ -1722,6 +1746,14 @@ class SuiteEvaluator:
                     f"available labels: {', '.join(labels)}"
                 )
         self.base.build_limit_checks(self.aggregate_cfg)
+        for check in self.base.limit_checks:
+            scenario = check.get("scenario")
+            if scenario is not None and scenario not in labels:
+                raise ValueError(
+                    f"optimizer limit on {check['metric']!r} selects scenario "
+                    f"{scenario!r}, which is not present in backtest.scenarios; "
+                    f"available labels: {', '.join(labels)}"
+                )
         # Cache for master dataset attachments (shared across scenarios)
         self._master_attachments: Dict[str, Dict[str, Any]] = {"hlcvs": {}, "btc": {}}
         self._master_arrays: Dict[str, Dict[str, np.ndarray]] = {"hlcvs": {}, "btc": {}}
@@ -2067,6 +2099,11 @@ class SuiteEvaluator:
         required_scenario_labels = {
             basis.scenario for basis in self.objective_bases if basis.scenario is not None
         }
+        required_scenario_labels.update(
+            check["scenario"]
+            for check in self.base.limit_checks
+            if check.get("scenario") is not None
+        )
         scenario_stats_by_label = {
             result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
             for result in scenario_results
@@ -2101,6 +2138,7 @@ class SuiteEvaluator:
         objectives, total_penalty = self.base.calc_fitness(
             flat_stats,
             limit_metrics=flat_stats,
+            scenario_limit_metrics=scenario_stats_by_label,
             objective_values=objective_values,
         )
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
@@ -2188,9 +2226,8 @@ def add_extra_options(parser, *, help_all: bool):
         dest="starting_configs",
         default=None,
         help=(
-            "Start with given live configs. With --fine-tune-params, these configs are fixed-param anchors."
-            if help_all
-            else argparse.SUPPRESS
+            "Start with configs or Pareto artifacts from a JSON file or directory. "
+            "With --fine-tune-params, these configs are fixed-param anchors."
         ),
     )
     parser.add_argument(
@@ -2234,6 +2271,30 @@ def add_extra_options(parser, *, help_all: bool):
     )
 
 
+def add_starting_config_selection_options(parser) -> None:
+    parser.add_argument(
+        "--filter-starting-configs",
+        action="store_true",
+        dest="filter_starting_configs",
+        help=(
+            "Before optimization, filter metric-bearing -t/--start Pareto artifacts using "
+            "the final effective optimize limits. Stored metrics are not revalidated."
+        ),
+    )
+    parser.add_argument(
+        "--compress-starting-configs",
+        "--starting-configs-max",
+        type=int,
+        default=None,
+        metavar="N",
+        dest="starting_configs_max",
+        help=(
+            "Select at most N metric-bearing -t/--start artifacts with the same "
+            "anchors-farthest method as pareto-compress."
+        ),
+    )
+
+
 def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | None:
     raw_limits_payload = getattr(args, "optimize.limits", None)
     raw_limit_entries = list(getattr(args, "limit_entries", []) or [])
@@ -2250,6 +2311,27 @@ def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | Non
     if raw_limit_entries:
         replacement.extend(parse_limit_cli_entries(raw_limit_entries))
     return normalize_limit_entries(replacement)
+
+
+def _validate_starting_config_selection_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    filter_starting_configs = bool(getattr(args, "filter_starting_configs", False))
+    starting_configs_max = getattr(args, "starting_configs_max", None)
+    selection_requested = filter_starting_configs or starting_configs_max is not None
+    if not selection_requested:
+        return
+    if not getattr(args, "starting_configs", None):
+        parser.error(
+            "--filter-starting-configs and --compress-starting-configs require -t/--start"
+        )
+    if getattr(args, "resume", None):
+        parser.error(
+            "--filter-starting-configs and --compress-starting-configs cannot be used with --resume"
+        )
+    if starting_configs_max is not None and int(starting_configs_max) <= 0:
+        parser.error("--compress-starting-configs must be a positive integer")
 
 
 def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
@@ -2521,6 +2603,8 @@ def install_anchored_fine_tune_plan(
     config: dict,
     fine_tune_params: list[str],
     starting_configs_path: str,
+    *,
+    starting_configs_override: Sequence[dict] | None = None,
 ) -> None:
     flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params = (
         _resolve_fine_tune_key_sets(config, fine_tune_params)
@@ -2547,7 +2631,12 @@ def install_anchored_fine_tune_plan(
     }
     sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
     clamp_collector = {}
-    for raw_anchor in iter_starting_configs(starting_configs_path):
+    starting_configs = (
+        iter(starting_configs_override)
+        if starting_configs_override is not None
+        else iter_starting_configs(starting_configs_path)
+    )
+    for raw_anchor in starting_configs:
         try:
             anchor_cfg = _build_starting_seed_config(raw_anchor)
             anchor_strategy_kind = normalize_strategy_kind(
@@ -2702,6 +2791,84 @@ def iter_starting_configs(starting_configs: str):
                 yield from iter_starting_configs(entry.path)
         return
     yield from iter_extract_configs(starting_configs)
+
+
+def preselect_starting_configs(
+    starting_configs_path: str,
+    config: Mapping[str, Any],
+    *,
+    filter_by_limits: bool,
+    max_count: int | None,
+    aggregate_cfg: Mapping[str, Any] | None,
+    scenario_labels: Sequence[str] | None = None,
+) -> list[dict]:
+    optimize_cfg = config.get("optimize")
+    limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    effective_aggregate_cfg = (
+        aggregate_cfg if isinstance(aggregate_cfg, Mapping) else {"default": "mean"}
+    )
+    selection = select_starting_config_artifacts(
+        starting_configs_path,
+        limits=limits,
+        aggregate_cfg=effective_aggregate_cfg,
+        scenario_labels=scenario_labels,
+        filter_by_limits=filter_by_limits,
+        max_count=max_count,
+    )
+    current_specs = extract_objective_specs(config)
+    if (
+        selection.selected_count < selection.filtered_count
+        and current_specs != list(selection.scoring_specs)
+    ):
+        logging.warning(
+            "Stored starting-config optimize.scoring differs from this optimization run; "
+            "anchors-farthest compression used the stored objectives."
+        )
+    return [
+        _extract_starting_config(candidate.entry, source=str(candidate.path))
+        for candidate in selection.candidates
+    ]
+
+
+def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | None:
+    if not suite_cfg.get("enabled"):
+        return None
+    scenarios, _aggregate_cfg = build_scenarios(dict(suite_cfg))
+    return [scenario.label for scenario in scenarios]
+
+
+def _validate_optimizer_limit_suite_mode(
+    config: Mapping[str, Any],
+    *,
+    suite_enabled: bool,
+    scenario_labels: Sequence[str] | None = None,
+) -> None:
+    optimize_cfg = config.get("optimize")
+    limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    available_labels = (
+        {str(label).strip() for label in scenario_labels}
+        if scenario_labels is not None
+        else None
+    )
+    for entry in limits:
+        if not isinstance(entry, Mapping) or not bool(entry.get("enabled", True)):
+            continue
+        scenario = entry.get("scenario")
+        if scenario is None:
+            continue
+        metric = str(entry.get("metric", "")).strip() or "<missing>"
+        normalized_scenario = str(scenario).strip()
+        if not suite_enabled:
+            raise ValueError(
+                f"scenario-specific optimizer limit on {metric!r} requires suite mode "
+                f"(scenario {scenario!r}); enable the optimizer suite or remove the scenario selector."
+            )
+        if available_labels is not None and normalized_scenario not in available_labels:
+            available = ", ".join(sorted(available_labels)) or "<none>"
+            raise ValueError(
+                f"optimizer limit on {metric!r} selects unknown scenario "
+                f"{normalized_scenario!r}; available labels: {available}"
+            )
 
 
 def iter_anchored_fine_tune_seed_configs(config: dict):
@@ -2868,7 +3035,8 @@ async def main():
         help=(
             "Repeatable optimize limit override. Example: "
             "\"drawdown_worst > 0.35\" or "
-            "\"loss_profit_ratio outside_range [0.05,0.7]\""
+            "\"drawdown_worst_strategy_eq <= 0.5 scenario=base\". "
+            "Aggregate limits may use stat=min|max|mean|std|median."
         ),
     )
     optimize_common_group.add_argument(
@@ -2877,10 +3045,12 @@ async def main():
         dest="clear_limits",
         help="Replace optimize.limits with an empty list before applying any --limits/--limit entries.",
     )
+    add_starting_config_selection_options(optimize_common_group)
     add_extra_options(group_map["Advanced Overrides"], help_all=help_all)
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    _validate_starting_config_selection_args(parser, args)
     polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
     polish_bounds_mode = getattr(args, "polish_bounds_mode", "clamp")
     if polish_bounds_pct is not None and (
@@ -2918,6 +3088,54 @@ async def main():
         TEMPLATE_CONFIG_MODE,
         ",".join(objective_metric_names(config)),
     )
+    suite_override = None
+    if args.suite_config:
+        logging.info("loading suite config %s", args.suite_config)
+        suite_override = load_suite_override_config(args.suite_config)
+        if _suite_config_implies_suite_mode(args):
+            recursive_config_update(
+                config, "backtest.suite_enabled", True, verbose=True
+            )
+    suite_cfg = extract_suite_config(config, suite_override)
+
+    # Handle --scenarios filter (implies --suite y)
+    scenario_filter = getattr(args, "scenarios", None)
+    if scenario_filter:
+        labels = [
+            label.strip() for label in scenario_filter.split(",") if label.strip()
+        ]
+        suite_cfg["scenarios"] = filter_scenarios_by_label(
+            suite_cfg.get("scenarios", []), labels
+        )
+        suite_cfg["enabled"] = True  # --scenarios implies suite mode
+        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
+
+    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
+    if args.suite is not None:
+        recursive_config_update(
+            config, "backtest.suite_enabled", bool(args.suite), verbose=True
+        )
+        suite_cfg["enabled"] = bool(args.suite)
+
+    active_suite_scenario_labels = _active_suite_scenario_labels(suite_cfg)
+    _validate_optimizer_limit_suite_mode(
+        config,
+        suite_enabled=bool(suite_cfg.get("enabled")),
+        scenario_labels=active_suite_scenario_labels,
+    )
+
+    preselected_starting_configs = None
+    if args.filter_starting_configs or args.starting_configs_max is not None:
+        preselected_starting_configs = preselect_starting_configs(
+            args.starting_configs,
+            config,
+            filter_by_limits=bool(args.filter_starting_configs),
+            max_count=args.starting_configs_max,
+            aggregate_cfg=(
+                suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
+            ),
+            scenario_labels=active_suite_scenario_labels,
+        )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]
         if getattr(args, "fine_tune_params", "")
@@ -2931,29 +3149,14 @@ async def main():
     if polish_bounds_pct is not None:
         apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
     if fine_tune_params and args.starting_configs:
-        install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
+        install_anchored_fine_tune_plan(
+            config,
+            fine_tune_params,
+            args.starting_configs,
+            starting_configs_override=preselected_starting_configs,
+        )
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
-    suite_override = None
-    if args.suite_config:
-        logging.info("loading suite config %s", args.suite_config)
-        suite_override = load_suite_override_config(args.suite_config)
-        if _suite_config_implies_suite_mode(args):
-            recursive_config_update(config, "backtest.suite_enabled", True, verbose=True)
-    suite_cfg = extract_suite_config(config, suite_override)
-
-    # Handle --scenarios filter (implies --suite y)
-    scenario_filter = getattr(args, "scenarios", None)
-    if scenario_filter:
-        labels = [label.strip() for label in scenario_filter.split(",") if label.strip()]
-        suite_cfg["scenarios"] = filter_scenarios_by_label(suite_cfg.get("scenarios", []), labels)
-        suite_cfg["enabled"] = True  # --scenarios implies suite mode
-        logging.info("Filtered to %d scenario(s): %s", len(labels), ", ".join(labels))
-
-    # --suite CLI arg overrides config (applied after --scenarios so explicit --suite n wins)
-    if args.suite is not None:
-        recursive_config_update(config, "backtest.suite_enabled", bool(args.suite), verbose=True)
-        suite_cfg["enabled"] = bool(args.suite)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
@@ -3163,6 +3366,8 @@ async def main():
         logging.info("Selected optimizer backend: %s", backend_name)
         backend_runner = get_backend_runner(backend_name)
         starting_config_iter = iter_starting_configs
+        if preselected_starting_configs is not None:
+            starting_config_iter = lambda _path: iter(preselected_starting_configs)
         if get_anchor_plan(config) is not None:
             starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(config)
         backend_result = backend_runner(

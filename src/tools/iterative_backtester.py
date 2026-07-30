@@ -293,12 +293,20 @@ def build_limit_checks(
     scoring_index_map: Optional[Dict[str, List[int]]] = None,
 ) -> List[Dict[str, Any]]:
     normalized_limits = normalize_limit_entries(limits)
-    return expand_limit_checks(
+    checks = expand_limit_checks(
         normalized_limits,
         scoring_weights,
         penalty_weight=PENALTY_WEIGHT,
         objective_index_map=scoring_index_map,
     )
+    scenario_checks = [check for check in checks if check.get("scenario") is not None]
+    if scenario_checks:
+        labels = sorted({check["scenario"] for check in scenario_checks})
+        raise ValueError(
+            "Scenario-specific optimize limits require suite optimizer evaluation; "
+            f"iterative-backtester cannot resolve scenario label(s): {', '.join(labels)}"
+        )
+    return checks
 
 
 def resolve_metric_value(
@@ -554,6 +562,12 @@ class IterativeBacktestSession:
         configure_logging(debug=level)
         config.setdefault("logging", {})
         config["logging"]["level"] = level
+        objective_specs = extract_objective_specs(config)
+        build_limit_checks(
+            config.get("optimize", {}).get("limits", []),
+            self.scoring_weights,
+            objective_index_map(objective_specs),
+        )
         # Ensure exchanges have markets loaded and live coin lists expanded
         for ex in require_config_value(config, "backtest.exchanges"):
             await load_markets(ex, verbose=False)
