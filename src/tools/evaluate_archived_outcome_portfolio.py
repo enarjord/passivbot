@@ -10,7 +10,10 @@ import math
 from pathlib import Path
 
 from outcome.archive import OutcomeTradeArchive
-from outcome.archive_replay import build_archived_ema_anchor_replay
+from outcome.archive_replay import (
+    build_archived_ema_anchor_replay,
+    load_archived_opening_market,
+)
 from outcome.models import NormalizedOutcomeMarket, OutcomeVenue
 from outcome.orchestrator import (
     InsufficientCapitalPolicy,
@@ -41,6 +44,35 @@ def _rust_fee_formula(market: NormalizedOutcomeMarket, override: str) -> str:
         f"archived fee formula {metadata.formula!r} has no Rust translation; "
         "pass --fee-formula explicitly"
     )
+
+
+def _load_archived_fee_market(
+    archive: OutcomeTradeArchive,
+    *,
+    venue: OutcomeVenue,
+    market_id: str,
+    fee_formula: str,
+) -> NormalizedOutcomeMarket:
+    opening_market, start_ms = load_archived_opening_market(
+        archive,
+        venue=venue,
+        market_id=market_id,
+    )
+    if fee_formula == "archived":
+        later_versions = archive.load_market_metadata_observed_after(
+            venue,
+            market_id,
+            observed_after_ms=start_ms,
+        )
+        if any(
+            version.fee_metadata != opening_market.fee_metadata
+            for version in later_versions
+        ):
+            raise ValueError(
+                f"outcome market {market_id} changes archived fee metadata after "
+                "trading open; full-contract fee transitions are not supported"
+            )
+    return opening_market
 
 
 def main() -> int:
@@ -136,12 +168,12 @@ def main() -> int:
         for mode in modes:
             replays = []
             for market_id in args.market_id:
-                market_versions = archive.load_market_metadata(venue, market_id)
-                if not market_versions:
-                    raise ValueError(
-                        f"outcome archive has no market metadata for {market_id}"
-                    )
-                archived_market = market_versions[0]
+                archived_market = _load_archived_fee_market(
+                    archive,
+                    venue=venue,
+                    market_id=market_id,
+                    fee_formula=args.fee_formula,
+                )
                 payout_unit = archived_market.payout_unit
                 fee_schedule = {
                     "maker_rate": args.maker_rate,

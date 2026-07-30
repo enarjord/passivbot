@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import time
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from outcome.adapters import hyperliquid
 from outcome.models import (
@@ -48,6 +48,15 @@ class OutcomeSettlementRecoveryUnavailable(RuntimeError):
 
 class OutcomeActionRejected(RuntimeError):
     pass
+
+
+class OutcomeCreateDeadlineExpired(RuntimeError):
+    def __init__(self, *, observed_at_ms: int, deadline_ms: int):
+        self.observed_at_ms = observed_at_ms
+        self.deadline_ms = deadline_ms
+        super().__init__(
+            f"HIP-4 create deadline {deadline_ms} expired at {observed_at_ms}"
+        )
 
 
 class HyperliquidOutcomeLifecycleState(str, Enum):
@@ -539,10 +548,14 @@ class HyperliquidOutcomeLiveClient:
         qty: float | str,
         client_order_id: str | None = None,
         post_only: bool = True,
+        create_deadline_ms: int | None = None,
+        wall_clock_ms: Callable[[], int] | None = None,
     ) -> HyperliquidOutcomeMutationResult:
         self._require_mutations_enabled()
         if not post_only:
             raise ValueError("initial HIP-4 live integration only permits post-only orders")
+        if create_deadline_ms is not None and create_deadline_ms < 0:
+            raise ValueError("HIP-4 create deadline must be non-negative")
         action = hyperliquid.build_limit_order_action(
             market,
             outcome=outcome,
@@ -582,6 +595,14 @@ class HyperliquidOutcomeLiveClient:
                 )
             if book.bids and price <= book.bids[0].native_price:
                 raise ValueError("post-only HIP-4 sell would cross the current bid")
+        if create_deadline_ms is not None:
+            clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
+            observed_at_ms = int(clock())
+            if observed_at_ms > create_deadline_ms:
+                raise OutcomeCreateDeadlineExpired(
+                    observed_at_ms=observed_at_ms,
+                    deadline_ms=create_deadline_ms,
+                )
         response = await self._send_action(action)
         return _parse_order_response(response)
 

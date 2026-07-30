@@ -11,11 +11,15 @@ from outcome.adapters import hyperliquid, polymarket
 from outcome.archive import OutcomeTradeArchive
 from outcome.candles import VerifiedCoverage
 from outcome.models import (
+    MarketLifecycle,
     OutcomeFeeMetadata,
     OutcomePriceGridChange,
     OutcomePriceGridMetadata,
 )
-from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
+from tools.evaluate_archived_outcome_portfolio import (
+    _load_archived_fee_market,
+    _rust_fee_formula,
+)
 from tools.evaluate_hip4_outcome_window import (
     _add_constraint_arguments,
     _add_window_phase_arguments,
@@ -71,6 +75,59 @@ def test_archived_fee_formula_fails_closed_when_not_representable():
     with pytest.raises(ValueError, match="no Rust translation"):
         _rust_fee_formula(hip4, "archived")
     assert _rust_fee_formula(hip4, "notional") == "notional"
+
+
+def test_archived_fee_formula_uses_opening_state_and_rejects_later_transition(
+    tmp_path,
+):
+    discovered = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    lifecycle = MarketLifecycle(
+        trading_open_time_ms=2_000,
+        trading_close_time_ms=5_000,
+        scheduled_event_time_ms=5_000,
+    )
+    fee_free = replace(
+        discovered,
+        lifecycle=lifecycle,
+        fee_metadata=OutcomeFeeMetadata(
+            formula="venue_reported_zero",
+            maker_rate=0.0,
+            taker_rate=0.0,
+        ),
+    )
+    opening = replace(discovered, lifecycle=lifecycle)
+    archive = OutcomeTradeArchive(tmp_path / "fee-history.sqlite")
+    archive.append_market_metadata(
+        fee_free,
+        observed_at_ms=500,
+        observation_source="discovery",
+    )
+    archive.append_market_metadata(
+        opening,
+        observed_at_ms=1_500,
+        observation_source="opening",
+    )
+
+    selected = _load_archived_fee_market(
+        archive,
+        venue=opening.venue,
+        market_id=opening.market_id,
+        fee_formula="archived",
+    )
+    assert selected.fee_metadata == opening.fee_metadata
+
+    archive.append_market_metadata(
+        fee_free,
+        observed_at_ms=2_500,
+        observation_source="fee_transition",
+    )
+    with pytest.raises(ValueError, match="fee transitions are not supported"):
+        _load_archived_fee_market(
+            archive,
+            venue=opening.venue,
+            market_id=opening.market_id,
+            fee_formula="archived",
+        )
 
 
 def test_polymarket_window_uses_start_metadata_and_archived_grid_changes(tmp_path):
@@ -138,6 +195,7 @@ def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
         end_ms=5_000,
         qty_step=1.0,
         min_order_qty=1.0,
+        min_order_notional=10.0,
     )
 
     assert spec["trading_opens_ms"] == 2_000
@@ -196,8 +254,16 @@ def test_hip4_window_requires_explicit_quantity_constraint_assumptions():
     with pytest.raises(SystemExit):
         parser.parse_args([])
     configured = parser.parse_args(
-        ["--qty-step", "1", "--min-order-qty", "10"]
+        [
+            "--qty-step",
+            "1",
+            "--min-order-qty",
+            "10",
+            "--min-order-notional",
+            "5",
+        ]
     )
 
     assert configured.qty_step == 1.0
     assert configured.min_order_qty == 10.0
+    assert configured.min_order_notional == 5.0

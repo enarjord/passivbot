@@ -250,7 +250,9 @@ Replay consolidates lifecycle observations without replacing the initial trading
 particular, an initial live Polymarket observation commonly has no `closedTime`; a later closed
 observation supplies the authoritative close. Full-contract replay fails closed if quantity-step
 or minimum-order constraints change because the initial simulator does not yet model those
-constraint transitions.
+constraint transitions. When archived fee metadata selects the replay formula, the opening state
+is the latest observation valid at trading open and any later fee-metadata transition fails closed
+until time-varying fees are modeled.
 
 Preserve raw venue payloads or lossless fixtures at the adapter boundary when practical. Derive
 one-second bars reproducibly from actual fills, never from bids, asks, midpoints, marks, or reported
@@ -303,6 +305,8 @@ entire batch back, so overlapping coverage can never expose rows from a failed p
 Because current Polymarket market-channel trades lack authoritative event identity, bounded live
 collections archive their fills and coverage atomically and reject any overlap with already
 verified coverage. They never deduplicate those fills by transaction hash or payload similarity.
+If an owned stream reconnects, discard every deferred fill and rejected-fill observation from the
+abandoned session before collecting the replacement window.
 
 Polymarket collateral identity is versioned transport metadata, not a permanent `USDC` constant.
 Gamma currently omits it on some market rows, and the venue is migrating from USDC.e to pUSD.
@@ -342,8 +346,8 @@ market-specific order minima. Keep quantity step, minimum quantity, and minimum 
 unavailable unless an independently authoritative source supplies them. Live planning and order
 construction route to observable cancel-only handling while any required constraint is
 unavailable; generic spot assumptions are not HIP-4 outcome constraints. The bounded HIP-4
-evaluation tool requires explicit quantity-step and minimum-quantity inputs and reports them as
-experiment assumptions; they do not become live venue metadata.
+evaluation tool requires explicit quantity-step, minimum-quantity, and minimum-notional inputs and
+reports them as experiment assumptions; they do not become live venue metadata.
 
 HIP-4 lifecycle reconciliation first checks settlement rows present in the current `userFills`
 snapshot. After scheduled expiry it also queries `userFillsByTime` from the event timestamp
@@ -496,9 +500,10 @@ unavailable. Reconciliation targets an empty managed-order set for the affected 
 cancel Passivbot-namespaced quotes and preserve all unmanaged user orders. A missing fill is never
 converted into a fabricated candle merely to keep existing quotes alive.
 
-Signal freshness is checked again at the mutation boundary and immediately before every create.
-If the signal expires while cancellation or authoritative refresh is in progress, creation stops
-and every managed quote for that market is driven to verified absence.
+Signal freshness is checked again at the mutation boundary, before every create, and after that
+create's lifecycle/account/book preflight immediately before the private action is sent. If the
+signal expires while cancellation or authoritative refresh is in progress, creation stops and
+every managed quote for that market is driven to verified absence.
 
 Live split, merge, redeem, and order writes are distinct authenticated mutations. Each requires an
 explicitly supported adapter path, reconciliation, idempotency or authoritative confirmation, and

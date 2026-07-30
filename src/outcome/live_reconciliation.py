@@ -10,6 +10,7 @@ from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
     HyperliquidOutcomeLiveClient,
     HyperliquidOutcomeMutationResult,
+    OutcomeCreateDeadlineExpired,
 )
 from outcome.live_planning import OutcomeLivePlan, OutcomeLiveOrderIntent
 from outcome.models import NormalizedOutcomeMarket, OutcomeOpenOrder, OutcomeSide
@@ -446,8 +447,24 @@ async def execute_hip4_order_reconciliation(
                     qty=intent.qty,
                     client_order_id=creation.client_order_id,
                     post_only=True,
+                    create_deadline_ms=create_deadline_ms,
+                    wall_clock_ms=clock,
                 )
             )
+    except OutcomeCreateDeadlineExpired as exc:
+        cleanup_cancelled, verified = await _cancel_all_managed_orders(
+            client,
+            market,
+        )
+        return OutcomeOrderReconciliationResult(
+            cancelled=tuple(cancelled) + cleanup_cancelled,
+            created=tuple(created),
+            final_snapshot=verified,
+            create_skipped_reason=(
+                OutcomeOrderMutationSkippedReason.STALE_VERIFIED_SIGNAL
+            ),
+            create_skipped_at_ms=exc.observed_at_ms,
+        )
     except Exception:
         if not attempted_creates:
             raise

@@ -127,17 +127,13 @@ def consolidated_archived_market(
     return replace(first, lifecycle=lifecycle)
 
 
-def build_archived_ema_anchor_replay(
+def load_archived_opening_market(
     archive: OutcomeTradeArchive,
     *,
     venue: OutcomeVenue,
     market_id: str,
-    fee_schedule: Mapping[str, Any],
-    requested_collateral: float,
-    strategy_params: Mapping[str, Any],
-    qty_step: float | None = None,
-) -> ArchivedOutcomeReplay:
-    """Build one authoritative full-contract replay from retained metadata and fills."""
+) -> tuple[NormalizedOutcomeMarket, int]:
+    """Load the latest retained market state observed no later than trading open."""
 
     market_versions = archive.load_market_metadata(venue, market_id)
     if not market_versions:
@@ -162,6 +158,26 @@ def build_archived_ema_anchor_replay(
             f"outcome archive has no market metadata observed by trading open "
             f"for {market_id}"
         )
+    return opening_market, start_ms
+
+
+def build_archived_ema_anchor_replay(
+    archive: OutcomeTradeArchive,
+    *,
+    venue: OutcomeVenue,
+    market_id: str,
+    fee_schedule: Mapping[str, Any],
+    requested_collateral: float,
+    strategy_params: Mapping[str, Any],
+    qty_step: float | None = None,
+) -> ArchivedOutcomeReplay:
+    """Build one authoritative full-contract replay from retained metadata and fills."""
+
+    opening_market, start_ms = load_archived_opening_market(
+        archive,
+        venue=venue,
+        market_id=market_id,
+    )
     market = consolidated_archived_market(
         [
             opening_market,

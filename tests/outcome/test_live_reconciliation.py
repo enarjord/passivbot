@@ -11,6 +11,7 @@ from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
     HyperliquidOutcomeFeeRates,
     HyperliquidOutcomeMutationResult,
+    OutcomeCreateDeadlineExpired,
 )
 from outcome.live_planning import OutcomeLiveOrderIntent, OutcomeLivePlan
 from outcome.live_reconciliation import (
@@ -223,6 +224,8 @@ class FakeClient:
         qty,
         client_order_id,
         post_only,
+        create_deadline_ms=None,
+        wall_clock_ms=None,
     ):
         self.created.append(
             (market.market_id, outcome, side, native_price, qty, client_order_id, post_only)
@@ -295,6 +298,35 @@ async def test_executor_cancels_to_empty_if_signal_expires_after_cancellation():
     assert result.final_snapshot.open_orders == ()
     assert client.cancelled == [("913", OutcomeSide.YES, 2, stale_cloid)]
     assert client.created == []
+
+
+@pytest.mark.asyncio
+async def test_executor_cancels_to_empty_if_create_preflight_crosses_deadline():
+    desired = replace(plan(), intents=(plan().intents[0],))
+    reconciliation = reconcile_outcome_orders(market(), desired, snapshot())
+
+    class DeadlineClient(FakeClient):
+        async def submit_limit_order(self, *args, **kwargs):
+            raise OutcomeCreateDeadlineExpired(
+                observed_at_ms=8_001,
+                deadline_ms=8_000,
+            )
+
+    client = DeadlineClient(snapshot(), snapshot())
+    result = await execute_hip4_order_reconciliation(
+        client,
+        market(),
+        reconciliation,
+        create_deadline_ms=8_000,
+        wall_clock_ms=lambda: 4_000,
+    )
+
+    assert result.create_skipped_reason is (
+        OutcomeOrderMutationSkippedReason.STALE_VERIFIED_SIGNAL
+    )
+    assert result.create_skipped_at_ms == 8_001
+    assert result.final_snapshot.open_orders == ()
+    assert result.created == ()
 
 
 @pytest.mark.asyncio

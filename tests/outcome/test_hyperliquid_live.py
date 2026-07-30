@@ -10,6 +10,7 @@ from outcome.adapters import hyperliquid
 from outcome.hyperliquid_live import (
     HyperliquidOutcomeLifecycleState,
     HyperliquidOutcomeLiveClient,
+    OutcomeCreateDeadlineExpired,
     OutcomeMutationDisabled,
 )
 from outcome.models import OutcomeOrderSide, OutcomeSide
@@ -548,6 +549,34 @@ async def test_enabled_post_only_order_preflights_state_book_and_current_market(
     assert request["action"]["orders"][0]["a"] == 100009130
     assert request["action"]["orders"][0]["t"] == {"limit": {"tif": "Alo"}}
     assert request["nonce"] == 1784900000300
+
+
+@pytest.mark.asyncio
+async def test_order_rechecks_create_deadline_after_public_preflight(monkeypatch):
+    payload, market = market_fixture()
+    session = FakeSession(payload)
+    client = HyperliquidOutcomeLiveClient(
+        session,
+        account_address="0xaccount",
+        allow_mutations=True,
+    )
+    monkeypatch.setattr("outcome.hyperliquid_live.time.time", lambda: 1784900000.0)
+
+    with pytest.raises(OutcomeCreateDeadlineExpired) as exc_info:
+        await client.submit_limit_order(
+            market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.BUY,
+            native_price="0.4",
+            qty="25",
+            create_deadline_ms=8_000,
+            wall_clock_ms=lambda: 8_001,
+        )
+
+    assert exc_info.value.observed_at_ms == 8_001
+    assert exc_info.value.deadline_ms == 8_000
+    assert session.public_requests
+    assert session.private_requests == []
 
 
 @pytest.mark.asyncio

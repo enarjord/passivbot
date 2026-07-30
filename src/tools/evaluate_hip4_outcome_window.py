@@ -77,11 +77,13 @@ def _window_market_spec(
     end_ms: int,
     qty_step: float,
     min_order_qty: float,
+    min_order_notional: float,
 ) -> dict:
     market_spec = normalized_market_to_rust_spec(
         market,
         qty_step=qty_step,
         min_order_qty=min_order_qty,
+        min_order_notional=min_order_notional,
     )
     # This evaluator covers only the requested sample, so lifecycle gates and
     # inventory-time metrics must use the same synthetic window boundaries.
@@ -123,6 +125,15 @@ def _add_constraint_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         type=float,
         help="Explicit authoritative minimum quantity or clearly labeled experiment assumption",
+    )
+    parser.add_argument(
+        "--min-order-notional",
+        required=True,
+        type=float,
+        help=(
+            "Explicit authoritative minimum quote notional or clearly labeled "
+            "experiment assumption"
+        ),
     )
 
 
@@ -195,8 +206,13 @@ async def _main() -> int:
         or args.qty_step <= 0.0
         or not math.isfinite(args.min_order_qty)
         or args.min_order_qty <= 0.0
+        or not math.isfinite(args.min_order_notional)
+        or args.min_order_notional < 0.0
     ):
-        parser.error("quantity constraints must be finite and positive")
+        parser.error(
+            "quantity constraints must be finite and positive, and minimum "
+            "notional must be finite and non-negative"
+        )
 
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
@@ -261,6 +277,7 @@ async def _main() -> int:
             end_ms=args.end_ms,
             qty_step=args.qty_step,
             min_order_qty=args.min_order_qty,
+            min_order_notional=args.min_order_notional,
         ),
         trades=trades,
         verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
@@ -301,6 +318,7 @@ async def _main() -> int:
                     "settlement_rate": args.settlement_rate,
                     "qty_step": args.qty_step,
                     "min_order_qty": args.min_order_qty,
+                    "min_order_notional": args.min_order_notional,
                     "settlement_scenarios": [0.0, 1.0],
                 },
                 "strategy_params": strategy_params,

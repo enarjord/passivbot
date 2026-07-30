@@ -53,6 +53,7 @@ def normalized_market_to_rust_spec(
     *,
     qty_step: float | None = None,
     min_order_qty: float | None = None,
+    min_order_notional: float | None = None,
 ) -> dict[str, Any]:
     """Translate exchange-neutral metadata into the authoritative Rust market contract."""
 
@@ -69,6 +70,11 @@ def normalized_market_to_rust_spec(
     effective_qty_step = market.qty_step if qty_step is None else qty_step
     effective_min_order_qty = (
         market.min_order_qty if min_order_qty is None else min_order_qty
+    )
+    effective_min_order_notional = (
+        market.min_order_notional
+        if min_order_notional is None
+        else min_order_notional
     )
     if (
         effective_qty_step is None
@@ -96,6 +102,27 @@ def normalized_market_to_rust_spec(
         )
     ):
         raise ValueError("explicit outcome min_order_qty disagrees with venue metadata")
+    if (
+        effective_min_order_notional is not None
+        and (
+            not math.isfinite(effective_min_order_notional)
+            or effective_min_order_notional < 0.0
+        )
+    ):
+        raise ValueError("outcome market minimum notional must be finite and non-negative")
+    if (
+        market.min_order_notional is not None
+        and min_order_notional is not None
+        and not math.isclose(
+            market.min_order_notional,
+            min_order_notional,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    ):
+        raise ValueError(
+            "explicit outcome min_order_notional disagrees with venue metadata"
+        )
     price_grid: dict[str, Any] = {"kind": market.price_grid.kind}
     if market.price_grid.kind == "fixed_step":
         price_grid["step"] = market.price_grid.fixed_step
@@ -120,7 +147,7 @@ def normalized_market_to_rust_spec(
         "price_grid": price_grid,
         "qty_step": effective_qty_step,
         "min_qty": effective_min_order_qty,
-        "min_notional": market.min_order_notional or 0.0,
+        "min_notional": effective_min_order_notional or 0.0,
         "trading_opens_ms": opens_ms,
         "order_entry_opens_ms": order_entry_opens_ms,
         "trading_closes_ms": closes_ms,

@@ -306,3 +306,85 @@ async def test_polymarket_identityless_collector_rejects_overlapping_coverage(
             end_ms=10_000,
         )
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_polymarket_reconnect_discards_abandoned_session_fills(
+    tmp_path,
+    monkeypatch,
+):
+    market = polymarket_market()
+    archive = OutcomeTradeArchive(tmp_path / "reconnect.sqlite")
+    sessions = iter(
+        (
+            (
+                NormalizedOutcomeTrade(
+                    venue=market.venue,
+                    market_id=market.market_id,
+                    asset_id=market.yes_asset.asset_id,
+                    outcome=OutcomeSide.YES,
+                    native_side=OutcomeOrderSide.BUY,
+                    native_price=0.4,
+                    canonical_yes_price=0.4,
+                    qty=1.0,
+                    exchange_time_ms=1_900,
+                    received_time_ms=1_950,
+                    source_event_id=None,
+                    collector_sequence=1,
+                ),
+            ),
+            (
+                NormalizedOutcomeTrade(
+                    venue=market.venue,
+                    market_id=market.market_id,
+                    asset_id=market.yes_asset.asset_id,
+                    outcome=OutcomeSide.YES,
+                    native_side=OutcomeOrderSide.BUY,
+                    native_price=0.6,
+                    canonical_yes_price=0.6,
+                    qty=2.0,
+                    exchange_time_ms=3_900,
+                    received_time_ms=3_950,
+                    source_event_id=None,
+                    collector_sequence=1,
+                ),
+            ),
+        )
+    )
+
+    def stream_factory(markets):
+        assert markets == (market,)
+        session_trades = next(sessions)
+
+        async def stream():
+            for item in session_trades:
+                yield item
+
+        return stream()
+
+    clock_values = iter((1_000, 3_000, 3_000, 7_100, 7_100))
+    monkeypatch.setattr(
+        "outcome.live_data.stream_polymarket_public_trades",
+        stream_factory,
+    )
+
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=3,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: next(clock_values),
+        archive=archive,
+        collector_session="reconnect",
+    )
+
+    retained = archive.load_trades(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    )
+    assert [item.native_price for item in retained] == [0.6]
+    assert window.coverage == VerifiedCoverage(4_000, 7_000)
+    assert window.candles[0].close == pytest.approx(0.6)

@@ -120,7 +120,10 @@ All notable user-facing changes will be documented in this file.
   starts from the latest metadata state valid at trading open, metadata fingerprint checks are
   serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
   tier, suite pre-aggregation converts validity indices, and active Polymarket evaluation windows
-  apply their synthetic close before Rust translation.
+  apply their synthetic close before Rust translation. Polymarket reconnects now discard
+  abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
+  archived fee selection uses opening metadata and rejects unsupported later transitions, and the
+  HIP-4 evaluator requires an explicit minimum-notional assumption alongside quantity constraints.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

@@ -186,6 +186,8 @@ async def collect_verified_outcome_signal_window(
                         "outcome public trade stream ended during collection"
                     ) from exc
                 trades.clear()
+                deferred_archive_trades.clear()
+                rejected_trade_times_ms.clear()
                 first_received_ms = None
                 collection_end_ms = None
                 stream = stream_factory()
