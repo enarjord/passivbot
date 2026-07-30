@@ -310,10 +310,14 @@ RPC endpoints are transport configuration: public providers may impose archive, 
 retention limits, and any such failure must leave the interval uncovered.
 
 Direct candle construction rejects conflicting immutable fields for repeated source-event or
-source-sequence identities before deduplication. Live collectors validate delivery lag before
-archiving or deferring a fill; a rejected over-lag fill is never added to retained history, even
-when its timestamp lies outside the newly certified window. Verified coverage never extends past
-the scheduled collection deadline merely because the event loop resumes late.
+source-sequence identities before deduplication. Mirrored YES/NO records paired under one economic
+event occurrence must agree on canonical price, quantity, and exchange timestamp before one copy is
+dropped. A live websocket message decoded into multiple fills is one received batch: the collector
+processes the complete batch before checking its collection deadline and certifying coverage. Live
+collectors validate delivery lag before archiving or deferring a fill; a rejected over-lag fill is
+never added to retained history, even when its timestamp lies outside the newly certified window.
+Verified coverage never extends past the scheduled collection deadline merely because the event
+loop resumes late.
 
 A historical source batch commits its metadata observation, trades, settlement evidence, and
 verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the
@@ -509,6 +513,10 @@ Before any outcome order action, require fresh authoritative:
 Missing outcome inventory, settlement, fee, or lifecycle inputs are unavailable and fail closed.
 Do not substitute perp positions, zero balances, assumed fees, title-parsed expiry, or candle-based
 settlement.
+
+A HIP-4 collateral snapshot requires the quote balance's token identifier and exactly one matching
+`tokenToAvailableAfterMaintenance` row. Missing, empty, duplicate, or non-matching maintenance
+availability is unavailable; it must not fall back to the full unheld balance.
 
 An active lifecycle may create or replace managed quotes. An expired or settled lifecycle targets
 an empty managed-order set and reports the exact state and settlement evidence, if any. Protective

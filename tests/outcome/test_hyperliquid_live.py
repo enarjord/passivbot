@@ -326,6 +326,40 @@ async def test_account_snapshot_keeps_outcome_state_separate_and_surfaces_unknow
     assert snapshot.unknown_outcome_fill_coins == ("#9990",)
 
 
+@pytest.mark.parametrize(
+    "maintenance",
+    [
+        None,
+        [],
+        [[1, "90.0"]],
+        [[0, "90.0"], [0, "80.0"]],
+    ],
+    ids=[
+        "field-absent",
+        "empty-array",
+        "quote-token-omitted",
+        "quote-token-duplicated",
+    ],
+)
+def test_collateral_rejects_missing_quote_maintenance_availability(maintenance):
+    state = spot_state()
+    if maintenance is None:
+        del state["tokenToAvailableAfterMaintenance"]
+    else:
+        state["tokenToAvailableAfterMaintenance"] = maintenance
+
+    with pytest.raises(ValueError, match="maintenance availability"):
+        hyperliquid.normalize_collateral_balance(state, quote_asset="USDC")
+
+
+def test_collateral_rejects_quote_balance_without_token_identifier():
+    state = spot_state()
+    del state["balances"][0]["token"]
+
+    with pytest.raises(ValueError, match="quote balance must contain a token identifier"):
+        hyperliquid.normalize_collateral_balance(state, quote_asset="USDC")
+
+
 @pytest.mark.asyncio
 async def test_account_snapshot_timestamp_is_conservative_across_concurrent_reads(
     monkeypatch,

@@ -72,7 +72,10 @@ def _deduplicate_economic_events(
         tuple[str, ...],
         dict[OutcomeSide, int],
     ] = defaultdict(lambda: defaultdict(int))
-    seen_occurrences: set[tuple[tuple[str, ...], int]] = set()
+    seen_occurrences: dict[
+        tuple[tuple[str, ...], int],
+        tuple[float, float, int],
+    ] = {}
     economic: list[tuple[int, NormalizedOutcomeTrade]] = []
     for item in retained:
         trade = item[1]
@@ -87,8 +90,22 @@ def _deduplicate_economic_events(
             side_occurrences[key][trade.outcome] += 1
             occurrence_key = (key, occurrence)
             if occurrence_key in seen_occurrences:
+                economic_fields = (
+                    trade.canonical_yes_price,
+                    trade.qty,
+                    trade.exchange_time_ms,
+                )
+                if seen_occurrences[occurrence_key] != economic_fields:
+                    raise ValueError(
+                        "conflicting mirrored outcome trade evidence for one "
+                        "economic event occurrence"
+                    )
                 continue
-            seen_occurrences.add(occurrence_key)
+            seen_occurrences[occurrence_key] = (
+                trade.canonical_yes_price,
+                trade.qty,
+                trade.exchange_time_ms,
+            )
         economic.append(item)
     return economic
 

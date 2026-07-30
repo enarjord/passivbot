@@ -38,9 +38,9 @@ from outcome.live_reconciliation import (
 )
 from outcome.models import (
     NormalizedOutcomeMarket,
-    NormalizedOutcomeTrade,
     OutcomeSignalCandle1s,
 )
+from outcome.public_streams import OutcomeTradeStreamItem
 
 
 class OutcomePlanningUnavailableReason(str, Enum):
@@ -316,7 +316,7 @@ async def run_hip4_outcome_collected_cycle(
     execute: bool = False,
     now_ms: int | None = None,
     wall_clock_ms: Callable[[], int] | None = None,
-    trade_stream: AsyncIterator[NormalizedOutcomeTrade] | None = None,
+    trade_stream: AsyncIterator[OutcomeTradeStreamItem] | None = None,
 ) -> HyperliquidOutcomeCollectedCycle:
     """Collect a verified HIP-4 signal and reconcile, or cancel managed quotes on silence."""
 

@@ -19,6 +19,9 @@ from outcome.models import (
 HYPERLIQUID_PUBLIC_WS_URL = "wss://api.hyperliquid.xyz/ws"
 POLYMARKET_PUBLIC_MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
+OutcomeTradeBatch = tuple[NormalizedOutcomeTrade, ...]
+OutcomeTradeStreamItem = NormalizedOutcomeTrade | OutcomeTradeBatch
+
 
 class _HyperliquidSubscriptionGate:
     """Suppress data until every requested Hyperliquid subscription is acknowledged."""
@@ -261,8 +264,8 @@ async def stream_hyperliquid_public_trades(
     markets: Iterable[NormalizedOutcomeMarket],
     *,
     ws_url: str = HYPERLIQUID_PUBLIC_WS_URL,
-) -> AsyncIterator[NormalizedOutcomeTrade]:
-    """Yield one connected public session; caller owns reconnect and coverage boundaries."""
+) -> AsyncIterator[OutcomeTradeBatch]:
+    """Yield decoded websocket trade batches; caller owns reconnect and coverage boundaries."""
 
     import aiohttp
 
@@ -294,14 +297,17 @@ async def stream_hyperliquid_public_trades(
                         raise ValueError("Hyperliquid websocket message must be an object")
                     if not subscription_gate.allows(payload):
                         continue
-                    for trade in decode_hyperliquid_ws_message(
-                        payload,
-                        market_list,
-                        received_time_ms=received_time_ms,
-                        collector_sequence_start=collector_sequence,
-                    ):
-                        yield trade
-                        collector_sequence += 1
+                    batch = tuple(
+                        decode_hyperliquid_ws_message(
+                            payload,
+                            market_list,
+                            received_time_ms=received_time_ms,
+                            collector_sequence_start=collector_sequence,
+                        )
+                    )
+                    if batch:
+                        collector_sequence += len(batch)
+                        yield batch
                 elif event.type in {
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -360,8 +366,8 @@ async def stream_polymarket_public_trades(
     markets: Iterable[NormalizedOutcomeMarket],
     *,
     ws_url: str = POLYMARKET_PUBLIC_MARKET_WS_URL,
-) -> AsyncIterator[NormalizedOutcomeTrade]:
-    """Yield one connected public session; caller owns reconnect and coverage boundaries."""
+) -> AsyncIterator[OutcomeTradeBatch]:
+    """Yield decoded websocket trade batches; caller owns reconnect and coverage boundaries."""
 
     import aiohttp
 
@@ -395,14 +401,17 @@ async def stream_polymarket_public_trades(
                         payload = json.loads(event.data)
                         if not subscription_gate.allows(payload):
                             continue
-                        for trade in decode_polymarket_ws_message(
-                            payload,
-                            market_list,
-                            received_time_ms=received_time_ms,
-                            collector_sequence_start=collector_sequence,
-                        ):
-                            yield trade
-                            collector_sequence += 1
+                        batch = tuple(
+                            decode_polymarket_ws_message(
+                                payload,
+                                market_list,
+                                received_time_ms=received_time_ms,
+                                collector_sequence_start=collector_sequence,
+                            )
+                        )
+                        if batch:
+                            collector_sequence += len(batch)
+                            yield batch
                     elif event.type in {
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,

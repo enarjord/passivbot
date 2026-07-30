@@ -336,6 +336,54 @@ async def test_collector_does_not_extend_coverage_after_late_event_loop_resume()
 
 
 @pytest.mark.asyncio
+async def test_collector_drains_received_trade_batch_before_deadline():
+    market = polymarket_market()
+    batch = tuple(
+        NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=price,
+            canonical_yes_price=price,
+            qty=qty,
+            exchange_time_ms=exchange_time_ms,
+            received_time_ms=2_950,
+            source_event_id=event_id,
+            collector_sequence=sequence,
+        )
+        for sequence, (exchange_time_ms, price, qty, event_id) in enumerate(
+            (
+                (2_900, 0.4, 1.0, "batch-seed"),
+                (3_000, 0.6, 2.0, "batch-in-window"),
+            ),
+            start=1,
+        )
+    )
+
+    async def stream():
+        yield batch
+
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=1,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: 4_100,
+        trade_stream=stream(),
+    )
+
+    assert window.coverage == VerifiedCoverage(3_000, 4_000)
+    assert [trade.source_event_id for trade in window.trades] == [
+        "batch-seed",
+        "batch-in-window",
+    ]
+    assert window.candles[0].close == pytest.approx(0.6)
+    assert window.candles[0].volume == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
 async def test_polymarket_identityless_collector_rejects_overlapping_coverage(
     tmp_path,
 ):

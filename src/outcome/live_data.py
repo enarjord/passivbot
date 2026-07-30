@@ -17,6 +17,7 @@ from outcome.models import (
     OutcomeVenue,
 )
 from outcome.public_streams import (
+    OutcomeTradeStreamItem,
     stream_hyperliquid_public_trades,
     stream_polymarket_public_trades,
 )
@@ -109,7 +110,7 @@ async def collect_verified_outcome_signal_window(
     delivery_lag_ms: int = 1_000,
     max_live_trade_lag_ms: int = 2_000,
     wall_clock_ms: Callable[[], int] | None = None,
-    trade_stream: AsyncIterator[NormalizedOutcomeTrade] | None = None,
+    trade_stream: AsyncIterator[OutcomeTradeStreamItem] | None = None,
     archive: OutcomeTradeArchive | None = None,
     collector_session: str | None = None,
 ) -> VerifiedOutcomeSignalWindow:
@@ -173,7 +174,10 @@ async def collect_verified_outcome_signal_window(
                     max(0.001, (collection_end_ms - clock()) / 1_000),
                 )
             try:
-                trade = await asyncio.wait_for(anext(stream), timeout=wait_seconds)
+                stream_item = await asyncio.wait_for(
+                    anext(stream),
+                    timeout=wait_seconds,
+                )
             except asyncio.TimeoutError:
                 if first_received_ms is None:
                     raise OutcomeNoPublicFill(
@@ -196,37 +200,61 @@ async def collect_verified_outcome_signal_window(
                 raise OutcomeInvalidPublicSignal(
                     "outcome public trade stream returned malformed data"
                 ) from exc
-            if trade.market_id != market.market_id:
+            batch = (
+                (stream_item,)
+                if isinstance(stream_item, NormalizedOutcomeTrade)
+                else stream_item
+            )
+            if (
+                not isinstance(batch, tuple)
+                or not batch
+                or not all(isinstance(trade, NormalizedOutcomeTrade) for trade in batch)
+            ):
                 raise OutcomeInvalidPublicSignal(
-                    "outcome public trade stream returned a different market"
+                    "outcome public trade stream returned a malformed trade batch"
                 )
-            if trade.collector_sequence is None:
+            if len({trade.received_time_ms for trade in batch}) != 1:
                 raise OutcomeInvalidPublicSignal(
-                    "outcome live trade omitted collector chronology"
+                    "outcome public trade batch does not share one receive timestamp"
                 )
-            delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
-            if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
-                rejected_trade_times_ms.append(trade.exchange_time_ms)
-                continue
-            if archive is not None:
-                if market.venue is OutcomeVenue.POLYMARKET:
-                    deferred_archive_trades.append(trade)
-                else:
-                    try:
-                        archive.append_trade(trade, collector_session=collector_session)
-                    except ValueError as exc:
-                        raise OutcomeInvalidPublicSignal(
-                            "outcome public trade conflicted with retained live evidence"
-                        ) from exc
-            trades.append(trade)
-            if first_received_ms is None:
-                first_received_ms = trade.received_time_ms
-                coverage_start_ms = ((first_received_ms + 999) // 1_000) * 1_000
-                collection_end_ms = (
-                    coverage_start_ms
-                    + min_observations * 1_000
-                    + verification_lag_ms
-                )
+            # One stream item is one already-decoded websocket message. Process every
+            # trade before checking the deadline again so certified coverage cannot
+            # omit a fill that was already received.
+            for trade in batch:
+                if trade.market_id != market.market_id:
+                    raise OutcomeInvalidPublicSignal(
+                        "outcome public trade stream returned a different market"
+                    )
+                if trade.collector_sequence is None:
+                    raise OutcomeInvalidPublicSignal(
+                        "outcome live trade omitted collector chronology"
+                    )
+                delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
+                if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
+                    rejected_trade_times_ms.append(trade.exchange_time_ms)
+                    continue
+                if archive is not None:
+                    if market.venue is OutcomeVenue.POLYMARKET:
+                        deferred_archive_trades.append(trade)
+                    else:
+                        try:
+                            archive.append_trade(
+                                trade,
+                                collector_session=collector_session,
+                            )
+                        except ValueError as exc:
+                            raise OutcomeInvalidPublicSignal(
+                                "outcome public trade conflicted with retained live evidence"
+                            ) from exc
+                trades.append(trade)
+                if first_received_ms is None:
+                    first_received_ms = trade.received_time_ms
+                    coverage_start_ms = ((first_received_ms + 999) // 1_000) * 1_000
+                    collection_end_ms = (
+                        coverage_start_ms
+                        + min_observations * 1_000
+                        + verification_lag_ms
+                    )
     finally:
         close = getattr(stream, "aclose", None)
         if close is not None:

@@ -12,12 +12,12 @@ from outcome.live_data import (
 )
 from outcome.models import (
     NormalizedOutcomeMarket,
-    NormalizedOutcomeTrade,
     OutcomeBookSnapshot,
     OutcomePriceGridChange,
     OutcomeVenue,
 )
 from outcome.public_streams import (
+    OutcomeTradeStreamItem,
     stream_hyperliquid_public_books,
     stream_polymarket_public_books,
     stream_polymarket_public_price_grid_changes,
@@ -94,7 +94,7 @@ async def capture_outcome_public_session(
     delivery_lag_ms: int = 1_000,
     max_live_trade_lag_ms: int = 2_000,
     wall_clock_ms=None,
-    trade_stream: AsyncIterator[NormalizedOutcomeTrade] | None = None,
+    trade_stream: AsyncIterator[OutcomeTradeStreamItem] | None = None,
     book_stream: AsyncIterator[OutcomeBookSnapshot] | None = None,
     price_grid_stream: AsyncIterator[OutcomePriceGridChange] | None = None,
     capture_books: bool = True,

@@ -264,26 +264,28 @@ def normalize_collateral_balance(
     if total < 0.0 or held < 0.0:
         raise ValueError("Hyperliquid collateral balance must be non-negative")
 
-    available_after_maintenance = None
     token = row.get("token")
+    if token is None:
+        raise ValueError("Hyperliquid quote balance must contain a token identifier")
     maintenance = payload.get("tokenToAvailableAfterMaintenance")
-    if token is not None:
-        if not isinstance(maintenance, list):
-            raise ValueError(
-                "Hyperliquid spotClearinghouseState maintenance availability must be an array"
-            )
-        token_matches = [
-            item
-            for item in maintenance
-            if isinstance(item, list) and len(item) == 2 and str(item[0]) == str(token)
-        ]
-        if len(token_matches) > 1:
-            raise ValueError("duplicate Hyperliquid maintenance availability token")
-        if token_matches:
-            available_after_maintenance = _finite_float(
-                token_matches[0][1],
-                "available after maintenance",
-            )
+    if not isinstance(maintenance, list):
+        raise ValueError(
+            "Hyperliquid spotClearinghouseState maintenance availability must be an array"
+        )
+    token_matches = [
+        item
+        for item in maintenance
+        if isinstance(item, list) and len(item) == 2 and str(item[0]) == str(token)
+    ]
+    if len(token_matches) != 1:
+        raise ValueError(
+            "Hyperliquid maintenance availability must contain exactly one "
+            f"row for quote token {token}"
+        )
+    available_after_maintenance = _finite_float(
+        token_matches[0][1],
+        "available after maintenance",
+    )
     return OutcomeCollateralBalance(
         asset=quote_asset,
         total=total,

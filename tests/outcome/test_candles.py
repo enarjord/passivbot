@@ -165,6 +165,27 @@ def test_signal_candle_counts_mirrored_merged_book_trade_once():
     assert candles[0].trade_count == 1
 
 
+@pytest.mark.parametrize("conflict", ["price", "quantity", "exchange_time"])
+def test_signal_candle_rejects_conflicting_mirrored_economic_event(conflict):
+    yes = replace(
+        trade(1_100, 0.4, 1.0, "yes", outcome=OutcomeSide.YES),
+        economic_event_id="transaction-leg",
+    )
+    no = replace(
+        trade(1_100, 0.4, 1.0, "no", outcome=OutcomeSide.NO),
+        economic_event_id="transaction-leg",
+    )
+    if conflict == "price":
+        no = replace(no, native_price=0.55, canonical_yes_price=0.45)
+    elif conflict == "quantity":
+        no = replace(no, qty=2.0)
+    else:
+        no = replace(no, exchange_time_ms=1_200)
+
+    with pytest.raises(ValueError, match="conflicting mirrored outcome trade evidence"):
+        trades_to_canonical_signal_1s_candles([yes, no])
+
+
 def test_signal_candle_pairs_repeated_equal_merged_book_trades_by_occurrence():
     trades = [
         replace(

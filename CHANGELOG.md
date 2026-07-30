@@ -149,7 +149,10 @@ All notable user-facing changes will be documented in this file.
   conflicting duplicate trade identities, and replay accepts execution candles from trading open
   while keeping order placement gated until order-entry open. Verified live coverage is capped at
   its scheduled collection deadline, and replayed price-grid transitions refresh executable price
-  bounds together with the tick size.
+  bounds together with the tick size. HIP-4 collateral normalization now requires exactly one
+  maintenance-availability row for the quote token, live collectors drain each already-decoded
+  websocket trade batch before certifying coverage, and canonical signal candles reject
+  contradictory mirrored economic records before deduplication.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
