@@ -1512,8 +1512,8 @@ class Passivbot:
         self._health_orders_placed = 0
         self._health_orders_cancelled = 0
         self._health_fills = 0
-        self._health_pnl = 0.0  # sum of realized PnL from fills
-        self._health_counted_synthetic_pnl_by_key: dict[str, float] = {}
+        # Authoritative net realized PnL observed during this process.
+        self._health_pnl = 0.0
         self._health_errors = 0
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
@@ -12808,12 +12808,11 @@ class Passivbot:
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
         for event in new_events:
-            if fill_event_pnl_pending(event):
+            if fill_event_pnl_pending(event) or FillEventsManager.synthetic_pnl_events(
+                [event]
+            ):
                 continue
-            net_pnl = fill_event_net_pnl(event)
-            self._health_pnl += net_pnl
-            if FillEventsManager.synthetic_pnl_events([event]):
-                Passivbot._mark_health_fill_pnl_counted(self, event, net_pnl)
+            self._health_pnl += fill_event_net_pnl(event)
 
         batch_summary = len(new_events) > 20
         pending_count = 0
@@ -12874,48 +12873,6 @@ class Passivbot:
                     pending_pnl_count=pending_count,
                 )
 
-    @staticmethod
-    def _health_fill_identity_keys(event: object) -> set[str]:
-        keys: set[str] = set()
-        event_id = str(getattr(event, "id", "") or "")
-        if event_id:
-            keys.add(f"id:{event_id}")
-        for source_id in getattr(event, "source_ids", None) or ():
-            normalized = str(source_id or "")
-            if normalized:
-                keys.add(f"source:{normalized}")
-        return keys
-
-    def _health_fill_counted_net_pnl(self, event: object) -> float | None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", {}) or {}
-        for key in Passivbot._health_fill_identity_keys(event):
-            if key in counted:
-                return float(counted[key])
-        return None
-
-    def _mark_health_fill_pnl_counted(
-        self, event: object, net_pnl: float | None = None
-    ) -> None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
-        if counted is None:
-            counted = {}
-            self._health_counted_synthetic_pnl_by_key = counted
-        amount = (
-            fill_event_net_pnl(event)
-            if net_pnl is None
-            else float(net_pnl)
-        )
-        for key in Passivbot._health_fill_identity_keys(event):
-            counted[key] = amount
-
-    def _forget_health_fill_pnl_counted(self, *events: object) -> None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
-        if not counted:
-            return
-        for event in events:
-            for key in Passivbot._health_fill_identity_keys(event):
-                counted.pop(key, None)
-
     def _log_enriched_fill_events(self, transitions: list[tuple[object, object]]) -> None:
         """Log authoritative PnL replacing pending or synthetic cached values."""
         if not transitions:
@@ -12923,21 +12880,16 @@ class Passivbot:
         for previous, event in sorted(
             transitions, key=lambda item: item[1].timestamp
         ):
-            counted_net_pnl = Passivbot._health_fill_counted_net_pnl(self, previous)
-            previous_counted = counted_net_pnl is not None
-            previous_net_pnl = float(counted_net_pnl or 0.0)
-            pnl_delta = fill_event_net_pnl(event) - previous_net_pnl
-            self._health_pnl += pnl_delta
-            Passivbot._forget_health_fill_pnl_counted(self, previous, event)
+            authoritative_net_pnl = fill_event_net_pnl(event)
+            self._health_pnl += authoritative_net_pnl
             previous_source = str(
                 getattr(previous, "pnl_source", "") or "pending"
             ).lower()
             logging.info(
                 "[fill] authoritative realized pnl replaced cached estimate | "
-                "previous_source=%s previous_counted=%s pnl_delta=%+.8g | %s",
+                "previous_source=%s authoritative_net_pnl=%+.8g | %s",
                 previous_source,
-                str(previous_counted).lower(),
-                pnl_delta,
+                authoritative_net_pnl,
                 self._log_fill_event(event),
             )
 

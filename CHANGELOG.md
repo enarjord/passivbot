@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live health-summary PnL now counts authoritative net realized PnL only.
+  Pending and synthetic fill estimates remain visible in fill diagnostics but
+  no longer create temporary fill-identity bookkeeping solely to correct the
+  uptime metric after enrichment.
 - Flat forager candidates can now persist proven-final public 1m WebSocket
   candles through the canonical candle path, reducing routine candle REST
   pressure while retaining REST for startup basis, gaps, reconnect recovery,
