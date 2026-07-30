@@ -193,3 +193,40 @@ def test_scenario_auto_limit_expressions_use_optimizer_directions():
         "base__adg_usd>=0.001",
         "stress__drawdown_worst_strategy_eq<=0.5",
     ]
+
+
+def test_scenario_equal_to_limit_expression_filters_equal_values():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "equal_to",
+                "scenario": "stress",
+                "value": 0.5,
+            }
+        ]
+    )
+    dataframe = pd.DataFrame(
+        {"stress__drawdown_worst_strategy_eq": [0.4, 0.5, 0.6]}
+    )
+
+    mask = pareto_dash._apply_limits(dataframe, "\n".join(expressions))
+
+    assert expressions == ["stress__drawdown_worst_strategy_eq!=0.5"]
+    assert mask.tolist() == [True, False, True]
+
+
+def test_disabled_scenario_limit_is_not_a_dashboard_default():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "enabled": False,
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "stress",
+                "value": 0.5,
+            }
+        ]
+    )
+
+    assert expressions == []

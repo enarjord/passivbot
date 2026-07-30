@@ -224,6 +224,30 @@ def test_inside_range_filter_preserves_boundary_candidates(
     }
 
 
+def test_filtering_normalizes_descending_range_bounds(
+    sample_pareto_dir: Path,
+):
+    result = select_starting_config_artifacts(
+        str(sample_pareto_dir),
+        limits=[
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "outside_range",
+                "range": [0.30, 0.10],
+            }
+        ],
+        aggregate_cfg={"default": "mean"},
+        filter_by_limits=True,
+        max_count=None,
+    )
+
+    assert {candidate.path.name for candidate in result.candidates} == {
+        "low_drawdown_anchor.json",
+        "middle.json",
+        "diverse_fill.json",
+    }
+
+
 def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
     tmp_path: Path,
 ):

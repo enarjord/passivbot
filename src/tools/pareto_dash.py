@@ -341,6 +341,7 @@ LIMIT_PATTERNS = [
     (re.compile(r"^\s*(?P<key>.+?)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
     (re.compile(r"^\s*(?P<key>.+?)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
     (re.compile(r"^\s*(?P<key>.+?)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
+    (re.compile(r"^\s*(?P<key>.+?)\s*!=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.not_equal),
     (re.compile(r"^\s*(?P<key>.+?)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
 ]
 
@@ -445,6 +446,8 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
     except Exception:
         return exprs
     for entry in normalized:
+        if not bool(entry.get("enabled", True)):
+            continue
         metric = entry.get("metric")
         mode = entry.get("penalize_if")
         if not metric or not mode:
