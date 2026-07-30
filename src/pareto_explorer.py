@@ -442,6 +442,24 @@ def _extract_suite_metrics(
     )
 
     if "metrics" in suite_metrics:
+        if selected_labels is not None:
+            raw_scenario_labels = suite_metrics.get("scenario_labels")
+            if isinstance(raw_scenario_labels, list):
+                available_scenario_labels = {
+                    str(label) for label in raw_scenario_labels
+                }
+            else:
+                available_scenario_labels = set()
+                for payload in suite_metrics["metrics"].values():
+                    if not isinstance(payload, Mapping):
+                        continue
+                    scenarios = payload.get("scenarios")
+                    if isinstance(scenarios, Mapping):
+                        available_scenario_labels.update(str(label) for label in scenarios)
+            if any(
+                label not in available_scenario_labels for label in selected_labels
+            ):
+                return stats_flat, aggregated_values
         for metric, payload in suite_metrics["metrics"].items():
             if not isinstance(payload, Mapping):
                 continue
@@ -453,13 +471,11 @@ def _extract_suite_metrics(
                 if isinstance(scenarios, Mapping):
                     for label in selected_labels:
                         value = scenarios.get(label)
-                        if not isinstance(value, (int, float)) or not math.isfinite(
+                        if isinstance(value, (int, float)) and math.isfinite(
                             float(value)
                         ):
-                            selected_values = []
-                            break
-                        selected_values.append(float(value))
-                if len(selected_values) == len(selected_labels) and selected_values:
+                            selected_values.append(float(value))
+                if selected_values:
                     values = np.asarray(selected_values, dtype=float)
                     stats = {
                         "mean": float(np.mean(values)),

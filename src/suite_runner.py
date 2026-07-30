@@ -202,6 +202,11 @@ def load_suite_override_config(suite_config_path: str | Path) -> Dict[str, Any]:
     )
 
 
+def _normalize_scenario_label(raw_label: Any, index: int) -> str:
+    label = str(raw_label).strip() if raw_label else ""
+    return label or f"scenario_{index:02d}"
+
+
 def filter_scenarios_by_label(
     scenarios: List[Dict[str, Any]],
     labels: List[str],
@@ -221,11 +226,18 @@ def filter_scenarios_by_label(
     if not labels:
         return scenarios
 
-    label_set = set(labels)
-    filtered = [s for s in scenarios if s.get("label") in label_set]
+    label_set = {str(label).strip() for label in labels}
+    filtered = [
+        scenario
+        for index, scenario in enumerate(scenarios, 1)
+        if _normalize_scenario_label(scenario.get("label"), index) in label_set
+    ]
 
     if not filtered:
-        available = [s.get("label", f"<unnamed_{i}>") for i, s in enumerate(scenarios)]
+        available = [
+            _normalize_scenario_label(scenario.get("label"), index)
+            for index, scenario in enumerate(scenarios, 1)
+        ]
         raise ValueError(
             f"No scenarios match the requested labels {labels}. " f"Available labels: {available}"
         )
@@ -553,7 +565,7 @@ def build_scenarios(
         )
         scenarios.append(
             SuiteScenario(
-                label=str(raw.get("label") or f"scenario_{idx:02d}"),
+                label=_normalize_scenario_label(raw.get("label"), idx),
                 start_date=raw.get("start_date"),
                 end_date=raw.get("end_date"),
                 coins=scenario_coins,

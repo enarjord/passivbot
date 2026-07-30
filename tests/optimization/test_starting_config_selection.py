@@ -316,6 +316,55 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
     assert result.selected_count == 1
 
 
+def test_filtering_aggregates_metric_from_available_active_scenarios(
+    tmp_path: Path,
+):
+    pareto_dir = tmp_path / "run" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    _write_candidate(
+        pareto_dir,
+        "suite_candidate",
+        adg=0.002,
+        drawdown_mean=0.20,
+        drawdown_max=0.20,
+    )
+    artifact_path = pareto_dir / "suite_candidate.json"
+    artifact = json.loads(artifact_path.read_text())
+    artifact["suite_metrics"] = {
+        "scenario_labels": ["base", "stress"],
+        "metrics": {
+            "adg_strategy_eq": {
+                "aggregated": 0.002,
+                "stats": _metric_stats(mean=0.002),
+                "scenarios": {"base": 0.002, "stress": 0.002},
+            },
+            "drawdown_worst_strategy_eq": {
+                "aggregated": 0.20,
+                "stats": _metric_stats(mean=0.20),
+                "scenarios": {"base": 0.20},
+            },
+        },
+    }
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    result = select_starting_config_artifacts(
+        str(pareto_dir),
+        limits=[
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 0.50,
+            }
+        ],
+        aggregate_cfg={"default": "max"},
+        scenario_labels=["base", "stress"],
+        filter_by_limits=True,
+        max_count=None,
+    )
+
+    assert result.selected_count == 1
+
+
 def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Path):
     pareto_dir = tmp_path / "run" / "pareto"
     pareto_dir.mkdir(parents=True)

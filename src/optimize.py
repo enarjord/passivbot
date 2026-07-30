@@ -2837,6 +2837,28 @@ def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | N
     return [scenario.label for scenario in scenarios]
 
 
+def _validate_optimizer_limit_suite_mode(
+    config: Mapping[str, Any],
+    *,
+    suite_enabled: bool,
+) -> None:
+    if suite_enabled:
+        return
+    optimize_cfg = config.get("optimize")
+    limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    for entry in limits:
+        if not isinstance(entry, Mapping) or not bool(entry.get("enabled", True)):
+            continue
+        scenario = entry.get("scenario")
+        if scenario is None:
+            continue
+        metric = str(entry.get("metric", "")).strip() or "<missing>"
+        raise ValueError(
+            f"scenario-specific optimizer limit on {metric!r} requires suite mode "
+            f"(scenario {scenario!r}); enable the optimizer suite or remove the scenario selector."
+        )
+
+
 def iter_anchored_fine_tune_seed_configs(config: dict):
     anchor_plan = get_anchor_plan(config)
     if anchor_plan is None:
@@ -3082,6 +3104,11 @@ async def main():
             config, "backtest.suite_enabled", bool(args.suite), verbose=True
         )
         suite_cfg["enabled"] = bool(args.suite)
+
+    _validate_optimizer_limit_suite_mode(
+        config,
+        suite_enabled=bool(suite_cfg.get("enabled")),
+    )
 
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
