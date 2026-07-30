@@ -27,7 +27,8 @@ All notable user-facing changes will be documented in this file.
   an accompanying `stat`. Scenario labels are normalized consistently and retain generated labels
   after filtering. Named-scenario limits are validated against the active labels before data
   preparation, including when suite mode is disabled. The Pareto dashboard also applies forbidden
-  `inside_range` bands to scenario-specific limit columns.
+  `inside_range` bands and optimizer-compatible `auto` directions to scenario-specific limit
+  columns.
 - Optimizer starting configs may now be pre-filtered from stored Pareto metrics with
   `--filter-starting-configs` and optionally reduced with the same `anchors-farthest` selection as
   `pareto-compress` via `--compress-starting-configs N` (`--starting-configs-max N`). The optimizer

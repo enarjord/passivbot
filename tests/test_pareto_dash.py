@@ -169,3 +169,27 @@ def test_scenario_inside_range_limit_expression_preserves_outside_values():
         "stress__adg_usd<=0.05 || stress__adg_usd>=0.1"
     ]
     assert mask.tolist() == [True, True, False, True, True]
+
+
+def test_scenario_auto_limit_expressions_use_optimizer_directions():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "metric": "adg",
+                "penalize_if": "auto",
+                "scenario": "base",
+                "value": 0.001,
+            },
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "auto",
+                "scenario": "stress",
+                "value": 0.5,
+            },
+        ]
+    )
+
+    assert expressions == [
+        "base__adg_usd>=0.001",
+        "stress__drawdown_worst_strategy_eq<=0.5",
+    ]

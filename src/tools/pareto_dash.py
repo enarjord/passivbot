@@ -25,7 +25,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from opt_utils import load_results
 from config.limits import normalize_limit_entries
-from config.scoring import extract_objective_specs, from_engine_value
+from config.scoring import (
+    default_scoring_weights,
+    extract_objective_specs,
+    from_engine_value,
+)
+from limit_utils import resolve_auto_limit_entries
 
 
 def discover_runs(root: str) -> List[str]:
@@ -433,7 +438,10 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
         exprs.append(limits_cfg)
         return exprs
     try:
-        normalized = normalize_limit_entries(limits_cfg)
+        normalized = resolve_auto_limit_entries(
+            normalize_limit_entries(limits_cfg),
+            default_scoring_weights(),
+        )
     except Exception:
         return exprs
     for entry in normalized:
