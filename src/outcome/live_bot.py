@@ -215,13 +215,8 @@ async def run_hip4_outcome_unavailable_cycle(
         now_ms=now_ms,
     )
     planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
-    _persist_lifecycle_settlement(
-        lifecycle,
-        archive=archive,
-        collector_session=collector_session,
-    )
     lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
-    return await _finish_unavailable_cycle(
+    cycle = await _finish_unavailable_cycle(
         client,
         market,
         account,
@@ -230,6 +225,12 @@ async def run_hip4_outcome_unavailable_cycle(
         execute=execute,
         planned_at_ms=planned_at_ms,
     )
+    _persist_lifecycle_settlement(
+        lifecycle,
+        archive=archive,
+        collector_session=collector_session,
+    )
+    return cycle
 
 
 def _planning_reason_for_lifecycle(

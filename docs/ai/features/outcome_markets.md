@@ -55,6 +55,11 @@ Strategy pricing uses one canonical YES coordinate. Native NO price `n` maps to 
 | Buy NO at `n` | `payout_unit - n` | `-qty` |
 | Sell NO at `n` | `payout_unit - n` | `+qty` |
 
+Every normalized trade must preserve this mapping exactly: a YES trade's canonical price equals
+its native price, while a NO trade's canonical price equals one minus its native price. Reject
+inconsistent archived or adapter-produced rows instead of allowing execution candles and signals
+to disagree about the same fill.
+
 Canonical equivalence does not erase native execution. Every synthetic level and intended order
 retains its venue, asset, native side, native price, and executable action. The execution planner
 chooses among native actions based on venue capabilities, available token inventory, collateral,
@@ -406,6 +411,10 @@ The Python outcome orchestrator runs markets in chronological order against a sh
 Independent single-market runs must not each receive the full starting balance and then be averaged
 as if capital were reusable. The orchestrator accounts for overlapping markets, locked complete
 sets, delayed resolution/redemption, and venue-specific settlement timing.
+
+Every market in one shared-wallet portfolio evaluation must use the same normalized quote asset.
+Mixed collateral units require separate evaluations until an explicit conversion and exchange-rate
+model exists; adding their numeric balances or PnL directly is invalid.
 
 An archived full-contract job is admissible only when the archive contains immutable market
 metadata observed no later than trading open, one consistent authoritative settlement payout,

@@ -431,6 +431,21 @@ class NormalizedOutcomeTrade:
             value = getattr(self, name)
             if not math.isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be finite and in [0, 1]")
+        expected_canonical_yes_price = (
+            self.native_price
+            if self.outcome is OutcomeSide.YES
+            else 1.0 - self.native_price
+        )
+        if not math.isclose(
+            self.canonical_yes_price,
+            expected_canonical_yes_price,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "canonical_yes_price must equal native_price for YES trades "
+                "and 1 - native_price for NO trades"
+            )
         if not math.isfinite(self.qty) or self.qty <= 0.0:
             raise ValueError("trade qty must be finite and positive")
         if self.exchange_time_ms < 0 or self.received_time_ms < 0:

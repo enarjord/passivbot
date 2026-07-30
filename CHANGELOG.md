@@ -129,6 +129,9 @@ All notable user-facing changes will be documented in this file.
   an explicitly verified full residual below entry minimums, and settled cycles cancel managed
   quotes before surfacing archive failures. Optimizer resume validation now rejects incompatible
   one-second candle settings, including adding the setting to an older result.
+  Cancel-only unavailable-signal cycles now apply the same settlement-archive ordering guarantee.
+  Shared-wallet portfolio evaluation rejects mixed quote assets, and normalized trades reject
+  inconsistent native-to-canonical YES price mappings.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

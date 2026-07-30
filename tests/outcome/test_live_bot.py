@@ -643,6 +643,60 @@ async def test_settled_cycle_cancels_managed_quotes_before_archive_failure():
 
 
 @pytest.mark.asyncio
+async def test_settled_unavailable_cycle_cancels_managed_quotes_before_archive_failure():
+    outcome_market = market()
+    now_ms = outcome_market.lifecycle.scheduled_event_time_ms + 2_000
+    cloid = managed_outcome_client_order_id(
+        outcome_market.market_id,
+        slot="canonical_bid",
+        observation_end_ms=candles()[-1].timestamp_ms,
+    )
+    managed_order = OutcomeOpenOrder(
+        market_id=outcome_market.market_id,
+        order_id="7",
+        asset_id=outcome_market.yes_asset.asset_id,
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=25.0,
+        original_qty=25.0,
+        timestamp_ms=candles()[-1].timestamp_ms,
+        client_order_id=cloid,
+    )
+    client = SafetyMutationClient(
+        (
+            snapshot(now_ms, open_orders=(managed_order,)),
+            snapshot(now_ms),
+            snapshot(now_ms),
+        ),
+        lifecycle=lifecycle_snapshot(
+            now_ms,
+            state=HyperliquidOutcomeLifecycleState.SETTLED,
+        ),
+    )
+
+    class FailingSettlementArchive:
+        def append_settlement(self, *args, **kwargs):
+            raise sqlite3.OperationalError("archive unavailable")
+
+    with pytest.raises(sqlite3.OperationalError, match="archive unavailable"):
+        await run_hip4_outcome_unavailable_cycle(
+            client,
+            outcome_market,
+            reason=OutcomePlanningUnavailableReason.NO_PUBLIC_FILL,
+            execute=True,
+            now_ms=now_ms,
+            archive=FailingSettlementArchive(),
+            collector_session="settled-unavailable-archive-failure",
+        )
+
+    assert client.cancelled == [
+        (outcome_market.market_id, OutcomeSide.YES, 7, cloid)
+    ]
+    assert client.created == []
+
+
+@pytest.mark.asyncio
 async def test_executed_unavailable_signal_cycle_cancels_managed_quote_only():
     now_ms = candles()[-1].timestamp_ms + 1_000
     cloid = managed_outcome_client_order_id(

@@ -67,6 +67,22 @@ def test_trade_derived_ohlcv_and_explicit_identity_deduplication():
     assert candle.carried_forward is False
 
 
+def test_trade_rejects_inconsistent_native_to_canonical_price_mapping():
+    with pytest.raises(ValueError, match="canonical_yes_price must equal"):
+        NormalizedOutcomeTrade(
+            venue=OutcomeVenue.HYPERLIQUID,
+            market_id="913",
+            asset_id="+9131",
+            outcome=OutcomeSide.NO,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.2,
+            canonical_yes_price=0.2,
+            qty=1.0,
+            exchange_time_ms=1_000,
+            received_time_ms=1_010,
+        )
+
+
 def test_verified_no_trade_seconds_carry_close_but_unknown_gap_breaks_continuity():
     candles = trades_to_1s_candles(
         [trade(1_100, 0.40, 1.0, "one"), trade(5_100, 0.55, 1.0, "two")],

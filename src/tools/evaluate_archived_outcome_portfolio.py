@@ -11,6 +11,7 @@ from pathlib import Path
 
 from outcome.archive import OutcomeTradeArchive
 from outcome.archive_replay import (
+    ArchivedOutcomeReplay,
     build_archived_ema_anchor_replay,
     load_archived_opening_market,
 )
@@ -23,6 +24,16 @@ from outcome.rust_runner import make_rust_ema_anchor_outcome_job
 
 
 DEFAULT_MODES = ("accumulate_pairs", "inventory_aware", "yes_only")
+
+
+def _require_shared_quote_asset(replays: list[ArchivedOutcomeReplay]) -> str:
+    quote_assets = sorted({replay.market.quote_asset for replay in replays})
+    if len(quote_assets) != 1:
+        raise ValueError(
+            "outcome portfolio evaluation requires one shared quote asset; "
+            f"got {', '.join(quote_assets)}"
+        )
+    return quote_assets[0]
 
 
 def _rust_fee_formula(market: NormalizedOutcomeMarket, override: str) -> str:
@@ -217,6 +228,7 @@ def main() -> int:
                         qty_step=args.qty_step,
                     )
                 )
+            quote_asset = _require_shared_quote_asset(replays)
             portfolio = run_outcome_portfolio_backtest(
                 [
                     make_rust_ema_anchor_outcome_job(replay.payload)
@@ -230,6 +242,7 @@ def main() -> int:
             reports.append(
                 {
                     "execution_mode": mode,
+                    "quote_asset": quote_asset,
                     "contracts": [
                         {
                             "market_id": replay.market.market_id,

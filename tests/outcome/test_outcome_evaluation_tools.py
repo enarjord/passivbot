@@ -18,6 +18,7 @@ from outcome.models import (
 )
 from tools.evaluate_archived_outcome_portfolio import (
     _load_archived_fee_market,
+    _require_shared_quote_asset,
     _rust_fee_formula,
 )
 from tools.evaluate_hip4_outcome_window import (
@@ -75,6 +76,19 @@ def test_archived_fee_formula_fails_closed_when_not_representable():
     with pytest.raises(ValueError, match="no Rust translation"):
         _rust_fee_formula(hip4, "archived")
     assert _rust_fee_formula(hip4, "notional") == "notional"
+
+
+def test_shared_wallet_portfolio_requires_one_quote_asset():
+    replay = argparse.Namespace(
+        market=polymarket.normalize_market(fixture("polymarket_binary.json"))
+    )
+    other_quote_asset = argparse.Namespace(
+        market=replace(replay.market, quote_asset="pUSD")
+    )
+
+    assert _require_shared_quote_asset([replay]) == replay.market.quote_asset
+    with pytest.raises(ValueError, match="requires one shared quote asset"):
+        _require_shared_quote_asset([replay, other_quote_asset])
 
 
 def test_archived_fee_formula_uses_opening_state_and_rejects_later_transition(
