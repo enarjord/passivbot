@@ -127,12 +127,13 @@
    candidates are persisted through the same canonical candle path as REST rows. Because CCXT may
    repeat a sliding cache, the first nonempty snapshot of each watcher session only primes
    provenance. A changed row may correct its existing canonical timestamp, but extending canonical
-   history requires a minute-boundary crossing between uninterrupted observations or a fresh
-   successor timestamp proving a trusted preceding bucket closed. The current in-progress minute is
+   history requires a fresh successor timestamp proving a trusted preceding bucket closed;
+   processing time is not post-boundary transport provenance. The current in-progress minute is
    rejected, an existing canonical basis is required, and WebSocket silence and reconnect gaps remain
    missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
-   EMA state. WebSocket shard persistence must succeed before the row is exposed to cache and EMA
-   readers. REST remains the complete fallback for startup basis, historical and internal gaps,
+   EMA state. WebSocket shard persistence must be read-verified before the row is exposed to cache
+   and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
+   the complete fallback for startup basis, historical and internal gaps,
    prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
    bounded REST overlap even while the persisted WebSocket tail is current; a successful REST
    omission alone does not disprove a validated WebSocket candle. Repeated stream or ingestion errors

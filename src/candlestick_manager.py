@@ -826,7 +826,7 @@ class CandlestickManager:
         # CCXT Pro's sliding cache. Proven-final rows themselves are persisted
         # through the canonical 1m candle path.
         self._live_ws_ohlcv_observations: Dict[
-            str, Dict[int, Tuple[Tuple[float, ...], int, bool]]
+            str, Dict[int, Tuple[Tuple[float, ...], bool]]
         ] = {}
         self._index: Dict[str, dict] = {}
         self._index_mtime: Dict[
@@ -2361,6 +2361,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        merge_memory_cache: bool = True,
     ) -> Optional[np.ndarray]:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache.
 
@@ -2369,6 +2370,9 @@ class CandlestickManager:
         Note: Legacy data from `historical_data/` is automatically migrated to the
         primary cache on CandlestickManager initialization. The legacy fallback below
         remains as a safety net for any data that wasn't migrated.
+
+        Set ``merge_memory_cache=False`` to inspect canonical disk contents
+        without merging their rows into the in-memory candle cache.
         """
         try:
             tf_norm = self._normalize_timeframe_arg(timeframe, tf)
@@ -2556,6 +2560,8 @@ class CandlestickManager:
                 # Disk-load telemetry must never break cache loading.
                 pass
             if tf_norm == "1m":
+                if not merge_memory_cache:
+                    return merged_disk
                 existing = self._ensure_symbol_cache(symbol)
                 merged = self._merge_overwrite(existing, merged_disk)
                 self._cache[symbol] = merged
@@ -2741,6 +2747,27 @@ class CandlestickManager:
                 timeframe=tf_norm,
                 defer_index=defer_index,
             )
+            durable = self._load_from_disk(
+                symbol,
+                int(arr[0]["ts"]),
+                int(arr[-1]["ts"]),
+                timeframe=tf_norm,
+                merge_memory_cache=False,
+            )
+            durable_by_ts = (
+                {int(row["ts"]): row for row in durable}
+                if isinstance(durable, np.ndarray) and durable.size
+                else {}
+            )
+            if any(
+                int(row["ts"]) not in durable_by_ts
+                or not np.array_equal(durable_by_ts[int(row["ts"])], row)
+                for row in arr
+            ):
+                # A legacy-backed day may intentionally reject a primary
+                # overlay. Treat any other successful-but-invisible save the
+                # same way: do not expose restart-sensitive content in RAM.
+                raise OSError("WebSocket candle persistence verification failed")
         if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
             self._invalidate_ema_cache(symbol, timeframe="1m")
@@ -5022,11 +5049,10 @@ class CandlestickManager:
         CCXT Pro may repeat its whole sliding OHLCV cache on each update. The
         first non-empty snapshot of each watcher session only primes provenance.
         After that, a changed row may correct an already canonical timestamp.
-        A new canonical timestamp additionally requires an uninterrupted
-        interval-boundary crossing or a fresh successor proving a trusted
-        preceding bucket closed. The current minute, malformed rows, silence,
-        and reconnect gaps never synthesize candles. An existing disk/index
-        basis is required before WS may extend history.
+        A new canonical timestamp additionally requires a fresh successor
+        proving a trusted preceding bucket closed. The current minute,
+        malformed rows, silence, and reconnect gaps never synthesize candles.
+        An existing disk/index basis is required before WS may extend history.
         """
         now = int(self._now_ms() if now_ms is None else now_ms)
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
@@ -5045,9 +5071,8 @@ class CandlestickManager:
 
         session_primed = symbol in self._live_ws_ohlcv_observations
         previous = self._live_ws_ohlcv_observations.get(symbol, {})
-        current: Dict[int, Tuple[Tuple[float, ...], int, bool]] = {}
+        current: Dict[int, Tuple[Tuple[float, ...], bool]] = {}
         changed_or_new: set[int] = set()
-        crossed_boundary: set[int] = set()
         rows_by_ts: Dict[int, np.void] = {}
         for row in arr:
             ts = int(row["ts"])
@@ -5056,22 +5081,22 @@ class CandlestickManager:
             prior = previous.get(ts)
             if prior is None or prior[0] != values:
                 changed_or_new.add(ts)
-            elif int(prior[1]) < ts + ONE_MIN_MS <= now:
-                crossed_boundary.add(ts)
             # A row first seen while its bucket is still open may later be
-            # sealed by an uninterrupted boundary crossing or successor. Past
-            # rows in the first snapshot of a watcher session are untrusted
-            # replay-cache contents until that row itself changes.
+            # sealed by a fresh successor. Processing time cannot prove a
+            # boundary crossing because a pre-boundary payload may resume from
+            # the event loop only after the bucket closes. Past rows in the
+            # first snapshot of a watcher session are untrusted replay-cache
+            # contents until that row itself changes.
             successor_eligible = (
                 now < ts + ONE_MIN_MS
                 if not session_primed
                 else bool(
                     prior is None
                     or prior[0] != values
-                    or prior[2]
+                    or prior[1]
                 )
             )
-            current[ts] = (values, now, successor_eligible)
+            current[ts] = (values, successor_eligible)
         # The first non-empty snapshot of every watcher session establishes
         # provenance only. It may be a replay of a partial pre-disconnect row,
         # so reconnect recovery remains REST-owned.
@@ -5086,7 +5111,7 @@ class CandlestickManager:
         for successor_ts in changed_or_new:
             predecessor_ts = int(successor_ts - ONE_MIN_MS)
             prior_predecessor = previous.get(predecessor_ts)
-            if prior_predecessor is None or not bool(prior_predecessor[2]):
+            if prior_predecessor is None or not bool(prior_predecessor[1]):
                 continue
             successor_proven_predecessors.add(predecessor_ts)
             if predecessor_ts not in rows_by_ts:
@@ -5107,7 +5132,6 @@ class CandlestickManager:
                 continue
             if (
                 ts in changed_or_new
-                or ts in crossed_boundary
                 or ts in successor_proven_predecessors
             ):
                 candidate_rows.append(tuple(row.tolist()))
@@ -5139,7 +5163,6 @@ class CandlestickManager:
                 row
                 for row in candidates
                 if int(row["ts"]) in canonical_by_ts
-                or int(row["ts"]) in crossed_boundary
                 or int(row["ts"]) in successor_proven_predecessors
             ]
             changed_rows = [

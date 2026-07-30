@@ -16,11 +16,12 @@ All notable user-facing changes will be documented in this file.
   snapshot without persisting replayed rows, integrity audits force a REST
   overlap even when the WebSocket tail is fresh, and WebSocket silence never
   creates a synthetic no-trade candle. Changed values may correct an existing
-  canonical timestamp, while extending the tail requires boundary or successor
-  proof; shard persistence succeeds before a WebSocket candle is exposed to
-  cache and EMA readers. Unstable streams cool down to REST-only maintenance
-  before retrying automatically, and the subscription reconciler remains ready
-  for runtime transitions into forager mode.
+  canonical timestamp, while extending the tail requires fresh-successor proof;
+  shard persistence is read-verified before a WebSocket candle is exposed to
+  cache and EMA readers, including on immutable legacy-backed days. Unstable
+  streams cool down to REST-only maintenance before retrying automatically, and
+  the subscription reconciler remains ready for runtime transitions into
+  forager mode.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

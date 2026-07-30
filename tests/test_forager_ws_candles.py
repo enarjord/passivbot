@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -366,6 +367,102 @@ async def test_changed_open_row_processed_after_boundary_cannot_extend_tail(
     persisted = disk[disk["ts"] == 2 * ONE_MIN_MS]
     assert persisted.shape[0] == 1
     assert float(persisted[0]["c"]) == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_unchanged_open_row_processed_after_boundary_cannot_extend_tail(
+    tmp_path,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    partial = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial],
+            now_ms=2 * ONE_MIN_MS + 50_000,
+        )
+        == 0
+    )
+    # Processing time is not transport provenance: this unchanged payload may
+    # have been emitted before close and resumed late by the event loop.
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial],
+            now_ms=3 * ONE_MIN_MS + 1_000,
+        )
+        == 0
+    )
+    assert cm.get_last_final_ts(symbol) == ONE_MIN_MS
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[3 * ONE_MIN_MS, 100.5, 101, 100, 100.7, 0.2]],
+            now_ms=3 * ONE_MIN_MS + 2_000,
+        )
+        == 1
+    )
+    assert cm.get_last_final_ts(symbol) == 2 * ONE_MIN_MS
+
+
+def test_ws_legacy_shard_noop_cannot_expose_ram_only_correction(
+    tmp_path,
+    monkeypatch,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=24 * 60 * ONE_MIN_MS)
+    day_key = "1970-01-01"
+    legacy_path = tmp_path / "legacy" / f"{day_key}.npy"
+    legacy_path.parent.mkdir(parents=True)
+    legacy = _candles(
+        *[
+            (minute * ONE_MIN_MS, 100, 101, 99, 100, 1)
+            for minute in range(24 * 60)
+        ]
+    )
+    np.save(legacy_path, legacy, allow_pickle=False)
+    monkeypatch.setattr(
+        cm,
+        "_get_legacy_shard_paths",
+        lambda _symbol, _tf: {day_key: str(legacy_path)},
+    )
+    monkeypatch.setattr(
+        cm,
+        "_legacy_day_is_complete",
+        lambda _symbol, _tf, _day: True,
+    )
+    final_ts = (24 * 60 - 1) * ONE_MIN_MS
+    cm._load_from_disk(symbol, final_ts, final_ts, timeframe="1m")
+    ema_key = ("close", 3.0, str(ONE_MIN_MS))
+    ema_value = (100.0, final_ts, final_ts)
+    cm._ema_cache[symbol] = {ema_key: ema_value}
+
+    correction = _candles((final_ts, 100, 102, 99, 101, 2))
+    with pytest.raises(OSError, match="persistence verification failed"):
+        cm._persist_batch(
+            symbol,
+            correction,
+            timeframe="1m",
+            merge_cache=True,
+            source="ws",
+        )
+
+    cached = cm._ensure_symbol_cache(symbol)
+    canonical = cached[cached["ts"] == final_ts]
+    assert canonical.shape[0] == 1
+    assert float(canonical[0]["c"]) == pytest.approx(100.0)
+    assert cm._ema_cache[symbol] == {ema_key: ema_value}
+    assert not Path(cm._shard_path(symbol, day_key, timeframe="1m")).exists()
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
 
 
 @pytest.mark.asyncio
