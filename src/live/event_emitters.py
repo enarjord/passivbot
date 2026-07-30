@@ -36,6 +36,11 @@ def current_live_event_cycle_id(bot: Any) -> str | None:
     return getattr(bot, "_live_event_current_cycle_id", None)
 
 
+def _freshness_epoch(bot: Any) -> int:
+    """Return the ledger epoch for diagnostics without creating trading state."""
+    return int(getattr(getattr(bot, "freshness_ledger", None), "epoch", 0) or 0)
+
+
 def set_live_event_context_ids(bot: Any, **kwargs: str | None) -> None:
     pipeline = getattr(bot, "_live_event_pipeline", None)
     if pipeline is None or not callable(getattr(pipeline, "with_context_ids", None)):
@@ -725,7 +730,7 @@ def _emit_authoritative_remote_call_event_unchecked(
     stage = str(stage or "").lower()
     surface = str(surface or "unknown")
     cycle_id = current_live_event_cycle_id(bot)
-    authoritative_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    authoritative_epoch = _freshness_epoch(bot)
     remote_call_group_id = (
         f"{cycle_id}:authoritative" if cycle_id else f"auth_{authoritative_epoch}:authoritative"
     )
@@ -1018,9 +1023,7 @@ def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
         status="started",
         data={
             "loop_start_ms": int(loop_start_ms),
-            "authoritative_epoch": int(
-                getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-            ),
+            "authoritative_epoch": _freshness_epoch(bot),
         },
     )
     return cycle_id
@@ -1046,9 +1049,7 @@ def emit_live_cycle_completed(
         data={
             "elapsed_ms": elapsed_ms,
             "timings_ms": dict(timings_ms or {}),
-            "authoritative_epoch": int(
-                getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-            ),
+            "authoritative_epoch": _freshness_epoch(bot),
             "orders_changed": bool(getattr(bot, "execution_scheduled", False)),
         },
     )
@@ -1068,9 +1069,7 @@ def emit_live_cycle_degraded(
     if not cycle_id:
         return
     payload = _sanitize_cycle_degraded_payload(dict(data or {}))
-    payload["authoritative_epoch"] = int(
-        getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-    )
+    payload["authoritative_epoch"] = _freshness_epoch(bot)
     bot._emit_live_event(
         EventTypes.CYCLE_DEGRADED,
         level=level,
@@ -4437,7 +4436,7 @@ def emit_execution_confirmation_requested_event(
         data = {
             "surfaces": sorted(str(surface) for surface in surfaces),
             "target_epoch": int(target_epoch),
-            "current_epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
+            "current_epoch": _freshness_epoch(bot),
             "min_epoch": int(min_epoch) if min_epoch is not None else None,
         }
         _add_execution_debug_profile(

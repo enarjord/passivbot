@@ -95,7 +95,6 @@ def _set_authoritative_epoch_state(
         signature = (surface, "changed" if surface in changed else "baseline")
         ledger.stamp(surface, signature, now_ms=2, epoch=epoch)
     bot.freshness_ledger = ledger
-    bot._authoritative_refresh_epoch = int(epoch)
     return ledger
 
 
@@ -693,7 +692,6 @@ def _counted_staged_account_refresh_bot(
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 0
     bot._authoritative_pending_confirmations = dict(pending_confirmations or {})
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.recent_order_cancellations = []
@@ -845,7 +843,7 @@ async def test_data_packet_capture_failure_does_not_block_authoritative_fetch(ca
 def test_balance_data_packet_capture_accepts_legacy_raw_normalized_pair():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "legacy"
-    bot._authoritative_refresh_epoch = 7
+    _set_authoritative_epoch_state(bot, epoch=7)
     raw_balance = {"total": {"USDT": 123.45}, "raw_revision": "legacy-pair"}
 
     bot._capture_live_data_packet_fetch_metadata(
@@ -890,15 +888,14 @@ def test_authoritative_surface_record_survives_data_packet_finalize_failure():
     assert bot.freshness_ledger.surface_epoch("balance") == 1
 
 
-def test_freshness_ledger_bootstraps_legacy_authoritative_epoch_alias():
+def test_freshness_ledger_is_only_authoritative_epoch_owner():
     bot = Passivbot.__new__(Passivbot)
-    bot._authoritative_refresh_epoch = 7
+    ledger = _set_authoritative_epoch_state(bot, epoch=7)
 
-    ledger = bot._ensure_freshness_ledger()
     bot._begin_authoritative_refresh_epoch()
 
     assert ledger.epoch == 8
-    assert bot._authoritative_refresh_epoch == 8
+    assert not hasattr(bot, "_authoritative_refresh_epoch")
 
 
 @pytest.mark.asyncio
@@ -933,7 +930,7 @@ async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
     assert snapshots[symbol].last == 100.5
     assert (
         bot.freshness_ledger.surface_epoch("market_snapshot")
-        == bot._authoritative_refresh_epoch
+        == bot.freshness_ledger.epoch
     )
     assert bot._market_snapshot_signature_invalid([symbol]) == []
 
@@ -3835,7 +3832,7 @@ def _set_pnl_lookback(bot, *, lookback_days: float, now_ms: int) -> None:
 def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     now = [1000.0]
 
     monkeypatch.setattr(time, "time", lambda: now[0])
@@ -3934,7 +3931,7 @@ def test_handle_order_update_cancel_hint_requests_full_confirmation(
 ):
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 7
+    _set_authoritative_epoch_state(bot, epoch=7)
     bot.state_change_detected_by_symbol = set()
     bot.recent_order_cancellations = []
 
@@ -3972,7 +3969,7 @@ def test_handle_order_update_fill_hint_requests_full_confirmation(caplog, monkey
     bot = Passivbot.__new__(Passivbot)
     bot.execution_scheduled = False
     bot._authoritative_pending_confirmations = {"open_orders": 1}
-    bot._authoritative_refresh_epoch = 4
+    _set_authoritative_epoch_state(bot, epoch=4)
     now = [1000.0]
 
     monkeypatch.setattr(time, "time", lambda: now[0])
@@ -4270,7 +4267,7 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
         [{"symbol": "BTC/USDT:USDT"}],
         [{"symbol": "ETH/USDT:USDT"}],
     )
-    bot._authoritative_refresh_epoch = 4
+    _set_authoritative_epoch_state(bot, epoch=4)
     bot._authoritative_pending_confirmations = {}
     bot._order_wave_in_progress = wave
     bot._request_authoritative_confirmation({"open_orders"})
@@ -4320,7 +4317,7 @@ def test_order_wave_settlement_uses_event_console_when_available(monkeypatch, ca
         [{"symbol": "BTC/USDT:USDT"}],
         [{"symbol": "ETH/USDT:USDT"}],
     )
-    bot._authoritative_refresh_epoch = 4
+    _set_authoritative_epoch_state(bot, epoch=4)
     bot._authoritative_pending_confirmations = {}
     bot._order_wave_in_progress = wave
     bot._request_authoritative_confirmation({"open_orders"})
@@ -7103,7 +7100,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     bot.recent_order_cancellations = []
     bot.fetch_balance = AsyncMock(return_value=123.45)
     bot.fetch_positions = AsyncMock(
@@ -7303,7 +7300,7 @@ async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     bot.recent_order_cancellations = []
     seen = {}
 
@@ -7393,7 +7390,7 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "binance"
     bot.stop_signal_received = False
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     bot.fetch_balance = AsyncMock(return_value=100.0)
     bot.fetch_positions = AsyncMock(return_value=[])
     bot.fetch_open_orders = AsyncMock(return_value=[])
@@ -7432,7 +7429,7 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     bot.stop_signal_received = False
     bot.positions = {}
     bot.open_orders = {}
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     bot.balance_override = None
     bot._balance_override_logged = False
     bot.previous_hysteresis_balance = None
@@ -7528,7 +7525,7 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "binance"
     bot.config_get = lambda keys: None
-    bot._authoritative_refresh_epoch = 1
+    _set_authoritative_epoch_state(bot, epoch=1)
     bot._authoritative_pending_confirmations = {
         "balance": 2,
         "positions": 2,
@@ -9525,7 +9522,7 @@ def test_completed_candle_signature_ignores_later_cache_improvements():
         "completed_candles",
         ((symbol, 60_000),),
         now_ms=stamp_ms,
-        epoch=bot._authoritative_refresh_epoch,
+        epoch=bot.freshness_ledger.epoch,
     )
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
@@ -9582,7 +9579,7 @@ def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
         "completed_candles",
         stamped_signature,
         now_ms=stamp_ms,
-        epoch=bot._authoritative_refresh_epoch,
+        epoch=bot.freshness_ledger.epoch,
     )
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
@@ -9627,7 +9624,7 @@ def test_staged_planner_preconditions_allow_tail_fallback_shape_recovery():
         "completed_candles",
         stamped_signature,
         now_ms=stamp_ms,
-        epoch=bot._authoritative_refresh_epoch,
+        epoch=bot.freshness_ledger.epoch,
     )
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
@@ -10102,7 +10099,7 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots(caplog):
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_refresh_epoch = 1
+    bot.freshness_ledger.epoch = 1
     sink = ListEventSink()
     monitor_sink = ListEventSink()
     console_sink = ListEventSink()
@@ -10205,7 +10202,7 @@ async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event(caplog
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_refresh_epoch = 1
+    bot.freshness_ledger.epoch = 1
     sink = ListEventSink()
     monitor_sink = ListEventSink()
     console_sink = ListEventSink()
@@ -10302,7 +10299,7 @@ async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapsh
     bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_refresh_epoch = 1
+    bot.freshness_ledger.epoch = 1
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
     bot._current_planning_snapshot = PlanningSnapshot(
@@ -10364,7 +10361,7 @@ def _make_pre_create_distance_guard_bot(
     bot.config = {"live": {"limit_order_create_max_market_dist_pct": threshold}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot._authoritative_refresh_epoch = 1
+    bot.freshness_ledger.epoch = 1
     now_ms = passivbot_module.utc_ms()
     bot._current_planning_snapshot = PlanningSnapshot(
         ts_ms=now_ms,
@@ -10823,11 +10820,10 @@ async def test_pre_create_snapshot_diagnostic_failures_are_redacted(caplog):
     assert "secret-trace" not in messages
 
 
-def _make_open_order_guardrail_bot(*, epoch: int = 3):
+def _make_open_order_snapshot_bot(*, epoch: int = 3):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.freshness_ledger.epoch = epoch
-    bot._authoritative_refresh_epoch = epoch
     bot._authoritative_pending_confirmations = {}
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -10840,7 +10836,7 @@ def _make_open_order_guardrail_bot(*, epoch: int = 3):
     return bot
 
 
-def _guardrail_order(**overrides):
+def _snapshot_order(**overrides):
     order = {
         "id": "created-1",
         "symbol": "BTC/USDT:USDT",
@@ -10856,7 +10852,7 @@ def _guardrail_order(**overrides):
 
 
 def _open_orders_snapshot_orders(prefix: str, count: int) -> list[dict]:
-    return [_guardrail_order(id=f"{prefix}-{index}") for index in range(count)]
+    return [_snapshot_order(id=f"{prefix}-{index}") for index in range(count)]
 
 
 @pytest.mark.asyncio
@@ -10867,7 +10863,7 @@ async def test_large_added_open_orders_snapshot_delta_event_is_bounded_and_opera
     monitor_sink = ListEventSink()
     console_sink = ListEventSink()
     text_sink = ListEventSink()
-    bot = _make_open_order_guardrail_bot()
+    bot = _make_open_order_snapshot_bot()
     bot.exchange = "bybit"
     bot.user = "user_01"
     bot.bot_id = "bot_01"
@@ -10920,7 +10916,7 @@ async def test_large_added_open_orders_snapshot_delta_event_is_bounded_and_opera
 @pytest.mark.asyncio
 async def test_large_removed_open_orders_snapshot_delta_event_preserves_guardrails():
     structured_sink = ListEventSink()
-    bot = _make_open_order_guardrail_bot(epoch=5)
+    bot = _make_open_order_snapshot_bot(epoch=5)
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[structured_sink], monitor_sinks=[]
     )
@@ -10959,7 +10955,7 @@ async def test_large_removed_open_orders_snapshot_delta_event_preserves_guardrai
 async def test_open_orders_snapshot_delta_uses_strictly_greater_than_twenty_threshold(
     direction,
 ):
-    bot = _make_open_order_guardrail_bot()
+    bot = _make_open_order_snapshot_bot()
     emitted = []
     logged_orders = []
     bot._emit_open_orders_snapshot_delta_event = lambda **kwargs: emitted.append(kwargs)
@@ -10982,7 +10978,7 @@ async def test_open_orders_snapshot_delta_uses_strictly_greater_than_twenty_thre
 
 
 def test_open_orders_snapshot_delta_emitter_failure_is_bounded_and_keeps_fallback(caplog):
-    bot = _make_open_order_guardrail_bot()
+    bot = _make_open_order_snapshot_bot()
 
     def fail_emit_delta(**_kwargs):
         raise RuntimeError(
@@ -11015,7 +11011,7 @@ async def test_open_orders_snapshot_delta_console_sink_failure_does_not_change_r
         def write(self, _event):
             raise OSError("console unavailable")
 
-    bot = _make_open_order_guardrail_bot(epoch=7)
+    bot = _make_open_order_snapshot_bot(epoch=7)
     bot.live_event_console_enabled = True
     bot._live_event_pipeline = LiveEventPipeline(
         structured_sinks=[],
@@ -11047,7 +11043,7 @@ async def test_open_orders_snapshot_delta_console_sink_failure_does_not_change_r
 
 @pytest.mark.asyncio
 async def test_large_open_orders_snapshot_delta_keeps_legacy_console_without_pipeline(caplog):
-    bot = _make_open_order_guardrail_bot()
+    bot = _make_open_order_snapshot_bot()
     bot.live_event_console_enabled = False
     bot._live_event_pipeline = None
     bot.open_orders = {}
@@ -11062,9 +11058,9 @@ async def test_large_open_orders_snapshot_delta_keeps_legacy_console_without_pip
 
 
 @pytest.mark.asyncio
-async def test_disappeared_self_order_blocks_creations_until_full_freshness():
-    bot = _make_open_order_guardrail_bot(epoch=3)
-    order = _guardrail_order()
+async def test_unexpected_order_disappearance_waits_for_full_confirmation():
+    bot = _make_open_order_snapshot_bot(epoch=3)
+    order = _snapshot_order()
     bot.open_orders = {"BTC/USDT:USDT": [order]}
     bot.fetched_open_orders = [order]
     bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
@@ -11080,34 +11076,61 @@ async def test_disappeared_self_order_blocks_creations_until_full_freshness():
     assert ok is True
     assert bot.execution_scheduled is True
     assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
-    assert set(bot.freshness_ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
-    assert bot.freshness_ledger.blocked_symbols()["BTC/USDT:USDT"].min_epoch == 4
     assert bot._authoritative_pending_confirmations == {
         surface: 4 for surface in ACCOUNT_SURFACES
     }
 
-    to_create, skipped = Passivbot._apply_freshness_creation_guardrails(
-        bot,
-        [
-            {"symbol": "BTC/USDT:USDT", "side": "buy", "position_side": "long"},
-            {"symbol": "ETH/USDT:USDT", "side": "buy", "position_side": "long"},
-        ],
-    )
-
-    assert skipped == 1
-    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is True
+    assert set(details["missing"]) == set(ACCOUNT_SURFACES)
 
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
 
-    assert bot.freshness_ledger.blocked_symbols() == {}
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is False
+    assert details["missing"] == []
+    assert bot._authoritative_pending_confirmations == {}
 
 
 @pytest.mark.asyncio
-async def test_bot_cancelled_order_disappearance_does_not_arm_duplicate_guardrail():
-    bot = _make_open_order_guardrail_bot(epoch=5)
-    order = _guardrail_order()
+async def test_default_open_order_refresh_preserves_disappearance_confirmation(
+    monkeypatch,
+):
+    bot = _make_open_order_snapshot_bot(epoch=3)
+    order = _snapshot_order()
+    bot.open_orders = {"BTC/USDT:USDT": [order]}
+    bot.fetched_open_orders = [order]
+    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
+    bot.order_matches_bot_cancellation = lambda _order: False
+    bot.order_was_recently_cancelled = lambda _order: 0.0
+    bot.stop_signal_received = False
+    bot.fetch_open_orders = AsyncMock(return_value=[])
+    bot.update_positions_and_balance = AsyncMock(return_value=(True, True))
+    sleep = AsyncMock()
+    monkeypatch.setattr(passivbot_module.asyncio, "sleep", sleep)
+
+    ok = await Passivbot.update_open_orders(bot)
+
+    assert ok is True
+    bot.fetch_open_orders.assert_awaited_once_with()
+    sleep.assert_awaited_once_with(1.5)
+    bot.update_positions_and_balance.assert_awaited_once_with()
+    assert bot.execution_scheduled is True
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot._authoritative_pending_confirmations == {
+        surface: 4 for surface in ACCOUNT_SURFACES
+    }
+    blocked, details = bot._authoritative_execution_barrier_state()
+    assert blocked is True
+    assert set(details["missing"]) == set(ACCOUNT_SURFACES)
+
+
+@pytest.mark.asyncio
+async def test_bot_cancelled_order_disappearance_does_not_request_confirmation():
+    bot = _make_open_order_snapshot_bot(epoch=5)
+    order = _snapshot_order()
     bot.open_orders = {"BTC/USDT:USDT": [order]}
     bot.fetched_open_orders = [order]
     bot.order_matches_bot_cancellation = lambda _order: True
@@ -11121,15 +11144,14 @@ async def test_bot_cancelled_order_disappearance_does_not_arm_duplicate_guardrai
     )
 
     assert ok is True
-    assert bot.freshness_ledger.blocked_symbols() == {}
     assert bot._authoritative_pending_confirmations == {}
     assert bot.state_change_detected_by_symbol == set()
 
 
 @pytest.mark.asyncio
-async def test_unknown_manual_or_exchange_cancel_requests_confirmation_without_symbol_block():
-    bot = _make_open_order_guardrail_bot(epoch=5)
-    order = _guardrail_order(id="manual-or-exchange-cancel")
+async def test_unknown_manual_or_exchange_cancel_requests_confirmation():
+    bot = _make_open_order_snapshot_bot(epoch=5)
+    order = _snapshot_order(id="manual-or-exchange-cancel")
     bot.open_orders = {"BTC/USDT:USDT": [order]}
     bot.fetched_open_orders = [order]
     bot.order_matches_bot_cancellation = lambda _order: False
@@ -11143,7 +11165,6 @@ async def test_unknown_manual_or_exchange_cancel_requests_confirmation_without_s
     )
 
     assert ok is True
-    assert bot.freshness_ledger.blocked_symbols() == {}
     assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
     assert bot._authoritative_pending_confirmations == {
         surface: 6 for surface in ACCOUNT_SURFACES
@@ -11151,38 +11172,9 @@ async def test_unknown_manual_or_exchange_cancel_requests_confirmation_without_s
 
 
 @pytest.mark.asyncio
-async def test_disappeared_emitted_order_record_arms_duplicate_guardrail_without_recent_execution():
-    bot = _make_open_order_guardrail_bot(epoch=8)
-    order = _guardrail_order(
-        custom_id="entry_grid_normal_long",
-        info={"clientOrderId": "entry_grid_normal_long"},
-    )
-    bot.get_exchange_time = lambda: 10_000
-    bot.open_orders = {"BTC/USDT:USDT": [order]}
-    bot.fetched_open_orders = [order]
-    bot.order_matches_bot_cancellation = lambda _order: False
-    bot.order_was_recently_cancelled = lambda _order: 0.0
-    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: False
-    Passivbot._record_emitted_order_custom_id(bot, order, emitted_ts=9_000)
-
-    ok = await Passivbot._apply_open_orders_snapshot(
-        bot,
-        [],
-        allow_followup_positions_refresh=False,
-    )
-
-    assert ok is True
-    assert set(bot.freshness_ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
-    assert bot.freshness_ledger.blocked_symbols()["BTC/USDT:USDT"].min_epoch == 9
-    assert bot._authoritative_pending_confirmations == {
-        surface: 9 for surface in ACCOUNT_SURFACES
-    }
-
-
-@pytest.mark.asyncio
-async def test_restarted_inherited_order_disappearance_uses_confirmation_not_symbol_block():
-    bot = _make_open_order_guardrail_bot(epoch=8)
-    order = _guardrail_order(
+async def test_restarted_inherited_order_disappearance_uses_confirmation():
+    bot = _make_open_order_snapshot_bot(epoch=8)
+    order = _snapshot_order(
         id="inherited-after-restart",
         custom_id="entry_grid_normal_long",
         info={"clientOrderId": "entry_grid_normal_long"},
@@ -11201,7 +11193,6 @@ async def test_restarted_inherited_order_disappearance_uses_confirmation_not_sym
     )
 
     assert ok is True
-    assert bot.freshness_ledger.blocked_symbols() == {}
     assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
     assert bot._authoritative_pending_confirmations == {
         surface: 9 for surface in ACCOUNT_SURFACES
@@ -11209,94 +11200,8 @@ async def test_restarted_inherited_order_disappearance_uses_confirmation_not_sym
 
 
 @pytest.mark.asyncio
-async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_refresh(
-    caplog,
-):
-    bot = _make_open_order_guardrail_bot(epoch=7)
-    bot._last_plan_detail = {}
-    bot._order_plan_summary_is_interesting = lambda **kwargs: False
-    bot.PB_modes = {"long": {}, "short": {}}
-    bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-
-    class _CM:
-        def get_current_close(self, symbol, max_age_ms=None):
-            return 100.0
-
-    bot.cm = _CM()
-
-    async def fake_get_live_last_prices(symbols, **kwargs):
-        return {symbol: 100.0 for symbol in symbols}
-
-    bot._get_live_last_prices = fake_get_live_last_prices
-    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
-
-    disappeared_order = _guardrail_order()
-    bot.open_orders = {"BTC/USDT:USDT": [disappeared_order], "ETH/USDT:USDT": []}
-    bot.fetched_open_orders = [disappeared_order]
-    bot.order_matches_recent_execution = lambda _order, max_age_ms=None: True
-    bot.order_matches_bot_cancellation = lambda _order: False
-    bot.order_was_recently_cancelled = lambda _order: 0.0
-
-    await Passivbot._apply_open_orders_snapshot(
-        bot,
-        [],
-        allow_followup_positions_refresh=False,
-    )
-    bot.state_change_detected_by_symbol = set()
-
-    ideal_orders = {
-        "BTC/USDT:USDT": [
-            {
-                "symbol": "BTC/USDT:USDT",
-                "side": "buy",
-                "position_side": "long",
-                "qty": 0.01,
-                "price": 99_000.0,
-                "reduce_only": False,
-                "type": "limit",
-                "pb_order_type": "entry_grid_normal_long",
-            }
-        ],
-        "ETH/USDT:USDT": [
-            {
-                "symbol": "ETH/USDT:USDT",
-                "side": "buy",
-                "position_side": "long",
-                "qty": 0.1,
-                "price": 3_000.0,
-                "reduce_only": False,
-                "type": "limit",
-                "pb_order_type": "entry_grid_normal_long",
-            }
-        ],
-    }
-
-    async def fake_calc_ideal_orders():
-        return ideal_orders
-
-    bot.calc_ideal_orders = fake_calc_ideal_orders
-
-    with caplog.at_level(logging.INFO):
-        _to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
-
-    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
-    assert "freshness guardrail blocking order creation" in caplog.text
-
-    bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES:
-        bot._record_authoritative_surface(surface, (surface, "fresh"))
-
-    _to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
-
-    assert sorted(order["symbol"] for order in to_create) == [
-        "BTC/USDT:USDT",
-        "ETH/USDT:USDT",
-    ]
-
-
-@pytest.mark.asyncio
 async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
-    bot = _make_open_order_guardrail_bot(epoch=11)
+    bot = _make_open_order_snapshot_bot(epoch=11)
     bot._last_plan_detail = {}
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
     bot.PB_modes = {"long": {}, "short": {}}
@@ -11322,7 +11227,7 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
         def __float__(self):
             raise hostile_error(secret)
 
-    malformed_order = _guardrail_order(id=unsafe_order_id)
+    malformed_order = _snapshot_order(id=unsafe_order_id)
     malformed_order["price"] = HostilePrice()
     bot.open_orders = {"BTC/USDT:USDT": [malformed_order], "ETH/USDT:USDT": []}
     ideal_orders = {
@@ -11959,7 +11864,6 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot.positions = {}
     bot.open_orders = {}
     bot.PB_modes = {"long": {}, "short": {}}
-    bot._authoritative_refresh_epoch = 0
     bot._authoritative_pending_confirmations = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
@@ -13311,7 +13215,7 @@ async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirma
     bot.active_symbols = []
     bot.state_change_detected_by_symbol = set()
     bot.execution_scheduled = False
-    bot._authoritative_refresh_epoch = 0
+    _set_authoritative_epoch_state(bot, epoch=0)
     bot._authoritative_pending_confirmations = {"open_orders": 1}
     bot.recent_order_cancellations = []
     bot.recent_order_executions = [

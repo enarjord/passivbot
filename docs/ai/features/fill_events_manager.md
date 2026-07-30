@@ -60,12 +60,11 @@
     advancing windows while retaining the narrow execution lookup. Preserve ordinary
     recent-fill overlap for routine ingestion, and defer risk planning without consuming
     restart budget until every in-lookback row is authoritatively replaced. Report every
-    successful replacement before attempting later fallible fetches. Uptime health adds
-    the full authoritative net PnL when the previous cached value was not counted by this
-    process, and applies a delta against the exact net PnL previously counted for an
-    outstanding runtime synthetic row. Discard that temporary accounting after
-    enrichment; authoritative fills must not accumulate identity state. Structured
-    `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
+    successful replacement before attempting later fallible fetches. Uptime health PnL
+    counts authoritative net realized PnL only: pending and synthetic values remain
+    visible in fill diagnostics but do not enter the health counter, and later enrichment
+    adds the full authoritative amount without retaining fill-identity accounting state.
+    Structured `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
     `degraded_pnl_count` fields through the centralized payload sanitizer.
 
 ## Runtime Provenance

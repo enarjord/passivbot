@@ -10,6 +10,7 @@ ORDER_CHURN_GATE_SUPPORTED_EXCHANGES = frozenset(
     {
         "binance",
         "bitget",
+        "bitunix",
         "bybit",
         "fake",
         "gateio",

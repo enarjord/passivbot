@@ -47,6 +47,10 @@ verification and contract-specific regression coverage.
    and sets plus both unused generation counters were removed; pending
    post-write confirmation obligations and immutable planning snapshots remain
    separate because they represent distinct contracts.
+6. The scalar authoritative-refresh epoch mirror was removed. Refresh,
+   planning, reconciliation, snapshot stamping, and event diagnostics now read
+   the epoch directly from `FreshnessLedger`; execution-loop `cycle_id` remains
+   a separate observability lifecycle.
 
 ## Decision rules for further work
 
@@ -99,10 +103,13 @@ consumers, and a deletion-first proposal. Do not implement until the
 account-wide versus scoped safety boundary is explicit.
 
 Current result: `FreshnessLedger` is the sole owner of per-surface freshness
-and change facts. Remaining candidates are the scalar
-`_authoritative_refresh_epoch` compatibility alias and the overlapping
-disappeared-self-order confirmation, symbol-block, and same-wave state-change
-representations. Audit their direct callers before further deletion.
+and change facts. The disappeared-self-order symbol-block state machine was
+also removed after direct-caller and runtime analysis showed that the existing
+full-account `N+1` confirmation barrier always settled first in normal
+execution. The generic same-wave symbol latch remains because it also protects
+against late websocket changes and uncertain cancellation results. The scalar
+authoritative-refresh epoch mirror was removed after verifying that it had no
+producer, invalidation rule, or consumer distinct from `FreshnessLedger.epoch`.
 
 ### 2. Fill and realized-PnL reconstruction
 

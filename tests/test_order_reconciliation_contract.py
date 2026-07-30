@@ -85,6 +85,87 @@ def test_supported_hedge_orders_do_not_fabricate_pside_from_client_id(bot_cls):
         bot._get_position_side_for_order(order)
 
 
+def test_bitget_uta_websocket_order_uses_native_hold_side():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.is_uta = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "sell",
+        "amount": 0.1,
+        "info": {
+            "holdMode": "hedge_mode",
+            "holdSide": "long",
+            "side": "sell",
+            "tradeSide": "close",
+        },
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["side"] == "sell"
+    assert normalized["position_side"] == "long"
+    assert normalized["qty"] == 0.1
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"filled": 0.04, "remaining": 0.06},
+        {"filled": 0.0, "remaining": 0.06},
+    ],
+)
+def test_bitget_uta_websocket_partial_fill_requires_authoritative_refresh(progress):
+    bot = BitgetBot.__new__(BitgetBot)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.is_uta = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "status": "open",
+        "side": "buy",
+        "amount": 0.1,
+        **progress,
+        "info": {"holdSide": "long", "side": "buy"},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert normalized["_pb_order_update_requires_authoritative_refresh"] is True
+
+
+def test_bitget_uta_websocket_unfilled_open_does_not_force_refresh():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot._config_hedge_mode = True
+    bot.hedge_mode = True
+    bot.is_uta = True
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "status": "open",
+        "side": "buy",
+        "amount": 0.1,
+        "filled": 0.0,
+        "remaining": 0.1,
+        "info": {"holdSide": "long", "side": "buy"},
+    }
+
+    normalized = bot._normalize_order_update(order)
+
+    assert "_pb_order_update_requires_authoritative_refresh" not in normalized
+
+
+def test_bitget_uta_websocket_order_rejects_conflicting_native_psides():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.hedge_mode = True
+    bot.is_uta = True
+
+    with pytest.raises(ValueError, match="authoritative position-side"):
+        bot._get_position_side_for_order(
+            {"info": {"posSide": "short", "holdSide": "long"}}
+        )
+
+
 @pytest.mark.parametrize("bot_cls", [BinanceBot, KucoinBot])
 def test_sparse_websocket_order_update_uses_passivbot_client_pside(bot_cls):
     bot = bot_cls.__new__(bot_cls)

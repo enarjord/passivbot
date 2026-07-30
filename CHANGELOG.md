@@ -4,10 +4,29 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live health-summary PnL now counts authoritative net realized PnL only.
+  Pending and synthetic fill estimates remain visible in fill diagnostics but
+  no longer create temporary fill-identity bookkeeping solely to correct the
+  uptime metric after enrichment.
+- Bitget UTA private order updates now use the native `holdSide` field for
+  hedge position attribution. Hyperliquid briefly retries a sparse order-open
+  event when a concurrent local create is still awaiting its exchange ID, then
+  accepts it only through the existing exact acknowledged-ID contract. These
+  fixes avoid unnecessary authoritative REST refreshes without weakening
+  foreign or ambiguous order handling.
 - Background forager candle refresh now charges its REST budget per attempted
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing
   one slow symbol from consuming the batch budget and starving other candidates.
+- Added production Bitunix USDT perpetual-futures support through a native signed REST and
+  WebSocket connector, including complete market metadata and top-of-book coverage, live-candle
+  pagination, hedge-mode order and position reconciliation, account configuration, realized-PnL
+  fill events, long/short reduce-only order lifecycles, honest identifier-only market-order
+  acknowledgements, strict complete open-order pagination, and bounded REST ticker snapshots when
+  WebSockets are explicitly disabled. The connector rejects invalid order quantities and
+  case-insensitive authentication-header collisions, isolates malformed order-detail rows, retains
+  synthetic ticker provenance, refreshes public ticker subscriptions as markets change, times
+  ticker-cache freshness locally, and reconciles malformed private-WebSocket rows.
 - WEEX Futures orders now carry Passivbot's registered broker ID in the required
   `newClientOrderId` prefix while preserving Passivbot order-type markers for
   reconciliation and fill diagnostics.

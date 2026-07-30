@@ -692,7 +692,6 @@ def record_market_snapshot_surface(
         "market_snapshot",
         bot._market_snapshot_signature(symbols, snapshots),
         now_ms=_utc_ms(),
-        epoch=int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
     )
 
 

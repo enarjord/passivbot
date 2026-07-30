@@ -5,7 +5,6 @@ from live.freshness import (
     LIVE_STATE_SURFACES,
     FreshnessLedger,
     SurfaceState,
-    SymbolBlock,
 )
 
 __all__ = [
@@ -13,5 +12,4 @@ __all__ = [
     "LIVE_STATE_SURFACES",
     "FreshnessLedger",
     "SurfaceState",
-    "SymbolBlock",
 ]

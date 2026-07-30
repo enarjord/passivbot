@@ -268,7 +268,7 @@ def test_live_event_cycle_helpers_emit_structured_events():
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
-            self._authoritative_refresh_epoch = 7
+            self.freshness_ledger = SimpleNamespace(epoch=7)
             self.execution_scheduled = True
             self._live_event_cycle_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3871,7 +3871,7 @@ async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
-            self._authoritative_refresh_epoch = 17
+            self.freshness_ledger = SimpleNamespace(epoch=17)
             self._authoritative_pending_confirmations = {"open_orders": 18}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3929,7 +3929,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
             self.bot_id = "bot_1"
             self.live_event_debug_profiles = ("remote_calls",)
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {"open_orders": 22}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -3978,7 +3978,7 @@ async def test_authoritative_timed_fetch_failure_emits_classification_only():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = None
-            self._authoritative_refresh_epoch = 19
+            self.freshness_ledger = SimpleNamespace(epoch=19)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -4021,7 +4021,7 @@ async def test_authoritative_timed_fetch_emit_failure_does_not_skip_fetch():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 20
+            self.freshness_ledger = SimpleNamespace(epoch=20)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self.fetch_called = False
@@ -4056,7 +4056,7 @@ async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception(
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_13"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
 
@@ -4562,7 +4562,6 @@ def test_log_new_fill_events_emits_fill_ingested_event():
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
-            self._health_counted_synthetic_pnl_by_key = {}
 
     source_ids = ["trade-a", "trade-b"]
     source_derived_fill_id = "+".join(source_ids)
@@ -4613,24 +4612,40 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_log_enriched_cached_fill_adds_full_authoritative_pnl_to_health(caplog):
+@pytest.mark.parametrize(
+    "pnl_source",
+    [
+        "synthetic_fill_reconstruction_exact",
+        "synthetic_fill_reconstruction_degraded",
+    ],
+)
+def test_synthetic_fill_waits_for_authoritative_pnl_before_health_count(
+    caplog, pnl_source
+):
     import passivbot as pb_mod
 
     class FakeBot:
+        _emit_fill_ingested_event = lambda self, event, **kwargs: None
+        _live_event_console_available = lambda self: True
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
         _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
         _log_fill_event = lambda self, event: f"id={event.id}"
+        _monitor_fill_payload = lambda self, event: {}
+        _monitor_record_event = lambda self, *args, **kwargs: None
+        _monitor_record_fill_history = lambda self, event: None
 
         def __init__(self):
-            self._health_pnl = 100.0
-            self._health_counted_synthetic_pnl_by_key = {}
+            self._health_fills = 0
+            self._health_pnl = 0.0
 
     previous = SimpleNamespace(
         id="degraded-close",
+        source_ids=["trade-1"],
         timestamp=1_700_000_000_000,
         pnl=5.0,
         fee_paid=-0.1,
         pnl_status="complete",
-        pnl_source="synthetic_fill_reconstruction_degraded",
+        pnl_source=pnl_source,
     )
     authoritative = SimpleNamespace(
         id="degraded-close",
@@ -4642,60 +4657,17 @@ def test_log_enriched_cached_fill_adds_full_authoritative_pnl_to_health(caplog):
     )
     bot = FakeBot()
 
-    with caplog.at_level(logging.INFO):
-        bot._log_enriched_fill_events([(previous, authoritative)])
+    bot._log_new_fill_events([previous])
 
-    assert bot._health_pnl == pytest.approx(102.9)
-    assert "previous_source=synthetic_fill_reconstruction_degraded" in caplog.text
-    assert "previous_counted=false" in caplog.text
-    assert "pnl_delta=+2.9" in caplog.text
-
-
-def test_log_enriched_runtime_fill_applies_authoritative_pnl_delta(caplog):
-    import passivbot as pb_mod
-
-    class FakeBot:
-        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
-        _log_fill_event = lambda self, event: f"id={event.id}"
-
-        def __init__(self):
-            self._health_pnl = 100.0
-            self._health_counted_synthetic_pnl_by_key = {}
-
-    previous = SimpleNamespace(
-        id="degraded-close",
-        source_ids=["trade-1"],
-        timestamp=1_700_000_000_000,
-        pnl=5.0,
-        fee_paid=-0.1,
-        pnl_status="complete",
-        pnl_source="synthetic_fill_reconstruction_degraded",
-    )
-    authoritative = SimpleNamespace(
-        id="authoritative-close",
-        source_ids=["trade-1"],
-        timestamp=previous.timestamp,
-        pnl=3.0,
-        fee_paid=-0.1,
-        pnl_status="complete",
-        pnl_source="authoritative",
-    )
-    bot = FakeBot()
-    pb_mod.Passivbot._mark_health_fill_pnl_counted(bot, previous)
-    assert bot._health_counted_synthetic_pnl_by_key
-    assert all(
-        value == pytest.approx(4.9)
-        for value in bot._health_counted_synthetic_pnl_by_key.values()
-    )
-    previous.pnl = 50.0
+    assert bot._health_fills == 1
+    assert bot._health_pnl == 0.0
 
     with caplog.at_level(logging.INFO):
         bot._log_enriched_fill_events([(previous, authoritative)])
 
-    assert bot._health_pnl == pytest.approx(98.0)
-    assert "previous_counted=true" in caplog.text
-    assert "pnl_delta=-2" in caplog.text
-    assert bot._health_counted_synthetic_pnl_by_key == {}
+    assert bot._health_pnl == pytest.approx(2.9)
+    assert f"previous_source={pnl_source}" in caplog.text
+    assert "authoritative_net_pnl=+2.9" in caplog.text
 
 
 def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
@@ -4734,7 +4706,6 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
             self.monitor_publisher = RecorderPublisher()
             self._health_fills = 0
             self._health_pnl = 0.0
-            self._health_counted_synthetic_pnl_by_key = {}
 
     event = SimpleNamespace(
         id="fill-1",
@@ -4757,7 +4728,6 @@ def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(ca
     with caplog.at_level(logging.INFO):
         bot._log_new_fill_events([event])
 
-    assert bot._health_counted_synthetic_pnl_by_key == {}
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert [event.event_type for event in structured.events] == [EventTypes.FILL_INGESTED]
     assert [event.event_type for event in console.events] == [EventTypes.FILL_INGESTED]
@@ -5222,6 +5192,7 @@ async def test_execute_orders_parent_records_order_opened_event():
             pb_mod.Passivbot._is_market_execution_order
         )
         _log_market_execution_notice = pb_mod.Passivbot._log_market_execution_notice
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -5232,6 +5203,8 @@ async def test_execute_orders_parent_records_order_opened_event():
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
             self._order_wave_in_progress = {"id": 7, "event_id": "ow_7"}
+            self.freshness_ledger = SimpleNamespace(epoch=0)
+            self._authoritative_pending_confirmations = {}
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5698,6 +5671,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
         _request_authoritative_confirmation = (
             pb_mod.Passivbot._request_authoritative_confirmation
         )
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _cancel_result_requires_full_authoritative_confirmation = (
             pb_mod.Passivbot._cancel_result_requires_full_authoritative_confirmation
         )
@@ -5709,7 +5683,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             self.live_event_debug_profiles = ("execution",)
             self._live_event_current_cycle_id = "cy_12"
             self._authoritative_pending_confirmations = {}
-            self._authoritative_refresh_epoch = 4
+            self.freshness_ledger = SimpleNamespace(epoch=4)
             self._order_wave_in_progress = {"id": 9, "event_id": "ow_9"}
             self._health_orders_cancelled = 0
             self.state_change_detected_by_symbol = set()
