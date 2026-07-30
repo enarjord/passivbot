@@ -234,8 +234,10 @@ async def collect_verified_outcome_signal_window(
 
     if first_received_ms is None:
         raise OutcomeNoPublicFill("outcome signal collection completed without a public fill")
+    assert collection_end_ms is not None
     coverage_start_ms = ((first_received_ms + 999) // 1_000) * 1_000
-    coverage_end_ms = ((clock() - verification_lag_ms) // 1_000) * 1_000
+    verified_through_ms = min(clock(), collection_end_ms) - verification_lag_ms
+    coverage_end_ms = (verified_through_ms // 1_000) * 1_000
     if coverage_end_ms <= coverage_start_ms:
         raise OutcomeIncompleteVerifiedSignal(
             "outcome collection did not complete one verified signal second"

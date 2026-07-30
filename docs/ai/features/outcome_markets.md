@@ -312,7 +312,8 @@ retention limits, and any such failure must leave the interval uncovered.
 Direct candle construction rejects conflicting immutable fields for repeated source-event or
 source-sequence identities before deduplication. Live collectors validate delivery lag before
 archiving or deferring a fill; a rejected over-lag fill is never added to retained history, even
-when its timestamp lies outside the newly certified window.
+when its timestamp lies outside the newly certified window. Verified coverage never extends past
+the scheduled collection deadline merely because the event loop resumes late.
 
 A historical source batch commits its metadata observation, trades, settlement evidence, and
 verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the
@@ -432,10 +433,11 @@ at the opening boundary. The archive replay builder also requires independent fu
 price-grid stream coverage on venues such as Polymarket where tick-size changes are a separate
 event source. Fill coverage does not prove grid coverage. A bounded live capture without an
 authoritative grid-subscription readiness boundary archives observed changes but does not certify
-grid coverage. Identical timestamped old-grid to new-grid transitions emitted for complementary
-assets are one normalized market-level change. The builder supplies the authoritative
-capital-release timestamp and payout to Rust; resolution-only evidence remains archived but is not
-a release timestamp. The EMA-anchor job
+grid coverage. Each retained grid transition updates the executable minimum and maximum prices
+atomically with the tick size. Identical timestamped old-grid to new-grid transitions emitted for
+complementary assets are one normalized market-level change. The builder supplies the
+authoritative capital-release timestamp and payout to Rust; resolution-only evidence remains
+archived but is not a release timestamp. The EMA-anchor job
 adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
 shared-wallet orchestrator locks that job's allocation until that release.
 

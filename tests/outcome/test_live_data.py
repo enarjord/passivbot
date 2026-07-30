@@ -303,6 +303,39 @@ async def test_collector_waits_through_maximum_accepted_trade_lag():
 
 
 @pytest.mark.asyncio
+async def test_collector_does_not_extend_coverage_after_late_event_loop_resume():
+    market = polymarket_market()
+
+    async def stream():
+        yield NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id="seed",
+            collector_sequence=1,
+        )
+
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=3,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: 9_100,
+        trade_stream=stream(),
+    )
+
+    assert window.coverage == VerifiedCoverage(2_000, 5_000)
+    assert [candle.timestamp_ms for candle in window.candles] == [2_000, 3_000, 4_000]
+
+
+@pytest.mark.asyncio
 async def test_polymarket_identityless_collector_rejects_overlapping_coverage(
     tmp_path,
 ):

@@ -254,7 +254,15 @@ def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
     return max((int(value) for value in warmup_map.values()), default=0)
 
 
-def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> Counter:
+def stamp_warmup_metadata(
+    mss: dict,
+    coins: Sequence[str],
+    warmup_map: dict,
+    *,
+    bar_interval_minutes: int = 1,
+) -> Counter:
+    if bar_interval_minutes <= 0:
+        raise ValueError("bar_interval_minutes must be positive")
     default_warmup = int(warmup_map.get("__default__", 0))
     stamped: Counter = Counter()
     for coin in coins:
@@ -267,7 +275,10 @@ def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> 
         if first_idx > last_idx:
             trade_start = first_idx
         else:
-            trade_start = min(last_idx, first_idx + warmup_minutes)
+            warmup_bars = (
+                warmup_minutes + bar_interval_minutes - 1
+            ) // bar_interval_minutes
+            trade_start = min(last_idx, first_idx + warmup_bars)
         meta["warmup_minutes"] = warmup_minutes
         meta["trade_start_index"] = trade_start
         stamped[(warmup_minutes, trade_start)] += 1

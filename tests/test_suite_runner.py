@@ -60,6 +60,57 @@ def test_suite_preaggregation_rewrites_validity_indices():
     assert mss["__meta__"]["candle_interval_offset_bars"] == 0
 
 
+def test_suite_slice_keeps_preaggregated_validity_indices_in_target_bar_units(
+    monkeypatch,
+):
+    interval_minutes = 5
+    timestamps = np.arange(60, dtype=np.int64) * interval_minutes * 60_000
+    hlcvs = np.ones((60, 1, 4), dtype=np.float64)
+    dataset = ExchangeDataset(
+        exchange="combined",
+        coins=["BTC"],
+        coin_index={"BTC": 0},
+        coin_exchange={"BTC": "combined"},
+        available_exchanges=["combined"],
+        hlcvs=hlcvs,
+        mss={
+            "BTC": {"first_valid_index": 20, "last_valid_index": 59},
+            "__meta__": {
+                "data_interval_minutes": interval_minutes,
+                "candle_interval_offset_bars": 0,
+            },
+        },
+        btc_usd_prices=np.ones(60, dtype=np.float64),
+        timestamps=timestamps,
+        cache_dir="/tmp",
+    )
+    scenario_config = {
+        "backtest": {
+            "start_date": "1970-01-01T00:50:00",
+            "end_date": "1970-01-01T04:55:00",
+        },
+        "live": {"warmup_ratio": 0.0},
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"bounds": {}},
+    }
+    monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
+    monkeypatch.setattr(
+        "suite_runner.compute_per_coin_warmup_minutes",
+        lambda cfg: {"__default__": 0},
+    )
+
+    subset_hlcvs, _subset_btc, _subset_ts, subset_mss = _prepare_dataset_subset(
+        dataset,
+        scenario_config,
+        ["BTC"],
+        "target_bar_units",
+    )
+
+    assert subset_hlcvs.shape[0] == 50
+    assert subset_mss["BTC"]["first_valid_index"] == 10
+    assert subset_mss["BTC"]["last_valid_index"] == 49
+
+
 def test_extract_suite_config_merges_override():
     """Test that extract_suite_config properly merges overrides with new structure."""
     base = {

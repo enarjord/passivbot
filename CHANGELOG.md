@@ -119,8 +119,9 @@ All notable user-facing changes will be documented in this file.
   tick-size events deduplicate as one normalized market-level transition. Full-contract replay
   starts from the latest metadata state valid at trading open, metadata fingerprint checks are
   serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
-  tier, suite pre-aggregation converts validity indices, and active Polymarket evaluation windows
-  apply their synthetic close before Rust translation. Polymarket reconnects now discard
+  tier, suite pre-aggregation and scenario slicing keep validity indices in target-bar units, and
+  active Polymarket evaluation windows apply their synthetic close before Rust translation.
+  Polymarket reconnects now discard
   abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
   archived fee selection uses opening metadata and rejects unsupported later transitions, and the
   HIP-4 evaluator requires an explicit minimum-notional assumption alongside quantity constraints.
@@ -138,7 +139,9 @@ All notable user-facing changes will be documented in this file.
   Polygon fill and settlement import now requires explicit boolean non-removed log evidence.
   Live collectors reject over-lag fills before archive writes, candle construction rejects
   conflicting duplicate trade identities, and replay accepts execution candles from trading open
-  while keeping order placement gated until order-entry open.
+  while keeping order placement gated until order-entry open. Verified live coverage is capped at
+  its scheduled collection deadline, and replayed price-grid transitions refresh executable price
+  bounds together with the tick size.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

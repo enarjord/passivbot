@@ -199,9 +199,7 @@ impl SingleOutcomeSimulator {
         timestamp_ms: u64,
     ) -> Result<(), OutcomeError> {
         self.ensure_market_open(timestamp_ms)?;
-        price_grid.validate()?;
-        self.market.price_grid = price_grid;
-        self.market.validate()?;
+        self.market.replace_price_grid(price_grid)?;
         // A venue grid transition makes any incompatible resting price non-executable.
         self.open_orders.retain(|resting| {
             if resting.order.close_all {
@@ -554,6 +552,35 @@ mod tests {
         assert_close(fills[0].fill.price, 0.4);
         assert!(simulator.open_orders().is_empty());
         assert_close(simulator.ledger().yes_qty(), 2.0);
+    }
+
+    #[test]
+    fn price_grid_change_refreshes_simulator_executable_bounds() {
+        let mut initial_market = market(false);
+        initial_market.min_price = 0.01;
+        initial_market.max_price = 0.99;
+        initial_market.price_grid = OutcomePriceGrid::FixedStep { step: 0.01 };
+        let mut simulator =
+            SingleOutcomeSimulator::new(initial_market, OutcomeFeeSchedule::zero(), 10.0).unwrap();
+
+        simulator
+            .update_price_grid(OutcomePriceGrid::FixedStep { step: 0.001 }, 1_500)
+            .unwrap();
+        simulator
+            .place_order(
+                order(
+                    "new-upper-bound",
+                    Outcome::Yes,
+                    OutcomeOrderSide::Buy,
+                    0.999,
+                    0.1,
+                ),
+                1_600,
+            )
+            .unwrap();
+
+        assert_close(simulator.market.min_price, 0.001);
+        assert_close(simulator.market.max_price, 0.999);
     }
 
     #[test]

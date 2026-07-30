@@ -285,6 +285,25 @@ impl OutcomePriceGrid {
         self.round_down(price)
             .is_ok_and(|rounded| (rounded - price).abs() <= EPSILON.max(price.abs() * 1e-12))
     }
+
+    pub fn executable_bounds(&self, payout_unit: f64) -> Result<(f64, f64), OutcomeError> {
+        validate_payout_unit(payout_unit)?;
+        let min_price = self.increment_at(0.0)?;
+        let upper_probe = f64::from_bits(payout_unit.to_bits() - 1);
+        let upper_increment = self.increment_at(upper_probe)?;
+        let max_price = (upper_probe / upper_increment).floor() * upper_increment;
+        if !min_price.is_finite()
+            || !max_price.is_finite()
+            || min_price <= 0.0
+            || min_price >= max_price
+            || max_price >= payout_unit
+        {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome price grid has no executable prices inside payout bounds".to_string(),
+            ));
+        }
+        Ok((min_price, max_price))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -368,6 +387,17 @@ impl BinaryOutcomeMarketSpec {
 
     pub fn round_price_up(&self, price: f64) -> Result<f64, OutcomeError> {
         self.price_grid.round_up(price)
+    }
+
+    pub fn replace_price_grid(&mut self, price_grid: OutcomePriceGrid) -> Result<(), OutcomeError> {
+        let (min_price, max_price) = price_grid.executable_bounds(self.payout_unit)?;
+        let mut updated = self.clone();
+        updated.price_grid = price_grid;
+        updated.min_price = min_price;
+        updated.max_price = max_price;
+        updated.validate()?;
+        *self = updated;
+        Ok(())
     }
 
     pub fn validate_order(&self, order: &OutcomeLimitOrder) -> Result<(), OutcomeError> {
@@ -959,6 +989,58 @@ mod tests {
         let buy_no = fill(Outcome::No, OutcomeOrderSide::Buy, 0.665, 2.0);
         assert_close(sell_yes.canonical_yes_exposure_delta(), -2.0);
         assert_close(buy_no.canonical_yes_exposure_delta(), -2.0);
+    }
+
+    #[test]
+    fn replacing_price_grid_refreshes_executable_bounds() {
+        let mut market = BinaryOutcomeMarketSpec {
+            venue: "fixture".to_string(),
+            market_id: "market".to_string(),
+            yes_asset_id: "yes".to_string(),
+            no_asset_id: "no".to_string(),
+            payout_unit: 1.0,
+            min_price: 0.01,
+            max_price: 0.99,
+            price_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+            qty_step: 1.0,
+            min_qty: 1.0,
+            min_notional: 0.0,
+            trading_opens_ms: 1,
+            order_entry_opens_ms: 1,
+            trading_closes_ms: 2,
+            scheduled_event_ms: 2,
+            capabilities: OutcomeVenueCapabilities {
+                complementary_books_merged: false,
+                supports_split: false,
+                supports_merge: false,
+                supports_redeem: false,
+                supports_post_only: true,
+                supports_gtd: false,
+                sell_requires_inventory: true,
+            },
+        };
+
+        market
+            .replace_price_grid(OutcomePriceGrid::FixedStep { step: 0.001 })
+            .unwrap();
+
+        assert_close(market.min_price, 0.001);
+        assert_close(market.max_price, 0.999);
+
+        market
+            .replace_price_grid(OutcomePriceGrid::FixedStep { step: 0.03 })
+            .unwrap();
+        assert_close(market.min_price, 0.03);
+        assert_close(market.max_price, 0.99);
+
+        market
+            .replace_price_grid(OutcomePriceGrid::SignificantFigures {
+                max_significant_figures: 5,
+                max_decimal_places: 8,
+            })
+            .unwrap();
+        assert_close(market.min_price, 1e-8);
+        assert_close(market.max_price, 0.99999);
     }
 
     #[test]

@@ -93,6 +93,20 @@ def test_stamp_optimizer_warmup_uses_bounds_when_template_bot_exceeds_them():
     assert mss["HYPE"]["trade_start_index"] == 30
 
 
+def test_stamp_warmup_converts_minutes_to_preaggregated_bar_units():
+    mss = {"HYPE": {"first_valid_index": 4, "last_valid_index": 20}}
+
+    stamp_warmup_metadata(
+        mss,
+        ["HYPE"],
+        {"HYPE": 11},
+        bar_interval_minutes=5,
+    )
+
+    assert mss["HYPE"]["warmup_minutes"] == 11
+    assert mss["HYPE"]["trade_start_index"] == 7
+
+
 def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_them():
     config = _make_optimizer_config()
 

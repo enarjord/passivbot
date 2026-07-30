@@ -1601,21 +1601,20 @@ def _prepare_dataset_subset(
     meta["warmup_minutes_provided"] = warmup_provided
     mss_slice["__meta__"] = meta
 
-    interval = int(meta.get("data_interval_minutes", 1) or 1)
     offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
-    adjustment_1m = start_idx * interval + offset_bars
-    if adjustment_1m > 0:
+    adjustment_bars = start_idx + offset_bars
+    if adjustment_bars > 0:
         for coin in selected_coins:
             coin_meta = mss_slice.get(coin)
             if not isinstance(coin_meta, dict):
                 continue
             if "first_valid_index" in coin_meta:
                 coin_meta["first_valid_index"] = max(
-                    0, int(coin_meta.get("first_valid_index", 0)) - adjustment_1m
+                    0, int(coin_meta.get("first_valid_index", 0)) - adjustment_bars
                 )
             if "last_valid_index" in coin_meta:
                 coin_meta["last_valid_index"] = max(
-                    0, int(coin_meta.get("last_valid_index", 0)) - adjustment_1m
+                    0, int(coin_meta.get("last_valid_index", 0)) - adjustment_bars
                 )
         if offset_bars > 0:
             meta["candle_interval_offset_bars"] = 0
@@ -1630,17 +1629,16 @@ def _recompute_index_metadata(
 ) -> None:
     total_steps = hlcvs.shape[0]
     interval = int(mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
-    total_steps_1m = total_steps * interval
     warmup_map = warmup_map or {}
     default_warm = int(warmup_map.get("__default__", 0))
     for idx, coin in enumerate(coins):
         meta = mss.setdefault(coin, {})
         first_idx = int(meta.get("first_valid_index", 0))
-        last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
-        first_idx = max(0, min(first_idx, total_steps_1m))
-        last_idx = max(0, min(last_idx, total_steps_1m - 1))
-        if first_idx >= total_steps_1m:
-            first_idx = total_steps_1m - 1
+        last_idx = int(meta.get("last_valid_index", total_steps - 1))
+        first_idx = max(0, min(first_idx, total_steps))
+        last_idx = max(0, min(last_idx, total_steps - 1))
+        if first_idx >= total_steps:
+            first_idx = total_steps - 1
         if last_idx < first_idx:
             last_idx = first_idx
         if "first_valid_index" not in meta or "last_valid_index" not in meta:
@@ -1648,8 +1646,8 @@ def _recompute_index_metadata(
             finite = np.isfinite(close_series)
             if finite.any():
                 valid_indices = np.where(finite)[0]
-                first_idx = int(valid_indices[0]) * interval
-                last_idx = int(valid_indices[-1]) * interval + (interval - 1)
+                first_idx = int(valid_indices[0])
+                last_idx = int(valid_indices[-1])
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
         if warmup_map:
@@ -1661,7 +1659,8 @@ def _recompute_index_metadata(
         if first_idx > last_idx:
             trade_start_idx = first_idx
         else:
-            trade_start_idx = min(last_idx, first_idx + warm_minutes)
+            warmup_bars = (warm_minutes + interval - 1) // interval
+            trade_start_idx = min(last_idx, first_idx + warmup_bars)
         meta["trade_start_index"] = trade_start_idx
 
 

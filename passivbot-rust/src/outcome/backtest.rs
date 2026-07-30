@@ -248,7 +248,7 @@ fn apply_price_grid_changes_before(
             ));
         }
         simulator.update_price_grid(change.new_grid, change.timestamp_ms)?;
-        current_market.price_grid = change.new_grid;
+        current_market.replace_price_grid(change.new_grid)?;
         *next_change += 1;
     }
     Ok(())
