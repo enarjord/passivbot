@@ -1,33 +1,35 @@
 # Passivbot Engineering Principles
 
-This is the canonical home for durable repository-wide engineering invariants. Task-specific
-documents should link here rather than restating these rules.
+Canonical repository-wide invariants; task documents link here instead of restating them.
 
 ## Architecture
 
-- Rust is the source of truth for order logic, strategies, risk, unstuck, backtesting behavior,
-  and analysis metrics derived from those behaviors.
-- Python owns orchestration, exchange I/O, configuration, data collection, caching, reconciliation,
+- Rust is the source of truth for order logic, strategies, risk, unstuck, backtesting, and derived
+  analysis metrics.
+- A Rust ideal-order result is atomic current intent. Validate the complete result before
+  reconciliation. Malformed output is fatal; Python must not substitute prior ideals, actual
+  orders, or a usable-looking subset.
+- Python owns orchestration, exchange I/O, configuration, data plumbing, caching, reconciliation,
   and execution gating.
-- Live and backtest behavior must implement equivalent trading and risk contracts. Separate
-  implementations are acceptable when runtime contexts differ, but require parity tests against a
-  simple shared reference contract.
+- Live and backtest behavior must implement equivalent trading and risk contracts, not identical
+  raw-data availability. Runtime-specific readiness and bounded fallbacks require parity tests
+  against a simple shared reference contract and must not bias selection toward fresher symbols.
 
 ## Statelessness
 
-- Trading decisions must be reproducible after restart from exchange state and configuration.
+- Trading decisions must be reproducible after restart from exchange state and config.
 - Do not add decision-changing local state that cannot be rederived.
 - Performance caches are allowed only when cache loss, rejection, or rebuild does not change the
-  intended trading decision.
-- A reviewed RAM-only economy gate may reset only toward current Rust intent. It must never preserve
-  or synthesize orders, weaken readiness/risk/mode checks, or hide resets; cover resets with tests.
+  intended decision.
+- A reviewed RAM-only economy gate may reset only toward current Rust intent. It must not preserve
+  or synthesize orders, weaken readiness/risk/mode checks, or hide resets. Test reset behavior.
 
 ## Terminology And Numeric Conventions
 
-- `position_side`, `pos_side`, and `pside` mean `long` or `short`.
-- `side` and `order_side` mean `buy` or `sell`.
-- `qty` and `pos_size` are signed internally. Use `abs(qty)` only at an exchange boundary that
-  requires unsigned payload quantities.
+- `position_side`, `pos_side`, and `pside` mean `long`/`short`; `side` and `order_side` mean
+  `buy`/`sell`.
+- `qty` and `pos_size` are signed internally. Use `abs(qty)` only at exchange boundaries requiring
+  unsigned quantities.
 - EMA spans are floats. Do not round derived spans.
 - Entries must observe effective minimum quantity.
 - Closes should observe effective minimum cost. If a position is below effective minimum quantity,
@@ -44,15 +46,14 @@ documents should link here rather than restating these rules.
 
 ## Configuration Ownership
 
-Place a parameter according to its actual consumers:
+Place parameters by actual consumers:
 
 - `config.live`: consumed by live and shared with backtest/optimizer
 - `config.backtest`: simulation-only behavior
 - `config.optimize`: optimizer-only behavior
 
-Do not place a parameter in `config.live` merely because ownership is uncertain. Trace the
-consumers and choose the narrowest correct surface. Defaults belong in the canonical config loading
-and formatting path; runtime consumers should not silently reapply them.
+Choose the narrowest consumer-owned surface; uncertainty does not justify `config.live`. Defaults
+belong in canonical loading/formatting; runtime consumers must not reapply them.
 
 ## Failure Handling
 

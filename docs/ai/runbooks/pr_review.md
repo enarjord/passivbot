@@ -41,6 +41,19 @@ diffs, test output, or exchange data.
 5. Report actionable findings first with exact locations, evidence, impact, and a credible fix.
    Avoid style-only findings unless they affect correctness or maintainability.
 
+## Architectural Proposal Check
+
+Before recommending a trading-critical fix or fallback:
+
+1. Name the current authority for the decision: Rust intent, exchange truth, canonical input
+   readiness, reconciliation, or execution policy.
+2. Distinguish a valid empty decision from malformed producer output and unavailable input.
+3. Reject proposals that preserve, synthesize, or reinterpret strategy intent outside Rust.
+4. Check restart reproducibility and live/backtest parity under realistic live data delay, including
+   whether selection would favor whichever symbols refreshed first.
+5. Fix a hypothetical producer defect at its producer boundary. Do not add consumer-side trading
+   policy without evidence of the failure and an explicit contract authorizing that policy.
+
 When a new head only incorporates the target branch or resolves a mechanical conflict, prior
 semantic approval may be carried forward after a focused delta review only when:
 

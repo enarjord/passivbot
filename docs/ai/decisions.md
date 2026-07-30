@@ -6,6 +6,8 @@ normative. Superseded discussion remains in git history and `case_studies/`.
 | Decision | Rationale | Current contract |
 |---|---|---|
 | Rust owns trading behavior | Prevent live/backtest divergence and Python-side strategy patches | `principles.md`, `architecture.md` |
+| Rust ideal-order batches validate atomically | A partial or prior-intent fallback makes Python a second strategy authority | `architecture.md`, `error_contract.md`, `case_studies/trading_contract_failures.md` |
+| Live readiness uses canonical inputs, not raw arrival | Exchange publication order must not bias forager selection or over-block unaffected actions | `error_contract.md`, `features/candlestick_manager.md`, `case_studies/trading_contract_failures.md` |
 | Decisions are restart-reproducible | Local history must not silently change post-restart trading behavior | `principles.md` |
 | Exchange fetch methods propagate failures | Caller policy needs complete error context for retry, defer, or restart | `error_contract.md` |
 | Bybit closed-PnL uses hybrid pagination | Cursor-only and broad time windows can each lose coverage | `features/exchange_integrations.md`, `features/fill_events_manager.md` |

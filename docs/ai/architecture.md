@@ -11,7 +11,7 @@ Python (src/)                              Rust (passivbot-rust/src/)
 ```
 
 Rust owns trading behavior. Python may determine whether a proposed action is currently executable
-from fresh exchange state, but must not reimplement strategy intent.
+from contract-valid exchange state, but must not reimplement strategy intent.
 
 ## Core Python Components
 
@@ -30,10 +30,17 @@ from fresh exchange state, but must not reimplement strategy intent.
 1. Refresh account and relevant market state.
 2. Build canonical strategy and risk inputs.
 3. Ask Rust for ideal orders.
-4. Reconcile ideal orders with exchange orders.
-5. Evaluate concrete create/cancel actions against freshness and safety gates.
-6. Submit only approved actions.
-7. Confirm or classify ambiguous exchange outcomes before retrying.
+4. Validate the complete Rust result as one current-intent batch.
+5. Reconcile ideal orders with exchange orders.
+6. Evaluate concrete create/cancel actions against readiness and safety gates.
+7. Submit only approved actions.
+8. Confirm or classify ambiguous exchange outcomes before retrying.
+
+Only a complete, valid Rust batch enters reconciliation. An absent ideal authorizes cancellation
+only within such a batch. Malformed output is fatal before reconciliation; prior ideals and actual
+exchange orders are not fallback strategy intent. Stopping before exchange actions may leave an
+existing order physically resting, but does not authorize the live bot to manage it as current
+Rust intent.
 
 Reconciliation owns equivalence decisions such as `satisfied_existing`. Gatekeeper decisions are
 structured (`approved`, `deferred`, `rejected`, or `satisfied_existing`) and include stable reason

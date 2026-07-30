@@ -27,6 +27,9 @@ to the caller. It does not mean every failed symbol fetch must crash the whole b
    source, bounds, observability, and tests.
 5. If an allowed fallback source is itself unavailable, fail closed or propagate according to the
    consumer boundary.
+6. Validate a produced trading decision before downstream policy consumes it. A malformed Rust
+   ideal-order batch is fatal before reconciliation; prior ideals, actual orders, and partial output
+   are not fallbacks.
 
 ## Forbidden Patterns
 
@@ -36,6 +39,7 @@ In trading-critical paths, do not:
 - catch and return neutral defaults such as `0.0`, `None`, `{}`, `[]`, or `False` for required data
 - use `dict.get(required_key, default)` to hide a missing required configuration or input
 - pass fabricated defaults to Rust, reconciliation, a risk gate, or the executor
+- reinterpret malformed or partial Rust output as current strategy intent
 
 These shapes may be valid in optional or observability-only code. Classify the consumer before
 changing a match.
@@ -105,6 +109,7 @@ violate an explicit ownership or safety policy.
 
 | Input/path | Default | Allowed fallback | Required evidence |
 |---|---|---|---|
+| Rust ideal-order batch | Fatal before reconciliation | None | Producer-boundary regression test |
 | Exchange fetch methods | Propagate | None in fetch method | Caller policy tests |
 | Required EMA | Unavailable/raise | Previous EMA for the same symbol/span only when explicitly implemented | `[ema]` warning, source/age/count, regression tests |
 | Risk-gating input | Fail closed | None unless explicitly approved | `[risk]` visibility and regression tests |
