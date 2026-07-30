@@ -110,7 +110,9 @@ All notable user-facing changes will be documented in this file.
   quotes to verified absence if the signal expires during execution. Historical source batches
   now commit metadata, trades, settlements, and coverage atomically, and one-second replay rejects
   grid changes whose intrasecond order against execution fills is unknowable. Strategy-mode
-  summaries retain settlement-scenario rebate ranges.
+  summaries retain settlement-scenario rebate ranges. Quote-asset changes remain versioned
+  metadata instead of conflicting immutable contract terms, trade identities are enforced across
+  both outcome assets, and Polymarket coverage waits for initial books from both subscriptions.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

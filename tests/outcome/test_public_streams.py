@@ -9,6 +9,7 @@ from outcome.adapters import hyperliquid, polymarket
 from outcome.models import OutcomeSide
 from outcome.public_streams import (
     _HyperliquidSubscriptionGate,
+    _PolymarketSubscriptionGate,
     decode_hyperliquid_ws_book_message,
     decode_hyperliquid_ws_message,
     decode_polymarket_ws_book_message,
@@ -88,6 +89,38 @@ def test_hyperliquid_trade_gate_waits_for_all_subscription_acknowledgements():
         is False
     )
     assert gate.allows(trade_message) is True
+
+
+def test_polymarket_trade_gate_waits_for_both_initial_books():
+    gate = _PolymarketSubscriptionGate(("yes-token", "no-token"))
+    trade_message = {
+        "event_type": "last_trade_price",
+        "asset_id": "yes-token",
+    }
+
+    assert gate.allows(trade_message) is False
+    assert (
+        gate.allows(
+            {
+                "event_type": "book",
+                "asset_id": "yes-token",
+            }
+        )
+        is False
+    )
+    assert gate.allows(trade_message) is False
+    assert (
+        gate.allows(
+            [
+                {
+                    "event_type": "book",
+                    "asset_id": "no-token",
+                },
+                trade_message,
+            ]
+        )
+        is True
+    )
 
 
 def test_websocket_decoder_assigns_monotonic_collector_sequence_to_batch():

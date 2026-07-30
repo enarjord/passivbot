@@ -58,6 +58,32 @@ class _HyperliquidSubscriptionGate:
         return message.get("channel") == self.subscription_type
 
 
+class _PolymarketSubscriptionGate:
+    """Suppress data until every requested asset has produced its initial book."""
+
+    def __init__(self, asset_ids: Iterable[str]) -> None:
+        requested = tuple(asset_ids)
+        if not requested or len(set(requested)) != len(requested):
+            raise ValueError("Polymarket subscriptions require unique non-empty asset IDs")
+        self.requested_asset_ids = set(requested)
+        self.pending_asset_ids = set(requested)
+
+    def allows(self, message: Mapping[str, Any] | list[Any]) -> bool:
+        entries = message if isinstance(message, list) else [message]
+        for payload in entries:
+            if not isinstance(payload, Mapping):
+                raise ValueError("Polymarket websocket event must be an object")
+            if payload.get("event_type") != "book":
+                continue
+            asset_id = str(payload.get("asset_id", ""))
+            if asset_id not in self.requested_asset_ids:
+                raise ValueError(
+                    f"Polymarket initialized an unrequested outcome asset {asset_id!r}"
+                )
+            self.pending_asset_ids.discard(asset_id)
+        return not self.pending_asset_ids
+
+
 async def _polymarket_ping_loop(websocket: Any) -> None:
     """Polymarket requires the literal text heartbeat rather than websocket ping frames."""
 
@@ -349,9 +375,16 @@ async def stream_polymarket_public_trades(
     ]
     timeout = aiohttp.ClientTimeout(total=None, connect=20, sock_read=None)
     collector_sequence = 0
+    subscription_gate = _PolymarketSubscriptionGate(asset_ids)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.ws_connect(ws_url, heartbeat=10) as websocket:
-            await websocket.send_json({"assets_ids": asset_ids, "type": "market"})
+            await websocket.send_json(
+                {
+                    "assets_ids": asset_ids,
+                    "type": "market",
+                    "initial_dump": True,
+                }
+            )
             ping_task = asyncio.create_task(_polymarket_ping_loop(websocket))
             try:
                 async for event in websocket:
@@ -360,6 +393,8 @@ async def stream_polymarket_public_trades(
                         if event.data == "PONG":
                             continue
                         payload = json.loads(event.data)
+                        if not subscription_gate.allows(payload):
+                            continue
                         for trade in decode_polymarket_ws_message(
                             payload,
                             market_list,

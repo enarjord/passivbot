@@ -91,7 +91,6 @@ def _contract_fingerprint(market: NormalizedOutcomeMarket) -> str:
         "market_id": market.market_id,
         "title": market.title,
         "description": market.description,
-        "quote_asset": market.quote_asset,
         "yes_asset": {
             **asdict(market.yes_asset),
             "side": market.yes_asset.side.value,
@@ -208,12 +207,6 @@ class OutcomeTradeArchive:
                     raw_payload_json TEXT NOT NULL,
                     archived_at_ms INTEGER NOT NULL
                 );
-                CREATE UNIQUE INDEX IF NOT EXISTS outcome_trades_event_identity
-                    ON outcome_trades(venue, market_id, asset_id, source_event_id)
-                    WHERE source_event_id IS NOT NULL;
-                CREATE UNIQUE INDEX IF NOT EXISTS outcome_trades_sequence_identity
-                    ON outcome_trades(venue, market_id, asset_id, sequence_id)
-                    WHERE sequence_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS outcome_trades_time_lookup
                     ON outcome_trades(venue, market_id, asset_id, exchange_time_ms, record_id);
 
@@ -376,6 +369,53 @@ class OutcomeTradeArchive:
             if "collector_sequence" not in columns:
                 connection.execute(
                     "ALTER TABLE outcome_trades ADD COLUMN collector_sequence INTEGER"
+                )
+            for identity_column in ("source_event_id", "sequence_id"):
+                duplicate = connection.execute(
+                    f"""
+                    SELECT venue, market_id, {identity_column}, COUNT(*) AS row_count
+                    FROM outcome_trades
+                    WHERE {identity_column} IS NOT NULL
+                    GROUP BY venue, market_id, {identity_column}
+                    HAVING COUNT(*) > 1
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if duplicate is not None:
+                    raise ValueError(
+                        "outcome archive contains conflicting cross-asset trade "
+                        f"{identity_column} {duplicate[identity_column]!r} for "
+                        f"{duplicate['venue']}:{duplicate['market_id']}"
+                    )
+            connection.executescript(
+                """
+                DROP INDEX IF EXISTS outcome_trades_event_identity;
+                CREATE UNIQUE INDEX outcome_trades_event_identity
+                    ON outcome_trades(venue, market_id, source_event_id)
+                    WHERE source_event_id IS NOT NULL;
+                DROP INDEX IF EXISTS outcome_trades_sequence_identity;
+                CREATE UNIQUE INDEX outcome_trades_sequence_identity
+                    ON outcome_trades(venue, market_id, sequence_id)
+                    WHERE sequence_id IS NOT NULL;
+                """
+            )
+            metadata_rows = connection.execute(
+                """
+                SELECT record_id, normalized_market_json
+                FROM outcome_market_metadata
+                """
+            ).fetchall()
+            for row in metadata_rows:
+                market = _market_from_payload(
+                    json.loads(row["normalized_market_json"])
+                )
+                connection.execute(
+                    """
+                    UPDATE outcome_market_metadata
+                    SET contract_fingerprint = ?
+                    WHERE record_id = ?
+                    """,
+                    (_contract_fingerprint(market), row["record_id"]),
                 )
             settlement_columns = {
                 row["name"]
@@ -563,20 +603,21 @@ class OutcomeTradeArchive:
                     )
                 retained = connection.execute(
                     f"""
-                    SELECT outcome, native_side, native_price, canonical_yes_price, qty,
+                    SELECT asset_id, outcome, native_side, native_price,
+                           canonical_yes_price, qty,
                            exchange_time_ms, source_event_id, economic_event_id, sequence_id
                     FROM outcome_trades
-                    WHERE venue = ? AND market_id = ? AND asset_id = ?
+                    WHERE venue = ? AND market_id = ?
                       AND ({" OR ".join(identity_clauses)})
                     """,
                     (
                         trade.venue.value,
                         trade.market_id,
-                        trade.asset_id,
                         *identity_params,
                     ),
                 ).fetchall()
                 expected = (
+                    trade.asset_id,
                     trade.outcome.value,
                     trade.native_side.value,
                     trade.native_price,
@@ -589,6 +630,7 @@ class OutcomeTradeArchive:
                 )
                 retained_identities = {
                     (
+                        row["asset_id"],
                         row["outcome"],
                         row["native_side"],
                         row["native_price"],

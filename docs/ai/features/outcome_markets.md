@@ -230,7 +230,8 @@ Persist normalized market metadata at discovery and at every historical import b
 The archive fingerprints immutable terms—venue and market identity, description, side assets,
 payout, scheduled event, and capabilities—and fails if the same venue market ID is later observed
 with conflicting contract terms. Constraint, fee, price-grid, and lifecycle observations may
-change without replacing the retained contract. This is required because expired HIP-4
+change without replacing the retained contract. Quote-asset identity is versioned transport
+metadata rather than an immutable contract fingerprint field. This is required because expired HIP-4
 price-binary rows disappear from `outcomeMeta`. Retain the chronological sequence of distinct
 metadata states, including a later return to an earlier state; suppress only a consecutive
 duplicate observation.
@@ -260,6 +261,10 @@ unavailable and must not be fabricated into flat candles.
 Live verified coverage must remain open for at least the greater of the configured delivery lag
 and the maximum accepted live-trade lag. A collector must not certify a second before every fill
 that it would accept for that second has had time to arrive.
+
+Polymarket live collection explicitly requests the initial order-book dump and does not expose
+trades to the coverage collector until an initial book has arrived for every requested YES and NO
+asset. A fill from one asset is not subscription-readiness evidence for its complement.
 
 Open and close require a proven chronological order within each second. If multiple fills share
 the same exchange timestamp, use a unique venue-ordered sequence when available, otherwise the

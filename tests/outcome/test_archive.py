@@ -89,6 +89,36 @@ def test_archive_rejects_conflicting_duplicate_trade_identities(tmp_path):
         )
 
 
+def test_archive_trade_identities_are_unique_across_outcome_assets(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    outcome_market = market()
+    source_identified = trade("event-1")
+    sequence_identified = replace(
+        trade(None, timestamp_ms=2_000),
+        sequence_id="sequence-1",
+    )
+    opposite_source = replace(
+        source_identified,
+        asset_id=outcome_market.no_asset.asset_id,
+        outcome=OutcomeSide.NO,
+        native_price=0.6,
+    )
+    opposite_sequence = replace(
+        sequence_identified,
+        asset_id=outcome_market.no_asset.asset_id,
+        outcome=OutcomeSide.NO,
+        native_price=0.6,
+    )
+
+    assert archive.append_trade(source_identified) is True
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        archive.append_trade(opposite_source)
+
+    assert archive.append_trade(sequence_identified) is True
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        archive.append_trade(opposite_sequence)
+
+
 def test_archive_rejects_conflicting_duplicate_settlement_identity(tmp_path):
     archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
     original = OutcomeSettlementEvidence(
@@ -194,6 +224,27 @@ def test_market_metadata_archive_round_trips_versions_and_rejects_id_reuse(tmp_p
             observed_at_ms=4_000,
             observation_source="outcomeMeta",
         )
+
+
+def test_market_metadata_versions_quote_asset_as_mutable_transport_state(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    original = market()
+    updated_quote_asset = replace(original, quote_asset="pUSD")
+
+    assert archive.append_market_metadata(
+        original,
+        observed_at_ms=1_000,
+        observation_source="outcomeMeta",
+    )
+    assert archive.append_market_metadata(
+        updated_quote_asset,
+        observed_at_ms=2_000,
+        observation_source="outcomeMeta",
+    )
+    assert archive.load_market_metadata(original.venue, original.market_id) == [
+        original,
+        updated_quote_asset,
+    ]
 
 
 def test_market_metadata_schema_migration_preserves_later_state_reversion(tmp_path):
