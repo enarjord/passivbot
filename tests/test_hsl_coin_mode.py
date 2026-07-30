@@ -5,7 +5,7 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
-from fill_events_manager import FillEvent
+from fill_events_manager import FillEvent, FillEventsManager
 from passivbot import Passivbot
 from passivbot_exceptions import RestartBotException
 from live.event_bus import ReasonCodes
@@ -193,9 +193,17 @@ def test_hsl_event_emitter_failure_logs_type_without_secret(caplog):
 
 
 class FakeRiskCache:
-    def __init__(self, covered_start_ms=1, history_scope="all"):
+    def __init__(
+        self,
+        covered_start_ms=1,
+        history_scope="all",
+        oldest_event_ts=0,
+        newest_event_ts=0,
+    ):
         self.covered_start_ms = covered_start_ms
         self.history_scope = history_scope
+        self.oldest_event_ts = oldest_event_ts
+        self.newest_event_ts = newest_event_ts
 
     def get_known_gaps(self):
         return []
@@ -211,18 +219,29 @@ class FakeRiskCache:
             "known_gaps": [],
             "covered_start_ms": self.covered_start_ms,
             "history_scope": self.history_scope,
-            "oldest_event_ts": self.covered_start_ms,
-            "newest_event_ts": 0,
+            "oldest_event_ts": self.oldest_event_ts,
+            "newest_event_ts": self.newest_event_ts,
         }
 
 
 def make_fake_pnls_manager(events, *, covered_start_ms=1, history_scope="all"):
-    cache = FakeRiskCache(covered_start_ms=covered_start_ms, history_scope=history_scope)
-    return SimpleNamespace(
+    timestamps = [int(getattr(event, "timestamp", 0) or 0) for event in events]
+    cache = FakeRiskCache(
+        covered_start_ms=covered_start_ms,
+        history_scope=history_scope,
+        oldest_event_ts=min(timestamps, default=0),
+        newest_event_ts=max(timestamps, default=0),
+    )
+    manager = SimpleNamespace(
         get_events=lambda: events,
         cache=cache,
         get_history_scope=cache.get_history_scope,
     )
+    manager.get_coverage_status = MethodType(
+        FillEventsManager.get_coverage_status,
+        manager,
+    )
+    return manager
 
 
 def test_hsl_signal_mode_requires_normalized_live_config():
@@ -2208,10 +2227,7 @@ def bind_hsl_methods(bot):
         setattr(bot, name, MethodType(getattr(hsl, name), bot))
     for name in (
         "_assert_no_pending_pnl_events",
-        "_pnl_history_coverage_status",
-        "_pnl_blocking_known_gaps",
-        "_pnl_gap_is_confirmed_legitimate",
-        "_pnl_gap_overlaps",
+        "_fill_history_coverage_status",
         "_pnl_event_preview",
         "_assert_pnl_history_safe_for_risk",
         "_assert_pnl_history_coverage_for_risk",
@@ -3711,12 +3727,9 @@ def _bind_reuse_support(bot, tmp_path, monkeypatch, *, fills, covered_start_ms=1
     bot.market_type = "swap"
     bot.qty_steps = {}
     bot.init_pnls = AsyncMock()
-    bot._pnl_history_coverage_status = MethodType(
-        Passivbot._pnl_history_coverage_status, bot
+    bot._fill_history_coverage_status = MethodType(
+        Passivbot._fill_history_coverage_status, bot
     )
-    bot._pnl_blocking_known_gaps = MethodType(Passivbot._pnl_blocking_known_gaps, bot)
-    bot._pnl_gap_is_confirmed_legitimate = Passivbot._pnl_gap_is_confirmed_legitimate
-    bot._pnl_gap_overlaps = Passivbot._pnl_gap_overlaps
     bot._hsl_extract_fill_events = MethodType(Passivbot._hsl_extract_fill_events, bot)
     bot._hsl_normalize_fill_symbol = MethodType(
         Passivbot._hsl_normalize_fill_symbol, bot
@@ -3734,6 +3747,9 @@ def _bind_reuse_support(bot, tmp_path, monkeypatch, *, fills, covered_start_ms=1
         def load_metadata(self):
             return {"covered_start_ms": covered_start_ms, "oldest_event_ts": 1}
 
+        def get_known_gaps(self):
+            return []
+
         def get_covered_start_ms(self):
             return covered_start_ms
 
@@ -3750,6 +3766,10 @@ def _bind_reuse_support(bot, tmp_path, monkeypatch, *, fills, covered_start_ms=1
             return "all"
 
     bot._pnls_manager = _StubPnlsManager()
+    bot._pnls_manager.get_coverage_status = MethodType(
+        FillEventsManager.get_coverage_status,
+        bot._pnls_manager,
+    )
     return bot
 
 
@@ -3835,6 +3855,9 @@ async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions,
         def load_metadata(self):
             return {"covered_start_ms": 1, "oldest_event_ts": 1}
 
+        def get_known_gaps(self):
+            return []
+
         def get_covered_start_ms(self):
             return 1
 
@@ -3854,6 +3877,10 @@ async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions,
             return "all"
 
     bot._pnls_manager = _StubPnlsManager(fills)
+    bot._pnls_manager.get_coverage_status = MethodType(
+        FillEventsManager.get_coverage_status,
+        bot._pnls_manager,
+    )
     history = await bot.get_balance_equity_history(
         current_balance=100.0,
         hsl_replay_signal_mode=signal_mode,

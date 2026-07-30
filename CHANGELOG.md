@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill-history coverage now has one canonical verdict owned by
+  `FillEventsManager`. Refresh, staged readiness, HSL replay, and realized-PnL
+  consumers no longer duplicate cache/gap interpretation. Metadata that claims
+  missing cached rows and malformed known-gap bounds fail closed and trigger
+  repair or deferral, while confirmed empty windows remain valid.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

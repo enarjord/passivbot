@@ -5467,43 +5467,14 @@ class FillEventsManager:
 
         coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
-        def gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
-            try:
-                gap_start = int(gap["start_ts"])
-                gap_end = int(gap["end_ts"])
-            except (KeyError, TypeError, ValueError):
-                return None
-            if gap_end <= gap_start:
-                return None
-            return gap_start, gap_end
-
-        def gap_confirmed_legitimate(gap: KnownGap) -> bool:
-            reason = str(gap.get("reason", "") or "").lower()
-            try:
-                confidence = float(gap.get("confidence", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                confidence = 0.0
-            return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
-
-        def blocking_known_gaps() -> List[KnownGap]:
-            gaps: List[KnownGap] = []
-            for gap in self.cache.get_known_gaps():
-                if gap_confirmed_legitimate(gap):
-                    continue
-                bounds = gap_bounds(gap)
-                if bounds is None:
-                    gaps.append(gap)
-                    continue
-                gap_start, gap_end = bounds
-                if gap_start < coverage_end_ms and gap_end > start_ms:
-                    gaps.append(gap)
-            return gaps
-
-        blocking_gaps = blocking_known_gaps()
+        blocking_gaps = self._blocking_known_gaps(
+            start_ms=start_ms,
+            end_ms=coverage_end_ms,
+        )
         if blocking_gaps:
             retried_ranges: List[Tuple[int, int]] = []
             for gap in blocking_gaps:
-                bounds = gap_bounds(gap)
+                bounds = self._known_gap_bounds(gap)
                 if bounds is None:
                     continue
                 if not force_refetch_gaps and not self.cache.should_retry_gap(gap):
@@ -5522,7 +5493,10 @@ class FillEventsManager:
                 await self.refresh(start_ms=retry_start, end_ms=retry_end)
             if retried_ranges:
                 await self.refresh_latest(overlap=overlap)
-                blocking_gaps = blocking_known_gaps()
+                blocking_gaps = self._blocking_known_gaps(
+                    start_ms=start_ms,
+                    end_ms=coverage_end_ms,
+                )
             if blocking_gaps:
                 if not retried_ranges:
                     # Historical coverage may remain blocked after its bounded
@@ -5531,7 +5505,7 @@ class FillEventsManager:
                     # cache current without weakening the PnL coverage gate.
                     await self.refresh_latest(overlap=overlap)
                 gap = blocking_gaps[0]
-                bounds = gap_bounds(gap)
+                bounds = self._known_gap_bounds(gap)
                 range_label = (
                     f"{_format_ms(bounds[0])}..{_format_ms(bounds[1])}"
                     if bounds is not None
@@ -5547,29 +5521,13 @@ class FillEventsManager:
                 )
                 return True
 
-        metadata = self.cache.load_metadata()
-        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        coverage_status = self.get_coverage_status(
+            start_ms=start_ms,
+            end_ms=coverage_end_ms,
+        )
         oldest_event_ts = int(self._events[0].timestamp) if self._events else 0
-        metadata_oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
-        metadata_newest_event_ts = int(metadata.get("newest_event_ts", 0) or 0)
-        metadata_indicates_no_cached_fills = (
-            metadata_oldest_event_ts <= 0 and metadata_newest_event_ts <= 0
-        )
-        metadata_claims_history_without_events = (
-            not self._events
-            and (metadata_oldest_event_ts > 0 or metadata_newest_event_ts > 0)
-            and covered_start_ms > 0
-            and covered_start_ms <= start_ms
-        )
-        lookback_covered = (
-            covered_start_ms > 0 and covered_start_ms <= start_ms and bool(self._events)
-        ) or (
-            covered_start_ms > 0
-            and covered_start_ms <= start_ms
-            and metadata_indicates_no_cached_fills
-        )
-
-        if lookback_covered:
+        covered_start_ms = int(coverage_status.get("covered_start_ms", 0) or 0)
+        if bool(coverage_status.get("ready", False)):
             logger.debug(
                 "[fills] lookback already covered from %s (covered_start=%s oldest_event=%s); refreshing latest",
                 _format_ms(start_ms),
@@ -5579,7 +5537,7 @@ class FillEventsManager:
             await self.refresh_latest(overlap=overlap)
             return True
 
-        if metadata_claims_history_without_events:
+        if coverage_status.get("reason") == "cache_metadata_event_mismatch":
             logger.warning(
                 "[fills] cache metadata claims lookback coverage from %s, but no cached events were loaded; rebuilding from requested lookback",
                 _format_ms(covered_start_ms),
@@ -5612,6 +5570,117 @@ class FillEventsManager:
 
         self.cache.mark_covered_start(start_ms)
         return True
+
+    @staticmethod
+    def _known_gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
+        try:
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if gap_end <= gap_start:
+            return None
+        return gap_start, gap_end
+
+    @staticmethod
+    def _known_gap_confirmed_legitimate(gap: KnownGap) -> bool:
+        reason = str(gap.get("reason", "") or "").lower()
+        try:
+            confidence = float(gap.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+    def _blocking_known_gaps(
+        self,
+        *,
+        start_ms: Optional[int],
+        end_ms: Optional[int],
+    ) -> List[KnownGap]:
+        window_start = 0 if start_ms is None else int(start_ms)
+        window_end = (2**63 - 1) if end_ms is None else int(end_ms)
+        blocking: List[KnownGap] = []
+        for gap in self.cache.get_known_gaps():
+            bounds = FillEventsManager._known_gap_bounds(gap)
+            if bounds is None:
+                blocking.append(gap)
+                continue
+            if FillEventsManager._known_gap_confirmed_legitimate(gap):
+                continue
+            gap_start, gap_end = bounds
+            if gap_start < window_end and gap_end > window_start:
+                blocking.append(gap)
+        return blocking
+
+    def get_coverage_status(
+        self,
+        *,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Return the canonical fill-history coverage verdict.
+
+        Callers must load the manager before asking it to judge coverage.
+        """
+        metadata = self.cache.load_metadata()
+        history_scope = self.get_history_scope()
+        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
+        metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
+        status: Dict[str, object] = {
+            "ready": False,
+            "reason": "cache_not_loaded",
+            "history_scope": history_scope,
+            "covered_start_ms": covered_start_ms,
+            "oldest_event_ts": metadata_oldest,
+        }
+        if getattr(self, "_loaded", True) is False:
+            return status
+
+        blocking_gaps = FillEventsManager._blocking_known_gaps(
+            self,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            bounds = FillEventsManager._known_gap_bounds(gap)
+            status.update(
+                {
+                    "reason": (
+                        "malformed_known_gap"
+                        if bounds is None
+                        else "known_gap_overlaps_lookback"
+                    ),
+                    "gap_start_ts": bounds[0] if bounds is not None else 0,
+                    "gap_end_ts": bounds[1] if bounds is not None else 0,
+                    "gap_reason": (
+                        str(gap.get("reason", "unknown"))
+                        if isinstance(gap, dict)
+                        else "malformed"
+                    ),
+                }
+            )
+            return status
+
+        if not self.get_events() and (metadata_oldest > 0 or metadata_newest > 0):
+            status["reason"] = "cache_metadata_event_mismatch"
+            return status
+
+        if history_scope == "all":
+            status.update({"ready": True, "reason": "full_history"})
+            return status
+
+        if start_ms is None:
+            status["reason"] = "full_history_scope_not_proven"
+            return status
+
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
+            status.update({"ready": True, "reason": "window_covered"})
+            return status
+
+        status["reason"] = "window_coverage_not_proven"
+        return status
 
     async def refresh_range(
         self,

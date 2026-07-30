@@ -67,6 +67,14 @@
     full authoritative amount without retaining fill-identity accounting state.
     Structured `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
     `degraded_pnl_count` fields through the centralized payload sanitizer.
+11. `FillEventsManager` owns the canonical fill-history coverage verdict used by
+    refresh, staged readiness, HSL replay, and realized-PnL consumers. Orchestration
+    may choose retry timing or whether a proven-incomplete history is explicitly
+    allowed, but it must not reinterpret cache metadata or known gaps. Metadata
+    claiming cached rows when no rows loaded, and malformed known-gap bounds, are
+    contradictory cache evidence: they are unavailable rather than proof of
+    coverage. A window with no fills remains valid when zero oldest/newest metadata
+    and `covered_start_ms` prove that empty result.
 
 ## Runtime Provenance
 
@@ -161,6 +169,9 @@ merely because an auxiliary endpoint failed.
    authoritative-PnL consumer requires it, authoritative replacement is persisted, and
    unresolved rows defer those consumers without restarts. With every PnL consumer
    disabled, unresolved PnL does not block covered structural fill history.
+6. Coverage verdicts fail closed for contradictory metadata and malformed gaps,
+   while confirmed-legitimate gaps and proven empty windows retain their explicit
+   semantics.
 
 ## Key Code
 
