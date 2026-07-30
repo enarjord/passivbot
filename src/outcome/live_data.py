@@ -295,10 +295,11 @@ async def collect_verified_outcome_signal_window(
     if archive is not None and market.venue is OutcomeVenue.POLYMARKET:
         try:
             with archive.write_transaction():
-                if any(
+                has_identityless_trades = any(
                     trade.source_event_id is None and trade.sequence_id is None
                     for trade in deferred_archive_trades
-                ):
+                )
+                if has_identityless_trades:
                     for asset in (market.yes_asset, market.no_asset):
                         archive.require_no_verified_coverage_overlap(
                             market.venue,
@@ -306,7 +307,18 @@ async def collect_verified_outcome_signal_window(
                             asset.asset_id,
                             coverage,
                         )
-                for trade in deferred_archive_trades:
+                archivable_trades = [
+                    trade
+                    for trade in deferred_archive_trades
+                    if (
+                        trade.source_event_id is not None
+                        or trade.sequence_id is not None
+                        or coverage.start_ms
+                        <= trade.exchange_time_ms
+                        < coverage.end_ms
+                    )
+                ]
+                for trade in archivable_trades:
                     archive.append_trade(
                         trade,
                         collector_session=collector_session,

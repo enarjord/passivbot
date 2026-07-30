@@ -129,6 +129,21 @@ def _load_archived_market_and_grid_window(
         raise ValueError(
             "archive does not prove complete Polymarket price-grid coverage"
         )
+    pre_window_grid_changes = (
+        archive.load_price_grid_changes(
+            market.venue,
+            market.market_id,
+            start_ms=0,
+            end_ms=start_ms,
+        )
+        if start_ms > 0
+        else []
+    )
+    if pre_window_grid_changes:
+        market = replace(
+            market,
+            price_grid=pre_window_grid_changes[-1].new_grid,
+        )
     price_grid_changes = archive.load_price_grid_changes(
         market.venue,
         market.market_id,

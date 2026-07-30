@@ -271,6 +271,57 @@ def test_polymarket_window_uses_start_metadata_and_archived_grid_changes(tmp_pat
     assert changes == [change]
 
 
+def test_polymarket_window_applies_latest_pre_window_grid_change(tmp_path):
+    discovered = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    fee_free = OutcomeFeeMetadata(
+        formula="venue_reported_zero",
+        maker_rate=0.0,
+        taker_rate=0.0,
+    )
+    opening_market = replace(discovered, fee_metadata=fee_free)
+    changed_market = replace(
+        opening_market,
+        price_grid=OutcomePriceGridMetadata(kind="fixed_step", fixed_step=0.001),
+    )
+    change = OutcomePriceGridChange(
+        venue=opening_market.venue,
+        market_id=opening_market.market_id,
+        timestamp_ms=3_000,
+        received_time_ms=3_100,
+        old_grid=opening_market.price_grid,
+        new_grid=changed_market.price_grid,
+        raw_payload={"event_type": "tick_size_change"},
+    )
+    archive = OutcomeTradeArchive(tmp_path / "polymarket-pre-window-grid.sqlite")
+    archive.append_market_metadata(
+        opening_market,
+        observed_at_ms=1_000,
+        observation_source="gamma",
+    )
+    archive.append_market_metadata(
+        changed_market,
+        observed_at_ms=5_000,
+        observation_source="gamma",
+    )
+    archive.append_price_grid_change(change, collector_session="grid")
+    archive.record_verified_price_grid_coverage(
+        opening_market.venue,
+        opening_market.market_id,
+        VerifiedCoverage(1_000, 6_000),
+        collector_session="grid",
+    )
+
+    market, changes = _load_archived_market_and_grid_window(
+        archive,
+        changed_market,
+        start_ms=4_000,
+        end_ms=6_000,
+    )
+
+    assert market.price_grid == changed_market.price_grid
+    assert changes == []
+
+
 def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
     market = replace(
         hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json")),

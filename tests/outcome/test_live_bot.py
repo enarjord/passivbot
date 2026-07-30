@@ -738,6 +738,51 @@ async def test_executed_unavailable_signal_cycle_cancels_managed_quote_only():
 
 
 @pytest.mark.asyncio
+async def test_stale_account_snapshot_routes_to_executed_cancel_only_cycle():
+    now_ms = candles()[-1].timestamp_ms + 1_000
+    cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=candles()[-1].timestamp_ms,
+    )
+    managed_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="7",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=25.0,
+        original_qty=25.0,
+        timestamp_ms=candles()[-1].timestamp_ms,
+        client_order_id=cloid,
+    )
+    stale = snapshot(now_ms - 5_001, open_orders=(managed_order,))
+    after_cancel = snapshot(now_ms)
+    final = snapshot(now_ms)
+    client = SafetyMutationClient((stale, after_cancel, final))
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        market(),
+        params(),
+        candles(),
+        execute=True,
+        now_ms=now_ms,
+    )
+
+    assert cycle.plan is None
+    assert (
+        cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.STALE_ACCOUNT_SNAPSHOT
+    )
+    assert client.cancelled == [("913", OutcomeSide.YES, 7, cloid)]
+    assert client.created == []
+    assert cycle.mutation_result is not None
+    assert cycle.mutation_result.created == ()
+
+
+@pytest.mark.asyncio
 async def test_stream_disconnect_routes_to_executed_cancel_only_cycle():
     outcome_market = market()
     start_ms = outcome_market.lifecycle.trading_open_time_ms

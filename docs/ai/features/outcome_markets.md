@@ -304,8 +304,9 @@ The standard-market Polygon downloader queries both official CTF Exchange addres
 `OrderFilled` topics, and the condition-indexed CTF resolution topic over a complete block
 interval. It finds the first block at or after each second-aligned time boundary, attaches
 canonical block timestamps, requires every log to carry an explicit boolean `removed=false`
-observation, rejects removed, duplicate, or out-of-range logs, excludes a configurable confirmation
-depth from the chain head, and records coverage only after the entire range is decoded and archived.
+observation and an exact 32-byte transaction hash, rejects removed, duplicate, or out-of-range
+logs, excludes a configurable confirmation depth from the chain head, and records coverage only
+after the entire range is decoded and archived.
 RPC endpoints are transport configuration: public providers may impose archive, range, traffic, or
 retention limits, and any such failure must leave the interval uncovered.
 
@@ -316,6 +317,8 @@ dropped. A live websocket message decoded into multiple fills is one received ba
 processes the complete batch before checking its collection deadline and certifying coverage. Live
 collectors validate delivery lag before archiving or deferring a fill; a rejected over-lag fill is
 never added to retained history, even when its timestamp lies outside the newly certified window.
+An identity-less fill retained only as a pre-window signal seed remains in memory and is not
+archived outside the certified interval.
 Verified coverage never extends past the scheduled collection deadline merely because the event
 loop resumes late.
 
@@ -447,8 +450,10 @@ capital-release evidence to the shared-wallet orchestrator, which keeps the job'
 locked through delayed redemption without delaying simulated settlement.
 
 Any bounded outcome-window evaluation uses the archived market metadata state valid at the start
-of its requested window, not the latest discovery row. It requires verified grid-stream coverage
-for that window and replays every retained grid change in chronological order. Strategy lifecycle
+of its requested window, not the latest discovery row. Its effective opening price grid includes
+the latest retained transition before the window even when the corresponding metadata refresh was
+observed later. It requires verified grid-stream coverage for that window and replays every
+retained in-window grid change in chronological order. Strategy lifecycle
 gates, settlement, and inventory-time metrics use synthetic open and close boundaries matching the
 requested sample; the result is not presented as a full-contract replay. Window-specific
 risk-reduction and entry-cutoff durations are explicit inputs and default to disabled, so a short
@@ -535,6 +540,10 @@ If the verified actual-fill signal is unavailable or stale, new and replacement 
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:
 cancel Passivbot-namespaced quotes and preserve all unmanaged user orders. A missing fill is never
 converted into a fabricated candle merely to keep existing quotes alive.
+
+A stale or future-dated account snapshot follows the same explicit unavailable path and targets an
+empty managed-order set; it is not surfaced as a generic planning error that leaves prior managed
+quotes resting.
 
 Signal freshness is checked again at the mutation boundary, before every create, and after that
 create's lifecycle/account/book preflight immediately before the private action is sent. If the

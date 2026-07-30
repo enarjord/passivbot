@@ -148,11 +148,13 @@ def decode_polymarket_order_filled_log(
         ),
         "logIndex": _hex_int(raw_log.get("logIndex"), "logIndex"),
         "blockTimeMs": block_time_ms,
-        "transactionHash": str(raw_log.get("transactionHash", "")),
+        "transactionHash": f"0x{_hex_bytes(
+            raw_log.get('transactionHash'),
+            'transactionHash',
+            length=32,
+        ).hex()}",
         "removed": _require_non_removed_log(raw_log),
     }
-    if not common["transactionHash"].startswith("0x"):
-        raise ValueError("Polygon log requires a transaction hash")
     indexed = {
         "orderHash": _topic_bytes32(topics[1], "OrderFilled.orderHash"),
         "maker": _topic_address(topics[2], "OrderFilled.maker"),
@@ -222,13 +224,15 @@ def decode_polymarket_condition_resolution_log(
         ),
         "logIndex": _hex_int(raw_log.get("logIndex"), "logIndex"),
         "blockTimeMs": block_time_ms,
-        "transactionHash": str(raw_log.get("transactionHash", "")),
+        "transactionHash": f"0x{_hex_bytes(
+            raw_log.get('transactionHash'),
+            'transactionHash',
+            length=32,
+        ).hex()}",
         "removed": _require_non_removed_log(raw_log),
     }
     if common["address"] != POLYMARKET_CONDITIONAL_TOKENS:
         raise ValueError("ConditionResolution came from an unexpected contract")
-    if not common["transactionHash"].startswith("0x"):
-        raise ValueError("Polygon log requires a transaction hash")
     args = {
         "conditionId": _topic_bytes32(topics[1], "ConditionResolution.conditionId"),
         "oracle": _topic_address(topics[2], "ConditionResolution.oracle"),

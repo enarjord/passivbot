@@ -461,9 +461,9 @@ class NormalizedOutcomeTrade:
     @property
     def deduplication_key(self) -> tuple[str, ...] | None:
         if self.source_event_id is not None:
-            return (self.venue.value, self.market_id, self.asset_id, "event", self.source_event_id)
+            return (self.venue.value, self.market_id, "event", self.source_event_id)
         if self.sequence_id is not None:
-            return (self.venue.value, self.market_id, self.asset_id, "sequence", self.sequence_id)
+            return (self.venue.value, self.market_id, "sequence", self.sequence_id)
         return None
 
     @property

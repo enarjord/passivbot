@@ -28,6 +28,7 @@ class OutcomeSignalPlanningUnavailable(ValueError):
         if reason not in {
             "incomplete_verified_signal",
             "stale_verified_signal",
+            "stale_account_snapshot",
             "market_constraints_unavailable",
         }:
             raise ValueError("unsupported outcome signal unavailability reason")
@@ -140,7 +141,10 @@ def build_ema_anchor_outcome_live_plan(
         raise ValueError("live outcome planning now_ms must be non-negative")
     account_age_ms = now_ms - account.received_time_ms
     if account_age_ms < 0 or account_age_ms > max_account_age_ms:
-        raise ValueError("HIP-4 account snapshot is stale or from the future")
+        raise OutcomeSignalPlanningUnavailable(
+            "stale_account_snapshot",
+            "HIP-4 account snapshot is stale or from the future",
+        )
     if not signal_candles:
         raise OutcomeSignalPlanningUnavailable(
             "incomplete_verified_signal",

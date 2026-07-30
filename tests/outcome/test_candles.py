@@ -90,6 +90,29 @@ def test_conflicting_duplicate_trade_identity_is_rejected(builder, identity_kind
         builder([original, conflicting])
 
 
+@pytest.mark.parametrize("identity_kind", ["source", "sequence"])
+def test_cross_asset_duplicate_trade_identity_is_rejected(identity_kind):
+    yes = trade(
+        1_100,
+        0.4,
+        1.0,
+        "same" if identity_kind == "source" else None,
+        outcome=OutcomeSide.YES,
+        sequence_id="same" if identity_kind == "sequence" else None,
+    )
+    no = trade(
+        1_100,
+        0.4,
+        1.0,
+        "same" if identity_kind == "source" else None,
+        outcome=OutcomeSide.NO,
+        sequence_id="same" if identity_kind == "sequence" else None,
+    )
+
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        trades_to_canonical_signal_1s_candles([yes, no])
+
+
 def test_trade_rejects_inconsistent_native_to_canonical_price_mapping():
     with pytest.raises(ValueError, match="canonical_yes_price must equal"):
         NormalizedOutcomeTrade(

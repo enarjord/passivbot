@@ -250,7 +250,7 @@ async def test_overlag_fill_outside_new_window_is_rejected_before_archive(tmp_pa
         end_ms=10_000,
     )
     assert window.coverage == VerifiedCoverage(5_000, 6_000)
-    assert [item.exchange_time_ms for item in retained] == [4_900]
+    assert retained == []
 
 
 @pytest.mark.asyncio
@@ -443,7 +443,50 @@ async def test_polymarket_identityless_collector_rejects_overlapping_coverage(
             start_ms=0,
             end_ms=10_000,
         )
-    ) == 1
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_polymarket_identityless_pre_window_seed_is_not_archived(tmp_path):
+    market = polymarket_market()
+    archive = OutcomeTradeArchive(tmp_path / "identityless-seed.sqlite")
+
+    async def stream():
+        yield NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id=None,
+            collector_sequence=1,
+            raw_payload={"event_type": "last_trade_price"},
+        )
+
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=3,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: 5_100,
+        trade_stream=stream(),
+        archive=archive,
+        collector_session="identityless-seed",
+    )
+
+    assert window.candles[0].close == pytest.approx(0.4)
+    assert archive.load_trades(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    ) == []
 
 
 @pytest.mark.asyncio
@@ -523,6 +566,6 @@ async def test_owned_polymarket_reconnect_discards_abandoned_session_fills(
         start_ms=0,
         end_ms=10_000,
     )
-    assert [item.native_price for item in retained] == [0.6]
+    assert retained == []
     assert window.coverage == VerifiedCoverage(4_000, 7_000)
     assert window.candles[0].close == pytest.approx(0.6)

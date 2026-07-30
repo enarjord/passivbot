@@ -11,7 +11,10 @@ from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
     HyperliquidOutcomeFeeRates,
 )
-from outcome.live_planning import build_ema_anchor_outcome_live_plan
+from outcome.live_planning import (
+    OutcomeSignalPlanningUnavailable,
+    build_ema_anchor_outcome_live_plan,
+)
 from outcome.models import (
     OutcomeCollateralBalance,
     OutcomeOpenOrder,
@@ -213,7 +216,10 @@ def test_live_plan_restores_only_managed_buy_reserve_for_replacement_sizing():
 def test_live_plan_rejects_stale_account_and_signal_inputs():
     signal_candles = candles()
     now_ms = signal_candles[-1].timestamp_ms + 10_000
-    with pytest.raises(ValueError, match="snapshot is stale"):
+    with pytest.raises(
+        OutcomeSignalPlanningUnavailable,
+        match="snapshot is stale",
+    ) as exc_info:
         build_ema_anchor_outcome_live_plan(
             market(),
             params(),
@@ -221,6 +227,7 @@ def test_live_plan_rejects_stale_account_and_signal_inputs():
             account(signal_candles[-1].timestamp_ms),
             now_ms=now_ms,
         )
+    assert exc_info.value.reason == "stale_account_snapshot"
 
 
 def test_live_plan_sells_excess_yes_during_risk_reduction_window():

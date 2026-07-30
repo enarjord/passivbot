@@ -195,6 +195,33 @@ def test_logs_require_explicit_boolean_non_removed_evidence():
                 decoder(dict(raw, removed=invalid), block_time_ms=10_000)
 
 
+def test_logs_require_canonical_transaction_hashes():
+    market = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    fill = raw_log(
+        address=POLYMARKET_CTF_EXCHANGE_V1,
+        topic0=POLYMARKET_ORDER_FILLED_V1_TOPIC,
+        data_words=[word(0), word(99), word(335_000), word(1_000_000), word(0)],
+    )
+    resolution = raw_resolution_log(market.market_id, payouts=(1, 1))
+
+    for decoder, raw in (
+        (decode_polymarket_order_filled_log, fill),
+        (decode_polymarket_condition_resolution_log, resolution),
+    ):
+        for invalid_hash in (
+            "0xdead",
+            f"0x{'gg' * 32}",
+            f"0x{'11' * 31}",
+            f"0x{'11' * 33}",
+            f"{'11' * 32}",
+        ):
+            with pytest.raises(ValueError, match="transactionHash"):
+                decoder(
+                    dict(raw, transactionHash=invalid_hash),
+                    block_time_ms=10_000,
+                )
+
+
 @pytest.mark.asyncio
 async def test_download_proves_exact_range_and_filters_other_markets():
     market = polymarket.normalize_market(fixture("polymarket_binary.json"))

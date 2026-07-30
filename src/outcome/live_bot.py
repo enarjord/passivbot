@@ -47,6 +47,7 @@ class OutcomePlanningUnavailableReason(str, Enum):
     NO_PUBLIC_FILL = "no_public_fill"
     INCOMPLETE_VERIFIED_SIGNAL = "incomplete_verified_signal"
     STALE_VERIFIED_SIGNAL = "stale_verified_signal"
+    STALE_ACCOUNT_SNAPSHOT = "stale_account_snapshot"
     SIGNAL_COLLECTION_FAILED = "signal_collection_failed"
     MARKET_CONSTRAINTS_UNAVAILABLE = "market_constraints_unavailable"
     MARKET_EXPIRED_AWAITING_SETTLEMENT = "market_expired_awaiting_settlement"

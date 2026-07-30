@@ -152,7 +152,11 @@ All notable user-facing changes will be documented in this file.
   bounds together with the tick size. HIP-4 collateral normalization now requires exactly one
   maintenance-availability row for the quote token, live collectors drain each already-decoded
   websocket trade batch before certifying coverage, and canonical signal candles reject
-  contradictory mirrored economic records before deduplication.
+  contradictory mirrored economic records before deduplication. Bounded Polymarket windows apply
+  the latest pre-window tick transition, identity-less signal seeds outside verified coverage stay
+  out of durable history, direct candle inputs enforce market-wide trade identities, stale HIP-4
+  account snapshots route to cancel-only safety, and Polygon fills and resolutions require exact
+  32-byte transaction hashes.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
