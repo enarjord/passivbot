@@ -57,6 +57,19 @@ def _rust_fee_formula(market: NormalizedOutcomeMarket, override: str) -> str:
     )
 
 
+def _rust_fee_rates(
+    market: NormalizedOutcomeMarket,
+    override: str,
+    *,
+    maker_rate: float,
+    taker_rate: float,
+    settlement_rate: float,
+) -> tuple[float, float, float]:
+    if override == "archived" and market.fee_metadata.formula == "venue_reported_zero":
+        return 0.0, 0.0, 0.0
+    return maker_rate, taker_rate, settlement_rate
+
+
 def _load_archived_fee_market(
     archive: OutcomeTradeArchive,
     *,
@@ -186,15 +199,22 @@ def main() -> int:
                     fee_formula=args.fee_formula,
                 )
                 payout_unit = archived_market.payout_unit
+                maker_rate, taker_rate, settlement_rate = _rust_fee_rates(
+                    archived_market,
+                    args.fee_formula,
+                    maker_rate=args.maker_rate,
+                    taker_rate=args.taker_rate,
+                    settlement_rate=args.settlement_rate,
+                )
                 fee_schedule = {
-                    "maker_rate": args.maker_rate,
-                    "taker_rate": args.taker_rate,
+                    "maker_rate": maker_rate,
+                    "taker_rate": taker_rate,
                     "formula": _rust_fee_formula(
                         archived_market,
                         args.fee_formula,
                     ),
                     "incidence": args.fee_incidence,
-                    "settlement_rate": args.settlement_rate,
+                    "settlement_rate": settlement_rate,
                 }
                 fee_schedules[market_id] = fee_schedule
                 strategy_params = {
@@ -207,7 +227,7 @@ def main() -> int:
                     "max_total_inventory_qty": args.max_total_inventory_qty,
                     "max_abs_residual_qty": args.max_abs_residual_qty,
                     "min_locked_pair_edge": args.min_locked_pair_edge,
-                    "estimated_fee_per_share": max(0.0, args.maker_rate)
+                    "estimated_fee_per_share": max(0.0, maker_rate)
                     * payout_unit,
                     "risk_reduction_only_ms_before_close": (
                         args.risk_reduction_only_seconds_before_close * 1_000
@@ -231,7 +251,12 @@ def main() -> int:
             quote_asset = _require_shared_quote_asset(replays)
             portfolio = run_outcome_portfolio_backtest(
                 [
-                    make_rust_ema_anchor_outcome_job(replay.payload)
+                    make_rust_ema_anchor_outcome_job(
+                        replay.payload,
+                        capital_release_time_ms=(
+                            replay.settlement.capital_release_time_ms
+                        ),
+                    )
                     for replay in replays
                 ],
                 starting_collateral=args.starting_collateral,

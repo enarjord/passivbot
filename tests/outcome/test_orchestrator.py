@@ -69,6 +69,8 @@ def job(
     settle_ms: int,
     allocation: float,
     pnl: float,
+    *,
+    capital_release_ms: int | None = None,
 ) -> OutcomeBacktestJob:
     return OutcomeBacktestJob(
         market_id=market_id,
@@ -76,6 +78,7 @@ def job(
         settlement_time_ms=settle_ms,
         requested_collateral=allocation,
         runner=lambda allocated: result(market_id, start_ms, settle_ms, allocated, pnl),
+        capital_release_time_ms=capital_release_ms,
     )
 
 
@@ -141,6 +144,32 @@ def test_same_timestamp_settlement_is_released_before_new_market_allocation():
     assert portfolio.ending_collateral == pytest.approx(102.0)
 
 
+def test_resolved_capital_is_not_reused_before_authoritative_release():
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            job(
+                "first",
+                0,
+                5_000,
+                100.0,
+                1.0,
+                capital_release_ms=6_000,
+            ),
+            job("before-release", 5_000, 9_000, 100.0, 100.0),
+            job("at-release", 6_000, 10_000, 100.0, 1.0),
+        ],
+        starting_collateral=100.0,
+        insufficient_capital_policy=InsufficientCapitalPolicy.SKIP,
+    )
+
+    assert [item.market_id for item in portfolio.market_results] == [
+        "first",
+        "at-release",
+    ]
+    assert [item.market_id for item in portfolio.skipped_markets] == ["before-release"]
+    assert portfolio.ending_collateral == pytest.approx(102.0)
+
+
 def test_overlapping_market_residual_peaks_are_aggregated_chronologically():
     first = replace(
         result("first", 0, 10_000, 40.0, 0.0),
@@ -190,6 +219,28 @@ def test_same_timestamp_residual_changes_are_applied_atomically():
                 9_000,
                 40.0,
                 lambda _: increasing,
+            ),
+        ],
+        starting_collateral=100.0,
+    )
+
+    assert portfolio.max_abs_residual_qty == pytest.approx(5.0)
+
+
+def test_same_market_intra_timestamp_residual_peak_is_preserved():
+    paired_within_second = replace(
+        result("paired", 0, 10_000, 40.0, 0.0),
+        max_abs_residual_qty=5.0,
+        residual_qty_timeline=((2_000, 5.0), (2_000, 0.0)),
+    )
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            OutcomeBacktestJob(
+                "paired",
+                0,
+                10_000,
+                40.0,
+                lambda _: paired_within_second,
             ),
         ],
         starting_collateral=100.0,

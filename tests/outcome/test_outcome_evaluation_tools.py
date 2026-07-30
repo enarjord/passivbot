@@ -20,6 +20,7 @@ from tools.evaluate_archived_outcome_portfolio import (
     _load_archived_fee_market,
     _require_shared_quote_asset,
     _rust_fee_formula,
+    _rust_fee_rates,
 )
 from tools.evaluate_hip4_outcome_window import (
     _add_constraint_arguments,
@@ -77,6 +78,33 @@ def test_archived_fee_formula_fails_closed_when_not_representable():
     with pytest.raises(ValueError, match="no Rust translation"):
         _rust_fee_formula(hip4, "archived")
     assert _rust_fee_formula(hip4, "notional") == "notional"
+
+
+def test_archived_zero_fee_metadata_forces_zero_rust_rates():
+    market = replace(
+        polymarket.normalize_market(fixture("polymarket_binary.json")),
+        fee_metadata=OutcomeFeeMetadata(
+            formula="venue_reported_zero",
+            maker_rate=0.0,
+            taker_rate=0.0,
+        ),
+    )
+
+    assert _rust_fee_formula(market, "archived") == "notional"
+    assert _rust_fee_rates(
+        market,
+        "archived",
+        maker_rate=0.01,
+        taker_rate=0.02,
+        settlement_rate=0.03,
+    ) == (0.0, 0.0, 0.0)
+    assert _rust_fee_rates(
+        market,
+        "notional",
+        maker_rate=0.01,
+        taker_rate=0.02,
+        settlement_rate=0.03,
+    ) == (0.01, 0.02, 0.03)
 
 
 def test_shared_wallet_portfolio_requires_one_quote_asset():

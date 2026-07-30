@@ -397,7 +397,7 @@ def normalize_account_fills(
 ) -> tuple[OutcomeAccountFill, ...]:
     lookup = _asset_lookup(markets)
     normalized = []
-    seen: set[tuple[int, str, str]] = set()
+    seen: dict[tuple[int, str, str], OutcomeAccountFill] = {}
     for row in payload:
         coin = str(row.get("coin", ""))
         resolved = lookup.get(coin)
@@ -408,41 +408,46 @@ def normalize_account_fills(
         trade_id = str(_non_negative_int(row.get("tid"), "fill tid"))
         transaction_hash = str(row.get("hash", "")).strip()
         identity = (timestamp_ms, coin, trade_id)
-        if identity in seen:
-            continue
-        seen.add(identity)
         side_raw = str(row.get("side", "")).upper()
         if side_raw not in {"B", "A"}:
             raise ValueError("Hyperliquid account-fill side must be B or A")
         crossed = row.get("crossed")
         if not isinstance(crossed, bool):
             raise ValueError("Hyperliquid account-fill crossed must be boolean")
-        normalized.append(
-            OutcomeAccountFill(
-                market_id=market.market_id,
-                trade_id=trade_id,
-                transaction_hash=transaction_hash,
-                order_id=str(_non_negative_int(row.get("oid"), "fill oid")),
-                asset_id=asset.asset_id,
-                outcome=asset.side,
-                side=(
-                    OutcomeOrderSide.BUY
-                    if side_raw == "B"
-                    else OutcomeOrderSide.SELL
-                ),
-                native_price=_finite_float(row.get("px"), "fill px"),
-                qty=_finite_float(row.get("sz"), "fill sz"),
-                fee=_finite_float(row.get("fee"), "fill fee"),
-                fee_asset=str(row.get("feeToken", "")).strip(),
-                is_maker=not crossed,
-                timestamp_ms=timestamp_ms,
-                direction=str(row.get("dir", "")).strip(),
-                start_position_qty=_finite_float(
-                    row.get("startPosition"),
-                    "fill startPosition",
-                ),
-            )
+        fill = OutcomeAccountFill(
+            market_id=market.market_id,
+            trade_id=trade_id,
+            transaction_hash=transaction_hash,
+            order_id=str(_non_negative_int(row.get("oid"), "fill oid")),
+            asset_id=asset.asset_id,
+            outcome=asset.side,
+            side=(
+                OutcomeOrderSide.BUY
+                if side_raw == "B"
+                else OutcomeOrderSide.SELL
+            ),
+            native_price=_finite_float(row.get("px"), "fill px"),
+            qty=_finite_float(row.get("sz"), "fill sz"),
+            fee=_finite_float(row.get("fee"), "fill fee"),
+            fee_asset=str(row.get("feeToken", "")).strip(),
+            is_maker=not crossed,
+            timestamp_ms=timestamp_ms,
+            direction=str(row.get("dir", "")).strip(),
+            start_position_qty=_finite_float(
+                row.get("startPosition"),
+                "fill startPosition",
+            ),
         )
+        previous = seen.get(identity)
+        if previous is not None:
+            if previous != fill:
+                raise ValueError(
+                    "conflicting duplicate Hyperliquid account fill "
+                    f"{identity!r}"
+                )
+            continue
+        seen[identity] = fill
+        normalized.append(fill)
     return tuple(
         sorted(
             normalized,

@@ -338,12 +338,14 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     reads ``mss``.
     """
     warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
-    interval = int(mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
+    interval_ms = int(
+        mss.get("__meta__", {}).get("data_interval_ms", 60_000) or 60_000
+    )
     stamped = stamp_warmup_metadata(
         mss,
         coins,
         warmup_map,
-        bar_interval_minutes=interval,
+        bar_interval_ms=interval_ms,
     )
     if stamped:
         summary = ", ".join(

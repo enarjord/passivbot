@@ -507,6 +507,17 @@ def test_account_fill_preserves_negative_fee_as_authoritative_rebate():
     assert fills[0].is_maker is True
 
 
+def test_account_fill_rejects_conflicting_duplicate_identity():
+    _, market = market_fixture()
+    first = user_fills()[0]
+    conflicting = dict(first, px="0.41")
+
+    with pytest.raises(ValueError, match="conflicting duplicate Hyperliquid account fill"):
+        hyperliquid.normalize_account_fills((first, conflicting), (market,))
+
+    assert len(hyperliquid.normalize_account_fills((first, dict(first)), (market,))) == 1
+
+
 @pytest.mark.asyncio
 async def test_mutations_are_disabled_by_default_before_any_private_request():
     payload, market = market_fixture()

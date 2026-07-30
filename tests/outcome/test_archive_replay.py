@@ -402,4 +402,5 @@ def test_polymarket_replay_requires_separate_verified_price_grid_history(tmp_pat
     )
     replay = build_archived_ema_anchor_replay(archive, **kwargs)
 
-    assert replay.payload["settlement_time_ms"] == 5_200
+    assert replay.payload["settlement_time_ms"] == 5_100
+    assert replay.settlement.capital_release_time_ms == 5_200

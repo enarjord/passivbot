@@ -138,13 +138,15 @@ async def prepare_suite_contexts(
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 
-    candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
+    from backtest import resolve_backtest_candle_interval_ms
+
+    candle_interval_ms = resolve_backtest_candle_interval_ms(base_config)
     datasets = await prepare_master_datasets(
         base_config,
         exchanges_list,
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
-        candle_interval_minutes=candle_interval,
+        candle_interval_ms=candle_interval_ms,
         scenarios=scenarios,
     )
     available_coins = set()
@@ -170,7 +172,10 @@ async def prepare_suite_contexts(
         ts_window: Optional[np.ndarray],
     ) -> Dict[str, Any]:
         total_steps = max(1, int(end_idx - start_idx))
-        interval = int(dataset.mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
+        interval_ms = int(
+            dataset.mss.get("__meta__", {}).get("data_interval_ms", 60_000)
+            or 60_000
+        )
         mss_slice: Dict[str, Any] = {
             coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
         }
@@ -207,7 +212,7 @@ async def prepare_suite_contexts(
             mss_slice,
             selected_coins,
             warmup_map,
-            bar_interval_minutes=interval,
+            bar_interval_ms=interval_ms,
         )
 
         # Meta window details (matches _prepare_dataset_subset semantics without hlcvs copies).

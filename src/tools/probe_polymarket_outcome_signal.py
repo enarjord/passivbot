@@ -36,7 +36,7 @@ async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--gamma-market-id",
-        default="2972731",
+        required=True,
         help="Gamma API market ID for a non-negative-risk binary CLOB market",
     )
     parser.add_argument(

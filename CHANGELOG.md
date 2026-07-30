@@ -67,7 +67,9 @@ All notable user-facing changes will be documented in this file.
   formulas, applies same-second grid changes before fills, and includes settlement fees in
   worst-case equity. Polymarket full-contract replay independently requires verified price-grid
   history and capital-release evidence, rather than treating fill coverage as tick history or
-  `ConditionResolution` as redemption. Source bars must be contiguous before interval aggregation;
+  `ConditionResolution` as redemption. Regular backtest and optimizer suites now resolve candle
+  intervals in milliseconds, preserving native one-second datasets instead of silently preparing
+  minute bars. Source bars must be contiguous before interval aggregation;
   one-sided pair completion can use its full remaining inventory headroom; mode summaries retain
   peak paired and residual exposure. Portfolio peak residual now aggregates overlapping market
   residuals on one chronological timeline. Final HIP-4 verification failures now trigger verified
@@ -117,7 +119,11 @@ All notable user-facing changes will be documented in this file.
   bounded HIP-4 evaluation requires explicit reported constraint assumptions. Identity-less
   Polymarket sessions reject overlapping verified coverage atomically, and complementary
   tick-size events deduplicate as one normalized market-level transition. Full-contract replay
-  starts from the latest metadata state valid at trading open, metadata fingerprint checks are
+  starts from the latest metadata state valid at trading open, settles at authoritative resolution
+  while keeping shared-wallet capital locked until authoritative release, preserves archived
+  zero-fee behavior regardless of exploratory CLI rates, rejects conflicting HIP-4 account-fill
+  duplicates, and retains deterministic intra-second residual peaks. The public Polymarket signal
+  probe now requires an explicit current Gamma market ID. Metadata fingerprint checks are
   serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
   tier, suite pre-aggregation and scenario slicing keep validity indices in target-bar units, and
   active Polymarket evaluation windows apply their synthetic close before Rust translation.

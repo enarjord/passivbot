@@ -253,7 +253,7 @@ def build_archived_ema_anchor_replay(
         fee_schedule=fee_schedule,
         starting_collateral=requested_collateral,
         strategy_params=strategy_params,
-        settlement_time_ms=capital_release_time_ms,
+        settlement_time_ms=settlement.settlement_time_ms,
         yes_fraction=settlement.yes_fraction,
         price_grid_changes=price_grid_changes,
     )

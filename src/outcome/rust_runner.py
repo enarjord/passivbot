@@ -270,15 +270,23 @@ def make_rust_outcome_job(payload: Mapping[str, Any]) -> OutcomeBacktestJob:
 
 def make_rust_ema_anchor_outcome_job(
     payload: Mapping[str, Any],
+    *,
+    capital_release_time_ms: int | None = None,
 ) -> OutcomeBacktestJob:
     """Wrap one EMA-anchor outcome payload for shared-wallet orchestration."""
 
-    return _make_rust_outcome_job(payload, run_outcome_ema_anchor_backtest)
+    return _make_rust_outcome_job(
+        payload,
+        run_outcome_ema_anchor_backtest,
+        capital_release_time_ms=capital_release_time_ms,
+    )
 
 
 def _make_rust_outcome_job(
     payload: Mapping[str, Any],
     run_backtest: Callable[[Mapping[str, Any]], dict[str, Any]],
+    *,
+    capital_release_time_ms: int | None = None,
 ) -> OutcomeBacktestJob:
     template = deepcopy(dict(payload))
     market = template.get("market")
@@ -300,6 +308,7 @@ def _make_rust_outcome_job(
         settlement_time_ms=settlement_time_ms,
         requested_collateral=requested_collateral,
         runner=runner,
+        capital_release_time_ms=capital_release_time_ms,
     )
 
 

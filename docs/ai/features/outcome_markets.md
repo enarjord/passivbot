@@ -436,10 +436,10 @@ authoritative grid-subscription readiness boundary archives observed changes but
 grid coverage. Each retained grid transition updates the executable minimum and maximum prices
 atomically with the tick size. Identical timestamped old-grid to new-grid transitions emitted for
 complementary assets are one normalized market-level change. The builder supplies the
-authoritative capital-release timestamp and payout to Rust; resolution-only evidence remains
-archived but is not a release timestamp. The EMA-anchor job
-adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
-shared-wallet orchestrator locks that job's allocation until that release.
+authoritative resolution timestamp and payout to Rust so settlement accounting and inventory-time
+metrics end when the outcome resolves. The EMA-anchor job adapter separately supplies authoritative
+capital-release evidence to the shared-wallet orchestrator, which keeps the job's allocation
+locked through delayed redemption without delaying simulated settlement.
 
 Any bounded outcome-window evaluation uses the archived market metadata state valid at the start
 of its requested window, not the latest discovery row. It requires verified grid-stream coverage

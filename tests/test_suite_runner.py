@@ -47,7 +47,8 @@ def test_suite_preaggregation_rewrites_validity_indices():
         timestamps,
         btc_usd_prices,
         mss,
-        5,
+        source_interval_ms=60_000,
+        target_interval_ms=300_000,
     )
 
     assert aggregated.shape[0] == 60
@@ -55,6 +56,7 @@ def test_suite_preaggregation_rewrites_validity_indices():
     assert aggregated_btc.shape[0] == 60
     assert mss["BTC"]["first_valid_index"] == 20
     assert mss["BTC"]["last_valid_index"] == 59
+    assert mss["__meta__"]["data_interval_ms"] == 300_000
     assert mss["__meta__"]["data_interval_minutes"] == 5
     assert mss["__meta__"]["source_candle_interval_offset_bars"] == 4
     assert mss["__meta__"]["candle_interval_offset_bars"] == 0
@@ -613,7 +615,12 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
     monkeypatch.setitem(
         sys.modules,
         "backtest",
-        SimpleNamespace(prepare_hlcvs_mss=fake_prepare_hlcvs_mss),
+        SimpleNamespace(
+            prepare_hlcvs_mss=fake_prepare_hlcvs_mss,
+            _resolve_source_interval_ms=lambda _meta, timestamps: int(
+                timestamps[1] - timestamps[0]
+            ),
+        ),
     )
     caplog.set_level("INFO")
 
@@ -639,6 +646,56 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
         in rec.message
         for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_master_dataset_preserves_native_one_second_bars(monkeypatch):
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-02",
+            "exchanges": ["binance"],
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    timestamps = np.arange(10, dtype=np.int64) * 1_000
+
+    async def fake_prepare_hlcvs_mss(_config, _exchange, *, force_refetch_gaps=False):
+        return (
+            ["BTC"],
+            np.ones((10, 1, 4), dtype=np.float64),
+            {"BTC": {"exchange": "binance"}, "__meta__": {"data_interval_ms": 1_000}},
+            "",
+            "/tmp/binance",
+            np.ones(10, dtype=np.float64),
+            timestamps,
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "backtest",
+        SimpleNamespace(
+            prepare_hlcvs_mss=fake_prepare_hlcvs_mss,
+            _resolve_source_interval_ms=lambda meta, _timestamps: meta["data_interval_ms"],
+        ),
+    )
+
+    datasets = await prepare_master_datasets(
+        base_config,
+        ["binance"],
+        candle_interval_ms=1_000,
+    )
+
+    dataset = datasets["binance"]
+    assert dataset.hlcvs.shape[0] == 10
+    assert np.array_equal(dataset.timestamps, timestamps)
+    assert dataset.mss["__meta__"]["data_interval_ms"] == 1_000
+    assert dataset.mss["__meta__"]["data_interval_seconds"] == 1
+    assert "data_interval_minutes" not in dataset.mss["__meta__"]
 
 
 def test_aggregate_metrics_computes_stats():

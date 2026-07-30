@@ -215,15 +215,25 @@ def _portfolio_max_abs_residual_qty(
         sorted(events),
         key=lambda event: event[0],
     ):
-        for (
-            _event_time,
-            _priority,
-            market_id,
-            _sequence,
-            residual_qty,
-        ) in timestamp_events:
-            current[market_id] = residual_qty
-        peak = max(peak, sum(abs(value) for value in current.values()))
+        grouped_events = tuple(timestamp_events)
+        final_state = dict(current)
+        residual_events: dict[str, list[float]] = {}
+        for _event_time, priority, market_id, _sequence, residual_qty in grouped_events:
+            final_state[market_id] = residual_qty
+            if priority != 0:
+                residual_events.setdefault(market_id, []).append(residual_qty)
+        # Cross-market changes within one timestamp remain atomic because their relative
+        # ordering is unknowable. Within each market, however, Rust emits a deterministic fill
+        # order whose intermediate residual exposure must contribute to the portfolio peak.
+        final_abs_total = sum(abs(value) for value in final_state.values())
+        peak = max(peak, final_abs_total)
+        for market_id, market_residuals in residual_events.items():
+            other_final_abs = final_abs_total - abs(final_state[market_id])
+            peak = max(
+                peak,
+                *(other_final_abs + abs(residual) for residual in market_residuals),
+            )
+        current = final_state
     return peak
 
 
@@ -296,14 +306,26 @@ class OutcomeBacktestJob:
     settlement_time_ms: int
     requested_collateral: float
     runner: OutcomeRunner
+    capital_release_time_ms: int | None = None
 
     def __post_init__(self) -> None:
         if not self.market_id:
             raise ValueError("outcome job market_id must not be empty")
         if self.trading_open_time_ms < 0 or self.settlement_time_ms <= self.trading_open_time_ms:
             raise ValueError("outcome job must have an ordered non-empty lifecycle")
+        if (
+            self.capital_release_time_ms is not None
+            and self.capital_release_time_ms < self.settlement_time_ms
+        ):
+            raise ValueError("outcome job capital release cannot precede settlement")
         if not math.isfinite(self.requested_collateral) or self.requested_collateral <= 0.0:
             raise ValueError("requested_collateral must be finite and positive")
+
+    @property
+    def effective_capital_release_time_ms(self) -> int:
+        if self.capital_release_time_ms is None:
+            return self.settlement_time_ms
+        return self.capital_release_time_ms
 
 
 @dataclass(frozen=True)
@@ -364,14 +386,18 @@ def run_outcome_portfolio_backtest(
     """Compose settled single-market runs against one conservative shared wallet.
 
     Each accepted job receives a fixed allocation that stays unavailable until its authoritative
-    settlement time. The orchestrator never lends another market unused intra-run collateral.
+    capital-release time. The orchestrator never lends another market unused intra-run collateral.
     """
 
     if not math.isfinite(starting_collateral) or starting_collateral <= 0.0:
         raise ValueError("portfolio starting_collateral must be finite and positive")
     ordered_jobs = sorted(
         jobs,
-        key=lambda job: (job.trading_open_time_ms, job.settlement_time_ms, job.market_id),
+        key=lambda job: (
+            job.trading_open_time_ms,
+            job.effective_capital_release_time_ms,
+            job.market_id,
+        ),
     )
     if len({job.market_id for job in ordered_jobs}) != len(ordered_jobs):
         raise ValueError("outcome portfolio jobs must have unique market IDs")
@@ -408,8 +434,9 @@ def run_outcome_portfolio_backtest(
     max_allocated = 0.0
     allocation_time_area = 0.0
     last_event_time_ms = ordered_jobs[0].trading_open_time_ms
-    pending_settlements: list[tuple[int, str]] = []
+    pending_releases: list[tuple[int, str]] = []
     active_results: dict[str, SingleOutcomeBacktestResult] = {}
+    accepted_release_times: dict[str, int] = {}
     results: list[SingleOutcomeBacktestResult] = []
     skipped: list[SkippedOutcomeBacktest] = []
     worst_case_equity_min = starting_collateral
@@ -419,12 +446,12 @@ def run_outcome_portfolio_backtest(
         nonlocal allocated_collateral, free_collateral, worst_case_equity_min
         if timestamp_ms < last_event_time_ms:
             raise AssertionError("portfolio event time moved backwards")
-        while pending_settlements and pending_settlements[0][0] <= timestamp_ms:
-            settlement_time_ms, market_id = heapq.heappop(pending_settlements)
+        while pending_releases and pending_releases[0][0] <= timestamp_ms:
+            release_time_ms, market_id = heapq.heappop(pending_releases)
             allocation_time_area += allocated_collateral * (
-                settlement_time_ms - last_event_time_ms
+                release_time_ms - last_event_time_ms
             )
-            last_event_time_ms = settlement_time_ms
+            last_event_time_ms = release_time_ms
             settled = active_results.pop(market_id)
             allocated_collateral -= settled.starting_collateral
             free_collateral += settled.ending_collateral
@@ -476,9 +503,12 @@ def run_outcome_portfolio_backtest(
         max_allocated = max(max_allocated, allocated_collateral)
         results.append(result)
         active_results[result.market_id] = result
+        accepted_release_times[result.market_id] = (
+            job.effective_capital_release_time_ms
+        )
         heapq.heappush(
-            pending_settlements,
-            (result.settlement_time_ms, result.market_id),
+            pending_releases,
+            (job.effective_capital_release_time_ms, result.market_id),
         )
         worst_case_equity_min = min(
             worst_case_equity_min,
@@ -517,11 +547,11 @@ def run_outcome_portfolio_backtest(
             post_fill_adverse_selection=(),
         )
 
-    final_time_ms = max(result.settlement_time_ms for result in results)
+    final_time_ms = max(accepted_release_times.values())
     if last_event_time_ms < final_time_ms:
         advance_time(final_time_ms)
-    if pending_settlements:
-        raise AssertionError("portfolio settlement queue was not fully released")
+    if pending_releases:
+        raise AssertionError("portfolio capital-release queue was not fully released")
     if abs(allocated_collateral) > 1e-9:
         raise AssertionError("portfolio retained allocated collateral after final settlement")
 
