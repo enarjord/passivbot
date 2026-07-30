@@ -744,7 +744,8 @@ fn sell_intent(
     let qty = round_down(qty, market.qty_step);
     let close_all =
         close_all_qty.is_some_and(|remaining| qty > EPSILON && (qty - remaining).abs() <= EPSILON);
-    if (!close_all && (qty < market.min_qty || qty * native_price + EPSILON < market.min_notional))
+    if (!close_all && qty < market.min_qty)
+        || qty * native_price + EPSILON < market.min_notional
         || qty <= EPSILON
         || native_price < market.min_price
         || native_price > market.max_price
@@ -1271,12 +1272,12 @@ mod tests {
     }
 
     #[test]
-    fn risk_reduction_window_closes_aligned_residual_below_order_minimums() {
+    fn risk_reduction_window_closes_aligned_residual_below_minimum_quantity() {
         let mut state = OutcomeEmaAnchorState::default();
         let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
         let mut outcome_market = market();
         outcome_market.min_qty = 5.0;
-        outcome_market.min_notional = 10.0;
+        outcome_market.min_notional = 0.5;
         state
             .update(0.5, outcome_market.payout_unit, &parameters)
             .unwrap();
@@ -1312,6 +1313,33 @@ mod tests {
             )
             .unwrap();
         assert!(unaligned_quotes.canonical_ask.is_none());
+    }
+
+    #[test]
+    fn risk_reduction_window_keeps_close_all_subject_to_minimum_notional() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        let mut outcome_market = market();
+        outcome_market.min_qty = 1.0;
+        outcome_market.min_notional = 10.0;
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: 1.0,
+            no_qty: 0.0,
+            yes_available_qty: None,
+            no_available_qty: None,
+            yes_average_cost: 0.4,
+            no_average_cost: 0.0,
+            free_collateral: 100.0,
+        };
+
+        let quotes = state
+            .quote(91_000, 0.5, &outcome_market, &parameters, &inventory)
+            .unwrap();
+
+        assert!(quotes.canonical_ask.is_none());
     }
 
     #[test]

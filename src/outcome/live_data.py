@@ -204,6 +204,10 @@ async def collect_verified_outcome_signal_window(
                 raise OutcomeInvalidPublicSignal(
                     "outcome live trade omitted collector chronology"
                 )
+            delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
+            if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
+                rejected_trade_times_ms.append(trade.exchange_time_ms)
+                continue
             if archive is not None:
                 if market.venue is OutcomeVenue.POLYMARKET:
                     deferred_archive_trades.append(trade)
@@ -214,10 +218,6 @@ async def collect_verified_outcome_signal_window(
                         raise OutcomeInvalidPublicSignal(
                             "outcome public trade conflicted with retained live evidence"
                         ) from exc
-            delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
-            if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
-                rejected_trade_times_ms.append(trade.exchange_time_ms)
-                continue
             trades.append(trade)
             if first_received_ms is None:
                 first_received_ms = trade.received_time_ms

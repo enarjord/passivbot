@@ -1271,6 +1271,44 @@ mod tests {
     }
 
     #[test]
+    fn ema_anchor_replays_execution_candles_before_delayed_order_entry() {
+        let mut market = fixture_market();
+        market.order_entry_opens_ms = 3_000;
+        let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.51,
+                low: 0.49,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.strategy_kind, "ema_anchor_outcome");
+        assert_eq!(output.fills_count, 0);
+    }
+
+    #[test]
     fn ema_anchor_outcome_uses_current_signal_to_quote_for_next_second() {
         let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
             market: fixture_market(),

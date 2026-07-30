@@ -126,15 +126,19 @@ All notable user-facing changes will be documented in this file.
   HIP-4 evaluator requires an explicit minimum-notional assumption alongside quantity constraints.
   Verified grid coverage now participates in outer archive transactions, grid changes between
   trading open and delayed order acceptance replay successfully, pre-close risk reduction may sell
-  an explicitly verified full residual below entry minimums, and settled cycles cancel managed
-  quotes before surfacing archive failures. Optimizer resume validation now rejects incompatible
-  one-second candle settings, including adding the setting to an older result.
+  an explicitly verified full residual below minimum quantity while still meeting minimum
+  notional, and settled cycles cancel managed quotes before surfacing archive failures.
+  Optimizer resume validation now rejects incompatible one-second candle settings, including
+  adding the setting to an older result.
   Cancel-only unavailable-signal cycles now apply the same settlement-archive ordering guarantee.
   Shared-wallet portfolio evaluation rejects mixed quote assets, and normalized trades reject
   inconsistent native-to-canonical YES price mappings.
   Reconciliation rejects duplicate kept orders in one managed quote slot before mutation, and the
   bounded Polymarket evaluator requires an explicit quantity-step assumption.
   Polygon fill and settlement import now requires explicit boolean non-removed log evidence.
+  Live collectors reject over-lag fills before archive writes, candle construction rejects
+  conflicting duplicate trade identities, and replay accepts execution candles from trading open
+  while keeping order placement gated until order-entry open.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

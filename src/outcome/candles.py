@@ -31,15 +31,35 @@ class VerifiedCoverage:
         return self.start_ms <= timestamp_ms and timestamp_ms + 1_000 <= self.end_ms
 
 
+def _immutable_trade_fields(trade: NormalizedOutcomeTrade) -> tuple[object, ...]:
+    return (
+        trade.asset_id,
+        trade.outcome,
+        trade.native_side,
+        trade.native_price,
+        trade.canonical_yes_price,
+        trade.qty,
+        trade.exchange_time_ms,
+        trade.source_event_id,
+        trade.economic_event_id,
+        trade.sequence_id,
+    )
+
+
 def _deduplicate(trades: Sequence[NormalizedOutcomeTrade]) -> list[tuple[int, NormalizedOutcomeTrade]]:
-    seen: set[tuple[str, ...]] = set()
+    seen: dict[tuple[str, ...], tuple[object, ...]] = {}
     retained: list[tuple[int, NormalizedOutcomeTrade]] = []
     for index, trade in enumerate(trades):
         key = trade.deduplication_key
         if key is not None:
             if key in seen:
+                if seen[key] != _immutable_trade_fields(trade):
+                    raise ValueError(
+                        "conflicting outcome trade evidence for an immutable "
+                        "source or sequence identity"
+                    )
                 continue
-            seen.add(key)
+            seen[key] = _immutable_trade_fields(trade)
         retained.append((index, trade))
     return retained
 

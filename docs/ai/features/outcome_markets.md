@@ -216,9 +216,10 @@ orders until an explicit taker model defines immediate execution, liquidity role
 slippage. A GTD expiry must be later than the order's placement timestamp and no later than the
 market's trading close; an already-expired order is rejected rather than rested until a later
 bucket. Entries and partial exits must satisfy quantity and notional minimums. A step-aligned sell
-that is explicitly marked to close the entire current directional residual may fall below those
-minimums; the simulator and live preflight independently verify the close-all claim against
-authoritative inventory before accepting the exception.
+that is explicitly marked to close the entire current directional residual may fall below the
+minimum quantity, but it must still satisfy minimum notional. The simulator and live preflight
+independently verify the close-all claim against authoritative inventory before accepting the
+quantity exception.
 
 Some venues use a merged complementary book and report one economic trade as mirrored YES and NO
 fill records. Adapters retain both native records for audit and execution reconciliation, attach a
@@ -307,6 +308,11 @@ observation, rejects removed, duplicate, or out-of-range logs, excludes a config
 depth from the chain head, and records coverage only after the entire range is decoded and archived.
 RPC endpoints are transport configuration: public providers may impose archive, range, traffic, or
 retention limits, and any such failure must leave the interval uncovered.
+
+Direct candle construction rejects conflicting immutable fields for repeated source-event or
+source-sequence identities before deduplication. Live collectors validate delivery lag before
+archiving or deferring a fill; a rejected over-lag fill is never added to retained history, even
+when its timestamp lies outside the newly certified window.
 
 A historical source batch commits its metadata observation, trades, settlement evidence, and
 verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the

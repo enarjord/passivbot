@@ -552,12 +552,14 @@ async def test_enabled_post_only_order_preflights_state_book_and_current_market(
 
 
 @pytest.mark.asyncio
-async def test_close_all_sell_may_clear_current_residual_below_order_minimums(monkeypatch):
+async def test_close_all_sell_may_clear_current_residual_below_minimum_quantity(
+    monkeypatch,
+):
     payload, base_market = market_fixture()
     market = replace(
         base_market,
         min_order_qty=5.0,
-        min_order_notional=10.0,
+        min_order_notional=0.5,
     )
 
     class ResidualSession(FakeSession):
@@ -620,6 +622,21 @@ async def test_close_all_sell_may_clear_current_residual_below_order_minimums(mo
             side=OutcomeOrderSide.SELL,
             native_price="0.6",
             qty="2",
+            close_all=True,
+        )
+
+    below_notional_market = replace(
+        market,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
+    )
+    with pytest.raises(ValueError, match="notional is below the minimum"):
+        await client.submit_limit_order(
+            below_notional_market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.SELL,
+            native_price="0.6",
+            qty="1",
             close_all=True,
         )
 

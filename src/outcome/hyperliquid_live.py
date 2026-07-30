@@ -630,7 +630,7 @@ class HyperliquidOutcomeLiveClient:
                 qty=qty,
                 client_order_id=client_order_id,
                 time_in_force="Alo",
-                allow_below_minimum=True,
+                allow_below_min_qty=True,
             )
         assert action is not None
         if create_deadline_ms is not None:

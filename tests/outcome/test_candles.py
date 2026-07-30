@@ -67,6 +67,29 @@ def test_trade_derived_ohlcv_and_explicit_identity_deduplication():
     assert candle.carried_forward is False
 
 
+@pytest.mark.parametrize(
+    "builder",
+    [trades_to_1s_candles, trades_to_canonical_signal_1s_candles],
+)
+@pytest.mark.parametrize("identity_kind", ["source", "sequence"])
+def test_conflicting_duplicate_trade_identity_is_rejected(builder, identity_kind):
+    original = trade(
+        1_100,
+        0.4,
+        1.0,
+        "same" if identity_kind == "source" else None,
+        sequence_id="same" if identity_kind == "sequence" else None,
+    )
+    conflicting = replace(
+        original,
+        native_price=0.45,
+        canonical_yes_price=0.45,
+    )
+
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        builder([original, conflicting])
+
+
 def test_trade_rejects_inconsistent_native_to_canonical_price_mapping():
     with pytest.raises(ValueError, match="canonical_yes_price must equal"):
         NormalizedOutcomeTrade(

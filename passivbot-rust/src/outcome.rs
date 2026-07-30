@@ -407,7 +407,7 @@ impl OutcomeLimitOrder {
     fn validate_with_minimums(
         &self,
         market: &BinaryOutcomeMarketSpec,
-        enforce_minimums: bool,
+        enforce_min_qty: bool,
     ) -> Result<(), OutcomeError> {
         if self.order_id.trim().is_empty() {
             return Err(OutcomeError::InvalidMarket(
@@ -423,12 +423,12 @@ impl OutcomeLimitOrder {
         }
         if !self.qty.is_finite()
             || self.qty <= 0.0
-            || (enforce_minimums && self.qty < market.min_qty)
+            || (enforce_min_qty && self.qty < market.min_qty)
             || !is_step_aligned(self.qty, market.qty_step)
         {
             return Err(OutcomeError::InvalidQuantity(self.qty));
         }
-        if enforce_minimums && self.qty * self.price + EPSILON < market.min_notional {
+        if self.qty * self.price + EPSILON < market.min_notional {
             return Err(OutcomeError::InvalidQuantity(self.qty));
         }
         if let Some(expires_at_ms) = self.expires_at_ms {

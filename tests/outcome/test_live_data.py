@@ -197,6 +197,63 @@ async def test_late_in_window_fill_prevents_verified_coverage(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_overlag_fill_outside_new_window_is_rejected_before_archive(tmp_path):
+    market = polymarket_market()
+    archive = OutcomeTradeArchive(tmp_path / "overlag-fill.sqlite")
+    retained_coverage = VerifiedCoverage(1_000, 2_000)
+    for asset in (market.yes_asset, market.no_asset):
+        archive.record_verified_coverage(
+            market.venue,
+            market.market_id,
+            asset.asset_id,
+            retained_coverage,
+            collector_session="retained",
+        )
+
+    async def stream():
+        for sequence, (exchange_time_ms, received_time_ms, price) in enumerate(
+            ((4_900, 4_950, 0.4), (1_500, 5_000, 0.6)),
+            start=1,
+        ):
+            yield NormalizedOutcomeTrade(
+                venue=market.venue,
+                market_id=market.market_id,
+                asset_id=market.yes_asset.asset_id,
+                outcome=OutcomeSide.YES,
+                native_side=OutcomeOrderSide.BUY,
+                native_price=price,
+                canonical_yes_price=price,
+                qty=1.0,
+                exchange_time_ms=exchange_time_ms,
+                received_time_ms=received_time_ms,
+                source_event_id=None,
+                collector_sequence=sequence,
+            )
+
+    clock_values = iter((4_900, 5_000, 5_000, 6_200, 6_200))
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=1,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: next(clock_values),
+        trade_stream=stream(),
+        archive=archive,
+        collector_session="new-window",
+    )
+
+    retained = archive.load_trades(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    )
+    assert window.coverage == VerifiedCoverage(5_000, 6_000)
+    assert [item.exchange_time_ms for item in retained] == [4_900]
+
+
+@pytest.mark.asyncio
 async def test_collector_waits_through_maximum_accepted_trade_lag():
     market = polymarket_market()
 

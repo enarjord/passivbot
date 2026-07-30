@@ -217,7 +217,7 @@ impl SingleOutcomeSimulator {
         &mut self,
         candle: &OutcomeCandle,
     ) -> Result<Vec<SimulatedOutcomeFill>, OutcomeError> {
-        self.ensure_trading(candle.timestamp_ms)?;
+        self.ensure_market_open(candle.timestamp_ms)?;
         self.expire_orders(candle.timestamp_ms);
         candle.validate(self.market.payout_unit)?;
         if candle.volume <= 0.0 {
@@ -656,10 +656,10 @@ mod tests {
     }
 
     #[test]
-    fn close_all_sell_may_clear_aligned_residual_below_order_minimums() {
+    fn close_all_sell_may_clear_aligned_residual_below_minimum_quantity() {
         let mut outcome_market = market(false);
         outcome_market.min_qty = 1.0;
-        outcome_market.min_notional = 1.0;
+        outcome_market.min_notional = 0.25;
         let mut simulator =
             SingleOutcomeSimulator::new(outcome_market, OutcomeFeeSchedule::zero(), 10.0).unwrap();
         simulator
@@ -711,6 +711,46 @@ mod tests {
         assert_eq!(
             simulator.place_order(false_close, 2_500),
             Err(OutcomeError::InvalidQuantity(0.4))
+        );
+    }
+
+    #[test]
+    fn close_all_sell_remains_subject_to_minimum_notional() {
+        let mut outcome_market = market(false);
+        outcome_market.min_qty = 0.1;
+        outcome_market.min_notional = 0.9;
+        let mut simulator =
+            SingleOutcomeSimulator::new(outcome_market, OutcomeFeeSchedule::zero(), 10.0).unwrap();
+        simulator
+            .place_order(
+                order("buy-yes", Outcome::Yes, OutcomeOrderSide::Buy, 0.7, 2.0),
+                1_500,
+            )
+            .unwrap();
+        simulator
+            .place_order(
+                order("buy-no", Outcome::No, OutcomeOrderSide::Buy, 0.95, 1.0),
+                1_500,
+            )
+            .unwrap();
+        simulator
+            .process_candle(&candle(Outcome::Yes, 0.71, 0.69, 0.7, 1.0))
+            .unwrap();
+        simulator
+            .process_candle(&candle(Outcome::No, 0.96, 0.94, 0.95, 1.0))
+            .unwrap();
+        let mut below_notional = order(
+            "below-notional",
+            Outcome::Yes,
+            OutcomeOrderSide::Sell,
+            0.5,
+            1.0,
+        );
+        below_notional.close_all = true;
+
+        assert_eq!(
+            simulator.place_order(below_notional, 2_500),
+            Err(OutcomeError::InvalidQuantity(1.0))
         );
     }
 
