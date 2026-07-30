@@ -49,6 +49,8 @@ from fill_events_manager import (
     PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
+    _hyperliquid_fill_position_chain,
+    _unique_position_chain_order,
     compute_psize_pprice,
     fee_policy_kwargs_from_config,
     fill_event_net_pnl,
@@ -8523,6 +8525,68 @@ class Passivbot:
             event_id = f"fingerprint:{fallback_key}:{int(fallback_occurrence)}"
         return f"fill:{timestamp}:{event_id}"
 
+    @staticmethod
+    def _fill_position_size_chain(event) -> tuple[float, float] | None:
+        """Return one fill event's unambiguous before/after position sizes."""
+        raw = getattr(event, "raw", None)
+        if raw:
+            chain = _hyperliquid_fill_position_chain(
+                {
+                    "raw": raw,
+                    "side": getattr(event, "side", ""),
+                    "position_side": getattr(event, "position_side", ""),
+                }
+            )
+            # Raw component boundaries are authoritative. Do not invent a
+            # predecessor from an aggregate qty when those components do not
+            # themselves form one unambiguous chain.
+            return chain
+        try:
+            after_size = abs(float(getattr(event, "psize")))
+            qty = abs(float(getattr(event, "qty")))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+        if not all(math.isfinite(value) for value in (after_size, qty)):
+            return None
+        pside = str(getattr(event, "position_side", "") or "").lower()
+        side = str(getattr(event, "side", "") or "").lower()
+        if pside == "short":
+            adds = side == "sell"
+        elif pside == "long":
+            adds = side == "buy"
+        else:
+            return None
+        before_size = after_size - qty if adds else after_size + qty
+        return before_size, after_size
+
+    @classmethod
+    def _terminal_same_timestamp_fill_index(
+        cls, events, indexes: list[int]
+    ) -> int | None:
+        """Return the index of the fill closing an intra-millisecond cohort.
+
+        Exchanges may report several fills sharing one millisecond, and neither
+        the connector response nor the cache preserves their execution order.
+        Each fill knows the position size it started from, so the cohort forms a
+        chain; the terminal link is the only after-state the exchange position
+        can match.  Ambiguous cohorts return None so callers keep list order.
+        """
+        if len(indexes) < 2:
+            return indexes[-1] if indexes else None
+        chains = []
+        for index in indexes:
+            event = events[index]
+            chain = cls._fill_position_size_chain(event)
+            if chain is None:
+                return None
+            if not all(math.isfinite(value) for value in chain):
+                return None
+            chains.append(chain)
+        chain_order = _unique_position_chain_order(chains)
+        if chain_order is None:
+            return None
+        return indexes[chain_order[-1]]
+
     def _latest_fill_position_change_anchors(self) -> dict[tuple[str, str], dict]:
         """Return the newest known fill anchor for each symbol and position side."""
         manager = getattr(self, "_pnls_manager", None)
@@ -8538,9 +8602,36 @@ class Passivbot:
                 fallback_key
             ]
             fallback_occurrences[fallback_key] += 1
+        latest_cohorts: dict[tuple[str, str], list[int]] = {}
+        for event_index, event in enumerate(events):
+            key = (str(event.symbol), str(event.position_side))
+            cohort = latest_cohorts.get(key)
+            if cohort is None:
+                latest_cohorts[key] = [event_index]
+                continue
+            latest_timestamp = int(events[cohort[-1]].timestamp)
+            timestamp = int(event.timestamp)
+            if timestamp > latest_timestamp:
+                latest_cohorts[key] = [event_index]
+            elif timestamp == latest_timestamp:
+                cohort.append(event_index)
+        preferred_indexes = set()
+        for cohort in latest_cohorts.values():
+            terminal = self._terminal_same_timestamp_fill_index(events, cohort)
+            if terminal is not None:
+                preferred_indexes.add(terminal)
         for event_index in range(len(events) - 1, -1, -1):
             event = events[event_index]
             key = (str(event.symbol), str(event.position_side))
+            cohort = latest_cohorts.get(key) or []
+            if (
+                len(cohort) > 1
+                and event_index in cohort
+                and preferred_indexes
+                and event_index not in preferred_indexes
+                and any(index in preferred_indexes for index in cohort)
+            ):
+                continue
             if key not in anchors:
                 anchor = {
                     "timestamp": int(event.timestamp),

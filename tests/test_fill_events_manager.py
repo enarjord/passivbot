@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 import types
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +39,7 @@ from src.fill_events_manager import (
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
+    order_same_timestamp_fills,
 )
 
 # ---------------------------------------------------------------------------
@@ -2056,8 +2058,8 @@ async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path
     cache_dir.mkdir()
     stale_payload = [
         {
-            "id": "tid-a+tid-b",
-            "source_ids": ["tid-a", "tid-b"],
+            "id": "tid-a",
+            "source_ids": ["tid-a"],
             "timestamp": 1_700_000_000_000,
             "datetime": "",
             "symbol": "SUI/USDC:USDC",
@@ -2149,6 +2151,91 @@ async def test_doctor_repairs_metadata_only_legacy_cache_for_any_exchange(tmp_pa
     assert report["repaired"] is True
     assert FillEventCache(cache_dir).load_metadata()["pnl_contract"] == fem.PNL_CONTRACT_CURRENT
     assert [ev.id for ev in FillEventCache(cache_dir).load()] == ["current-row"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete_aggregate", [False, True])
+async def test_hyperliquid_metadata_repair_reloads_current_contract_cache(
+    tmp_path: Path,
+    incomplete_aggregate: bool,
+):
+    late_add, close = _hyperliquid_same_millisecond_events()
+    early_add = deepcopy(late_add)
+    early_add["id"] = "early-add"
+    early_add["qty"] = 2.0
+    early_add["price"] = 53.0
+    early_raw = early_add["raw"][0]["data"]
+    early_raw.update({"id": "early-add", "amount": 2.0, "price": 53.0})
+    early_raw["info"].update(
+        {
+            "tid": "early-add",
+            "sz": "2.0",
+            "px": "53.0",
+            "startPosition": "651.21",
+        }
+    )
+    components = [early_add, close, late_add]
+    for event in components:
+        event.update(
+            {
+                "source_ids": [event["id"]],
+                "datetime": "",
+                "fee_paid": -0.01,
+                "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+                "fee_source": fem.FEE_SOURCE_REPORTED_QUOTE,
+                "fee_quality": fem.FEE_QUALITY_EXACT,
+                "fee_currency": "USDC",
+                "fee_conversion_source": "same_currency",
+                "fee_notional": abs(event["qty"]) * event["price"],
+                "fee_ratio": -0.01 / (abs(event["qty"]) * event["price"]),
+                "pnl_status": "complete",
+                "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+                "fees": {"currency": "USDC", "cost": 0.01},
+                "pb_order_type": "unknown",
+                "client_order_id": "",
+                "c_mult": 1.0,
+            }
+        )
+        raw_trade = event["raw"][0]["data"]
+        raw_trade.update(
+            {
+                "timestamp": event["timestamp"],
+                "symbol": event["symbol"],
+                "fee": {"currency": "USDC", "cost": 0.01},
+            }
+        )
+    cache_dir = tmp_path / "metadata_only_hyperliquid_aggregate"
+    cache_dir.mkdir()
+    legacy_coalesced = fem._coalesce_events(components)
+    if incomplete_aggregate:
+        legacy_coalesced[0]["raw"] = legacy_coalesced[0]["raw"][:1]
+    (cache_dir / f"{fem._day_key(components[0]['timestamp'])}.json").write_text(
+        json.dumps(legacy_coalesced),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    if incomplete_aggregate:
+        assert report["repaired"] is False
+        assert report["action"] == "rebuild_cache"
+        assert report["normalization_error_type"] == "RuntimeError"
+        assert manager.get_events() == []
+        return
+
+    assert report["repaired"] is True
+    expected_ids = ["early-add", close["id"], late_add["id"]]
+    assert [event.id for event in manager.get_events()] == expected_ids
+    assert [event.id for event in FillEventCache(cache_dir).load()] == expected_ids
+    assert manager.get_events()[-1].psize == pytest.approx(655.06)
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert manager.get_events()[-1].pprice == pytest.approx(expected_pprice)
 
 
 def test_fill_event_cache_quarantine_for_rebuild_moves_legacy_payload(tmp_path: Path):
@@ -4023,15 +4110,12 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
         until_ms=base_ts + 10,
         detail_cache={},
     )
-    assert len(events) == 1
-    event = events[0]
-    assert event["id"] == "tid-hl-1+tid-hl-1b"
-    assert event["pb_order_type"] == "unknown"
-    assert event["pnl"] == pytest.approx(2.0)
-    assert event["qty"] == pytest.approx(0.30000000000000004)
-    assert event["client_order_id"] == "0xabc"
-    assert isinstance(event["fees"], dict)
-    assert event["fees"]["cost"] == pytest.approx(0.7)
+    assert [event["id"] for event in events] == ["tid-hl-1", "tid-hl-1b"]
+    assert [event["pb_order_type"] for event in events] == ["unknown", "unknown"]
+    assert [event["pnl"] for event in events] == pytest.approx([1.5, 0.5])
+    assert [event["qty"] for event in events] == pytest.approx([0.1, 0.2])
+    assert [event["client_order_id"] for event in events] == ["0xabc", "0xabc"]
+    assert [float(event["fees"]["cost"]) for event in events] == pytest.approx([0.5, 0.2])
     assert api.calls[0]["since"] == base_ts - 1
     assert api.calls[0]["limit"] == fetcher.trade_limit
     assert api.calls[0]["params"] == {}
@@ -4273,6 +4357,70 @@ async def test_manager_refresh_latest_uses_overlap(tmp_path: Path, sample_events
     assert len(manager.get_events()) == 3
     assert len(fetcher.calls) == 2
     assert fetcher.calls[1][0] == sample_events[0]["timestamp"]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_refresh_latest_counts_timestamp_cohorts_for_overlap(
+    tmp_path: Path, sample_events
+):
+    base_timestamp = int(sample_events[0]["timestamp"])
+    burst_timestamp = base_timestamp + 1_000
+
+    def _event(event_id: str, timestamp: int) -> Dict[str, object]:
+        return {
+            "id": event_id,
+            "timestamp": timestamp,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "qty": 0.01,
+            "price": 10.0,
+            "pnl": 0.0,
+            "pb_order_type": "entry",
+            "position_side": "long",
+            "client_order_id": f"cid-{event_id}",
+        }
+
+    anchor = _event("anchor", base_timestamp)
+    burst = [_event(f"burst-{index}", burst_timestamp) for index in range(25)]
+    late_fill = _event("late-fill", base_timestamp)
+    class _SinceFilteringSequencedFetcher(_SequencedFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [
+                dict(event)
+                for event in (self.batches.pop(0) if self.batches else [])
+                if since_ms is None or int(event["timestamp"]) >= since_ms
+            ]
+            self.pnl_observations = (
+                self.observations.pop(0) if self.observations else []
+            )
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _SinceFilteringSequencedFetcher(
+        [[anchor, *burst], [anchor, late_fill, *burst]]
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "hyperliquid_cohort_overlap",
+    )
+
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = base_timestamp + 30 * 60_000
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60_000,
+    )
+
+    assert fetcher.calls[1][0] == base_timestamp
+    assert "late-fill" in {event.id for event in manager.get_events()}
 
 
 @pytest.mark.asyncio
@@ -8035,3 +8183,389 @@ async def test_refresh_does_not_reattribute_legacy_cached_fill(tmp_path: Path):
     data_files = [path for path in tmp_path.glob("*.json") if path.name != "metadata.json"]
     persisted = json.loads(data_files[0].read_text())
     assert "provenance" not in persisted[0]
+
+
+def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
+    """Hyperliquid cohort sharing a millisecond, cached in reverse order."""
+
+    def _fill(trade_id: str, side: str, qty: float, price: float, start: str, direction: str):
+        event = {
+            "id": trade_id,
+            "symbol": "HYPE/USDC:USDC",
+            "position_side": "long",
+            "timestamp": 1_785_241_167_526,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": -0.343558 if side == "sell" else 0.0,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": trade_id,
+                        "symbol": "HYPE/USDC:USDC",
+                        "timestamp": 1_785_241_167_526,
+                        "side": side,
+                        "amount": qty,
+                        "price": price,
+                        "info": {
+                            "tid": trade_id,
+                            "side": side,
+                            "sz": str(qty),
+                            "px": str(price),
+                            "startPosition": start,
+                            "dir": direction,
+                        },
+                    },
+                }
+            ],
+        }
+        if side == "sell":
+            event["raw"][0]["data"]["pnl"] = event["pnl"]
+        return event
+
+    return [
+        _fill("1109260071634171", "buy", 2.04, 54.439, "653.02", "Open Long"),
+        _fill("952357507764053", "sell", 0.19, 54.438, "653.21", "Close Long"),
+    ]
+
+
+def test_order_same_timestamp_fills_follows_hyperliquid_position_chain():
+    events = _hyperliquid_same_millisecond_events()
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == [
+        "952357507764053",
+        "1109260071634171",
+    ]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events, {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)})
+
+    assert events[-1]["psize"] == pytest.approx(655.06)
+
+
+def test_order_same_timestamp_fills_accepts_tiny_head_at_large_position_size():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "tiny-head"
+    first["qty"] = 0.0005
+    first["raw"][0]["data"]["id"] = "tiny-head"
+    first["raw"][0]["data"]["amount"] = 0.0005
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "tiny-head",
+            "sz": "0.0005",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "large-successor"
+    second["qty"] = 1.0
+    second["raw"][0]["data"]["id"] = "large-successor"
+    second["raw"][0]["data"]["amount"] = 1.0
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "large-successor",
+            "sz": "1.0",
+            "startPosition": "1000000.0005",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == ["tiny-head", "large-successor"]
+
+
+def test_order_same_timestamp_fills_distinguishes_small_consecutive_links():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "first-small-add"
+    first["qty"] = 0.0004
+    first["raw"][0]["data"]["id"] = "first-small-add"
+    first["raw"][0]["data"]["amount"] = 0.0004
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "first-small-add",
+            "sz": "0.0004",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "second-small-add"
+    second["raw"][0]["data"]["id"] = "second-small-add"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "second-small-add",
+            "startPosition": "1000000.0004",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == [
+        "first-small-add",
+        "second-small-add",
+    ]
+
+
+def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
+    events = _hyperliquid_same_millisecond_events()
+
+    ensure_qty_signage(events)
+    order_same_timestamp_fills(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["id"] == "1109260071634171"
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(expected_pprice)
+
+
+def test_hyperliquid_raw_basis_ignores_normalized_zero_when_close_pnl_is_absent():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"].pop("pnl")
+    close["raw"][0]["data"]["info"].pop("closedPnl", None)
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)},
+    )
+    expected_pprices = [event["pprice"] for event in events]
+
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    assert [event["pprice"] for event in events] == pytest.approx(expected_pprices)
+
+
+def test_hyperliquid_raw_basis_accepts_explicit_zero_close_pnl():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"]["pnl"] = 0.0
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 60.0)},
+    )
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * close["price"]) + (2.04 * add["price"])) / 655.06
+    assert events[0]["pprice"] == pytest.approx(close["price"])
+    assert events[1]["pprice"] == pytest.approx(expected_pprice)
+
+
+def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
+    add, close = _hyperliquid_same_millisecond_events()
+    # A missing close-and-reopen round trip can return to the same size with a
+    # different basis, so size continuity alone is insufficient across time.
+    add["timestamp"] = close["timestamp"] + 1
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_stale_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(54.439)
+    assert events[-1]["pprice"] != pytest.approx(expected_stale_pprice)
+
+
+def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
+    buy_1, sell_1 = _hyperliquid_same_millisecond_events()
+    buy_1["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["info"]["tid"] = "buy-1"
+    buy_1["qty"] = 1.0
+    buy_1["raw"][0]["data"]["amount"] = 1.0
+    buy_1["raw"][0]["data"]["info"]["sz"] = "1.0"
+    buy_1["raw"][0]["data"]["info"]["startPosition"] = "0.0"
+    buy_2 = deepcopy(buy_1)
+    buy_2["id"] = "buy-2"
+    buy_2["price"] = 102.0
+    buy_2["raw"][0]["data"]["id"] = "buy-2"
+    buy_2["raw"][0]["data"]["price"] = 102.0
+    buy_2["raw"][0]["data"]["info"]["tid"] = "buy-2"
+    buy_2["raw"][0]["data"]["info"]["px"] = "102.0"
+    sell_1["id"] = "sell-1"
+    sell_1["qty"] = 1.0
+    sell_1["price"] = 101.0
+    sell_1["raw"][0]["data"]["id"] = "sell-1"
+    sell_1["raw"][0]["data"]["amount"] = 1.0
+    sell_1["raw"][0]["data"]["price"] = 101.0
+    sell_1["raw"][0]["data"]["info"].update(
+        {
+            "tid": "sell-1",
+            "sz": "1.0",
+            "px": "101.0",
+            "startPosition": "1.0",
+        }
+    )
+    coalesced = fem._coalesce_events([buy_1, sell_1, buy_2])
+
+    expanded = fem._expand_hyperliquid_coalesced_events(coalesced)
+
+    assert [event["id"] for event in expanded] == ["buy-1", "buy-2", "sell-1"]
+    assert all(len(event["raw"]) == 1 for event in expanded)
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "component_ids",
+        "source_ids",
+        "signed_qty",
+        "pnl",
+        "fees",
+        "malformed_component",
+        "component_price",
+        "component_position_chain",
+        "component_symbol",
+        "component_timestamp",
+        "price_notional",
+    ],
+)
+def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
+    mismatch,
+):
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "buy-1"
+    first["qty"] = 1.0
+    first["raw"][0]["data"]["id"] = "buy-1"
+    first["raw"][0]["data"]["amount"] = 1.0
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-1",
+            "sz": "1.0",
+            "startPosition": "0.0",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "buy-2"
+    second["raw"][0]["data"]["id"] = "buy-2"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-2",
+            "startPosition": "1.0",
+        }
+    )
+    aggregate = fem._coalesce_events([first, second])[0]
+    if mismatch == "component_ids":
+        aggregate["id"] = "aggregate"
+    elif mismatch == "source_ids":
+        aggregate["source_ids"] = ["buy-1", "buy-2", "buy-3"]
+    elif mismatch == "signed_qty":
+        aggregate["qty"] = 3.0
+    elif mismatch == "pnl":
+        aggregate["pnl"] = 1.0
+    elif mismatch == "fees":
+        aggregate["fee_paid"] = -1.0
+    elif mismatch == "malformed_component":
+        aggregate["raw"][0]["data"]["amount"] = "invalid"
+    elif mismatch == "component_price":
+        aggregate["raw"][0]["data"]["price"] = "NaN"
+    elif mismatch == "component_position_chain":
+        aggregate["raw"][0]["data"]["info"]["startPosition"] = "NaN"
+    elif mismatch == "component_symbol":
+        aggregate["raw"][0]["data"]["symbol"] = "BTC/USDC:USDC"
+    elif mismatch == "component_timestamp":
+        aggregate["raw"][0]["data"]["timestamp"] += 1
+    elif mismatch == "price_notional":
+        aggregate["raw"][0]["data"]["price"] = 60.0
+        aggregate["raw"][0]["data"]["info"]["px"] = "60.0"
+
+    with pytest.raises(FillEventCacheContractError, match=mismatch) as exc_info:
+        fem._expand_hyperliquid_coalesced_events([aggregate])
+    if mismatch == "malformed_component":
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cached_component_ids",
+    [set(), {"1"}, {"1", "3"}],
+    ids=["no-components", "one-component", "multiple-components"],
+)
+async def test_unreconciled_hyperliquid_aggregate_is_quarantined_before_refresh(
+    tmp_path: Path,
+    cached_component_ids: set[str],
+):
+    def _component(event_id: str, start_position: float) -> Dict[str, object]:
+        event = deepcopy(_hyperliquid_same_millisecond_events()[0])
+        event["id"] = event_id
+        event["qty"] = 1.0
+        event["pb_order_type"] = "unknown"
+        event["client_order_id"] = ""
+        event["raw"][0]["data"]["id"] = event_id
+        event["raw"][0]["data"]["amount"] = 1.0
+        event["raw"][0]["data"]["info"].update(
+            {
+                "tid": event_id,
+                "sz": "1.0",
+                "startPosition": str(start_position),
+            }
+        )
+        return event
+
+    components = [
+        _component("1", 0.0),
+        _component("2", 1.0),
+        _component("3", 2.0),
+    ]
+    aggregate = fem._coalesce_events(components)[0]
+    aggregate["raw"] = [
+        raw
+        for raw in aggregate["raw"]
+        if str(raw["data"]["id"]) in cached_component_ids
+    ]
+    cache_path = tmp_path / (
+        f"unreconciled_hyperliquid_aggregate_{len(cached_component_ids)}"
+    )
+    FillEventCache(cache_path).save([FillEvent.from_dict(aggregate)])
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher(components),
+        cache_path=cache_path,
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild"):
+        await manager.ensure_loaded()
+
+    quarantine_path = manager.quarantine_cache_for_rebuild(
+        reason="unreconciled_hyperliquid_aggregate"
+    )
+    await manager.refresh(start_ms=components[0]["timestamp"], end_ms=None)
+
+    assert quarantine_path is not None
+    assert Path(quarantine_path).exists()
+    assert [event.id for event in manager.get_events()] == ["1", "2", "3"]
+    assert sum(abs(event.qty) for event in manager.get_events()) == pytest.approx(3.0)
+
+
+def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():
+    events = _hyperliquid_same_millisecond_events()
+    for ev in events:
+        ev["raw"][0]["data"]["info"].pop("startPosition")
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original
+
+
+def test_order_same_timestamp_fills_keeps_distinct_timestamps_untouched():
+    events = _hyperliquid_same_millisecond_events()
+    events[1]["timestamp"] = events[0]["timestamp"] + 1
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original

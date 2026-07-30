@@ -845,6 +845,7 @@ class _DummyFillEvent:
         client_order_id: str = "",
         source_ids: list[str] | None = None,
         c_mult: float | None = None,
+        raw: list[dict] | None = None,
     ):
         self.symbol = symbol
         self.position_side = position_side
@@ -856,6 +857,7 @@ class _DummyFillEvent:
         self.price = price
         self.client_order_id = client_order_id
         self.source_ids = list(source_ids or [])
+        self.raw = list(raw or [])
         if psize is not None:
             self.psize = psize
         if pprice is not None:
@@ -7040,3 +7042,157 @@ async def test_orders_sorted_by_market_diff(monkeypatch):
 
     assert [order["price"] for order in to_cancel] == [102.0, 97.0]
     assert [order["price"] for order in to_create] == [101.0, 95.0]
+
+
+def _same_millisecond_cohort(symbol: str) -> list:
+    """Two fills sharing one millisecond, cached in reverse execution order."""
+    closing_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        1_785_241_167_526,
+        "952357507764053",
+        psize=653.02,
+        pprice=56.2462,
+        side="sell",
+        qty=0.19,
+        price=54.438,
+    )
+    opening_fill = _DummyFillEvent(
+        symbol,
+        "long",
+        1_785_241_167_526,
+        "1109260071634171",
+        psize=655.06,
+        pprice=56.2405,
+        side="buy",
+        qty=2.04,
+        price=54.439,
+    )
+    return [opening_fill, closing_fill]
+
+
+def test_latest_fill_anchor_prefers_intra_millisecond_chain_terminal():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(_same_millisecond_cohort(symbol))
+
+    anchors = bot._latest_fill_position_change_anchors()
+
+    anchor = anchors[(symbol, "long")]
+    assert anchor["psize"] == 655.06
+    assert anchor["epoch"].endswith("1109260071634171")
+    assert bot._fill_anchor_matches_position_state(
+        symbol, "long", (655.06, 56.2405), anchor
+    )
+
+
+def test_latest_fill_anchor_keeps_list_order_for_ambiguous_cohort():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    events = _same_millisecond_cohort(symbol)
+    # A cohort that does not chain (both fills claim the same predecessor)
+    # stays ambiguous, so the cached order remains authoritative.
+    events[1].psize = 651.17
+    bot._pnls_manager = _DummyPnlsManager(events)
+
+    anchors = bot._latest_fill_position_change_anchors()
+
+    assert anchors[(symbol, "long")]["psize"] == 651.17
+
+
+def test_latest_fill_anchor_terminal_accepts_tiny_fill_at_large_position_size():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    timestamp = 1_785_241_167_526
+    events = [
+        _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            "large-head",
+            psize=1_000_000.0,
+            pprice=100.0,
+            side="buy",
+            qty=1.0,
+            price=100.0,
+        ),
+        _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            "tiny-terminal",
+            psize=1_000_000.0005,
+            pprice=100.0,
+            side="buy",
+            qty=0.0005,
+            price=100.0,
+        ),
+    ]
+
+    assert bot._terminal_same_timestamp_fill_index(events, [0, 1]) == 1
+
+
+def test_latest_fill_anchor_ignores_position_state_for_ambiguous_raw_cohort():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    timestamp = 1_785_241_167_526
+
+    def _event(
+        event_id: str,
+        side: str,
+        start_position: float,
+        psize: float,
+        pprice: float,
+    ):
+        qty = 1.0
+        return _DummyFillEvent(
+            symbol,
+            "long",
+            timestamp,
+            event_id,
+            psize=psize,
+            pprice=pprice,
+            side=side,
+            qty=qty if side == "buy" else -qty,
+            price=pprice,
+            source_ids=[event_id],
+            raw=[
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": event_id,
+                        "side": side,
+                        "amount": qty,
+                        "price": pprice,
+                        "info": {
+                            "tid": event_id,
+                            "side": side,
+                            "sz": str(qty),
+                            "px": str(pprice),
+                            "startPosition": str(start_position),
+                            "dir": "Open Long" if side == "buy" else "Close Long",
+                        },
+                    },
+                }
+            ],
+        )
+
+    events = [
+        _event("buy-1", "buy", 0.0, 1.0, 100.0),
+        _event("buy-2", "buy", 0.0, 1.0, 102.0),
+        _event("sell-1", "sell", 1.0, 0.0, 0.0),
+    ]
+    bot.positions[symbol]["long"] = {"size": 1.0, "price": 102.0}
+    bot._pnls_manager = _DummyPnlsManager(events)
+
+    first_anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+    bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
+    second_anchor = bot._latest_fill_position_change_anchors()[(symbol, "long")]
+
+    assert first_anchor == second_anchor
+    assert first_anchor["epoch"].endswith("sell-1")
+    assert first_anchor["psize"] == 0.0

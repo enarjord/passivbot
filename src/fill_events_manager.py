@@ -925,60 +925,27 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
     """
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
     for ev in events:
-        candidates: List[Tuple[float, float, float, bool]] = []
-        for item in _normalize_raw_field(ev.get("raw")):
-            if not isinstance(item, dict):
-                continue
-            data = item.get("data")
-            if not isinstance(data, dict):
-                continue
-            info = data.get("info")
-            if not isinstance(info, dict) or "startPosition" not in info:
-                continue
-            try:
-                start_position = abs(float(info.get("startPosition") or 0.0))
-                qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
-                price = float(data.get("price") or info.get("px") or 0.0)
-                pnl = float(data.get("pnl") or info.get("closedPnl") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if qty <= 0.0:
-                continue
-
-            side = str(
-                data.get("side") or info.get("side") or ev.get("side") or ""
-            ).lower()
-            position_side = str(
-                ev.get("position_side") or ev.get("pside") or ""
-            ).lower()
-            if not position_side:
-                direction = str(info.get("dir") or "").lower()
-                if "short" in direction:
-                    position_side = "short"
-                elif "long" in direction:
-                    position_side = "long"
-            if position_side == "short":
-                reducing = side == "buy"
-            elif position_side == "long":
-                reducing = side == "sell"
-            else:
-                continue
-
-            after_size = (
-                max(0.0, start_position - qty) if reducing else start_position + qty
-            )
-            entry_price = 0.0
-            if reducing and qty > 0.0 and price > 0.0:
-                if position_side == "short":
-                    entry_price = price + (pnl / qty)
-                else:
-                    entry_price = price - (pnl / qty)
-            elif not reducing and start_position <= 1e-12:
-                entry_price = price
-            candidates.append((after_size, qty, entry_price, reducing))
+        components = _hyperliquid_raw_position_components(ev)
+        candidates = [
+            (after_size, qty, entry_price, reducing)
+            for (
+                _before_size,
+                after_size,
+                qty,
+                _price,
+                entry_price,
+                reducing,
+            ) in components
+        ]
 
         if not candidates:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            recovered_state.pop(key, None)
             continue
 
         reducing_candidates = [item for item in candidates if item[3]]
@@ -987,33 +954,470 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             if after_size <= 1e-12:
                 ev["psize"] = 0.0
                 ev["pprice"] = 0.0
-                continue
-            weighted_qty = sum(
-                item[1] for item in reducing_candidates if item[2] > 0.0
-            )
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(
-                        item[1] * item[2]
-                        for item in reducing_candidates
-                        if item[2] > 0.0
-                    )
-                    / weighted_qty
+            else:
+                weighted_qty = sum(
+                    item[1] for item in reducing_candidates if item[2] > 0.0
                 )
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in reducing_candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+                ev["psize"] = round(after_size, 12)
+        else:
+            after_size = max(item[0] for item in candidates)
             ev["psize"] = round(after_size, 12)
+            if after_size <= 1e-12:
+                ev["pprice"] = 0.0
+            elif all(item[0] - item[1] <= 1e-12 for item in candidates):
+                weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+        )
+        component_order = _unique_position_chain_order(
+            [(component[0], component[1]) for component in components]
+        )
+        if component_order is None:
+            recovered_state.pop(key, None)
             continue
 
-        after_size = max(item[0] for item in candidates)
-        ev["psize"] = round(after_size, 12)
-        if after_size <= 1e-12:
+        ordered_components = [components[index] for index in component_order]
+        first_before = ordered_components[0][0]
+        previous = recovered_state.get(key)
+        event_timestamp = int(ev.get("timestamp") or 0)
+        basis: Optional[float] = None
+        if (
+            previous is not None
+            and event_timestamp > 0
+            and previous[2] == event_timestamp
+            and _is_same_position_size(previous[0], first_before)
+        ):
+            basis = previous[1]
+        position_size = first_before
+        for (
+            before_size,
+            after_size,
+            qty,
+            price,
+            entry_price,
+            reducing,
+        ) in ordered_components:
+            if not _is_same_position_size(position_size, before_size):
+                basis = None
+            if reducing:
+                if entry_price > 0.0:
+                    basis = entry_price
+                position_size = after_size
+                if position_size <= 1e-12:
+                    position_size = 0.0
+                    basis = 0.0
+            else:
+                if before_size <= 1e-12:
+                    basis = price if price > 0.0 else None
+                elif basis is not None and basis > 0.0 and after_size > 0.0:
+                    basis = ((before_size * basis) + (qty * price)) / after_size
+                else:
+                    basis = None
+                position_size = after_size
+
+        ev["psize"] = round(position_size, 12)
+        if position_size <= 1e-12:
             ev["pprice"] = 0.0
-        elif all(item[0] - item[1] <= 1e-12 for item in candidates):
-            weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(item[1] * item[2] for item in candidates if item[2] > 0.0)
-                    / weighted_qty
-                )
+        elif basis is not None and basis > 0.0:
+            ev["pprice"] = basis
+        recovered_state[key] = (position_size, basis, event_timestamp)
+
+
+def _is_same_position_size(lhs: float, rhs: float) -> bool:
+    if lhs == rhs:
+        return True
+    if not math.isfinite(lhs) or not math.isfinite(rhs):
+        return False
+    scale = max(1.0, abs(lhs), abs(rhs))
+    return abs(lhs - rhs) <= max(1e-12, 16.0 * math.ulp(scale))
+
+
+def _unique_position_chain_order(
+    chains: Sequence[Tuple[float, float]],
+) -> Optional[List[int]]:
+    if not chains:
+        return None
+    if len(chains) == 1:
+        return [0]
+    heads = [
+        index
+        for index, chain in enumerate(chains)
+        if not any(
+            other_index != index and _is_same_position_size(chain[0], other[1])
+            for other_index, other in enumerate(chains)
+        )
+    ]
+    if len(heads) != 1:
+        return None
+    ordered = [heads[0]]
+    while len(ordered) < len(chains):
+        current_end = chains[ordered[-1]][1]
+        successors = [
+            index
+            for index, chain in enumerate(chains)
+            if index not in ordered and _is_same_position_size(chain[0], current_end)
+        ]
+        if len(successors) != 1:
+            return None
+        ordered.append(successors[0])
+    return ordered
+
+
+def _hyperliquid_raw_position_components(
+    ev: Dict[str, object],
+) -> List[Tuple[float, float, float, float, float, bool]]:
+    """Return raw Hyperliquid (before, after, qty, price, basis, reducing) rows."""
+    components: List[Tuple[float, float, float, float, float, bool]] = []
+    raw_items = _normalize_raw_field(ev.get("raw"))
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        if not isinstance(info, dict) or "startPosition" not in info:
+            continue
+        try:
+            start_position = abs(float(info.get("startPosition") or 0.0))
+            qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
+            price = float(data.get("price") or info.get("px") or 0.0)
+            explicit_pnl = False
+            if "pnl" in data and data["pnl"] not in (None, ""):
+                pnl_value = data["pnl"]
+                explicit_pnl = True
+            elif "closedPnl" in info and info["closedPnl"] not in (None, ""):
+                pnl_value = info["closedPnl"]
+                explicit_pnl = True
+            else:
+                pnl_value = 0.0
+            pnl = float(pnl_value)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0.0:
+            continue
+        side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
+        position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
+        if not position_side:
+            direction = str(info.get("dir") or "").lower()
+            if "short" in direction:
+                position_side = "short"
+            elif "long" in direction:
+                position_side = "long"
+        if position_side == "short":
+            reducing = side == "buy"
+        elif position_side == "long":
+            reducing = side == "sell"
+        else:
+            continue
+        after_size = (
+            max(0.0, start_position - qty) if reducing else start_position + qty
+        )
+        entry_price = 0.0
+        if reducing and price > 0.0 and explicit_pnl:
+            entry_price = (
+                price + (pnl / qty)
+                if position_side == "short"
+                else price - (pnl / qty)
+            )
+        elif start_position <= 1e-12:
+            entry_price = price
+        components.append(
+            (start_position, after_size, qty, price, entry_price, reducing)
+        )
+    return components
+
+
+def _hyperliquid_fill_position_chain(
+    ev: Dict[str, object]
+) -> Optional[Tuple[float, float]]:
+    """Return (before, after) position magnitudes from raw Hyperliquid fills.
+
+    Hyperliquid reports the position size preceding every component fill, which
+    is the only ordering evidence available for fills sharing a millisecond.
+    """
+    components = _hyperliquid_raw_position_components(ev)
+    component_order = _unique_position_chain_order(
+        [(component[0], component[1]) for component in components]
+    )
+    if component_order is None:
+        return None
+    ordered = [components[index] for index in component_order]
+    return ordered[0][0], ordered[-1][1]
+
+
+def _hyperliquid_signed_effective_qty(
+    payload: Dict[str, object],
+) -> Optional[float]:
+    side = str(payload.get("side") or "").lower()
+    if side not in {"buy", "sell"}:
+        return None
+    try:
+        qty = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
+        qty *= _payload_contract_multiplier(payload)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(qty):
+        return None
+    return qty if side == "buy" else -qty
+
+
+def _hyperliquid_component_validation_failure(
+    event: Dict[str, object],
+    child: Dict[str, object],
+) -> Optional[str]:
+    """Return why a normalized legacy aggregate component is unsafe."""
+    try:
+        parent_timestamp = int(event.get("timestamp") or 0)
+        child_timestamp = int(child.get("timestamp") or 0)
+        qty = float(child["qty"])
+        price = float(child["price"])
+        pnl = float(child["pnl"])
+        parent_c_mult = float(event.get("c_mult", 1.0))
+        child_c_mult = float(child.get("c_mult", 1.0))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "component_fields"
+
+    if child_timestamp <= 0 or child_timestamp != parent_timestamp:
+        return "component_timestamp"
+    child_symbol = str(child.get("symbol") or "")
+    if not child_symbol or child_symbol != str(event.get("symbol") or ""):
+        return "component_symbol"
+    child_side = str(child.get("side") or "").lower()
+    if child_side not in {"buy", "sell"} or child_side != str(
+        event.get("side") or ""
+    ).lower():
+        return "component_side"
+    child_position_side = str(child.get("position_side") or "").lower()
+    if child_position_side not in {"long", "short"} or child_position_side != str(
+        event.get("position_side") or event.get("pside") or ""
+    ).lower():
+        return "component_position_side"
+    if not math.isfinite(qty) or qty <= 0.0:
+        return "component_qty"
+    if not math.isfinite(price) or price <= 0.0:
+        return "component_price"
+    if not math.isfinite(pnl):
+        return "component_pnl"
+    if (
+        not math.isfinite(parent_c_mult)
+        or parent_c_mult <= 0.0
+        or not math.isfinite(child_c_mult)
+        or child_c_mult <= 0.0
+        or not math.isclose(parent_c_mult, child_c_mult, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        return "component_c_mult"
+
+    position_components = _hyperliquid_raw_position_components(child)
+    if len(position_components) != 1:
+        return "component_position_chain"
+    before_size, after_size, raw_qty, raw_price, entry_price, _reducing = (
+        position_components[0]
+    )
+    if not all(
+        math.isfinite(value)
+        for value in (before_size, after_size, raw_qty, raw_price, entry_price)
+    ):
+        return "component_position_chain"
+    if not math.isclose(raw_qty, qty, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_qty"
+    if not math.isclose(raw_price, price, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_price"
+    return None
+
+
+def _hyperliquid_coalesced_reconciliation_failure(
+    event: Dict[str, object],
+    children: Sequence[Dict[str, object]],
+) -> Optional[str]:
+    """Return the aggregate field that prevents safe component expansion."""
+    parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+    child_ids = [str(child.get("id") or "") for child in children]
+    if (
+        len(parent_ids) != len(children)
+        or len(set(parent_ids)) != len(parent_ids)
+        or set(parent_ids) != set(child_ids)
+    ):
+        return "component_ids"
+    source_ids = [str(value) for value in event.get("source_ids") or [] if value]
+    if source_ids and (
+        len(source_ids) != len(children)
+        or len(set(source_ids)) != len(source_ids)
+        or set(source_ids) != set(child_ids)
+    ):
+        return "source_ids"
+
+    for child in children:
+        failure = _hyperliquid_component_validation_failure(event, child)
+        if failure is not None:
+            return failure
+
+    parent_qty = _hyperliquid_signed_effective_qty(event)
+    child_qtys = [_hyperliquid_signed_effective_qty(child) for child in children]
+    if parent_qty is None or any(qty is None for qty in child_qtys):
+        return "signed_qty"
+
+    try:
+        parent_pnl = float(event.get("pnl") or 0.0)
+        child_pnl = sum(float(child.get("pnl") or 0.0) for child in children)
+        parent_fee = signed_fee_paid_from_payload(event)
+        child_fee = sum(signed_fee_paid_from_payload(child) for child in children)
+    except (TypeError, ValueError, OverflowError):
+        return "accounting"
+    values = (parent_qty, *child_qtys, parent_pnl, child_pnl, parent_fee, child_fee)
+    if not all(math.isfinite(float(value)) for value in values):
+        return "accounting"
+
+    def _reconciles(lhs: float, rhs: float) -> bool:
+        return math.isclose(lhs, rhs, rel_tol=1e-12, abs_tol=1e-12)
+
+    if not _reconciles(parent_qty, sum(qty for qty in child_qtys if qty is not None)):
+        return "signed_qty"
+    try:
+        parent_price = float(event["price"])
+        child_prices = [float(child["price"]) for child in children]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "price_notional"
+    if (
+        not math.isfinite(parent_price)
+        or parent_price <= 0.0
+        or not _reconciles(
+            abs(parent_qty) * parent_price,
+            sum(
+                abs(qty) * price
+                for qty, price in zip(child_qtys, child_prices)
+                if qty is not None
+            ),
+        )
+    ):
+        return "price_notional"
+    if not _reconciles(parent_pnl, child_pnl):
+        return "pnl"
+    if not _reconciles(parent_fee, child_fee):
+        return "fees"
+    return None
+
+
+def _expand_hyperliquid_coalesced_events(
+    events: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """Restore per-execution events from older Hyperliquid cache rows."""
+    expanded: List[Dict[str, object]] = []
+    for event in events:
+        parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+        source_ids = {str(value) for value in event.get("source_ids") or [] if value}
+        is_legacy_aggregate = len(parent_ids) > 1 or len(source_ids) > 1
+        raw_trades = [
+            item.get("data")
+            for item in _normalize_raw_field(event.get("raw"))
+            if isinstance(item, dict)
+            and item.get("source") == "fetch_my_trades"
+            and isinstance(item.get("data"), dict)
+        ]
+        unique_trades: List[Tuple[str, Dict[str, object]]] = []
+        seen_ids: set[str] = set()
+        for trade in raw_trades:
+            info = trade.get("info")
+            if not isinstance(info, dict):
+                info = {}
+            trade_id = str(
+                trade.get("id")
+                or info.get("tid")
+                or info.get("hash")
+                or ""
+            )
+            if not trade_id or trade_id in seen_ids:
+                continue
+            seen_ids.add(trade_id)
+            unique_trades.append((trade_id, trade))
+        if len(unique_trades) <= 1 and not is_legacy_aggregate:
+            expanded.append(event)
+            continue
+
+        children: List[Dict[str, object]] = []
+        for trade_id, trade in unique_trades:
+            try:
+                child = HyperliquidFetcher._normalize_trade(trade)
+            except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                raise FillEventCacheContractError(
+                    "malformed Hyperliquid cache aggregate component cannot be "
+                    "normalized; "
+                    f"id={str(event.get('id') or '')!r} component_id={trade_id!r} "
+                    f"reason=malformed_component "
+                    f"error_type={bounded_exception_type(exc)}"
+                ) from exc
+            client_order_id = str(child.get("client_order_id") or "")
+            child["pb_order_type"] = (
+                custom_id_to_snake(client_order_id)
+                if client_order_id
+                else str(event.get("pb_order_type") or "unknown")
+            )
+            if not child["pb_order_type"]:
+                child["pb_order_type"] = "unknown"
+            if event.get("provenance"):
+                child["provenance"] = deepcopy(event["provenance"])
+            children.append(child)
+        failure = _hyperliquid_coalesced_reconciliation_failure(event, children)
+        if failure is not None:
+            raise FillEventCacheContractError(
+                "unreconciled Hyperliquid cache aggregate cannot be mixed with "
+                "individually fetched components; quarantine and rebuild the cache "
+                f"from exchange fills; id={str(event.get('id') or '')!r} "
+                f"components={len(children)} reason={failure}"
+            )
+        expanded.extend(children)
+    return expanded
+
+
+def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
+    """Order fills sharing a millisecond by the exchange's position chain.
+
+    Position reconstruction replays fills in list order, but exchange responses
+    and caches keep no intra-millisecond ordering.  When the exchange reports
+    the position size preceding each fill, the cohort forms a chain whose order
+    is unambiguous; ambiguous cohorts are left untouched.
+    """
+    grouped: Dict[Tuple[str, str, int], List[int]] = defaultdict(list)
+    for index, ev in enumerate(events):
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            int(ev.get("timestamp") or 0),
+        )
+        grouped[key].append(index)
+
+    for indexes in grouped.values():
+        if len(indexes) < 2:
+            continue
+        chains = [_hyperliquid_fill_position_chain(events[index]) for index in indexes]
+        if any(chain is None for chain in chains):
+            continue
+        chain_order = _unique_position_chain_order(chains)
+        if chain_order is None:
+            continue
+        reordered = [events[indexes[chain_index]] for chain_index in chain_order]
+        for slot, ev in zip(indexes, reordered):
+            events[slot] = ev
 
 
 def annotate_positions_inplace(
@@ -3481,9 +3885,12 @@ class FillEventsManager:
             # operate on the original files.
             if self._events and not allow_legacy_contract:
                 payload = [ev.to_dict() for ev in self._events]
+                if self.exchange.lower() == "hyperliquid":
+                    payload = _expand_hyperliquid_coalesced_events(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
+                order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
                 apply_hyperliquid_raw_psize_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
@@ -4159,6 +4566,32 @@ class FillEventsManager:
             self.cache.update_metadata_from_events(
                 self._events, mark_refreshed=False
             )
+            self._loaded = False
+            self._events = []
+            try:
+                await self.ensure_loaded()
+            except FillEventCacheContractError as exc:
+                self._loaded = False
+                self._events = []
+                report.update(
+                    {
+                        "action": "rebuild_cache",
+                        "message": (
+                            "fill cache metadata was repaired, but current-contract "
+                            "normalization failed; quarantine and rebuild the cache"
+                        ),
+                        "normalization_error_type": bounded_exception_type(exc),
+                        "anomaly_events_after": max(1, len(self.cache._data_files())),
+                    }
+                )
+                logger.warning(
+                    "[fills-doctor] metadata repair exposed a cache normalization "
+                    "failure; rebuild required | exchange=%s user=%s error_type=%s",
+                    self.exchange,
+                    self.user,
+                    report["normalization_error_type"],
+                )
+                return report
             report["repaired"] = True
             report["anomaly_events_after"] = 0
             report["anomaly_examples_after"] = []
@@ -4292,6 +4725,7 @@ class FillEventsManager:
         for ev in payload:
             ev["pnl_contract"] = PNL_CONTRACT_CURRENT
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         compute_psize_pprice(payload)
         apply_hyperliquid_raw_psize_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
@@ -4440,6 +4874,7 @@ class FillEventsManager:
         backup_path = self._backup_cache_for_repair()
         payload = [ev.to_dict() for ev in self._events]
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
         compute_psize_pprice(repaired_payload)
         self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
@@ -4703,6 +5138,7 @@ class FillEventsManager:
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
+            order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
             apply_hyperliquid_raw_psize_overrides(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
@@ -4753,20 +5189,45 @@ class FillEventsManager:
         overlap: int = 20,
         last_refresh_overlap_ms: Optional[int] = None,
     ) -> None:
-        """Fetch only the most recent fills, overlapping by `overlap` events."""
+        """Fetch recent fills, overlapping Hyperliquid by timestamp cohort."""
         await self.ensure_loaded()
         if not self._events:
             logger.debug("[fills] refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
+        is_hyperliquid = self.exchange.lower() == "hyperliquid"
         if self._events:
-            idx = max(0, len(self._events) - overlap)
-            start_ms = self._events[idx].timestamp
+            overlap = max(1, int(overlap))
+            if is_hyperliquid:
+                # Hyperliquid may emit many executions in one millisecond. Count
+                # timestamp cohorts so retaining raw component boundaries does
+                # not shrink the effective recent-fill overlap.
+                cohort_count = 0
+                previous_timestamp = None
+                for event in reversed(self._events):
+                    timestamp = int(event.timestamp)
+                    if previous_timestamp is None or timestamp != previous_timestamp:
+                        cohort_count += 1
+                        previous_timestamp = timestamp
+                    start_ms = timestamp
+                    if cohort_count >= overlap:
+                        break
+            else:
+                idx = max(0, len(self._events) - overlap)
+                start_ms = self._events[idx].timestamp
         if last_refresh_overlap_ms is not None:
             metadata = self.cache.load_metadata()
             last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
-                start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
+                if start_ms is None:
+                    start_ms = metadata_start_ms
+                elif is_hyperliquid:
+                    # Preserve both overlap guarantees. Clamping the cohort
+                    # anchor forward can permanently strand a late-arriving
+                    # execution from an older same-millisecond cohort.
+                    start_ms = min(start_ms, metadata_start_ms)
+                else:
+                    start_ms = max(start_ms, metadata_start_ms)
         pending_pnl_events = self.pending_pnl_events(self._events)
         synthetic_pnl_events = self.synthetic_pnl_events(self._events)
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -5968,8 +6429,10 @@ class HyperliquidFetcher(BaseFetcher):
                 )
                 break
 
+        # Hyperliquid's startPosition is per execution. Preserve those component
+        # boundaries: coalescing same-side fills can merge disjoint links from an
+        # alternating same-millisecond position chain.
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
-        events = _coalesce_events(events)
         # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         for event in events:
