@@ -130,9 +130,10 @@ logs, runtime windows, and immutable manifests.
    do not choose a different anchor from mutable exchange position state. Hyperliquid's incremental
    overlap counts timestamp cohorts rather than individual executions so a same-millisecond burst
    cannot consume the full recent-fill window and strand a late-arriving component. Expand a legacy
-   coalesced row only when its component identities, signed effective quantity, gross PnL, and signed
-   fees reconcile to the aggregate. An unreconciled aggregate is a cache-contract failure: quarantine
-   the cache and rebuild the configured lookback before accepting individually fetched components.
+   coalesced row only when component identities and cohort fields match, position-chain data is
+   finite, and weighted price, signed effective quantity, gross PnL, and signed fees reconcile to the
+   aggregate. An unreconciled aggregate is a cache-contract failure: quarantine the cache and rebuild
+   the configured lookback before accepting individually fetched components.
 
 ## Failure Semantics And Risks
 

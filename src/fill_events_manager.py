@@ -1182,6 +1182,70 @@ def _hyperliquid_signed_effective_qty(
     return qty if side == "buy" else -qty
 
 
+def _hyperliquid_component_validation_failure(
+    event: Dict[str, object],
+    child: Dict[str, object],
+) -> Optional[str]:
+    """Return why a normalized legacy aggregate component is unsafe."""
+    try:
+        parent_timestamp = int(event.get("timestamp") or 0)
+        child_timestamp = int(child.get("timestamp") or 0)
+        qty = float(child["qty"])
+        price = float(child["price"])
+        pnl = float(child["pnl"])
+        parent_c_mult = float(event.get("c_mult", 1.0))
+        child_c_mult = float(child.get("c_mult", 1.0))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "component_fields"
+
+    if child_timestamp <= 0 or child_timestamp != parent_timestamp:
+        return "component_timestamp"
+    child_symbol = str(child.get("symbol") or "")
+    if not child_symbol or child_symbol != str(event.get("symbol") or ""):
+        return "component_symbol"
+    child_side = str(child.get("side") or "").lower()
+    if child_side not in {"buy", "sell"} or child_side != str(
+        event.get("side") or ""
+    ).lower():
+        return "component_side"
+    child_position_side = str(child.get("position_side") or "").lower()
+    if child_position_side not in {"long", "short"} or child_position_side != str(
+        event.get("position_side") or event.get("pside") or ""
+    ).lower():
+        return "component_position_side"
+    if not math.isfinite(qty) or qty <= 0.0:
+        return "component_qty"
+    if not math.isfinite(price) or price <= 0.0:
+        return "component_price"
+    if not math.isfinite(pnl):
+        return "component_pnl"
+    if (
+        not math.isfinite(parent_c_mult)
+        or parent_c_mult <= 0.0
+        or not math.isfinite(child_c_mult)
+        or child_c_mult <= 0.0
+        or not math.isclose(parent_c_mult, child_c_mult, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        return "component_c_mult"
+
+    position_components = _hyperliquid_raw_position_components(child)
+    if len(position_components) != 1:
+        return "component_position_chain"
+    before_size, after_size, raw_qty, raw_price, entry_price, _reducing = (
+        position_components[0]
+    )
+    if not all(
+        math.isfinite(value)
+        for value in (before_size, after_size, raw_qty, raw_price, entry_price)
+    ):
+        return "component_position_chain"
+    if not math.isclose(raw_qty, qty, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_qty"
+    if not math.isclose(raw_price, price, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_price"
+    return None
+
+
 def _hyperliquid_coalesced_reconciliation_failure(
     event: Dict[str, object],
     children: Sequence[Dict[str, object]],
@@ -1195,6 +1259,11 @@ def _hyperliquid_coalesced_reconciliation_failure(
         or set(parent_ids) != set(child_ids)
     ):
         return "component_ids"
+
+    for child in children:
+        failure = _hyperliquid_component_validation_failure(event, child)
+        if failure is not None:
+            return failure
 
     parent_qty = _hyperliquid_signed_effective_qty(event)
     child_qtys = [_hyperliquid_signed_effective_qty(child) for child in children]
@@ -1217,6 +1286,24 @@ def _hyperliquid_coalesced_reconciliation_failure(
 
     if not _reconciles(parent_qty, sum(qty for qty in child_qtys if qty is not None)):
         return "signed_qty"
+    try:
+        parent_price = float(event["price"])
+        child_prices = [float(child["price"]) for child in children]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "price_notional"
+    if (
+        not math.isfinite(parent_price)
+        or parent_price <= 0.0
+        or not _reconciles(
+            abs(parent_qty) * parent_price,
+            sum(
+                abs(qty) * price
+                for qty, price in zip(child_qtys, child_prices)
+                if qty is not None
+            ),
+        )
+    ):
+        return "price_notional"
     if not _reconciles(parent_pnl, child_pnl):
         return "pnl"
     if not _reconciles(parent_fee, child_fee):

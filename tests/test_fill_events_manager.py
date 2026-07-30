@@ -8188,6 +8188,8 @@ def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
                     "source": "fetch_my_trades",
                     "data": {
                         "id": trade_id,
+                        "symbol": "HYPE/USDC:USDC",
+                        "timestamp": 1_785_241_167_526,
                         "side": side,
                         "amount": qty,
                         "price": price,
@@ -8361,7 +8363,18 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
 
 @pytest.mark.parametrize(
     "mismatch",
-    ["component_ids", "signed_qty", "pnl", "fees", "malformed_component"],
+    [
+        "component_ids",
+        "signed_qty",
+        "pnl",
+        "fees",
+        "malformed_component",
+        "component_price",
+        "component_position_chain",
+        "component_symbol",
+        "component_timestamp",
+        "price_notional",
+    ],
 )
 def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
     mismatch,
@@ -8398,6 +8411,17 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
         aggregate["fee_paid"] = -1.0
     elif mismatch == "malformed_component":
         aggregate["raw"][0]["data"]["amount"] = "invalid"
+    elif mismatch == "component_price":
+        aggregate["raw"][0]["data"]["price"] = "NaN"
+    elif mismatch == "component_position_chain":
+        aggregate["raw"][0]["data"]["info"]["startPosition"] = "NaN"
+    elif mismatch == "component_symbol":
+        aggregate["raw"][0]["data"]["symbol"] = "BTC/USDC:USDC"
+    elif mismatch == "component_timestamp":
+        aggregate["raw"][0]["data"]["timestamp"] += 1
+    elif mismatch == "price_notional":
+        aggregate["raw"][0]["data"]["price"] = 60.0
+        aggregate["raw"][0]["data"]["info"]["px"] = "60.0"
 
     with pytest.raises(FillEventCacheContractError, match=mismatch) as exc_info:
         fem._expand_hyperliquid_coalesced_events([aggregate])
