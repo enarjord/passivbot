@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict
 import hashlib
 import json
@@ -7,7 +8,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
-from typing import Iterable
+from typing import Iterator, Iterable
 
 from outcome.candles import VerifiedCoverage
 from outcome.models import (
@@ -129,6 +130,34 @@ class OutcomeTradeArchive:
             connection.row_factory = sqlite3.Row
             self._local.connection = connection
         return connection
+
+    @contextmanager
+    def write_transaction(self) -> Iterator[None]:
+        """Commit a related archive batch atomically on this thread's connection."""
+
+        if getattr(self._local, "write_transaction_active", False):
+            raise RuntimeError("nested outcome archive write transactions are not supported")
+        connection = self._connect()
+        connection.execute("BEGIN IMMEDIATE")
+        self._local.write_transaction_active = True
+        try:
+            yield
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+        finally:
+            self._local.write_transaction_active = False
+
+    @contextmanager
+    def _write_connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        if getattr(self._local, "write_transaction_active", False):
+            yield connection
+        else:
+            with connection:
+                yield connection
 
     def close(self) -> None:
         connection = getattr(self._local, "connection", None)
@@ -409,7 +438,7 @@ class OutcomeTradeArchive:
         ).fetchone()
         if predecessor is not None and predecessor["payload_sha256"] == payload_sha256:
             return False
-        with connection:
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_market_metadata (
@@ -487,7 +516,7 @@ class OutcomeTradeArchive:
             sort_keys=True,
             allow_nan=False,
         )
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_trades (
@@ -633,7 +662,7 @@ class OutcomeTradeArchive:
             allow_nan=False,
         )
         payload_sha256 = hashlib.sha256(raw_payload_json.encode()).hexdigest()
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_books (
@@ -686,7 +715,7 @@ class OutcomeTradeArchive:
             allow_nan=False,
         )
         payload_sha256 = hashlib.sha256(raw_payload_json.encode()).hexdigest()
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_price_grid_changes (
@@ -735,7 +764,7 @@ class OutcomeTradeArchive:
             settlement.fee_asset,
             raw_payload_json,
         )
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_settlements (
@@ -961,7 +990,7 @@ class OutcomeTradeArchive:
     ) -> None:
         if not collector_session:
             raise ValueError("collector_session must not be empty")
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_verified_coverage (

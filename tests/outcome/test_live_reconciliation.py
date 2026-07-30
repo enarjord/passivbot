@@ -15,6 +15,7 @@ from outcome.hyperliquid_live import (
 from outcome.live_planning import OutcomeLiveOrderIntent, OutcomeLivePlan
 from outcome.live_reconciliation import (
     OutcomeOrderCancel,
+    OutcomeOrderMutationSkippedReason,
     execute_hip4_order_reconciliation,
     is_managed_outcome_client_order_id,
     managed_outcome_client_order_id,
@@ -262,6 +263,38 @@ async def test_executor_verifies_cancel_before_create_and_final_resting_state():
     assert client.cancelled == [("913", OutcomeSide.YES, 2, stale_cloid)]
     assert len(client.created) == 1
     assert result.final_snapshot.open_orders[0].client_order_id == current_cloid
+
+
+@pytest.mark.asyncio
+async def test_executor_cancels_to_empty_if_signal_expires_after_cancellation():
+    desired = replace(plan(), intents=(plan().intents[0],))
+    stale_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    initial = snapshot(
+        (order("2", outcome=OutcomeSide.YES, price=0.48, cloid=stale_cloid),)
+    )
+    reconciliation = reconcile_outcome_orders(market(), desired, initial)
+    client = FakeClient(snapshot(), snapshot(), snapshot())
+    clock_values = iter((3_000, 8_001))
+
+    result = await execute_hip4_order_reconciliation(
+        client,
+        market(),
+        reconciliation,
+        create_deadline_ms=8_000,
+        wall_clock_ms=lambda: next(clock_values),
+    )
+
+    assert result.create_skipped_reason is (
+        OutcomeOrderMutationSkippedReason.STALE_VERIFIED_SIGNAL
+    )
+    assert result.create_skipped_at_ms == 8_001
+    assert result.final_snapshot.open_orders == ()
+    assert client.cancelled == [("913", OutcomeSide.YES, 2, stale_cloid)]
+    assert client.created == []
 
 
 @pytest.mark.asyncio

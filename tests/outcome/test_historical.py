@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -87,6 +88,77 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
         start_ms=0,
         end_ms=10_000,
     ) == [VerifiedCoverage(1_000, 3_000)]
+
+
+def test_historical_batch_rolls_back_all_rows_on_late_trade_conflict(tmp_path):
+    market = hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json"))
+    fill = {
+        "coin": market.yes_asset.market_data_symbol,
+        "px": "0.335",
+        "sz": "2",
+        "side": "B",
+        "time": 1_500,
+        "hash": "0xtrade",
+        "tid": 7,
+    }
+    lines = [
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:01.000Z",
+                "block_number": 100,
+                "events": [["0xbuyer", fill]],
+            }
+        ),
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:03.000Z",
+                "block_number": 101,
+                "events": [],
+            }
+        ),
+    ]
+    batch = parse_hyperliquid_node_fills_by_block(
+        lines,
+        market,
+        source_cursor="atomic-batch",
+        received_time_ms=9_000,
+    )
+    original = batch.trades[0]
+    new_trade = replace(
+        original,
+        exchange_time_ms=1_600,
+        received_time_ms=9_001,
+        source_event_id="0xnew",
+        economic_event_id="0xnew",
+        sequence_id="00000000000000000100:00000000:00000001",
+    )
+    conflicting = replace(original, qty=3.0)
+    failed_batch = replace(batch, trades=(new_trade, conflicting))
+    archive = OutcomeTradeArchive(tmp_path / "atomic-historical.sqlite")
+    assert archive.append_trade(original) is True
+
+    with pytest.raises(ValueError, match="conflicting outcome trade evidence"):
+        archive_historical_batch(
+            archive,
+            failed_batch,
+            collector_session="atomic-batch",
+        )
+
+    assert archive.load_market_metadata(market.venue, market.market_id) == []
+    assert archive.load_trades(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    ) == [original]
+    assert archive.load_verified_coverage(
+        market.venue,
+        market.market_id,
+        market.yes_asset.asset_id,
+        start_ms=0,
+        end_ms=10_000,
+    ) == []
 
 
 def test_hyperliquid_coverage_excludes_partial_boundary_seconds():

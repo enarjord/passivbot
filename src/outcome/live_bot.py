@@ -23,11 +23,13 @@ from outcome.live_data import (
     collect_verified_hyperliquid_signal_window,
 )
 from outcome.live_planning import (
+    DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS,
     OutcomeLivePlan,
     OutcomeSignalPlanningUnavailable,
     build_ema_anchor_outcome_live_plan,
 )
 from outcome.live_reconciliation import (
+    OutcomeOrderMutationSkippedReason,
     OutcomeOrderReconciliation,
     OutcomeOrderReconciliationResult,
     execute_hip4_order_reconciliation,
@@ -84,6 +86,7 @@ async def run_hip4_outcome_cycle(
     *,
     execute: bool = False,
     now_ms: int | None = None,
+    wall_clock_ms: Callable[[], int] | None = None,
     archive: OutcomeTradeArchive | None = None,
     collector_session: str | None = None,
 ) -> HyperliquidOutcomeCycle:
@@ -96,7 +99,8 @@ async def run_hip4_outcome_cycle(
         account=account,
         now_ms=now_ms,
     )
-    planned_at_ms = int(time.time() * 1_000) if now_ms is None else int(now_ms)
+    clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
+    planned_at_ms = int(clock()) if now_ms is None else int(now_ms)
     _persist_lifecycle_settlement(
         lifecycle,
         archive=archive,
@@ -132,11 +136,44 @@ async def run_hip4_outcome_cycle(
             planned_at_ms=planned_at_ms,
         )
     reconciliation = reconcile_outcome_orders(market, plan, account)
-    mutation_result = (
-        await execute_hip4_order_reconciliation(client, market, reconciliation)
-        if execute
-        else None
-    )
+    mutation_result = None
+    if execute:
+        mutation_result = await execute_hip4_order_reconciliation(
+            client,
+            market,
+            reconciliation,
+            create_deadline_ms=(
+                plan.observation_end_ms + DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS
+            ),
+            wall_clock_ms=(
+                clock
+                if wall_clock_ms is not None or now_ms is None
+                else lambda: int(now_ms)
+            ),
+        )
+        if (
+            mutation_result.create_skipped_reason
+            is OutcomeOrderMutationSkippedReason.STALE_VERIFIED_SIGNAL
+        ):
+            if mutation_result.create_skipped_at_ms is None:
+                raise AssertionError("stale outcome execution omitted its decision time")
+            decision_time_ms = mutation_result.create_skipped_at_ms // 1_000 * 1_000
+            return HyperliquidOutcomeCycle(
+                market_id=market.market_id,
+                planned_at_ms=planned_at_ms,
+                account=account,
+                lifecycle=lifecycle,
+                plan=None,
+                reconciliation=reconcile_outcome_orders_to_empty(
+                    market,
+                    mutation_result.final_snapshot,
+                    decision_time_ms=decision_time_ms,
+                ),
+                mutation_result=mutation_result,
+                planning_unavailable_reason=(
+                    OutcomePlanningUnavailableReason.STALE_VERIFIED_SIGNAL
+                ),
+            )
     return HyperliquidOutcomeCycle(
         market_id=market.market_id,
         planned_at_ms=planned_at_ms,
@@ -334,6 +371,7 @@ async def run_hip4_outcome_collected_cycle(
         window.candles,
         execute=execute,
         now_ms=now_ms,
+        wall_clock_ms=wall_clock_ms,
         archive=archive,
         collector_session=collector_session,
     )

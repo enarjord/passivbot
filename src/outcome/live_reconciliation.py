@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import math
+import time
+from typing import Callable
 
 from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
@@ -51,11 +54,17 @@ class OutcomeOrderReconciliation:
         return tuple(item.order_id for item in self.kept)
 
 
+class OutcomeOrderMutationSkippedReason(str, Enum):
+    STALE_VERIFIED_SIGNAL = "stale_verified_signal"
+
+
 @dataclass(frozen=True)
 class OutcomeOrderReconciliationResult:
     cancelled: tuple[HyperliquidOutcomeMutationResult, ...]
     created: tuple[HyperliquidOutcomeMutationResult, ...]
     final_snapshot: HyperliquidOutcomeAccountSnapshot
+    create_skipped_reason: OutcomeOrderMutationSkippedReason | None = None
+    create_skipped_at_ms: int | None = None
 
 
 async def _cancel_attempted_creates(
@@ -107,7 +116,10 @@ async def _cancel_all_managed_orders(
     client: HyperliquidOutcomeLiveClient,
     market: NormalizedOutcomeMarket,
     authoritative: HyperliquidOutcomeAccountSnapshot | None = None,
-) -> None:
+) -> tuple[
+    tuple[HyperliquidOutcomeMutationResult, ...],
+    HyperliquidOutcomeAccountSnapshot,
+]:
     """Drive every surviving managed quote for this market to verified absence."""
 
     if authoritative is None:
@@ -119,13 +131,16 @@ async def _cancel_all_managed_orders(
         and is_managed_outcome_client_order_id(order.client_order_id, market.market_id)
     )
     cleanup_errors: list[Exception] = []
+    cancelled = []
     for order in managed:
         try:
-            await client.cancel_order(
-                market,
-                outcome=order.outcome,
-                order_id=int(order.order_id),
-                expected_client_order_id=order.client_order_id,
+            cancelled.append(
+                await client.cancel_order(
+                    market,
+                    outcome=order.outcome,
+                    order_id=int(order.order_id),
+                    expected_client_order_id=order.client_order_id,
+                )
             )
         except Exception as exc:
             cleanup_errors.append(exc)
@@ -143,6 +158,7 @@ async def _cancel_all_managed_orders(
         if cleanup_errors:
             raise error from cleanup_errors[0]
         raise error
+    return tuple(cancelled), verified
 
 
 async def _cancel_reconciliation_targets(
@@ -332,13 +348,49 @@ async def execute_hip4_order_reconciliation(
     client: HyperliquidOutcomeLiveClient,
     market: NormalizedOutcomeMarket,
     reconciliation: OutcomeOrderReconciliation,
+    *,
+    create_deadline_ms: int | None = None,
+    wall_clock_ms: Callable[[], int] | None = None,
 ) -> OutcomeOrderReconciliationResult:
     """Cancel stale managed orders, verify cancellation, then create desired ALO orders."""
 
     if reconciliation.market_id != market.market_id:
         raise ValueError("outcome reconciliation belongs to a different market")
+    if (
+        create_deadline_ms is not None
+        and create_deadline_ms < reconciliation.observation_end_ms
+    ):
+        raise ValueError(
+            "outcome reconciliation create deadline must not predate its observation"
+        )
     _validate_managed_reconciliation(market, reconciliation)
     cancelled = []
+    created = []
+    clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
+
+    async def stale_create_result() -> OutcomeOrderReconciliationResult | None:
+        if create_deadline_ms is None:
+            return None
+        now_ms = int(clock())
+        if reconciliation.observation_end_ms <= now_ms <= create_deadline_ms:
+            return None
+        cleanup_cancelled, verified = await _cancel_all_managed_orders(
+            client,
+            market,
+        )
+        return OutcomeOrderReconciliationResult(
+            cancelled=tuple(cancelled) + cleanup_cancelled,
+            created=tuple(created),
+            final_snapshot=verified,
+            create_skipped_reason=(
+                OutcomeOrderMutationSkippedReason.STALE_VERIFIED_SIGNAL
+            ),
+            create_skipped_at_ms=now_ms,
+        )
+
+    stale_result = await stale_create_result()
+    if stale_result is not None:
+        return stale_result
     try:
         for cancellation in reconciliation.cancels:
             cancelled.append(
@@ -374,10 +426,15 @@ async def execute_hip4_order_reconciliation(
             ) from cleanup_error
         raise
 
-    created = []
+    stale_result = await stale_create_result()
+    if stale_result is not None:
+        return stale_result
     attempted_creates = []
     try:
         for creation in reconciliation.creates:
+            stale_result = await stale_create_result()
+            if stale_result is not None:
+                return stale_result
             attempted_creates.append(creation)
             intent = creation.intent
             created.append(

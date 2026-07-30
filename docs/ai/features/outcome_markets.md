@@ -199,6 +199,11 @@ and NO have separate native books, execution candles retain their native source 
 their prices are transformed into the canonical YES coordinate. This prevents a trade in one
 native book from falsely filling an order resting only in the other.
 
+Because the initial execution candles aggregate a full second, a price-grid change strictly inside
+the same second as an execution candle cannot be ordered safely against those fills. Such a replay
+is unavailable until a finer-grained execution model exists; a boundary-aligned change applies
+before that second's fills.
+
 This initial execution model is passive-only. It accepts post-only orders and rejects non-post-only
 orders until an explicit taker model defines immediate execution, liquidity role, fees, and
 slippage. A GTD expiry must be later than the order's placement timestamp and no later than the
@@ -285,6 +290,10 @@ configurable confirmation depth from the chain head, and records coverage only a
 range is decoded and archived. RPC endpoints are transport configuration: public providers may
 impose archive, range, traffic, or retention limits, and any such failure must leave the interval
 uncovered.
+
+A historical source batch commits its metadata observation, trades, settlement evidence, and
+verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the
+entire batch back, so overlapping coverage can never expose rows from a failed partial import.
 
 Polymarket collateral identity is versioned transport metadata, not a permanent `USDC` constant.
 Gamma currently omits it on some market rows, and the venue is migrating from USDC.e to pUSD.
@@ -391,7 +400,9 @@ Any bounded outcome-window evaluation uses the archived market metadata state va
 of its requested window, not the latest discovery row. It requires verified grid-stream coverage
 for that window and replays every retained grid change in chronological order. Strategy lifecycle
 gates, settlement, and inventory-time metrics use synthetic open and close boundaries matching the
-requested sample; the result is not presented as a full-contract replay.
+requested sample; the result is not presented as a full-contract replay. Window-specific
+risk-reduction and entry-cutoff durations are explicit inputs and default to disabled, so a short
+sample does not silently suppress every entry.
 
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,
@@ -469,6 +480,10 @@ If the verified actual-fill signal is unavailable or stale, new and replacement 
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:
 cancel Passivbot-namespaced quotes and preserve all unmanaged user orders. A missing fill is never
 converted into a fabricated candle merely to keep existing quotes alive.
+
+Signal freshness is checked again at the mutation boundary and immediately before every create.
+If the signal expires while cancellation or authoritative refresh is in progress, creation stops
+and every managed quote for that market is driven to verified absence.
 
 Live split, merge, redeem, and order writes are distinct authenticated mutations. Each requires an
 explicitly supported adapter path, reconciliation, idempotency or authoritative confirmation, and

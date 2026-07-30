@@ -19,6 +19,10 @@ from outcome.rust_runner import (
 )
 
 
+DEFAULT_OUTCOME_MAX_ACCOUNT_AGE_MS = 5_000
+DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS = 5_000
+
+
 class OutcomeSignalPlanningUnavailable(ValueError):
     def __init__(self, reason: str, message: str) -> None:
         if reason not in {"incomplete_verified_signal", "stale_verified_signal"}:
@@ -120,8 +124,8 @@ def build_ema_anchor_outcome_live_plan(
     account: HyperliquidOutcomeAccountSnapshot,
     *,
     now_ms: int,
-    max_account_age_ms: int = 5_000,
-    max_signal_age_ms: int = 5_000,
+    max_account_age_ms: int = DEFAULT_OUTCOME_MAX_ACCOUNT_AGE_MS,
+    max_signal_age_ms: int = DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS,
 ) -> OutcomeLivePlan:
     """Create a restart-reproducible Rust plan from exchange state and archived candles."""
 

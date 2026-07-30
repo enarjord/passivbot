@@ -215,6 +215,24 @@ fn validate_price_grid_change(
     Ok(())
 }
 
+fn validate_grid_change_execution_bucket_ordering(
+    changes: &[OutcomePriceGridChange],
+    candles: &[OutcomeCandle],
+) -> Result<(), OutcomeError> {
+    for change in changes {
+        if candles.iter().any(|candle| {
+            candle.timestamp_ms < change.timestamp_ms
+                && change.timestamp_ms < candle.timestamp_ms.saturating_add(1_000)
+        }) {
+            return Err(OutcomeError::InvalidMarket(
+                "intrasecond outcome price-grid change cannot be ordered against ".to_string()
+                    + "a one-second execution candle",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn apply_price_grid_changes_before(
     simulator: &mut SingleOutcomeSimulator,
     current_market: &mut BinaryOutcomeMarketSpec,
@@ -274,6 +292,7 @@ pub fn run_single_outcome_backtest(
     for change in &input.price_grid_changes {
         validate_price_grid_change(&input.market, change)?;
     }
+    validate_grid_change_execution_bucket_ordering(&input.price_grid_changes, &input.candles)?;
     timeline.sort_by_key(|event| (event.timestamp_ms(), event.priority(), event.sequence()));
 
     let mut current_price_grid = input.market.price_grid;
@@ -506,6 +525,7 @@ pub fn run_outcome_ema_anchor_backtest(
             .or_default()
             .push(candle.clone());
     }
+    validate_grid_change_execution_bucket_ordering(&price_grid_changes, &input.execution_candles)?;
 
     let mut simulator = SingleOutcomeSimulator::new(
         input.market.clone(),
@@ -533,8 +553,8 @@ pub fn run_outcome_ema_anchor_backtest(
             &mut total_inventory_time_area_ms,
         );
         // A grid change stamped at the bucket boundary is authoritative for every fill in that
-        // second. Changes later inside an aggregated one-second bucket cannot be ordered against
-        // its fills, so they apply after execution and before quotes for the next bucket.
+        // second. Intrasecond changes sharing an execution bucket were rejected above; changes
+        // in no-fill buckets apply after that bucket and before quotes for the next one.
         apply_price_grid_changes_before(
             &mut simulator,
             &mut current_market,
@@ -1308,6 +1328,50 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.fills_count, 0);
+    }
+
+    #[test]
+    fn ema_anchor_outcome_rejects_intrasecond_grid_change_in_execution_bucket() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.001 };
+        let result = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.489,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_500,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        });
+
+        assert!(matches!(
+            result,
+            Err(OutcomeError::InvalidMarket(message))
+                if message.contains("intrasecond outcome price-grid change")
+        ));
     }
 
     #[test]

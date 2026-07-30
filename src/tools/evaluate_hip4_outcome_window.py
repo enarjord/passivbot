@@ -90,6 +90,21 @@ def _window_market_spec(
     return market_spec
 
 
+def _add_window_phase_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--risk-reduction-only-ms-before-close",
+        type=int,
+        default=0,
+        help="Synthetic-window risk-reduction phase; defaults to disabled",
+    )
+    parser.add_argument(
+        "--entry-cutoff-ms-before-close",
+        type=int,
+        default=0,
+        help="Synthetic-window entry cutoff; defaults to disabled",
+    )
+
+
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     market_selector = parser.add_mutually_exclusive_group(required=True)
@@ -113,6 +128,7 @@ async def _main() -> int:
     parser.add_argument("--max-total-inventory-qty", type=float, default=500.0)
     parser.add_argument("--max-abs-residual-qty", type=float, default=50.0)
     parser.add_argument("--min-locked-pair-edge", type=float, default=0.001)
+    _add_window_phase_arguments(parser)
     parser.add_argument(
         "--maker-rate",
         required=True,
@@ -142,6 +158,11 @@ async def _main() -> int:
         parser.error("--end-ms must be greater than --start-ms")
     if args.start_ms % 1_000 or args.end_ms % 1_000:
         parser.error("--start-ms and --end-ms must be second-aligned")
+    if (
+        args.risk_reduction_only_ms_before_close < 0
+        or args.entry_cutoff_ms_before_close < 0
+    ):
+        parser.error("synthetic-window close phases must be non-negative")
     if any(
         not math.isfinite(rate)
         for rate in (args.maker_rate, args.taker_rate, args.settlement_rate)
@@ -198,8 +219,10 @@ async def _main() -> int:
         "max_abs_residual_qty": args.max_abs_residual_qty,
         "min_locked_pair_edge": args.min_locked_pair_edge,
         "estimated_fee_per_share": max(0.0, args.maker_rate) * market.payout_unit,
-        "risk_reduction_only_ms_before_close": 30 * 60 * 1_000,
-        "entry_cutoff_ms_before_close": 60 * 1_000,
+        "risk_reduction_only_ms_before_close": (
+            args.risk_reduction_only_ms_before_close
+        ),
+        "entry_cutoff_ms_before_close": args.entry_cutoff_ms_before_close,
         "execution_mode": "accumulate_pairs",
     }
     payload = build_trade_derived_ema_anchor_input(

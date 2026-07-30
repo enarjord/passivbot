@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -15,7 +16,10 @@ from outcome.models import (
     OutcomePriceGridMetadata,
 )
 from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
-from tools.evaluate_hip4_outcome_window import _window_market_spec
+from tools.evaluate_hip4_outcome_window import (
+    _add_window_phase_arguments,
+    _window_market_spec,
+)
 from tools.evaluate_polymarket_outcome_window import (
     _load_archived_market_and_grid_window,
     _require_fee_free_market,
@@ -132,3 +136,23 @@ def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
     assert spec["order_entry_opens_ms"] == 2_000
     assert spec["trading_closes_ms"] == 5_000
     assert spec["scheduled_event_ms"] == 5_000
+
+
+def test_hip4_window_close_phases_default_to_disabled_and_are_configurable():
+    parser = argparse.ArgumentParser()
+    _add_window_phase_arguments(parser)
+
+    defaults = parser.parse_args([])
+    configured = parser.parse_args(
+        [
+            "--risk-reduction-only-ms-before-close",
+            "30000",
+            "--entry-cutoff-ms-before-close",
+            "5000",
+        ]
+    )
+
+    assert defaults.risk_reduction_only_ms_before_close == 0
+    assert defaults.entry_cutoff_ms_before_close == 0
+    assert configured.risk_reduction_only_ms_before_close == 30_000
+    assert configured.entry_cutoff_ms_before_close == 5_000

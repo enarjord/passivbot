@@ -264,6 +264,33 @@ async def test_stale_signal_routes_normal_cycle_to_cancel_only_safety():
 
 
 @pytest.mark.asyncio
+async def test_signal_expiring_before_execution_routes_to_cancel_only_safety():
+    signal_candles = candles()
+    observation_end_ms = signal_candles[-1].timestamp_ms + 1_000
+    client = ReadOnlyClient(snapshot(observation_end_ms))
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        market(),
+        params(),
+        signal_candles,
+        execute=True,
+        now_ms=observation_end_ms,
+        wall_clock_ms=lambda: observation_end_ms + 5_001,
+    )
+
+    assert cycle.plan is None
+    assert (
+        cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.STALE_VERIFIED_SIGNAL
+    )
+    assert cycle.reconciliation.creates == ()
+    assert cycle.mutation_result is not None
+    assert cycle.mutation_result.create_skipped_reason is not None
+    assert cycle.mutation_result.final_snapshot.open_orders == ()
+
+
+@pytest.mark.asyncio
 async def test_collected_cycle_routes_public_silence_to_cancel_only_safety():
     async def silent_stream():
         while True:

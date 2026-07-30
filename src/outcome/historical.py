@@ -104,46 +104,43 @@ def archive_historical_batch(
     *,
     collector_session: str,
 ) -> tuple[int, int]:
-    """Archive immutable trades first and continuity evidence last.
-
-    If ingestion is interrupted, the archive may contain harmless un-covered trades but can never
-    contain coverage that claims an incompletely archived source range.
-    """
+    """Archive metadata, immutable evidence, and continuity as one atomic source batch."""
 
     if not collector_session.strip():
         raise ValueError("collector_session must not be empty")
-    archive.append_market_metadata(
-        batch.market,
-        observed_at_ms=_utc_ms(),
-        observation_source=batch.source_cursor,
-        collector_session=collector_session,
-    )
     inserted = 0
     ignored = 0
-    for trade in batch.trades:
-        if archive.append_trade(
-            trade,
+    with archive.write_transaction():
+        archive.append_market_metadata(
+            batch.market,
+            observed_at_ms=_utc_ms(),
+            observation_source=batch.source_cursor,
             collector_session=collector_session,
-            source_cursor=batch.source_cursor,
-        ):
-            inserted += 1
-        else:
-            ignored += 1
-    for settlement in batch.settlements:
-        archive.append_settlement(
-            settlement,
-            collector_session=collector_session,
-            source_cursor=batch.source_cursor,
         )
-    for asset_id, intervals in batch.coverage_by_asset.items():
-        for interval in intervals:
-            archive.record_verified_coverage(
-                batch.venue,
-                batch.market_id,
-                asset_id,
-                interval,
+        for trade in batch.trades:
+            if archive.append_trade(
+                trade,
                 collector_session=collector_session,
+                source_cursor=batch.source_cursor,
+            ):
+                inserted += 1
+            else:
+                ignored += 1
+        for settlement in batch.settlements:
+            archive.append_settlement(
+                settlement,
+                collector_session=collector_session,
+                source_cursor=batch.source_cursor,
             )
+        for asset_id, intervals in batch.coverage_by_asset.items():
+            for interval in intervals:
+                archive.record_verified_coverage(
+                    batch.venue,
+                    batch.market_id,
+                    asset_id,
+                    interval,
+                    collector_session=collector_session,
+                )
     return inserted, ignored
 
 
