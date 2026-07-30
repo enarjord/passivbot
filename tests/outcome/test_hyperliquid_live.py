@@ -715,6 +715,45 @@ async def test_order_rechecks_create_deadline_after_public_preflight(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_order_rechecks_lifecycle_after_public_preflight(monkeypatch):
+    payload, market = market_fixture()
+
+    class ExpiringSession(FakeSession):
+        def __init__(self, outcome_meta):
+            super().__init__(outcome_meta)
+            self.lifecycle_reads = 0
+
+        async def publicPostInfo(self, request):
+            if request["type"] == "outcomeMeta":
+                self.lifecycle_reads += 1
+            return await super().publicPostInfo(request)
+
+    session = ExpiringSession(payload)
+    client = HyperliquidOutcomeLiveClient(
+        session,
+        account_address="0xaccount",
+        allow_mutations=True,
+    )
+    event_seconds = market.lifecycle.scheduled_event_time_ms / 1_000
+    monkeypatch.setattr(
+        "outcome.hyperliquid_live.time.time",
+        lambda: event_seconds - 1 if session.lifecycle_reads < 2 else event_seconds + 1,
+    )
+
+    with pytest.raises(ValueError, match="not active"):
+        await client.submit_limit_order(
+            market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.BUY,
+            native_price="0.4",
+            qty="25",
+        )
+
+    assert session.lifecycle_reads == 2
+    assert session.private_requests == []
+
+
+@pytest.mark.asyncio
 async def test_vault_mutations_query_and_sign_for_the_vault_trading_account(monkeypatch):
     payload, market = market_fixture()
     session = FakeSession(payload)

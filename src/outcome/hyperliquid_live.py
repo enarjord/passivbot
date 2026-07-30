@@ -633,6 +633,7 @@ class HyperliquidOutcomeLiveClient:
                 allow_below_min_qty=True,
             )
         assert action is not None
+        await self.assert_market_current(market)
         if create_deadline_ms is not None:
             clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
             observed_at_ms = int(clock())

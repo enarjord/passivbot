@@ -127,6 +127,8 @@ All notable user-facing changes will be documented in this file.
   serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
   tier, suite pre-aggregation and scenario slicing keep validity indices in target-bar units, and
   active Polymarket evaluation windows apply their synthetic close before Rust translation.
+  HIP-4 creates now recheck market lifecycle after account/book preflight, while any create failure
+  drives kept and newly attempted managed quotes to verified absence.
   Polymarket reconnects now discard
   abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
   archived fee selection uses opening metadata and rejects unsupported later transitions, and the

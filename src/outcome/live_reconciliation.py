@@ -68,51 +68,6 @@ class OutcomeOrderReconciliationResult:
     create_skipped_at_ms: int | None = None
 
 
-async def _cancel_attempted_creates(
-    client: HyperliquidOutcomeLiveClient,
-    market: NormalizedOutcomeMarket,
-    attempted: tuple[OutcomeOrderCreate, ...],
-    authoritative: HyperliquidOutcomeAccountSnapshot | None = None,
-) -> None:
-    """Restore a verified create-free state after a rejected or ambiguous submission."""
-
-    attempted_cloids = {creation.client_order_id for creation in attempted}
-    if authoritative is None:
-        authoritative = await client.fetch_account_snapshot((market,))
-    cleanup_orders = tuple(
-        order
-        for order in authoritative.open_orders
-        if order.market_id == market.market_id
-        and order.client_order_id in attempted_cloids
-    )
-    cleanup_errors: list[Exception] = []
-    for order in cleanup_orders:
-        try:
-            await client.cancel_order(
-                market,
-                outcome=order.outcome,
-                order_id=int(order.order_id),
-                expected_client_order_id=order.client_order_id,
-            )
-        except Exception as exc:
-            cleanup_errors.append(exc)
-    verified = await client.fetch_account_snapshot((market,))
-    remaining = sorted(
-        order.order_id
-        for order in verified.open_orders
-        if order.market_id == market.market_id
-        and order.client_order_id in attempted_cloids
-    )
-    if remaining:
-        error = RuntimeError(
-            "HIP-4 partial-create cleanup is not authoritative: "
-            f"{remaining}"
-        )
-        if cleanup_errors:
-            raise error from cleanup_errors[0]
-        raise error
-
-
 async def _cancel_all_managed_orders(
     client: HyperliquidOutcomeLiveClient,
     market: NormalizedOutcomeMarket,
@@ -470,14 +425,13 @@ async def execute_hip4_order_reconciliation(
         if not attempted_creates:
             raise
         try:
-            await _cancel_attempted_creates(
+            await _cancel_all_managed_orders(
                 client,
                 market,
-                tuple(attempted_creates),
             )
         except Exception as cleanup_error:
             raise RuntimeError(
-                "HIP-4 order creation failed and partial-create cleanup could "
+                "HIP-4 order creation failed and managed-order cleanup could "
                 "not establish an authoritative safe state"
             ) from cleanup_error
         raise

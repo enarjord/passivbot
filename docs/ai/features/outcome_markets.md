@@ -549,6 +549,9 @@ Signal freshness is checked again at the mutation boundary, before every create,
 create's lifecycle/account/book preflight immediately before the private action is sent. If the
 signal expires while cancellation or authoritative refresh is in progress, creation stops and
 every managed quote for that market is driven to verified absence.
+Any other lifecycle, account, book, or private-submission failure during creation also drives every
+managed quote for that market, including previously kept quotes, to verified absence before the
+failure propagates.
 
 Live split, merge, redeem, and order writes are distinct authenticated mutations. Each requires an
 explicitly supported adapter path, reconciliation, idempotency or authoritative confirmation, and

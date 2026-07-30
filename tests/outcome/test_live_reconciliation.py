@@ -372,6 +372,46 @@ async def test_executor_cancels_all_attempted_orders_after_partial_create_failur
 
 
 @pytest.mark.asyncio
+async def test_create_preflight_failure_cancels_kept_managed_quotes():
+    desired = plan()
+    kept_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    kept = order(
+        "1",
+        outcome=OutcomeSide.YES,
+        price=0.49,
+        cloid=kept_cloid,
+    )
+    unmanaged = order(
+        "2",
+        outcome=OutcomeSide.YES,
+        price=0.48,
+        cloid=None,
+    )
+    reconciliation = reconcile_outcome_orders(
+        market(),
+        desired,
+        snapshot((kept, unmanaged)),
+    )
+
+    class FailingCreateClient(FakeClient):
+        async def submit_limit_order(self, *args, **kwargs):
+            raise ValueError("create preflight unavailable")
+
+    client = FailingCreateClient(snapshot((kept, unmanaged)), snapshot((unmanaged,)))
+
+    with pytest.raises(ValueError, match="create preflight unavailable"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert client.cancelled == [
+        ("913", OutcomeSide.YES, 1, kept_cloid),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_partial_create_cleanup_continues_after_individual_cancel_failure():
     reconciliation = reconcile_outcome_orders(market(), plan(), snapshot())
     first, second = reconciliation.creates
