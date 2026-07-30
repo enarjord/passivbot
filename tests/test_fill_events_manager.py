@@ -8359,7 +8359,10 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     assert all(len(event["raw"]) == 1 for event in expanded)
 
 
-@pytest.mark.parametrize("mismatch", ["component_ids", "signed_qty", "pnl", "fees"])
+@pytest.mark.parametrize(
+    "mismatch",
+    ["component_ids", "signed_qty", "pnl", "fees", "malformed_component"],
+)
 def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
     mismatch,
 ):
@@ -8393,9 +8396,13 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
         aggregate["pnl"] = 1.0
     elif mismatch == "fees":
         aggregate["fee_paid"] = -1.0
+    elif mismatch == "malformed_component":
+        aggregate["raw"][0]["data"]["amount"] = "invalid"
 
-    with pytest.raises(FillEventCacheContractError, match=mismatch):
+    with pytest.raises(FillEventCacheContractError, match=mismatch) as exc_info:
         fem._expand_hyperliquid_coalesced_events([aggregate])
+    if mismatch == "malformed_component":
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 @pytest.mark.asyncio

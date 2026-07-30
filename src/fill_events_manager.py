@@ -1240,26 +1240,38 @@ def _expand_hyperliquid_coalesced_events(
             and item.get("source") == "fetch_my_trades"
             and isinstance(item.get("data"), dict)
         ]
-        unique_trades: List[Dict[str, object]] = []
+        unique_trades: List[Tuple[str, Dict[str, object]]] = []
         seen_ids: set[str] = set()
         for trade in raw_trades:
+            info = trade.get("info")
+            if not isinstance(info, dict):
+                info = {}
             trade_id = str(
                 trade.get("id")
-                or (trade.get("info") or {}).get("tid")
-                or (trade.get("info") or {}).get("hash")
+                or info.get("tid")
+                or info.get("hash")
                 or ""
             )
             if not trade_id or trade_id in seen_ids:
                 continue
             seen_ids.add(trade_id)
-            unique_trades.append(trade)
+            unique_trades.append((trade_id, trade))
         if len(unique_trades) <= 1 and not is_legacy_aggregate:
             expanded.append(event)
             continue
 
         children: List[Dict[str, object]] = []
-        for trade in unique_trades:
-            child = HyperliquidFetcher._normalize_trade(trade)
+        for trade_id, trade in unique_trades:
+            try:
+                child = HyperliquidFetcher._normalize_trade(trade)
+            except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                raise FillEventCacheContractError(
+                    "malformed Hyperliquid cache aggregate component cannot be "
+                    "normalized; "
+                    f"id={str(event.get('id') or '')!r} component_id={trade_id!r} "
+                    f"reason=malformed_component "
+                    f"error_type={bounded_exception_type(exc)}"
+                ) from exc
             client_order_id = str(child.get("client_order_id") or "")
             child["pb_order_type"] = (
                 custom_id_to_snake(client_order_id)
