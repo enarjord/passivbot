@@ -173,6 +173,28 @@ def test_removed_or_noncanonical_logs_are_rejected():
         decode_polymarket_order_filled_log(wrong_contract, block_time_ms=10_000)
 
 
+def test_logs_require_explicit_boolean_non_removed_evidence():
+    market = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    fill = raw_log(
+        address=POLYMARKET_CTF_EXCHANGE_V1,
+        topic0=POLYMARKET_ORDER_FILLED_V1_TOPIC,
+        data_words=[word(0), word(99), word(335_000), word(1_000_000), word(0)],
+    )
+    resolution = raw_resolution_log(market.market_id, payouts=(1, 1))
+
+    for decoder, raw in (
+        (decode_polymarket_order_filled_log, fill),
+        (decode_polymarket_condition_resolution_log, resolution),
+    ):
+        missing = dict(raw)
+        missing.pop("removed")
+        with pytest.raises(ValueError, match="explicitly boolean false"):
+            decoder(missing, block_time_ms=10_000)
+        for invalid in (True, 0, "false", None):
+            with pytest.raises(ValueError, match="explicitly boolean false"):
+                decoder(dict(raw, removed=invalid), block_time_ms=10_000)
+
+
 @pytest.mark.asyncio
 async def test_download_proves_exact_range_and_filters_other_markets():
     market = polymarket.normalize_market(fixture("polymarket_binary.json"))

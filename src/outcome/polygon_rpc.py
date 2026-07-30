@@ -109,6 +109,12 @@ def _data_words(data: Any, expected: int) -> list[bytes]:
     return [raw[index : index + 32] for index in range(0, len(raw), 32)]
 
 
+def _require_non_removed_log(raw_log: Mapping[str, Any]) -> bool:
+    if raw_log.get("removed") is not False:
+        raise ValueError("Polygon log removed must be explicitly boolean false")
+    return False
+
+
 def decode_polymarket_order_filled_log(
     raw_log: Mapping[str, Any],
     *,
@@ -143,10 +149,8 @@ def decode_polymarket_order_filled_log(
         "logIndex": _hex_int(raw_log.get("logIndex"), "logIndex"),
         "blockTimeMs": block_time_ms,
         "transactionHash": str(raw_log.get("transactionHash", "")),
-        "removed": raw_log.get("removed", False),
+        "removed": _require_non_removed_log(raw_log),
     }
-    if common["removed"] is True:
-        raise ValueError("removed Polygon logs cannot be archived as verified history")
     if not common["transactionHash"].startswith("0x"):
         raise ValueError("Polygon log requires a transaction hash")
     indexed = {
@@ -219,12 +223,10 @@ def decode_polymarket_condition_resolution_log(
         "logIndex": _hex_int(raw_log.get("logIndex"), "logIndex"),
         "blockTimeMs": block_time_ms,
         "transactionHash": str(raw_log.get("transactionHash", "")),
-        "removed": raw_log.get("removed", False),
+        "removed": _require_non_removed_log(raw_log),
     }
     if common["address"] != POLYMARKET_CONDITIONAL_TOKENS:
         raise ValueError("ConditionResolution came from an unexpected contract")
-    if common["removed"] is True:
-        raise ValueError("removed Polygon logs cannot be archived as verified history")
     if not common["transactionHash"].startswith("0x"):
         raise ValueError("Polygon log requires a transaction hash")
     args = {

@@ -302,11 +302,11 @@ Preferred backfill sources must preserve event chronology:
 The standard-market Polygon downloader queries both official CTF Exchange addresses, both
 `OrderFilled` topics, and the condition-indexed CTF resolution topic over a complete block
 interval. It finds the first block at or after each second-aligned time boundary, attaches
-canonical block timestamps, rejects removed, duplicate, or out-of-range logs, excludes a
-configurable confirmation depth from the chain head, and records coverage only after the entire
-range is decoded and archived. RPC endpoints are transport configuration: public providers may
-impose archive, range, traffic, or retention limits, and any such failure must leave the interval
-uncovered.
+canonical block timestamps, requires every log to carry an explicit boolean `removed=false`
+observation, rejects removed, duplicate, or out-of-range logs, excludes a configurable confirmation
+depth from the chain head, and records coverage only after the entire range is decoded and archived.
+RPC endpoints are transport configuration: public providers may impose archive, range, traffic, or
+retention limits, and any such failure must leave the interval uncovered.
 
 A historical source batch commits its metadata observation, trades, settlement evidence, and
 verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the

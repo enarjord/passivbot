@@ -134,6 +134,7 @@ All notable user-facing changes will be documented in this file.
   inconsistent native-to-canonical YES price mappings.
   Reconciliation rejects duplicate kept orders in one managed quote slot before mutation, and the
   bounded Polymarket evaluator requires an explicit quantity-step assumption.
+  Polygon fill and settlement import now requires explicit boolean non-removed log evidence.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
