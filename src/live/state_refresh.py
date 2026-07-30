@@ -109,11 +109,11 @@ async def refresh_authoritative_state_staged(bot) -> bool:
         bot._last_authoritative_degraded_pnl_count = int(
             snapshot.get("degraded_pnl_count", 0) or 0
         )
-        bot._last_authoritative_block_reason = (
-            "degraded_pnl"
-            if bot._last_authoritative_degraded_pnl_count
-            else "pending_pnl"
-        )
+        if bot._live_risk_uses_authoritative_pnl():
+            if bot._last_authoritative_degraded_pnl_count:
+                bot._last_authoritative_block_reason = "degraded_pnl"
+            elif bot._last_authoritative_pending_pnl_count:
+                bot._last_authoritative_block_reason = "pending_pnl"
         return False
     prepared_balance_snapshot = None
     if "balance" in plan:

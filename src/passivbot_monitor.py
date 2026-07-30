@@ -973,9 +973,15 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
 
 def _build_monitor_unstuck_section(self) -> dict[str, Any]:
     has_open = bool(self.has_open_unstuck_order())
-    # Allowances are pure budget facts and stay real while an unstuck order
-    # is open; has_open is reported alongside so the monitor shows both.
-    allowances_live = self._calc_unstuck_allowances_live()
+    # When unstuck is enabled, allowances are pure budget facts and stay real
+    # while an unstuck order is open. Disabled unstuck has no PnL-derived
+    # allowance to report.
+    unstuck_uses_realized_pnl = self._unstuck_uses_realized_pnl()
+    allowances_live = (
+        self._calc_unstuck_allowances_live()
+        if unstuck_uses_realized_pnl
+        else None
+    )
     out: dict[str, Any] = {
         "has_open_order": has_open,
         "open_orders": [],
@@ -996,10 +1002,18 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             payload["symbol"] = symbol
             out["open_orders"].append(payload)
     for pside in ("long", "short"):
-        info = self._calc_unstuck_allowance_for_logging(pside)
+        info = (
+            self._calc_unstuck_allowance_for_logging(pside)
+            if unstuck_uses_realized_pnl
+            else {"status": "unstuck_disabled"}
+        )
         side_payload: dict[str, Any] = {
             "status": info.get("status"),
-            "allowance_live": float(allowances_live.get(pside, 0.0) or 0.0),
+            "allowance_live": (
+                float(allowances_live.get(pside, 0.0) or 0.0)
+                if allowances_live is not None
+                else None
+            ),
             "configured_loss_allowance_pct": float(
                 self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
             ),

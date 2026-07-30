@@ -180,11 +180,22 @@ class _FailingConsoleSink:
 
 class TestRealizedPnlConsumers:
     @staticmethod
-    def _make_bot(*, max_realized_loss_pct=1.0, hsl_enabled=False, values=None):
+    def _make_bot(
+        *,
+        max_realized_loss_pct=1.0,
+        hsl_enabled=False,
+        total_wallet_exposure_limit=1.0,
+        values=None,
+    ):
         bot = object.__new__(Passivbot)
         bot.coin_overrides = {}
         bot._live_max_realized_loss_pct = lambda: max_realized_loss_pct
         bot._equity_hard_stop_enabled = lambda: hsl_enabled
+        bot.bot_value = lambda pside, key: (
+            total_wallet_exposure_limit
+            if key == "total_wallet_exposure_limit"
+            else 0.0
+        )
         values = values or {}
         bot.bp = lambda pside, key, symbol=None: values.get(
             (symbol, pside, key),
@@ -224,6 +235,20 @@ class TestRealizedPnlConsumers:
             bot.coin_overrides = {symbol: {}}
 
         assert bot._live_risk_uses_authoritative_pnl() is True
+
+    def test_unstuck_with_zero_total_exposure_does_not_require_pnl(self):
+        values = {
+            (None, "long", "unstuck_enabled"): True,
+            (None, "long", "unstuck_loss_allowance_pct"): 0.01,
+            (None, "long", "unstuck_close_pct"): 0.1,
+            (None, "long", "unstuck_threshold"): 0.9,
+        }
+        bot = self._make_bot(
+            total_wallet_exposure_limit=0.0,
+            values=values,
+        )
+
+        assert bot._live_risk_uses_authoritative_pnl() is False
 
 
 class TestGetRealizedPnlCumsumStats:

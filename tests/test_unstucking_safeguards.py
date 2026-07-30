@@ -3278,6 +3278,7 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
             "unstuck_threshold": 0.5,
         }
     )
+    bot._bot_value_defaults["total_wallet_exposure_limit"] = 0.5
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 

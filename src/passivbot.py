@@ -1669,8 +1669,15 @@ class Passivbot:
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
         symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
-        for symbol in symbols:
-            for pside in ("long", "short"):
+        for pside in ("long", "short"):
+            if (
+                float(
+                    self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+                )
+                <= 0.0
+            ):
+                continue
+            for symbol in symbols:
                 if (
                     bool(self.bp(pside, "unstuck_enabled", symbol))
                     and float(
@@ -12644,10 +12651,10 @@ class Passivbot:
                     if fills_ready
                     else (
                         "pending_pnl_enrichment"
-                        if pending_pnl_events
+                        if authoritative_pnl_required and pending_pnl_events
                         else (
                             "degraded_pnl_enrichment"
-                            if degraded_pnl_events
+                            if authoritative_pnl_required and degraded_pnl_events
                             else "fill_history_coverage_unavailable"
                         )
                     )

@@ -92,10 +92,10 @@ planning may use the configured lookback only when the cache proves `history_sco
 refresh or deferral, never a neutral history.
 
 Pending or degraded realized PnL blocks only enabled consumers that require authoritative PnL, such
-as HSL, auto-unstuck, or the realized-loss gate. When every such consumer is disabled, proven fill
-history may remain ready for structural consumers such as fill timestamps; PnL defects remain
-observable and repairable but do not globally defer planning. Enabling a PnL consumer restores the
-strict requirement without a neutral PnL fallback.
+as HSL, operational auto-unstuck with positive total exposure, or the realized-loss gate. When
+every such consumer is disabled, proven fill history may remain ready for structural consumers
+such as fill timestamps; PnL defects remain observable and repairable but do not globally defer
+planning. Enabling a PnL consumer restores the strict requirement without a neutral PnL fallback.
 
 Corrupt or unavailable fills use bounded repair/retry and explicit degraded decisions. Valid
 manual or external exchange fills without Passivbot client IDs are exchange truth unless they

@@ -6497,8 +6497,9 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         ("complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
     ],
 )
+@pytest.mark.parametrize("coverage_ready", [True, False])
 async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disabled(
-    pnl_status, pnl_source
+    pnl_status, pnl_source, coverage_ready
 ):
     bot = Passivbot.__new__(Passivbot)
     now_ms = 1_800_000_000_000
@@ -6522,7 +6523,7 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
     class _Cache:
         def load_metadata(self):
             return {
-                "covered_start_ms": start_ms,
+                "covered_start_ms": start_ms if coverage_ready else start_ms + 1,
                 "oldest_event_ts": event.timestamp,
                 "history_scope": "window",
                 "known_gaps": [],
@@ -6532,12 +6533,13 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
             return []
 
         def get_covered_start_ms(self):
-            return start_ms
+            return start_ms if coverage_ready else start_ms + 1
 
     class _Manager:
         def __init__(self):
             self.cache = _Cache()
             self.refresh_latest = AsyncMock()
+            self.refresh_for_lookback = AsyncMock(return_value=False)
             self.refresh_degraded_pnl_events = AsyncMock()
 
         def get_events(self, start_ms=None, end_ms=None):
@@ -6577,16 +6579,23 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
 
     result = await bot.update_pnls(source="staged_blocking")
 
-    assert result is True
+    assert result is coverage_ready
     bot._pnls_manager.refresh_degraded_pnl_events.assert_not_awaited()
-    bot._record_authoritative_surface.assert_called_once()
+    if coverage_ready:
+        bot._record_authoritative_surface.assert_called_once()
+    else:
+        bot._record_authoritative_surface.assert_not_called()
     expected_pending = 1 if pnl_status == "pending" else 0
     expected_degraded = 1 if pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED else 0
     assert bot._last_fill_refresh_pending_pnl_count == expected_pending
     assert bot._last_fill_refresh_degraded_pnl_count == expected_degraded
     summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
-    assert summary["status"] == "succeeded"
-    assert summary["reason_code"] == "fills_refresh_succeeded"
+    assert summary["status"] == ("succeeded" if coverage_ready else "deferred")
+    assert summary["reason_code"] == (
+        "fills_refresh_succeeded"
+        if coverage_ready
+        else "fill_history_coverage_unavailable"
+    )
     assert summary["pending_pnl_count"] == expected_pending
     assert summary["degraded_pnl_count"] == expected_degraded
 
@@ -7755,6 +7764,7 @@ async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     plan = {"balance", "positions", "open_orders", "fills"}
     bot._authoritative_staged_refresh_plan = lambda: set(plan)
     bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
@@ -7783,6 +7793,35 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
     assert bot._last_authoritative_block_reason == "degraded_pnl"
     assert bot._last_authoritative_pending_pnl_count == 0
+    assert bot._last_authoritative_degraded_pnl_count == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_does_not_blame_nonblocking_pnl():
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot._authoritative_staged_refresh_plan = lambda: {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": 100.0,
+            "positions": [{"symbol": "BTC/USDT:USDT"}],
+            "open_orders": [],
+            "pnls_ok": False,
+            "pending_pnl_count": 1,
+            "degraded_pnl_count": 1,
+        }
+    )
+
+    result = await bot._refresh_authoritative_state_staged()
+
+    assert result is False
+    assert bot._last_authoritative_block_reason is None
+    assert bot._last_authoritative_pending_pnl_count == 1
     assert bot._last_authoritative_degraded_pnl_count == 1
 
 
