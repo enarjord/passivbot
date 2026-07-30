@@ -314,6 +314,115 @@ async def test_successor_timestamp_proves_unchanged_preceding_candle_final(
 
 
 @pytest.mark.asyncio
+async def test_changed_open_row_processed_after_boundary_cannot_extend_tail(
+    tmp_path,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    partial = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+    changed = [2 * ONE_MIN_MS, 100, 102, 99, 101.5, 3]
+
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial],
+            now_ms=2 * ONE_MIN_MS + 50_000,
+        )
+        == 0
+    )
+    # This payload could have been emitted while the bucket was open and then
+    # delayed in the consumer queue until after the boundary. A value change
+    # alone is therefore insufficient to extend canonical history.
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [changed],
+            now_ms=3 * ONE_MIN_MS + 1_000,
+        )
+        == 0
+    )
+    assert cm.get_last_final_ts(symbol) == ONE_MIN_MS
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[3 * ONE_MIN_MS, 101.5, 102, 101, 101.7, 0.2]],
+            now_ms=3 * ONE_MIN_MS + 2_000,
+        )
+        == 1
+    )
+    disk = cm._load_from_disk(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    persisted = disk[disk["ts"] == 2 * ONE_MIN_MS]
+    assert persisted.shape[0] == 1
+    assert float(persisted[0]["c"]) == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_ws_persistence_failure_does_not_expose_ram_only_candle(
+    tmp_path,
+    monkeypatch,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    partial = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial],
+            now_ms=2 * ONE_MIN_MS + 50_000,
+        )
+        == 0
+    )
+    ema_key = ("close", 3.0, str(ONE_MIN_MS))
+    ema_value = (100.0, ONE_MIN_MS, ONE_MIN_MS)
+    projected_value = {("sentinel",): {"close": 100.0}}
+    cm._ema_cache[symbol] = {ema_key: ema_value}
+    cm._projected_open_tail_ema_cache[symbol] = projected_value
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(cm, "_save_range_incremental", fail_save)
+    with pytest.raises(OSError, match="disk unavailable"):
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [[3 * ONE_MIN_MS, 100.5, 101, 100, 100.7, 0.2]],
+            now_ms=3 * ONE_MIN_MS + 1_000,
+        )
+
+    assert cm.get_last_final_ts(symbol) == ONE_MIN_MS
+    assert not np.any(cm._ensure_symbol_cache(symbol)["ts"] == 2 * ONE_MIN_MS)
+    disk = cm._load_from_disk(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    assert not np.any(disk["ts"] == 2 * ONE_MIN_MS)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+    assert cm._ema_cache[symbol] == {ema_key: ema_value}
+    assert cm._projected_open_tail_ema_cache[symbol] == projected_value
+
+
+@pytest.mark.asyncio
 async def test_delayed_ws_correction_overwrites_persisted_row(tmp_path):
     symbol = "BTC/USDT:USDT"
     cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)

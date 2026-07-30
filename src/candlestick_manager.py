@@ -2699,6 +2699,8 @@ class CandlestickManager:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        source_norm = str(source or "").lower()
+        persist_before_cache = tf_norm == "1m" and source_norm == "ws"
         candle_content_changed = True
         replaces_synthetic = False
         if tf_norm == "1m":
@@ -2729,6 +2731,16 @@ class CandlestickManager:
                 synthetic
                 and any(int(ts) in synthetic for ts in incoming_unique["ts"])
             )
+        # WebSocket rows become canonical trading inputs only after the shard
+        # write succeeds. A failed write must not leave restart-sensitive
+        # candles or EMA state visible exclusively in RAM.
+        if persist_before_cache:
+            self._save_range_incremental(
+                symbol,
+                arr,
+                timeframe=tf_norm,
+                defer_index=defer_index,
+            )
         if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
             self._invalidate_ema_cache(symbol, timeframe="1m")
@@ -2755,9 +2767,15 @@ class CandlestickManager:
             # If so, mark that EMAs should be recomputed for this symbol
             self._check_synthetic_replacement(symbol, arr)
 
-        self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+        if not persist_before_cache:
+            self._save_range_incremental(
+                symbol,
+                arr,
+                timeframe=tf_norm,
+                defer_index=defer_index,
+            )
         if tf_norm == "1m":
-            if str(source or "").lower() == "ws":
+            if source_norm == "ws":
                 idx = self._ensure_symbol_index(symbol, tf="1m")
                 meta = idx.setdefault("meta", {})
                 meta["last_ws_final_ts"] = max(
@@ -5003,12 +5021,12 @@ class CandlestickManager:
 
         CCXT Pro may repeat its whole sliding OHLCV cache on each update. The
         first non-empty snapshot of each watcher session only primes provenance.
-        After that, a row is eligible only when it is newly observed, its
-        content changed, it crossed its interval boundary between observations,
-        or a fresh successor proves a trusted preceding bucket closed. The
-        current minute, malformed rows, silence, and reconnect gaps never
-        synthesize candles. An existing disk/index basis is required before WS
-        may extend history.
+        After that, a changed row may correct an already canonical timestamp.
+        A new canonical timestamp additionally requires an uninterrupted
+        interval-boundary crossing or a fresh successor proving a trusted
+        preceding bucket closed. The current minute, malformed rows, silence,
+        and reconnect gaps never synthesize candles. An existing disk/index
+        basis is required before WS may extend history.
         """
         now = int(self._now_ms() if now_ms is None else now_ms)
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
@@ -5083,7 +5101,7 @@ class CandlestickManager:
             self._live_ws_ohlcv_observations[symbol] = current
             return 0
 
-        proven_rows = []
+        candidate_rows = []
         for ts, row in rows_by_ts.items():
             if ts > latest_finalized:
                 continue
@@ -5092,29 +5110,41 @@ class CandlestickManager:
                 or ts in crossed_boundary
                 or ts in successor_proven_predecessors
             ):
-                proven_rows.append(tuple(row.tolist()))
-        if not proven_rows:
+                candidate_rows.append(tuple(row.tolist()))
+        if not candidate_rows:
             self._live_ws_ohlcv_observations[symbol] = current
             return 0
-        proven = np.array(proven_rows, dtype=CANDLE_DTYPE)
+        candidates = np.array(candidate_rows, dtype=CANDLE_DTYPE)
 
         async with self._acquire_fetch_lock(symbol, "1m"):
             disk = self._load_from_disk(
                 symbol,
-                int(proven[0]["ts"]),
-                int(proven[-1]["ts"]),
+                int(candidates[0]["ts"]),
+                int(candidates[-1]["ts"]),
                 timeframe="1m",
             )
             cached = self._slice_ts_range(
                 self._ensure_symbol_cache(symbol),
-                int(proven[0]["ts"]),
-                int(proven[-1]["ts"]),
+                int(candidates[0]["ts"]),
+                int(candidates[-1]["ts"]),
             )
             canonical = self._merge_overwrite(disk, cached)
             canonical_by_ts = {int(row["ts"]): row for row in canonical}
+            # Value changes alone can correct a timestamp already admitted by
+            # REST or WS. Extending canonical history requires independent
+            # post-boundary proof, so a pre-boundary update delayed in the
+            # consumer queue cannot become final merely because wall time
+            # advanced before it was processed.
+            eligible_rows = [
+                row
+                for row in candidates
+                if int(row["ts"]) in canonical_by_ts
+                or int(row["ts"]) in crossed_boundary
+                or int(row["ts"]) in successor_proven_predecessors
+            ]
             changed_rows = [
                 tuple(row.tolist())
-                for row in proven
+                for row in eligible_rows
                 if int(row["ts"]) not in canonical_by_ts
                 or not np.array_equal(canonical_by_ts[int(row["ts"])], row)
             ]
