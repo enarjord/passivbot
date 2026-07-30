@@ -715,6 +715,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "btc_collateral_cap",
             "btc_collateral_ltv_cap",
             "candle_interval_minutes",
+            "candle_interval_seconds",
             "coins",
             "dynamic_wel_by_tradability",
             "end_date",
@@ -731,6 +732,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "volume_normalization",
         },
     )
+    old_bt_compare.setdefault("candle_interval_seconds", None)
     new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
     if is_suite_result:
         # Suite result entries omit top-level backtest.coins because the

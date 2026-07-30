@@ -4233,6 +4233,19 @@ def test_resume_config_mismatches_rejects_changed_backend():
     assert any("optimize.backend" in mismatch for mismatch in mismatches)
 
 
+def test_resume_config_mismatches_rejects_adding_one_second_candles():
+    entry = _resume_validation_entry()
+    config = deepcopy(entry)
+    config["backtest"]["candle_interval_seconds"] = 1
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any(
+        "backtest.candle_interval_seconds: 'None' -> '1'" in mismatch
+        for mismatch in mismatches
+    )
+
+
 def test_resume_config_mismatches_rejects_adding_objective_scenario_to_old_result():
     entry = _resume_validation_entry()
     config = deepcopy(entry)

@@ -103,7 +103,24 @@ impl SingleOutcomeSimulator {
     ) -> Result<(), OutcomeError> {
         self.ensure_trading(timestamp_ms)?;
         self.expire_orders(timestamp_ms);
-        self.market.validate_order(&order)?;
+        self.market.validate()?;
+        if order.close_all {
+            let residual_qty = self.ledger.yes_qty() - self.ledger.no_qty();
+            let closes_full_residual = match order.outcome {
+                Outcome::Yes => {
+                    residual_qty > QTY_EPSILON && (order.qty - residual_qty).abs() <= QTY_EPSILON
+                }
+                Outcome::No => {
+                    residual_qty < -QTY_EPSILON && (order.qty + residual_qty).abs() <= QTY_EPSILON
+                }
+            };
+            if !closes_full_residual {
+                return Err(OutcomeError::InvalidQuantity(order.qty));
+            }
+            order.validate_close_all(&self.market)?;
+        } else {
+            self.market.validate_order(&order)?;
+        }
         if !order.post_only {
             return Err(OutcomeError::UnsupportedOrderFeature(
                 "non_post_only".to_string(),
@@ -181,13 +198,18 @@ impl SingleOutcomeSimulator {
         price_grid: OutcomePriceGrid,
         timestamp_ms: u64,
     ) -> Result<(), OutcomeError> {
-        self.ensure_trading(timestamp_ms)?;
+        self.ensure_market_open(timestamp_ms)?;
         price_grid.validate()?;
         self.market.price_grid = price_grid;
         self.market.validate()?;
         // A venue grid transition makes any incompatible resting price non-executable.
-        self.open_orders
-            .retain(|resting| self.market.validate_order(&resting.order).is_ok());
+        self.open_orders.retain(|resting| {
+            if resting.order.close_all {
+                resting.order.validate_close_all(&self.market).is_ok()
+            } else {
+                self.market.validate_order(&resting.order).is_ok()
+            }
+        });
         Ok(())
     }
 
@@ -399,6 +421,17 @@ impl SingleOutcomeSimulator {
         }
     }
 
+    fn ensure_market_open(&self, timestamp_ms: u64) -> Result<(), OutcomeError> {
+        if self.ledger.is_settled()
+            || timestamp_ms < self.market.trading_opens_ms
+            || timestamp_ms >= self.market.trading_closes_ms
+        {
+            Err(OutcomeError::MarketNotTrading(timestamp_ms))
+        } else {
+            Ok(())
+        }
+    }
+
     fn collateral_reservation(
         &self,
         order: &OutcomeLimitOrder,
@@ -476,6 +509,7 @@ mod tests {
             side,
             price,
             qty,
+            close_all: false,
             post_only: true,
             expires_at_ms: None,
         }
@@ -622,6 +656,65 @@ mod tests {
     }
 
     #[test]
+    fn close_all_sell_may_clear_aligned_residual_below_order_minimums() {
+        let mut outcome_market = market(false);
+        outcome_market.min_qty = 1.0;
+        outcome_market.min_notional = 1.0;
+        let mut simulator =
+            SingleOutcomeSimulator::new(outcome_market, OutcomeFeeSchedule::zero(), 10.0).unwrap();
+        simulator
+            .place_order(
+                order("buy-yes", Outcome::Yes, OutcomeOrderSide::Buy, 0.7, 2.0),
+                1_500,
+            )
+            .unwrap();
+        simulator
+            .place_order(
+                order("buy-no", Outcome::No, OutcomeOrderSide::Buy, 0.7, 1.5),
+                1_500,
+            )
+            .unwrap();
+        simulator
+            .process_candle(&candle(Outcome::Yes, 0.71, 0.69, 0.7, 1.0))
+            .unwrap();
+        simulator
+            .process_candle(&candle(Outcome::No, 0.71, 0.69, 0.7, 1.0))
+            .unwrap();
+        assert_close(
+            simulator.ledger().yes_qty() - simulator.ledger().no_qty(),
+            0.5,
+        );
+
+        let mut ordinary_dust = order(
+            "ordinary-dust",
+            Outcome::Yes,
+            OutcomeOrderSide::Sell,
+            0.6,
+            0.5,
+        );
+        assert_eq!(
+            simulator.place_order(ordinary_dust.clone(), 2_500),
+            Err(OutcomeError::InvalidQuantity(0.5))
+        );
+        ordinary_dust.order_id = "close-all".to_string();
+        ordinary_dust.close_all = true;
+        simulator.place_order(ordinary_dust, 2_500).unwrap();
+
+        let mut false_close = order(
+            "false-close",
+            Outcome::Yes,
+            OutcomeOrderSide::Sell,
+            0.6,
+            0.4,
+        );
+        false_close.close_all = true;
+        assert_eq!(
+            simulator.place_order(false_close, 2_500),
+            Err(OutcomeError::InvalidQuantity(0.4))
+        );
+    }
+
+    #[test]
     fn maker_fee_is_reserved_and_applied_on_fill() {
         let fees = OutcomeFeeSchedule {
             maker_rate: 0.01,
@@ -715,6 +808,7 @@ mod tests {
                     side: OutcomeOrderSide::Buy,
                     price: 0.4,
                     qty: 1.0,
+                    close_all: false,
                     post_only: true,
                     expires_at_ms: None,
                 },
@@ -729,6 +823,7 @@ mod tests {
                     side: OutcomeOrderSide::Buy,
                     price: 0.5,
                     qty: 1.0,
+                    close_all: false,
                     post_only: true,
                     expires_at_ms: None,
                 },

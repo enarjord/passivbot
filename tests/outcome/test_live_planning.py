@@ -255,6 +255,40 @@ def test_live_plan_sells_excess_yes_during_risk_reduction_window():
     assert intent.outcome is OutcomeSide.YES
     assert intent.side is OutcomeOrderSide.SELL
     assert intent.qty == 25.0
+    assert intent.close_all is True
+
+
+def test_live_plan_marks_below_minimum_residual_exit_as_close_all():
+    outcome_market = replace(
+        market(),
+        min_order_qty=5.0,
+        min_order_notional=10.0,
+    )
+    signal_candles = candles()
+    risk_timestamp_ms = outcome_market.lifecycle.scheduled_event_time_ms - 10_000
+    shifted = [
+        replace(
+            candle,
+            timestamp_ms=risk_timestamp_ms
+            - (len(signal_candles) - index) * 1_000,
+        )
+        for index, candle in enumerate(signal_candles)
+    ]
+    now_ms = shifted[-1].timestamp_ms + 1_000
+
+    plan = build_ema_anchor_outcome_live_plan(
+        outcome_market,
+        params(),
+        shifted,
+        account(now_ms, yes_qty=10.0, no_qty=9.0),
+        now_ms=now_ms,
+    )
+
+    assert len(plan.intents) == 1
+    intent = plan.intents[0]
+    assert intent.side is OutcomeOrderSide.SELL
+    assert intent.qty == 1.0
+    assert intent.close_all is True
 
 
 def test_live_plan_does_not_sell_inventory_reserved_by_unmanaged_orders():

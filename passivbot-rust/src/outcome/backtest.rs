@@ -734,6 +734,7 @@ fn limit_order_from_intent(
         side: intent.side,
         price: intent.native_price,
         qty: intent.qty,
+        close_all: intent.close_all,
         post_only: true,
         expires_at_ms: None,
     }
@@ -964,6 +965,7 @@ mod tests {
             side: OutcomeOrderSide::Buy,
             price,
             qty: 1.0,
+            close_all: false,
             post_only: true,
             expires_at_ms: None,
         }
@@ -1222,6 +1224,41 @@ mod tests {
             }],
             price_grid_changes: vec![OutcomePriceGridChange {
                 timestamp_ms: 1_500,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 1);
+    }
+
+    #[test]
+    fn price_grid_change_before_delayed_order_entry_is_replayed() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.01 };
+        market.order_entry_opens_ms = 3_000;
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 3_000,
+                order: order("yes", Outcome::Yes, 0.495),
+            }],
+            candles: vec![OutcomeCandle {
+                timestamp_ms: 4_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.494,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_000,
                 old_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
                 new_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
             }],

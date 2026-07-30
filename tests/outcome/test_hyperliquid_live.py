@@ -552,6 +552,79 @@ async def test_enabled_post_only_order_preflights_state_book_and_current_market(
 
 
 @pytest.mark.asyncio
+async def test_close_all_sell_may_clear_current_residual_below_order_minimums(monkeypatch):
+    payload, base_market = market_fixture()
+    market = replace(
+        base_market,
+        min_order_qty=5.0,
+        min_order_notional=10.0,
+    )
+
+    class ResidualSession(FakeSession):
+        async def publicPostInfo(self, request):
+            if request["type"] == "spotClearinghouseState":
+                self.public_requests.append(request)
+                return {
+                    "balances": [
+                        {
+                            "coin": "USDC",
+                            "entryNtl": "0",
+                            "hold": "0",
+                            "token": 0,
+                            "total": "100",
+                        },
+                        {
+                            "coin": "+9130",
+                            "entryNtl": "4.8",
+                            "hold": "0",
+                            "total": "12",
+                        },
+                        {
+                            "coin": "+9131",
+                            "entryNtl": "4.4",
+                            "hold": "0",
+                            "total": "11",
+                        },
+                    ],
+                    "tokenToAvailableAfterMaintenance": [[0, "100"]],
+                }
+            if request["type"] == "frontendOpenOrders":
+                self.public_requests.append(request)
+                return []
+            return await super().publicPostInfo(request)
+
+    session = ResidualSession(payload)
+    client = HyperliquidOutcomeLiveClient(
+        session,
+        account_address="0xaccount",
+        allow_mutations=True,
+    )
+    monkeypatch.setattr("outcome.hyperliquid_live.time.time", lambda: 1784900000.0)
+
+    result = await client.submit_limit_order(
+        market,
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.SELL,
+        native_price="0.6",
+        qty="1",
+        close_all=True,
+    )
+
+    assert result.kind == "resting"
+    assert session.private_requests[0]["action"]["orders"][0]["s"] == "1"
+
+    with pytest.raises(ValueError, match="entire current residual"):
+        await client.submit_limit_order(
+            market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.SELL,
+            native_price="0.6",
+            qty="2",
+            close_all=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_order_rechecks_create_deadline_after_public_preflight(monkeypatch):
     payload, market = market_fixture()
     session = FakeSession(payload)

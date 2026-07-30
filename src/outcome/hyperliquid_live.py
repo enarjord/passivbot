@@ -548,23 +548,28 @@ class HyperliquidOutcomeLiveClient:
         qty: float | str,
         client_order_id: str | None = None,
         post_only: bool = True,
+        close_all: bool = False,
         create_deadline_ms: int | None = None,
         wall_clock_ms: Callable[[], int] | None = None,
     ) -> HyperliquidOutcomeMutationResult:
         self._require_mutations_enabled()
         if not post_only:
             raise ValueError("initial HIP-4 live integration only permits post-only orders")
+        if close_all and side is not OutcomeOrderSide.SELL:
+            raise ValueError("HIP-4 close-all order must be a sell")
         if create_deadline_ms is not None and create_deadline_ms < 0:
             raise ValueError("HIP-4 create deadline must be non-negative")
-        action = hyperliquid.build_limit_order_action(
-            market,
-            outcome=outcome,
-            side=side,
-            native_price=native_price,
-            qty=qty,
-            client_order_id=client_order_id,
-            time_in_force="Alo",
-        )
+        action = None
+        if not close_all:
+            action = hyperliquid.build_limit_order_action(
+                market,
+                outcome=outcome,
+                side=side,
+                native_price=native_price,
+                qty=qty,
+                client_order_id=client_order_id,
+                time_in_force="Alo",
+            )
         await self.assert_market_current(market)
         snapshot, book = await asyncio.gather(
             self.fetch_account_snapshot((market,)),
@@ -593,8 +598,41 @@ class HyperliquidOutcomeLiveClient:
                     f"insufficient HIP-4 {outcome.value} inventory: "
                     f"required {quantity}, available {available}"
                 )
+            if close_all:
+                yes_qty = snapshot.balance(
+                    market.market_id, OutcomeSide.YES
+                ).total_qty
+                no_qty = snapshot.balance(
+                    market.market_id, OutcomeSide.NO
+                ).total_qty
+                residual = yes_qty - no_qty
+                closes_full_residual = (
+                    outcome is OutcomeSide.YES
+                    and residual > 1e-12
+                    and abs(quantity - residual) <= 1e-12
+                ) or (
+                    outcome is OutcomeSide.NO
+                    and residual < -1e-12
+                    and abs(quantity + residual) <= 1e-12
+                )
+                if not closes_full_residual:
+                    raise ValueError(
+                        "HIP-4 close-all sell must close the entire current residual"
+                    )
             if book.bids and price <= book.bids[0].native_price:
                 raise ValueError("post-only HIP-4 sell would cross the current bid")
+        if close_all:
+            action = hyperliquid.build_limit_order_action(
+                market,
+                outcome=outcome,
+                side=side,
+                native_price=native_price,
+                qty=qty,
+                client_order_id=client_order_id,
+                time_in_force="Alo",
+                allow_below_minimum=True,
+            )
+        assert action is not None
         if create_deadline_ms is not None:
             clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
             observed_at_ms = int(clock())

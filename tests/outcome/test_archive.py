@@ -416,6 +416,30 @@ def test_verified_price_grid_coverage_is_stored_separately_from_fill_coverage(tm
     ) == []
 
 
+def test_verified_price_grid_coverage_rolls_back_with_outer_write_transaction(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+
+    with pytest.raises(RuntimeError, match="abort coverage batch"):
+        with archive.write_transaction():
+            archive.record_verified_price_grid_coverage(
+                OutcomeVenue.POLYMARKET,
+                "condition-1",
+                VerifiedCoverage(1_000, 3_000),
+                collector_session="grid-1",
+            )
+            raise RuntimeError("abort coverage batch")
+
+    assert (
+        archive.load_verified_price_grid_coverage(
+            OutcomeVenue.POLYMARKET,
+            "condition-1",
+            start_ms=0,
+            end_ms=10_000,
+        )
+        == []
+    )
+
+
 def test_book_archive_keeps_raw_snapshots_without_using_them_as_trades(tmp_path):
     archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
     book = OutcomeBookSnapshot(

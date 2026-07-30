@@ -1190,7 +1190,7 @@ class OutcomeTradeArchive:
     ) -> None:
         if not collector_session:
             raise ValueError("collector_session must not be empty")
-        with self._connect() as connection:
+        with self._write_connection() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_price_grid_coverage (

@@ -384,12 +384,31 @@ pub struct OutcomeLimitOrder {
     pub side: OutcomeOrderSide,
     pub price: f64,
     pub qty: f64,
+    #[serde(default)]
+    pub close_all: bool,
     pub post_only: bool,
     pub expires_at_ms: Option<u64>,
 }
 
 impl OutcomeLimitOrder {
     pub fn validate(&self, market: &BinaryOutcomeMarketSpec) -> Result<(), OutcomeError> {
+        self.validate_with_minimums(market, true)
+    }
+
+    pub fn validate_close_all(&self, market: &BinaryOutcomeMarketSpec) -> Result<(), OutcomeError> {
+        if self.side != OutcomeOrderSide::Sell || !self.close_all {
+            return Err(OutcomeError::InvalidMarket(
+                "close-all outcome orders must be marked sell orders".to_string(),
+            ));
+        }
+        self.validate_with_minimums(market, false)
+    }
+
+    fn validate_with_minimums(
+        &self,
+        market: &BinaryOutcomeMarketSpec,
+        enforce_minimums: bool,
+    ) -> Result<(), OutcomeError> {
         if self.order_id.trim().is_empty() {
             return Err(OutcomeError::InvalidMarket(
                 "outcome order_id is required".to_string(),
@@ -403,12 +422,13 @@ impl OutcomeLimitOrder {
             return Err(OutcomeError::InvalidPrice(self.price));
         }
         if !self.qty.is_finite()
-            || self.qty < market.min_qty
+            || self.qty <= 0.0
+            || (enforce_minimums && self.qty < market.min_qty)
             || !is_step_aligned(self.qty, market.qty_step)
         {
             return Err(OutcomeError::InvalidQuantity(self.qty));
         }
-        if self.qty * self.price + EPSILON < market.min_notional {
+        if enforce_minimums && self.qty * self.price + EPSILON < market.min_notional {
             return Err(OutcomeError::InvalidQuantity(self.qty));
         }
         if let Some(expires_at_ms) = self.expires_at_ms {

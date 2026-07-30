@@ -43,10 +43,13 @@ class OutcomeLiveOrderIntent:
     native_price: float
     canonical_yes_price: float
     qty: float
+    close_all: bool = False
 
     def __post_init__(self) -> None:
         if self.slot not in {"canonical_bid", "canonical_ask"}:
             raise ValueError(f"unsupported live outcome intent slot {self.slot!r}")
+        if not isinstance(self.close_all, bool):
+            raise ValueError("live outcome intent close_all must be boolean")
         for name in ("native_price", "canonical_yes_price"):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
@@ -228,6 +231,7 @@ def build_ema_anchor_outcome_live_plan(
                 native_price=native_price,
                 canonical_yes_price=canonical_yes_price,
                 qty=float(raw_intent["qty"]),
+                close_all=bool(raw_intent.get("close_all", False)),
             )
         )
     return OutcomeLivePlan(

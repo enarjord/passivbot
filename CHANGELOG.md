@@ -124,6 +124,11 @@ All notable user-facing changes will be documented in this file.
   abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
   archived fee selection uses opening metadata and rejects unsupported later transitions, and the
   HIP-4 evaluator requires an explicit minimum-notional assumption alongside quantity constraints.
+  Verified grid coverage now participates in outer archive transactions, grid changes between
+  trading open and delayed order acceptance replay successfully, pre-close risk reduction may sell
+  an explicitly verified full residual below entry minimums, and settled cycles cancel managed
+  quotes before surfacing archive failures. Optimizer resume validation now rejects incompatible
+  one-second candle settings, including adding the setting to an older result.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

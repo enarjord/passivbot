@@ -628,6 +628,7 @@ def _validate_native_order_values(
     *,
     native_price: Any,
     qty: Any,
+    allow_below_minimum: bool = False,
 ) -> tuple[str, str]:
     price_text = _decimal_text(native_price, "native_price")
     qty_text = _decimal_text(qty, "qty")
@@ -643,11 +644,14 @@ def _validate_native_order_values(
         raise ValueError("HIP-4 order quantity is not step-aligned")
     if market.min_order_qty is None:
         raise ValueError("HIP-4 minimum order quantity is unavailable")
-    if quantity < Decimal(str(market.min_order_qty)):
+    if not allow_below_minimum and quantity < Decimal(str(market.min_order_qty)):
         raise ValueError("HIP-4 order quantity is below the minimum")
     if market.min_order_notional is None:
         raise ValueError("HIP-4 minimum order notional is unavailable")
-    if price * quantity < Decimal(str(market.min_order_notional)):
+    if (
+        not allow_below_minimum
+        and price * quantity < Decimal(str(market.min_order_notional))
+    ):
         raise ValueError("HIP-4 order notional is below the minimum")
 
     grid = market.price_grid
@@ -679,6 +683,7 @@ def build_limit_order_action(
     qty: Any,
     client_order_id: str | None = None,
     time_in_force: str = "Alo",
+    allow_below_minimum: bool = False,
 ) -> dict[str, Any]:
     if market.venue is not OutcomeVenue.HYPERLIQUID:
         raise ValueError("HIP-4 order action requires a Hyperliquid market")
@@ -688,6 +693,7 @@ def build_limit_order_action(
         market,
         native_price=native_price,
         qty=qty,
+        allow_below_minimum=allow_below_minimum,
     )
     asset = market.yes_asset if outcome is OutcomeSide.YES else market.no_asset
     order = {

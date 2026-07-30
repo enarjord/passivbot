@@ -182,6 +182,8 @@ pub struct OutcomeNativeOrderIntent {
     pub native_price: f64,
     pub canonical_yes_price: f64,
     pub qty: f64,
+    #[serde(default)]
+    pub close_all: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -330,6 +332,7 @@ impl OutcomeEmaAnchorState {
                             .min(residual)
                             .min(inventory.available_yes_qty()),
                         market,
+                        Some(residual),
                     ),
                 )
             } else if residual < -EPSILON {
@@ -346,6 +349,7 @@ impl OutcomeEmaAnchorState {
                             .min(-residual)
                             .min(inventory.available_no_qty()),
                         market,
+                        Some(-residual),
                     ),
                     None,
                 )
@@ -426,6 +430,7 @@ impl OutcomeEmaAnchorState {
                         market.payout_unit - bid_price,
                         params.clip_qty.min(inventory.available_no_qty()),
                         market,
+                        None,
                     )
                     .is_none(),
                     sell_intent(
@@ -433,6 +438,7 @@ impl OutcomeEmaAnchorState {
                         ask_price,
                         params.clip_qty.min(inventory.available_yes_qty()),
                         market,
+                        None,
                     )
                     .is_none(),
                 ),
@@ -569,6 +575,7 @@ impl OutcomeEmaAnchorState {
                     native_price,
                     params.clip_qty.min(inventory.available_no_qty()),
                     market,
+                    None,
                 )
                 .or_else(|| buy_intent(Outcome::Yes, canonical_price, buy_qty, market))
             }
@@ -597,6 +604,7 @@ impl OutcomeEmaAnchorState {
                     canonical_price,
                     params.clip_qty.min(inventory.available_yes_qty()),
                     market,
+                    None,
                 );
                 if sell.is_some() {
                     sell
@@ -722,6 +730,7 @@ fn buy_intent(
         native_price,
         canonical_yes_price,
         qty,
+        close_all: false,
     })
 }
 
@@ -730,10 +739,13 @@ fn sell_intent(
     native_price: f64,
     qty: f64,
     market: &BinaryOutcomeMarketSpec,
+    close_all_qty: Option<f64>,
 ) -> Option<OutcomeNativeOrderIntent> {
     let qty = round_down(qty, market.qty_step);
-    if qty < market.min_qty
-        || qty * native_price + EPSILON < market.min_notional
+    let close_all =
+        close_all_qty.is_some_and(|remaining| qty > EPSILON && (qty - remaining).abs() <= EPSILON);
+    if (!close_all && (qty < market.min_qty || qty * native_price + EPSILON < market.min_notional))
+        || qty <= EPSILON
         || native_price < market.min_price
         || native_price > market.max_price
         || !market.price_grid.is_valid(native_price)
@@ -750,6 +762,7 @@ fn sell_intent(
         native_price,
         canonical_yes_price,
         qty,
+        close_all,
     })
 }
 
@@ -770,7 +783,13 @@ fn cap_intent_to_residual_bounds(
     let qty = intent.qty.min(residual_headroom);
     match intent.side {
         OutcomeOrderSide::Buy => buy_intent(intent.outcome, intent.native_price, qty, market),
-        OutcomeOrderSide::Sell => sell_intent(intent.outcome, intent.native_price, qty, market),
+        OutcomeOrderSide::Sell => sell_intent(
+            intent.outcome,
+            intent.native_price,
+            qty,
+            market,
+            intent.close_all.then_some(intent.qty),
+        ),
     }
 }
 
@@ -1248,6 +1267,51 @@ mod tests {
         );
         assert!((exit.native_price - 0.5).abs() < 1e-12);
         assert!(exit.canonical_exposure_delta() < 0.0);
+        assert!(exit.close_all);
+    }
+
+    #[test]
+    fn risk_reduction_window_closes_aligned_residual_below_order_minimums() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let parameters = params(OutcomeEmaAnchorExecutionMode::AccumulatePairs);
+        let mut outcome_market = market();
+        outcome_market.min_qty = 5.0;
+        outcome_market.min_notional = 10.0;
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: 10.0,
+            no_qty: 9.0,
+            yes_available_qty: None,
+            no_available_qty: None,
+            yes_average_cost: 0.4,
+            no_average_cost: 0.4,
+            free_collateral: 100.0,
+        };
+
+        let quotes = state
+            .quote(91_000, 0.5, &outcome_market, &parameters, &inventory)
+            .unwrap();
+
+        let exit = quotes.canonical_ask.unwrap();
+        assert_eq!(exit.qty, 1.0);
+        assert!(exit.close_all);
+
+        let unaligned_inventory = OutcomeInventorySnapshot {
+            yes_qty: 10.05,
+            ..inventory
+        };
+        let unaligned_quotes = state
+            .quote(
+                91_000,
+                0.5,
+                &outcome_market,
+                &parameters,
+                &unaligned_inventory,
+            )
+            .unwrap();
+        assert!(unaligned_quotes.canonical_ask.is_none());
     }
 
     #[test]
@@ -1278,6 +1342,7 @@ mod tests {
         );
         assert!((exit.native_price - 0.5).abs() < 1e-12);
         assert!(exit.canonical_exposure_delta() > 0.0);
+        assert!(exit.close_all);
     }
 
     #[test]

@@ -447,6 +447,7 @@ async def execute_hip4_order_reconciliation(
                     qty=intent.qty,
                     client_order_id=creation.client_order_id,
                     post_only=True,
+                    close_all=intent.close_all,
                     create_deadline_ms=create_deadline_ms,
                     wall_clock_ms=clock,
                 )

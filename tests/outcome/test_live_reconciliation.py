@@ -224,6 +224,7 @@ class FakeClient:
         qty,
         client_order_id,
         post_only,
+        close_all=False,
         create_deadline_ms=None,
         wall_clock_ms=None,
     ):

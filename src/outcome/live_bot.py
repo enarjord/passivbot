@@ -102,14 +102,9 @@ async def run_hip4_outcome_cycle(
     )
     clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
     planned_at_ms = int(clock()) if now_ms is None else int(now_ms)
-    _persist_lifecycle_settlement(
-        lifecycle,
-        archive=archive,
-        collector_session=collector_session,
-    )
     lifecycle_reason = _planning_reason_for_lifecycle(lifecycle)
     if lifecycle_reason is not None:
-        return await _finish_unavailable_cycle(
+        cycle = await _finish_unavailable_cycle(
             client,
             market,
             account,
@@ -118,6 +113,17 @@ async def run_hip4_outcome_cycle(
             execute=execute,
             planned_at_ms=planned_at_ms,
         )
+        _persist_lifecycle_settlement(
+            lifecycle,
+            archive=archive,
+            collector_session=collector_session,
+        )
+        return cycle
+    _persist_lifecycle_settlement(
+        lifecycle,
+        archive=archive,
+        collector_session=collector_session,
+    )
     try:
         plan = build_ema_anchor_outcome_live_plan(
             market,

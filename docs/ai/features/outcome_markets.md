@@ -202,13 +202,18 @@ native book from falsely filling an order resting only in the other.
 Because the initial execution candles aggregate a full second, a price-grid change strictly inside
 the same second as an execution candle cannot be ordered safely against those fills. Such a replay
 is unavailable until a finer-grained execution model exists; a boundary-aligned change applies
-before that second's fills.
+before that second's fills. Price-grid history begins at trading open and may therefore change
+before the venue starts accepting orders; replay applies those changes while keeping order
+placement gated by the separate order-entry-open timestamp.
 
 This initial execution model is passive-only. It accepts post-only orders and rejects non-post-only
 orders until an explicit taker model defines immediate execution, liquidity role, fees, and
 slippage. A GTD expiry must be later than the order's placement timestamp and no later than the
 market's trading close; an already-expired order is rejected rather than rested until a later
-bucket.
+bucket. Entries and partial exits must satisfy quantity and notional minimums. A step-aligned sell
+that is explicitly marked to close the entire current directional residual may fall below those
+minimums; the simulator and live preflight independently verify the close-all claim against
+authoritative inventory before accepting the exception.
 
 Some venues use a merged complementary book and report one economic trade as mirrored YES and NO
 fill records. Adapters retain both native records for audit and execution reconciliation, attach a
@@ -357,7 +362,9 @@ most recent fills. Persist every observed settlement record before it can age ou
 current account state nor retained evidence proves a payout, remain
 `expired_awaiting_settlement`; never infer the winner from market disappearance or price.
 A bounded settlement-history lookup failure is recorded on that unresolved lifecycle and does not
-block protective cancellation of exact managed orders.
+block protective cancellation of exact managed orders. For any lifecycle state that disables
+planning, an executing cycle completes and verifies protective managed-order cancellation before
+surfacing a settlement-archive write failure.
 
 ## Outcome EMA Anchor
 
