@@ -192,6 +192,7 @@ from optimization.config_adapter import (
 )
 from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
 from optimization.warmup import (
+    build_optimizer_data_config,
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
@@ -3159,6 +3160,7 @@ async def main():
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
+    data_config = build_optimizer_data_config(config)
     interrupted = False
     failed = False
     pool = None
@@ -3177,7 +3179,7 @@ async def main():
 
         if suite_enabled:
             scenario_contexts, aggregate_cfg = await prepare_suite_contexts(
-                config,
+                data_config,
                 suite_cfg,
                 shared_array_manager=array_manager,
             )
@@ -3252,7 +3254,7 @@ async def main():
                 exchange = "combined"
                 coins, mss = _register_exchange_data(
                     exchange,
-                    await prepare_hlcvs_mss(config, exchange),
+                    await prepare_hlcvs_mss(data_config, exchange),
                     config,
                     msss=msss,
                     hlcvs_specs=hlcvs_specs,
@@ -3267,7 +3269,7 @@ async def main():
                     logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
             else:
                 tasks = {
-                    exchange: asyncio.create_task(prepare_hlcvs_mss(config, exchange))
+                    exchange: asyncio.create_task(prepare_hlcvs_mss(data_config, exchange))
                     for exchange in backtest_exchanges
                 }
                 for exchange, task in tasks.items():

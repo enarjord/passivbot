@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from backtest_universe import effective_backtest_approved_coins_by_side
 from config.access import get_optional_config_value
+from config.shared_bot import get_grouped_bot_value
 from hlcvs_manifest import manifest_has_required_schema
 
 HLCVS_CACHE_DIR_SEP = "__"
@@ -25,6 +27,25 @@ def _extract_cache_hash_from_dir(cache_dir: Path | None) -> str | None:
     return name.rsplit(HLCVS_CACHE_DIR_SEP, 1)[-1] or name
 
 
+def _runtime_side_membership(config: dict, coins: list[str]) -> dict[str, list[str]] | None:
+    bot = config.get("bot")
+    approved = config.get("live", {}).get("approved_coins")
+    if not isinstance(bot, dict) or not isinstance(approved, dict):
+        return None
+    for pside in ("long", "short"):
+        side = bot.get(pside)
+        if not isinstance(side, dict):
+            return None
+        for field in ("n_positions", "total_wallet_exposure_limit"):
+            if get_grouped_bot_value(side, field, default=None, prefer_flat=True) is None:
+                return None
+    coin_set = set(coins)
+    return {
+        pside: sorted(coin for coin in side_coins if coin in coin_set)
+        for pside, side_coins in effective_backtest_approved_coins_by_side(config).items()
+    }
+
+
 def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     cache_dir_raw = get_optional_config_value(config, f"backtest.cache_dir.{exchange}")
     cache_dir = Path(cache_dir_raw).resolve() if cache_dir_raw else None
@@ -41,7 +62,7 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     manifest_schema_version = None
     materialization_schema_version = None
     content_hashes = {}
-    side_membership = None
+    cache_build_side_membership = None
     manifest_missing = None
     coins_order = list(coins_from_config)
 
@@ -77,7 +98,9 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
                     }
                 effective = manifest.get("effective", {})
                 if isinstance(effective, dict):
-                    side_membership = effective.get("side_membership")
+                    cache_build_side_membership = effective.get("build_side_membership")
+                    if not isinstance(cache_build_side_membership, dict):
+                        cache_build_side_membership = effective.get("side_membership")
         if coins_file:
             with open(coins_file) as f:
                 loaded_coins = json.load(f)
@@ -86,6 +109,7 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
             ):
                 raise TypeError(f"cache coins file must contain a list[str], got {type(loaded_coins)}")
             coins_order = loaded_coins
+    runtime_side_membership = _runtime_side_membership(config, coins_order)
 
     return {
         "exchange": exchange,
@@ -110,7 +134,12 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         "manifest_schema_version": manifest_schema_version,
         "materialization_schema_version": materialization_schema_version,
         "content_hashes": content_hashes,
-        "side_membership": side_membership,
+        "side_membership": (
+            runtime_side_membership
+            if runtime_side_membership is not None
+            else cache_build_side_membership
+        ),
+        "cache_build_side_membership": cache_build_side_membership,
         "coins": coins_order,
         "coin_index": {coin: idx for idx, coin in enumerate(coins_order)},
         "requested_start_date": get_optional_config_value(config, "backtest.start_date"),

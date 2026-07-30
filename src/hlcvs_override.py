@@ -110,7 +110,9 @@ def _side_membership_for_override(config: dict, dataset_coins: list[str], manife
     if manifest_has_required_schema(manifest):
         effective = manifest.get("effective", {})
         if isinstance(effective, dict):
-            manifest_sides = effective.get("side_membership")
+            manifest_sides = effective.get("build_side_membership")
+            if not isinstance(manifest_sides, dict):
+                manifest_sides = effective.get("side_membership")
     if isinstance(manifest_sides, dict):
         return {
             pside: sorted([normalize_backtest_coin(coin) for coin in manifest_sides.get(pside, [])])

@@ -93,6 +93,14 @@ Prepared final caches under `caches/hlcvs_data/` require a valid manifest. Old
 manifest-less final caches are rebuilt. Explicit `backtest.hlcvs_data_dir` override
 datasets also require valid manifests and checksums.
 
+Final cache identity follows the direction-agnostic data payload: the sorted union
+of enabled long and short coins, date window, exchanges, source assignments,
+minimum coin age, and gap tolerance. Long-only, short-only, and both-side runs
+therefore reuse the same prepared cache when their effective coin union and other
+data inputs match. Side membership remains run-specific; manifests retain the
+build request for provenance and explicit dataset replay. Warmup is checked
+separately, so a cache with greater warmup coverage may satisfy a smaller request.
+
 ### Override final HLCV datasets
 
 Use `backtest.hlcvs_data_dir` or `--hlcvs-data-dir` to replay a specific prepared

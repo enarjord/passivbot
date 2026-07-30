@@ -80,6 +80,10 @@ def test_build_hlcvs_manifest_hashes_logical_arrays_and_side_membership(tmp_path
         "long": ["BTC", "ETH"],
         "short": ["BTC"],
     }
+    assert manifest["effective"]["build_side_membership"] == {
+        "long": ["BTC", "ETH"],
+        "short": ["BTC"],
+    }
     assert verify_hlcvs_manifest(cache_dir)["config_hash"] == "abc123"
 
     changed_btc = btc_usd_prices.copy()
