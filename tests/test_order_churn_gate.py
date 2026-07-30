@@ -227,7 +227,12 @@ def test_raw_rust_order_batch_with_unknown_symbol_is_fatal_as_a_whole():
     ]
 
     with pytest.raises(FatalBotException, match="unknown symbol_idx 999"):
-        reconciler.validate_rust_orchestrator_order_symbols(orders, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output({"orders": orders}, {0: SYMBOL})
+
+
+def test_raw_rust_output_requires_orders_field():
+    with pytest.raises(FatalBotException, match="missing required orders field"):
+        reconciler.validate_rust_orchestrator_output({}, {0: SYMBOL})
 
 
 @pytest.mark.asyncio

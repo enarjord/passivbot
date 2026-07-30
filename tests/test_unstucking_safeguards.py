@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import numpy as np
+from passivbot_exceptions import FatalBotException
 from utils import utc_ms
 
 
@@ -3053,6 +3054,59 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
     await bot.calc_ideal_orders_orchestrator()
 
     assert captured["input"]["symbols"][0]["tradable"] is False
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_invalid_output_emits_correlated_failed_return(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
+
+    bot.markets_dict = {symbol: _active_market()}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": _trailing_default(),
+            "short": _trailing_default(),
+        }
+    }
+
+    async def fake_load_bundle(self, symbols, modes):
+        self._orchestrator_ema_unavailable_symbols = set()
+        self._orchestrator_trailing_unavailable_symbols = set()
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
+        m1_volume = {symbol: {10.0: 1_000.0}}
+        m1_log_range = {symbol: {10.0: 0.01}}
+        h1_log_range = {symbol: {10.0: 0.01}}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    events = []
+    bot._emit_rust_orchestrator_called_event = lambda **kwargs: events.append(
+        ("called", kwargs)
+    )
+    bot._emit_rust_orchestrator_returned_event = lambda **kwargs: events.append(
+        ("returned", kwargs)
+    )
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
+    monkeypatch.setattr(
+        pbr,
+        "compute_ideal_orders_json",
+        lambda _input_json: '{"diagnostics": {}}',
+    )
+    _stamp_staged_account_and_candles(bot)
+
+    with pytest.raises(FatalBotException, match="missing required orders field"):
+        await bot.calc_ideal_orders_orchestrator()
+
+    assert [event_type for event_type, _kwargs in events] == ["called", "returned"]
+    called = events[0][1]
+    returned = events[1][1]
+    assert returned["rust_call_id"] == called["rust_call_id"]
+    assert returned["status"] == "failed"
+    assert isinstance(returned["error"], FatalBotException)
 
 
 def _stamp_staged_account_and_candles(bot):

@@ -16037,8 +16037,7 @@ class Passivbot:
             )
 
         out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
-        orders = out.get("orders", [])
-        reconciler.validate_rust_orchestrator_order_symbols(orders, idx_to_symbol)
+        orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
         ideal_orders: dict[str, list] = {}
         for order in orders:
             symbol = idx_to_symbol[int(order["symbol_idx"])]
@@ -16779,8 +16778,7 @@ class Passivbot:
                         )
             raise
         out = json.loads(out_json)
-        orders = out.get("orders", [])
-        reconciler.validate_rust_orchestrator_order_symbols(orders, idx_to_symbol)
+        orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -19240,6 +19238,14 @@ class Passivbot:
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
+            out = json.loads(out_json)
+            orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
+            diagnostics = out.get("diagnostics", {})
+            self._order_churn_risk_active_pairs = (
+                reconciler.order_churn_risk_active_pairs_from_rust_output(
+                    out, idx_to_symbol
+                )
+            )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
@@ -19262,17 +19268,8 @@ class Passivbot:
                 error=e,
             )
             raise
-        out = json.loads(out_json)
         elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
         output_hash = payload_hash_raw(out_json)
-        orders = out.get("orders", [])
-        reconciler.validate_rust_orchestrator_order_symbols(orders, idx_to_symbol)
-        diagnostics = out.get("diagnostics", {})
-        self._order_churn_risk_active_pairs = (
-            reconciler.order_churn_risk_active_pairs_from_rust_output(
-                out, idx_to_symbol
-            )
-        )
         self._emit_rust_orchestrator_returned_event(
             rust_call_id=rust_call_id,
             status="succeeded",

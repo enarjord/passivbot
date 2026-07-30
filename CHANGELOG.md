@@ -19,9 +19,10 @@ All notable user-facing changes will be documented in this file.
   the current run's side membership separately from cache-build provenance, and
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
-- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if any
-  emitted order references a symbol index absent from the request. The bot no longer converts a
-  usable subset which could cancel existing orders from the omitted symbol's prior intent.
+- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if the
+  required order batch is absent, malformed, or contains a symbol index absent from the request.
+  The bot no longer converts a fabricated empty batch or usable subset which could cancel existing
+  orders, and normal live calls emit a correlated failed-return event before propagating the error.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

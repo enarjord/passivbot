@@ -990,10 +990,15 @@ def validate_rust_ideal_orders(ideal_orders: object) -> None:
             ) from exc
 
 
-def validate_rust_orchestrator_order_symbols(
-    orders: object, idx_to_symbol: dict[int, str]
-) -> None:
-    """Reject a raw Rust order batch containing unmappable symbol identities."""
+def validate_rust_orchestrator_output(
+    out: object, idx_to_symbol: dict[int, str]
+) -> list[dict]:
+    """Validate the required Rust output envelope before any result is consumed."""
+    if not isinstance(out, dict):
+        raise FatalBotException("Rust orchestrator output must be a mapping")
+    if "orders" not in out:
+        raise FatalBotException("Rust orchestrator output missing required orders field")
+    orders = out["orders"]
     if not isinstance(orders, list):
         raise FatalBotException("Rust orchestrator orders must be a list")
     for order_idx, order in enumerate(orders):
@@ -1010,6 +1015,7 @@ def validate_rust_orchestrator_order_symbols(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has unknown symbol_idx {symbol_idx}"
             )
+    return orders
 
 
 def order_churn_risk_active_pairs_from_rust_output(

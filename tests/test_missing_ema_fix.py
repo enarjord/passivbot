@@ -244,6 +244,59 @@ async def test_snapshot_orchestrator_rejects_unknown_rust_symbol_before_conversi
         await method(FakeBot(), snapshot, return_snapshot=False)
 
 
+@pytest.mark.asyncio
+async def test_snapshot_orchestrator_rejects_missing_orders_field(monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    class FakeBot:
+        positions = {}
+        balance = 1000.0
+        PB_modes = {}
+        effective_min_cost = {}
+        _config_hedge_mode = False
+        hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            return False
+
+        def get_raw_balance(self):
+            return float(self.balance)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+    snapshot = {
+        "symbols": [],
+        "last_prices": {},
+        "m1_close_emas": {},
+        "m1_volume_emas": {},
+        "m1_log_range_emas": {},
+        "h1_log_range_emas": {},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    monkeypatch.setattr(
+        pb_mod.pbr,
+        "compute_ideal_orders_json",
+        lambda _json_str: json.dumps({"diagnostics": {}}),
+    )
+
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    with pytest.raises(FatalBotException, match="missing required orders field"):
+        await method(FakeBot(), snapshot, return_snapshot=False)
+
+
 def _rust_bot_params(**overrides):
     params = {
         "close_grid_qty_pct": 1.0,
