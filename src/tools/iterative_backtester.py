@@ -562,6 +562,12 @@ class IterativeBacktestSession:
         configure_logging(debug=level)
         config.setdefault("logging", {})
         config["logging"]["level"] = level
+        objective_specs = extract_objective_specs(config)
+        build_limit_checks(
+            config.get("optimize", {}).get("limits", []),
+            self.scoring_weights,
+            objective_index_map(objective_specs),
+        )
         # Ensure exchanges have markets loaded and live coin lists expanded
         for ex in require_config_value(config, "backtest.exchanges"):
             await load_markets(ex, verbose=False)

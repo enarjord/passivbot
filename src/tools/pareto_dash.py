@@ -355,8 +355,45 @@ def _parse_limit_term(term: str):
             value = float(match.group("val"))
         except ValueError:
             return None
-        return match.group("key"), op, value
+        key = match.group("key").strip()
+        if key.startswith('"') and key.endswith('"'):
+            try:
+                decoded = json.loads(key)
+            except (TypeError, ValueError):
+                return None
+            if not isinstance(decoded, str):
+                return None
+            key = decoded
+        return key, op, value
     return None
+
+
+def _split_limit_terms(line: str) -> List[str]:
+    terms: List[str] = []
+    start = 0
+    in_quotes = False
+    escaped = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if in_quotes and escaped:
+            escaped = False
+        elif in_quotes and char == "\\":
+            escaped = True
+        elif char == '"':
+            in_quotes = not in_quotes
+        elif not in_quotes and line.startswith("||", index):
+            terms.append(line[start:index])
+            index += 2
+            start = index
+            continue
+        index += 1
+    terms.append(line[start:])
+    return terms
+
+
+def _encode_limit_key(key: str) -> str:
+    return json.dumps(key) if "||" in key or "\n" in key or "\r" in key else key
 
 
 def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
@@ -366,7 +403,7 @@ def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
     for line in exprs:
         if not line:
             continue
-        for term in str(line).split("||"):
+        for term in _split_limit_terms(str(line)):
             parsed = _parse_limit_term(term.strip())
             if parsed is None:
                 continue
@@ -384,7 +421,7 @@ def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
         line = line.strip()
         if not line:
             continue
-        raw_terms = [term.strip() for term in line.split("||") if term.strip()]
+        raw_terms = [term.strip() for term in _split_limit_terms(line) if term.strip()]
         parsed_terms = [_parse_limit_term(term) for term in raw_terms]
         if (
             not raw_terms
@@ -457,6 +494,7 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
             metric = f"{scenario}__{metric}"
         elif entry.get("stat") is not None:
             metric = f"{metric}_{entry['stat']}"
+        metric = _encode_limit_key(str(metric))
         if mode == "greater_than":
             num = _ensure_float(entry.get("value"))
             if num is not None:

@@ -148,6 +148,25 @@ def test_scenario_limit_expression_supports_punctuation_in_label():
     assert mask.tolist() == [True, False]
 
 
+def test_scenario_limit_expression_quotes_or_separator_in_label():
+    expressions = pareto_dash._limits_to_exprs(
+        [
+            {
+                "metric": "adg",
+                "penalize_if": "greater_than",
+                "scenario": "stress||base",
+                "value": 0.08,
+            }
+        ]
+    )
+    dataframe = pd.DataFrame({"stress||base__adg_usd": [0.07, 0.09]})
+
+    mask = pareto_dash._apply_limits(dataframe, "\n".join(expressions))
+
+    assert expressions == ['"stress||base__adg_usd"<=0.08']
+    assert mask.tolist() == [True, False]
+
+
 def test_scenario_inside_range_limit_expression_preserves_outside_values():
     expressions = pareto_dash._limits_to_exprs(
         [
