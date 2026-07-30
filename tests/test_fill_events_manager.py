@@ -4384,11 +4384,23 @@ async def test_hyperliquid_refresh_latest_counts_timestamp_cohorts_for_overlap(
     anchor = _event("anchor", base_timestamp)
     burst = [_event(f"burst-{index}", burst_timestamp) for index in range(25)]
     late_fill = _event("late-fill", base_timestamp)
-    fetcher = _SequencedFetcher(
-        [
-            [anchor, *burst],
-            [anchor, late_fill, *burst],
-        ]
+    class _SinceFilteringSequencedFetcher(_SequencedFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [
+                dict(event)
+                for event in (self.batches.pop(0) if self.batches else [])
+                if since_ms is None or int(event["timestamp"]) >= since_ms
+            ]
+            self.pnl_observations = (
+                self.observations.pop(0) if self.observations else []
+            )
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _SinceFilteringSequencedFetcher(
+        [[anchor, *burst], [anchor, late_fill, *burst]]
     )
     manager = FillEventsManager(
         exchange="hyperliquid",
@@ -4399,10 +4411,13 @@ async def test_hyperliquid_refresh_latest_counts_timestamp_cohorts_for_overlap(
 
     await manager.refresh()
     metadata = manager.cache.load_metadata()
-    metadata["last_refresh_ms"] = burst_timestamp + 1_000
+    metadata["last_refresh_ms"] = base_timestamp + 30 * 60_000
     manager.cache.save_metadata(metadata)
 
-    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=10_000)
+    await manager.refresh_latest(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60_000,
+    )
 
     assert fetcher.calls[1][0] == base_timestamp
     assert "late-fill" in {event.id for event in manager.get_events()}

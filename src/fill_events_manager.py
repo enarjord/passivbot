@@ -5194,9 +5194,10 @@ class FillEventsManager:
         if not self._events:
             logger.debug("[fills] refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
+        is_hyperliquid = self.exchange.lower() == "hyperliquid"
         if self._events:
             overlap = max(1, int(overlap))
-            if self.exchange.lower() == "hyperliquid":
+            if is_hyperliquid:
                 # Hyperliquid may emit many executions in one millisecond. Count
                 # timestamp cohorts so retaining raw component boundaries does
                 # not shrink the effective recent-fill overlap.
@@ -5218,7 +5219,15 @@ class FillEventsManager:
             last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
-                start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
+                if start_ms is None:
+                    start_ms = metadata_start_ms
+                elif is_hyperliquid:
+                    # Preserve both overlap guarantees. Clamping the cohort
+                    # anchor forward can permanently strand a late-arriving
+                    # execution from an older same-millisecond cohort.
+                    start_ms = min(start_ms, metadata_start_ms)
+                else:
+                    start_ms = max(start_ms, metadata_start_ms)
         pending_pnl_events = self.pending_pnl_events(self._events)
         synthetic_pnl_events = self.synthetic_pnl_events(self._events)
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
