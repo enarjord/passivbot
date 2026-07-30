@@ -5,6 +5,7 @@ import pytest
 import passivbot_rust as pbr
 from passivbot import Passivbot
 from exchanges.ccxt_bot import CCXTBot
+from passivbot_exceptions import FatalBotException
 from runtime_identity import RuntimeIdentity
 
 
@@ -828,6 +829,65 @@ async def test_red_supervisor_uses_protective_refresh_and_order_plan():
 
 
 @pytest.mark.asyncio
+async def test_red_supervisor_propagates_fatal_protective_plan_failure():
+    class FakeBot:
+        _equity_hard_stop_supervisor_running = False
+        stop_signal_received = False
+
+        def __init__(self):
+            self.state = {
+                "red_flat_confirmations": 0,
+                "last_red_progress": None,
+                "halted": False,
+            }
+
+        def _hsl_psides(self):
+            return ("long",)
+
+        def _hsl_state(self, pside):
+            return self.state
+
+        def _equity_hard_stop_enabled(self, pside=None):
+            return True
+
+        def _equity_hard_stop_runtime_red_latched(self, pside):
+            return True
+
+        async def refresh_protective_authoritative_state(self):
+            return True
+
+        def _equity_hard_stop_count_open_positions(self, pside):
+            return 1
+
+        def _equity_hard_stop_count_blocking_open_orders(self, pside):
+            return 0, 0
+
+        def _equity_hard_stop_log_red_progress(self, *args):
+            pass
+
+        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
+            pass
+
+        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
+            pass
+
+        async def calc_protective_panic_orders_to_cancel_and_create(self):
+            raise FatalBotException("malformed Rust output")
+
+        async def execute_order_plan_to_exchange(self, *args, **kwargs):
+            raise AssertionError("fatal plan failure must prevent execution")
+
+        def live_value(self, key):
+            return 0.0
+
+    bot = FakeBot()
+    with pytest.raises(FatalBotException, match="malformed Rust output"):
+        await Passivbot._equity_hard_stop_run_red_supervisor(bot)
+
+    assert bot._equity_hard_stop_supervisor_running is False
+
+
+@pytest.mark.asyncio
 async def test_red_supervisor_refreshes_late_flatten_fill_and_exits():
     events = [
         {"timestamp": 90_000, "pside": "long", "symbol": "OLD"},
@@ -1078,6 +1138,76 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
 
     assert bot.state["cooldown_repanic_reset_pending"] is False
     assert bot.refresh_sources == [("hsl_flatten_confirmation", 160_000)]
+    assert bot._equity_hard_stop_supervisor_running is False
+
+
+@pytest.mark.asyncio
+async def test_coin_red_supervisor_propagates_fatal_protective_plan_failure():
+    symbol = "BTC/USDT:USDT"
+
+    class FakeBot:
+        _equity_hard_stop_supervisor_running = False
+        stop_signal_received = False
+
+        def __init__(self):
+            self.state = {
+                "halted": False,
+                "cooldown_repanic_reset_pending": False,
+                "red_flat_confirmations": 0,
+                "pending_stop_event": None,
+            }
+            self._equity_hard_stop_coin = {"long": {symbol: self.state}}
+
+        def _hsl_psides(self):
+            return ("long",)
+
+        def _equity_hard_stop_coin_needs_panic_supervision(
+            self, pside, requested_symbol, state
+        ):
+            return True
+
+        async def refresh_protective_authoritative_state(self):
+            return True
+
+        def _hsl_coin_state(self, pside, requested_symbol):
+            return self.state
+
+        def _equity_hard_stop_has_open_position_symbol(self, pside, requested_symbol):
+            return True
+
+        def _equity_hard_stop_count_blocking_open_orders_symbol(
+            self, pside, requested_symbol
+        ):
+            return 0, 0
+
+        def get_exchange_time(self):
+            return 100_000
+
+        def get_raw_balance(self):
+            return 100.0
+
+        async def _calc_upnl_sum_strict(self, *args):
+            return 0.0
+
+        def _equity_hard_stop_apply_coin_sample(self, *args, **kwargs):
+            return {"red_active_now": True}
+
+        def _equity_hard_stop_set_coin_runtime_forced_mode(self, *args):
+            pass
+
+        async def calc_protective_panic_orders_to_cancel_and_create(self):
+            raise FatalBotException("malformed Rust output")
+
+        async def execute_order_plan_to_exchange(self, *args, **kwargs):
+            raise AssertionError("fatal plan failure must prevent execution")
+
+        def live_value(self, key):
+            return 0.0
+
+    bot = FakeBot()
+    with pytest.raises(FatalBotException, match="malformed Rust output"):
+        await Passivbot._equity_hard_stop_run_coin_red_supervisor(bot)
+
     assert bot._equity_hard_stop_supervisor_running is False
 
 

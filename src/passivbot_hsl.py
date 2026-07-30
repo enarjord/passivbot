@@ -30,7 +30,7 @@ from config.pnl_lookback import parse_pnls_max_lookback_days
 from fill_events_manager import signed_fee_paid_from_payload
 from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
-from passivbot_exceptions import RestartBotException
+from passivbot_exceptions import FatalBotException, RestartBotException
 from utils import make_get_filepath
 
 
@@ -7818,6 +7818,8 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                     to_create,
                     configure_creations=False,
                 )
+            except FatalBotException:
+                raise
             except RestartBotException as e:
                 logging.error("[risk] RED supervisor ignored restart request: %s", e)
             except Exception as e:
@@ -7960,6 +7962,8 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                     to_create,
                     configure_creations=False,
                 )
+            except FatalBotException:
+                raise
             except RestartBotException as e:
                 logging.error("[risk] coin RED supervisor ignored restart request: %s", e)
             except Exception as e:

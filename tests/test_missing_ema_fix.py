@@ -245,7 +245,16 @@ async def test_snapshot_orchestrator_rejects_unknown_rust_symbol_before_conversi
 
 
 @pytest.mark.asyncio
-async def test_snapshot_orchestrator_rejects_missing_orders_field(monkeypatch):
+@pytest.mark.parametrize(
+    ("rust_output", "error"),
+    [
+        ({"diagnostics": {}}, "missing required orders field"),
+        ({"orders": [], "diagnostics": {}}, "missing required symbol_states"),
+    ],
+)
+async def test_snapshot_orchestrator_rejects_malformed_output_envelope(
+    monkeypatch, rust_output, error
+):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -289,11 +298,11 @@ async def test_snapshot_orchestrator_rejects_missing_orders_field(monkeypatch):
     monkeypatch.setattr(
         pb_mod.pbr,
         "compute_ideal_orders_json",
-        lambda _json_str: json.dumps({"diagnostics": {}}),
+        lambda _json_str: json.dumps(rust_output),
     )
 
     method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
-    with pytest.raises(FatalBotException, match="missing required orders field"):
+    with pytest.raises(FatalBotException, match=error):
         await method(FakeBot(), snapshot, return_snapshot=False)
 
 

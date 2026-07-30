@@ -16036,8 +16036,10 @@ class Passivbot:
                 }
             )
 
-        out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
-        orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            pbr.compute_ideal_orders_json(json.dumps(input_dict)),
+            idx_to_symbol,
+        )
         ideal_orders: dict[str, list] = {}
         for order in orders:
             symbol = idx_to_symbol[int(order["symbol_idx"])]
@@ -16777,8 +16779,10 @@ class Passivbot:
                             idx,
                         )
             raise
-        out = json.loads(out_json)
-        orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, idx_to_symbol
+        )
+        diagnostics = out["diagnostics"]
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -16790,7 +16794,7 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )
@@ -19238,9 +19242,10 @@ class Passivbot:
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
-            out = json.loads(out_json)
-            orders = reconciler.validate_rust_orchestrator_output(out, idx_to_symbol)
-            diagnostics = out.get("diagnostics", {})
+            out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+                out_json, idx_to_symbol
+            )
+            diagnostics = out["diagnostics"]
             self._order_churn_risk_active_pairs = (
                 reconciler.order_churn_risk_active_pairs_from_rust_output(
                     out, idx_to_symbol
@@ -19299,7 +19304,7 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )

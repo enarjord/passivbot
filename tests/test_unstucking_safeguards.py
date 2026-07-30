@@ -15,6 +15,30 @@ def _active_market() -> dict:
     return {"active": True, "maker": 0.0002, "taker": 0.00055}
 
 
+def _empty_orchestrator_output(input_json: str) -> str:
+    payload = json.loads(input_json)
+    symbol_states = []
+    for symbol in payload.get("symbols", []):
+        row = {"symbol_idx": symbol["symbol_idx"]}
+        for pside in ("long", "short"):
+            input_mode = symbol[pside].get("mode")
+            effective_mode = input_mode or "normal"
+            active = bool(symbol.get("tradable", False)) and effective_mode != "manual"
+            row[pside] = {
+                "input_mode": input_mode,
+                "effective_mode": effective_mode,
+                "active": active,
+                "allow_initial": active and effective_mode == "normal",
+            }
+        symbol_states.append(row)
+    return json.dumps(
+        {
+            "orders": [],
+            "diagnostics": {"warnings": [], "symbol_states": symbol_states},
+        }
+    )
+
+
 def _make_mock_pbr():
     module = types.ModuleType("passivbot_rust")
 
@@ -627,6 +651,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.ineligible_symbols = {}
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
+            self.PB_mode_stop = {"long": "manual", "short": "manual"}
             self._runtime_forced_modes = {"long": {}, "short": {}}
             self.inactive_coin_candle_ttl_ms = 60_000
             self.trailing_prices = {}
@@ -1024,7 +1049,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = json.loads(input_json)
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     monkeypatch.setattr(
         bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
@@ -3043,7 +3068,7 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = json.loads(input_json)
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     monkeypatch.setattr(
         bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
@@ -3057,7 +3082,16 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_invalid_output_emits_correlated_failed_return(monkeypatch):
+@pytest.mark.parametrize(
+    ("rust_output", "error"),
+    [
+        ('{"diagnostics": {}}', "missing required orders field"),
+        ("{", "malformed JSON"),
+    ],
+)
+async def test_orchestrator_invalid_output_emits_correlated_failed_return(
+    monkeypatch, rust_output, error
+):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -3094,11 +3128,11 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(monkey
     monkeypatch.setattr(
         pbr,
         "compute_ideal_orders_json",
-        lambda _input_json: '{"diagnostics": {}}',
+        lambda _input_json: rust_output,
     )
     _stamp_staged_account_and_candles(bot)
 
-    with pytest.raises(FatalBotException, match="missing required orders field"):
+    with pytest.raises(FatalBotException, match=error):
         await bot.calc_ideal_orders_orchestrator()
 
     assert [event_type for event_type, _kwargs in events] == ["called", "returned"]
@@ -3388,7 +3422,7 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = input_json
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     monkeypatch.setattr(
         bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
@@ -3461,7 +3495,7 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = json.loads(input_json)
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     monkeypatch.setattr(
         bot,
@@ -3638,7 +3672,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = json.loads(input_json)
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     bot.cm.get_last_prices = fake_get_last_prices
     bot.market_snapshot_provider = types.SimpleNamespace(
@@ -3743,7 +3777,7 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
 
     def fake_compute(input_json: str) -> str:
         captured["input"] = json.loads(input_json)
-        return '{"orders": [], "diagnostics": {"warnings": []}}'
+        return _empty_orchestrator_output(input_json)
 
     bot.market_snapshot_provider = types.SimpleNamespace(
         get_snapshots=fake_get_snapshots

@@ -50,6 +50,44 @@ def _evaluate(
     )
 
 
+def _raw_rust_order(**overrides) -> dict:
+    order = {
+        "symbol_idx": 0,
+        "pside": "long",
+        "qty": 1.0,
+        "price": 100.0,
+        "order_type": "entry_initial_normal_long",
+        "execution_type": "limit",
+        "execution_priority": "ordinary",
+    }
+    order.update(overrides)
+    return order
+
+
+def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
+    if orders is None:
+        orders = []
+    if symbol_states is None:
+        symbol_states = [
+            {
+                "symbol_idx": 0,
+                "long": {
+                    "input_mode": None,
+                    "effective_mode": "normal",
+                    "active": True,
+                    "allow_initial": True,
+                },
+                "short": {
+                    "input_mode": "manual",
+                    "effective_mode": "manual",
+                    "active": False,
+                    "allow_initial": False,
+                },
+            }
+        ]
+    return {"orders": orders, "diagnostics": {"symbol_states": symbol_states}}
+
+
 def test_no_history_and_single_move_fail_open():
     state = OrderChurnGateState()
     first = _order(price=100.0)
@@ -222,17 +260,54 @@ def test_snapshot_and_attempt_windows_prune():
 
 def test_raw_rust_order_batch_with_unknown_symbol_is_fatal_as_a_whole():
     orders = [
-        {"symbol_idx": 0},
-        {"symbol_idx": 999},
+        _raw_rust_order(),
+        _raw_rust_order(symbol_idx=999),
     ]
 
     with pytest.raises(FatalBotException, match="unknown symbol_idx 999"):
-        reconciler.validate_rust_orchestrator_output({"orders": orders}, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders), {0: SYMBOL}
+        )
 
 
 def test_raw_rust_output_requires_orders_field():
     with pytest.raises(FatalBotException, match="missing required orders field"):
         reconciler.validate_rust_orchestrator_output({}, {0: SYMBOL})
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"pside": "both"}, "invalid pside"),
+        ({"qty": 0.0}, "invalid qty"),
+        ({"qty": float("nan")}, "invalid qty"),
+        ({"price": 0.0}, "invalid price"),
+        ({"order_type": ""}, "invalid order_type"),
+        ({"order_type": "not_an_order_long"}, "invalid order_type"),
+        ({"qty": -1.0}, "qty sign disagrees"),
+        ({"execution_type": "stop"}, "invalid execution_type"),
+        ({"execution_priority": "optional"}, "invalid execution_priority"),
+    ],
+)
+def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(**overrides)]),
+            {0: SYMBOL},
+        )
+
+
+def test_raw_rust_output_requires_complete_symbol_state_coverage():
+    with pytest.raises(FatalBotException, match="do not cover"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(symbol_states=[]),
+            {0: SYMBOL},
+        )
+
+
+def test_raw_rust_output_malformed_json_is_fatal():
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output("{", {0: SYMBOL})
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ import math
 
 import pytest
 
+from live import reconciler
+
 
 @pytest.fixture(scope="module", autouse=True)
 def require_real_passivbot_rust_module():
@@ -342,6 +344,23 @@ def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_martin
 def compute(pbr, inp: dict) -> dict:
     out_json = pbr.compute_ideal_orders_json(json.dumps(inp))
     return json.loads(out_json)
+
+
+def test_live_validator_accepts_complete_rust_output():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=101.0)],
+    )
+    out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+        pbr.compute_ideal_orders_json(json.dumps(inp)),
+        {0: "BTC/USDT:USDT"},
+    )
+
+    assert orders == out["orders"]
+    assert orders
+    assert out["diagnostics"]["symbol_states"][0]["symbol_idx"] == 0
 
 
 def test_json_rejects_invalid_order_book():

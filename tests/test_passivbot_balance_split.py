@@ -71,6 +71,26 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 )
 
 
+def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -> str:
+    symbol_states = []
+    for symbol in payload.get("symbols", []):
+        row = {"symbol_idx": symbol["symbol_idx"]}
+        for pside in ("long", "short"):
+            input_mode = symbol[pside].get("mode")
+            effective_mode = input_mode or "normal"
+            active = bool(symbol.get("tradable", False)) and effective_mode != "manual"
+            row[pside] = {
+                "input_mode": input_mode,
+                "effective_mode": effective_mode,
+                "active": active,
+                "allow_initial": active and effective_mode == "normal",
+            }
+        symbol_states.append(row)
+    out_diagnostics = dict(diagnostics or {})
+    out_diagnostics["symbol_states"] = symbol_states
+    return json.dumps({"orders": [], "diagnostics": out_diagnostics})
+
+
 def _set_authoritative_epoch_state(
     bot,
     *,
@@ -8906,7 +8926,9 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -8995,7 +9017,9 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -9111,7 +9135,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"warnings": []}})
+        return _empty_orchestrator_output(captured["input"], {"warnings": []})
 
     monkeypatch.setattr(
         pb_mod.planning_gates,
@@ -9247,7 +9271,9 @@ async def test_orchestrator_snapshot_payload_does_not_require_backtest_config(mo
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -9345,7 +9371,9 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 

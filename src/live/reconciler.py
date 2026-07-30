@@ -1015,7 +1015,127 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has unknown symbol_idx {symbol_idx}"
             )
+        pside = order.get("pside")
+        if pside not in {"long", "short"}:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid pside"
+            )
+        qty = order.get("qty")
+        if (
+            isinstance(qty, bool)
+            or not isinstance(qty, (int, float))
+            or not math.isfinite(float(qty))
+            or float(qty) == 0.0
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid qty"
+            )
+        price = order.get("price")
+        if (
+            isinstance(price, bool)
+            or not isinstance(price, (int, float))
+            or not math.isfinite(float(price))
+            or float(price) <= 0.0
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid price"
+            )
+        order_type = order.get("order_type")
+        if not isinstance(order_type, str) or not order_type:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid order_type"
+            )
+        try:
+            _pb_attr("pbr").order_type_snake_to_id(order_type)
+            order_side = determine_side_from_order_tuple(
+                (float(qty), float(price), order_type)
+            )
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid order_type"
+            ) from exc
+        if not order_type.endswith(f"_{pside}"):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} order_type disagrees with pside"
+            )
+        if (order_side == "buy") != (float(qty) > 0.0):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
+            )
+        if order.get("execution_type") not in {"limit", "market"}:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid execution_type"
+            )
+        if order.get("execution_priority") not in {"ordinary", "risk_critical"}:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has invalid execution_priority"
+            )
+
+    diagnostics = out.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        raise FatalBotException("Rust orchestrator output missing valid diagnostics")
+    if "symbol_states" not in diagnostics:
+        raise FatalBotException(
+            "Rust orchestrator diagnostics missing required symbol_states"
+        )
+    symbol_states = diagnostics["symbol_states"]
+    if not isinstance(symbol_states, list):
+        raise FatalBotException("Rust orchestrator symbol_states must be a list")
+    expected_symbol_idxs = set(idx_to_symbol)
+    seen_symbol_idxs: set[int] = set()
+    valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
+    for state_idx, row in enumerate(symbol_states):
+        if not isinstance(row, dict):
+            raise FatalBotException(
+                f"Rust orchestrator symbol_state {state_idx} must be a mapping"
+            )
+        symbol_idx = row.get("symbol_idx")
+        if (
+            isinstance(symbol_idx, bool)
+            or not isinstance(symbol_idx, int)
+            or symbol_idx not in expected_symbol_idxs
+            or symbol_idx in seen_symbol_idxs
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator symbol_state {state_idx} has invalid symbol_idx"
+            )
+        seen_symbol_idxs.add(symbol_idx)
+        for pside in ("long", "short"):
+            side_state = row.get(pside)
+            if not isinstance(side_state, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has invalid {pside} state"
+                )
+            if side_state.get("input_mode") not in valid_modes | {None}:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has invalid {pside} input_mode"
+                )
+            if side_state.get("effective_mode") not in valid_modes:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has invalid {pside} effective_mode"
+                )
+            for field in ("active", "allow_initial"):
+                if not isinstance(side_state.get(field), bool):
+                    raise FatalBotException(
+                        f"Rust orchestrator symbol_state {state_idx} has invalid {pside} {field}"
+                    )
+    if seen_symbol_idxs != expected_symbol_idxs:
+        raise FatalBotException(
+            "Rust orchestrator symbol_states do not cover the requested symbols"
+        )
     return orders
+
+
+def parse_and_validate_rust_orchestrator_output(
+    out_json: object, idx_to_symbol: dict[int, str]
+) -> tuple[dict, list[dict]]:
+    """Decode and validate Rust output, preserving malformed-output fatality."""
+    try:
+        out = json.loads(out_json)
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise FatalBotException("Rust orchestrator returned malformed JSON") from exc
+    orders = validate_rust_orchestrator_output(out, idx_to_symbol)
+    return out, orders
 
 
 def order_churn_risk_active_pairs_from_rust_output(
@@ -1047,7 +1167,7 @@ def order_churn_risk_active_pairs_from_rust_output(
             raise ValueError(f"Rust {context} item missing valid pside")
         pairs.add((str(symbol), pside))
 
-    orders = out.get("orders", [])
+    orders = out["orders"]
     if not isinstance(orders, list):
         raise ValueError("Rust orchestrator orders must be a list")
     for order in orders:
@@ -1056,7 +1176,7 @@ def order_churn_risk_active_pairs_from_rust_output(
         if str(order.get("execution_priority") or "").lower() == "risk_critical":
             add_pair(order, context="risk-critical order")
 
-    diagnostics = out.get("diagnostics", {})
+    diagnostics = out["diagnostics"]
     if not isinstance(diagnostics, dict):
         raise ValueError("Rust orchestrator diagnostics must be a dict")
     loss_gate_blocks = diagnostics.get("loss_gate_blocks", [])

@@ -19,10 +19,11 @@ All notable user-facing changes will be documented in this file.
   the current run's side membership separately from cache-build provenance, and
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
-- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if the
-  required order batch is absent, malformed, or contains a symbol index absent from the request.
-  The bot no longer converts a fabricated empty batch or usable subset which could cancel existing
-  orders, and normal live calls emit a correlated failed-return event before propagating the error.
+- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if its JSON,
+  required order batch, order fields, or complete per-symbol mode state is malformed. The bot no
+  longer converts a fabricated empty batch or usable subset which could cancel existing orders.
+  Normal live calls emit a correlated failed-return event before propagating the error, and HSL RED
+  supervisors no longer swallow fatal producer failures.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

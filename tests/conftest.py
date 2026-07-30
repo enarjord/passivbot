@@ -245,7 +245,30 @@ def _install_passivbot_rust_stub():
         """Stub orchestrator that returns empty orders."""
         import json
 
-        return json.dumps({"orders": []})
+        payload = json.loads(input_json)
+        symbol_states = []
+        for symbol in payload.get("symbols", []):
+            row = {"symbol_idx": symbol["symbol_idx"]}
+            for pside in ("long", "short"):
+                input_mode = symbol[pside].get("mode")
+                effective_mode = input_mode or "normal"
+                active = (
+                    bool(symbol.get("tradable", False))
+                    and effective_mode != "manual"
+                )
+                row[pside] = {
+                    "input_mode": input_mode,
+                    "effective_mode": effective_mode,
+                    "active": active,
+                    "allow_initial": active and effective_mode == "normal",
+                }
+            symbol_states.append(row)
+        return json.dumps(
+            {
+                "orders": [],
+                "diagnostics": {"warnings": [], "symbol_states": symbol_states},
+            }
+        )
 
     stub.compute_ideal_orders_json = _compute_ideal_orders_json
 
