@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
 const INITIAL_POST_FILL_MARKOUT_HORIZONS_MS: &[u64] = &[1_000];
+const MARKOUT_PRICE_EPSILON: f64 = 1e-12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -874,18 +875,28 @@ fn mark_price_from_execution_candles(
     fill: &SimulatedOutcomeFill,
     mark_time_ms: u64,
 ) -> Result<Option<f64>, OutcomeError> {
-    let mut matches = candles.iter().filter(|candle| {
-        candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms)
-            && (complementary_books_merged || candle.outcome == fill.fill.outcome)
-    });
-    let first = matches.next().map(|candle| candle.close);
-    if matches.next().is_some() {
+    let matches: Vec<f64> = candles
+        .iter()
+        .filter(|candle| {
+            candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms)
+                && (complementary_books_merged || candle.outcome == fill.fill.outcome)
+        })
+        .map(|candle| candle.close)
+        .collect();
+    let Some(&first) = matches.first() else {
+        return Ok(None);
+    };
+    if (!complementary_books_merged && matches.len() > 1)
+        || matches
+            .iter()
+            .skip(1)
+            .any(|close| (close - first).abs() > MARKOUT_PRICE_EPSILON)
+    {
         return Err(OutcomeError::InvalidMarket(
-            "post-fill markout has multiple canonical closes for one native book and second"
-                .to_string(),
+            "post-fill markout has conflicting canonical closes for one second".to_string(),
         ));
     }
-    Ok(first)
+    Ok(Some(first))
 }
 
 #[cfg(test)]
@@ -1039,6 +1050,57 @@ mod tests {
         assert_eq!(expanded[0].fill_qty_coverage_ratio, Some(1.0));
         assert_eq!(expanded[1].fill_qty_coverage_ratio, Some(0.0));
         assert!(expanded[1].total_adverse_selection_quote.is_none());
+    }
+
+    #[test]
+    fn merged_book_markout_accepts_agreeing_mirrored_closes() {
+        let mut market = fixture_market();
+        market.capabilities.complementary_books_merged = true;
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule {
+                maker_rate: 0.0,
+                taker_rate: 0.0,
+                formula: OutcomeFeeFormula::Notional,
+                incidence: crate::outcome::OutcomeFeeIncidence::EveryFill,
+                settlement_rate: 0.0,
+            },
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_500,
+                order: order("yes", Outcome::Yes, 0.4),
+            }],
+            candles: vec![
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::Yes,
+                    open: 0.42,
+                    high: 0.45,
+                    low: 0.399,
+                    close: 0.42,
+                    volume: 0.1,
+                },
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::No,
+                    open: 0.42,
+                    high: 0.45,
+                    low: 0.399,
+                    close: 0.42,
+                    volume: 0.1,
+                },
+            ],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 1);
+        assert_eq!(
+            output.post_fill_adverse_selection[0].observed_fills_count,
+            1
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -160,10 +161,32 @@ def test_market_metadata_archive_round_trips_versions_and_rejects_id_reuse(tmp_p
         observed_at_ms=3_000,
         observation_source="outcomeMeta",
     )
+    assert archive.append_market_metadata(
+        original,
+        observed_at_ms=4_000,
+        observation_source="outcomeMeta",
+    )
     assert archive.load_market_metadata(original.venue, original.market_id) == [
         original,
         updated_constraints,
+        original,
     ]
+    assert (
+        archive.load_market_metadata_at(
+            original.venue,
+            original.market_id,
+            observed_at_or_before_ms=2_500,
+        )
+        == original
+    )
+    assert (
+        archive.load_market_metadata_at(
+            original.venue,
+            original.market_id,
+            observed_at_or_before_ms=3_500,
+        )
+        == updated_constraints
+    )
 
     with pytest.raises(ValueError, match="conflicting immutable metadata"):
         archive.append_market_metadata(
@@ -171,6 +194,64 @@ def test_market_metadata_archive_round_trips_versions_and_rejects_id_reuse(tmp_p
             observed_at_ms=4_000,
             observation_source="outcomeMeta",
         )
+
+
+def test_market_metadata_schema_migration_preserves_later_state_reversion(tmp_path):
+    db_path = tmp_path / "legacy-metadata.sqlite"
+    original = market()
+    updated = replace(original, min_order_qty=50.0)
+    archive = OutcomeTradeArchive(db_path)
+    assert archive.append_market_metadata(
+        original,
+        observed_at_ms=1_000,
+        observation_source="legacy",
+    )
+    archive.close()
+
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(
+            """
+            ALTER TABLE outcome_market_metadata
+                RENAME TO outcome_market_metadata_current;
+            CREATE TABLE outcome_market_metadata (
+                record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                venue TEXT NOT NULL,
+                market_id TEXT NOT NULL,
+                observed_at_ms INTEGER NOT NULL,
+                observation_source TEXT NOT NULL,
+                contract_fingerprint TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                normalized_market_json TEXT NOT NULL,
+                collector_session TEXT,
+                archived_at_ms INTEGER NOT NULL,
+                UNIQUE(venue, market_id, payload_sha256)
+            );
+            INSERT INTO outcome_market_metadata
+            SELECT * FROM outcome_market_metadata_current;
+            DROP TABLE outcome_market_metadata_current;
+            CREATE INDEX outcome_market_metadata_lookup
+                ON outcome_market_metadata(
+                    venue, market_id, observed_at_ms, record_id
+                );
+            """
+        )
+
+    migrated = OutcomeTradeArchive(db_path)
+    assert migrated.append_market_metadata(
+        updated,
+        observed_at_ms=2_000,
+        observation_source="migrated",
+    )
+    assert migrated.append_market_metadata(
+        original,
+        observed_at_ms=2_000,
+        observation_source="migrated",
+    )
+    assert migrated.load_market_metadata(original.venue, original.market_id) == [
+        original,
+        updated,
+        original,
+    ]
 
 
 def test_verified_coverage_is_merged_but_collection_gaps_are_not_marked_covered(tmp_path):

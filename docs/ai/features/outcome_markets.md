@@ -208,7 +208,8 @@ bucket.
 Some venues use a merged complementary book and report one economic trade as mirrored YES and NO
 fill records. Adapters retain both native records for audit and execution reconciliation, attach a
 shared economic-event identity when the venue proves one, and count that event once in the
-canonical signal candle.
+canonical signal candle. Pair mirrored records by occurrence within that identity: repeated
+equal-price, equal-quantity economic trades remain distinct events rather than collapsing into one.
 
 ## Public Data Contract
 
@@ -225,7 +226,9 @@ The archive fingerprints immutable terms—venue and market identity, descriptio
 payout, scheduled event, and capabilities—and fails if the same venue market ID is later observed
 with conflicting contract terms. Constraint, fee, price-grid, and lifecycle observations may
 change without replacing the retained contract. This is required because expired HIP-4
-price-binary rows disappear from `outcomeMeta`.
+price-binary rows disappear from `outcomeMeta`. Retain the chronological sequence of distinct
+metadata states, including a later return to an earlier state; suppress only a consecutive
+duplicate observation.
 
 Settlement source-event identity is immutable as well. Re-importing the same venue, market, and
 source event may differ in observation metadata such as receive time or endpoint provenance, but
@@ -248,6 +251,10 @@ one-second bars reproducibly from actual fills, never from bids, asks, midpoints
 probabilities. During a verified-continuous collection interval, no-trade seconds carry the prior
 fill close with `open = high = low = close` and zero volume. Unknown collector gaps remain
 unavailable and must not be fabricated into flat candles.
+
+Live verified coverage must remain open for at least the greater of the configured delivery lag
+and the maximum accepted live-trade lag. A collector must not certify a second before every fill
+that it would accept for that second has had time to arrive.
 
 Open and close require a proven chronological order within each second. If multiple fills share
 the same exchange timestamp, use a unique venue-ordered sequence when available, otherwise the
@@ -309,6 +316,12 @@ spot token index. Reconcile orders and fills by their `#<encoding>` coin. Fill-l
 input. Until HIP-4-specific fee incidence is authoritative, strategy edge gating uses the larger
 non-negative maker rate reported for regular and spot trading as a conservative per-share floor;
 that floor does not overwrite actual fill fees or assert a settlement-fee rate.
+
+Current `outcomeMeta` rows do not expose authoritative side-token quantity precision or
+market-specific order minima. Keep quantity step, minimum quantity, and minimum notional
+unavailable unless an independently authoritative source supplies them. Live planning and order
+construction must fail closed while any required constraint is unavailable; generic spot
+assumptions are not HIP-4 outcome constraints.
 
 HIP-4 lifecycle reconciliation first checks settlement rows present in the current `userFills`
 snapshot. After scheduled expiry it also queries `userFillsByTime` from the event timestamp
@@ -373,6 +386,10 @@ archived but is not a release timestamp. The EMA-anchor job adapter invokes the 
 kernel—not the generic scripted-action simulator—before the shared-wallet orchestrator locks that
 job's allocation until that release.
 
+Any bounded outcome-window evaluation uses the archived market metadata state valid at the start
+of its requested window, not the latest discovery row. It requires verified grid-stream coverage
+for that window and replays every retained grid change in chronological order.
+
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,
 maker ratio, fill rate, and post-fill adverse selection. `pair_completion_ratio` is based on
@@ -396,7 +413,9 @@ may add horizons without changing its aggregation contract. The initial collecti
 `horizon_ms = 1000`. A fill timestamp denotes the start of its one-second execution bucket, and its
 one-second mark is the canonical YES close at that bucket's end. EMA-anchor runs use the canonical
 signal close. Scripted-action runs use the canonicalized close from the native book that produced
-the fill, or the single merged-book close when the venue proves complementary books are merged.
+the fill. When the venue proves complementary books are merged, mirrored closes at the mark
+timestamp are accepted only when their canonical YES values agree within numerical tolerance;
+conflicting closes leave the mark unavailable.
 
 For canonical YES-equivalent exposure direction `d` (`+1` for buying YES or selling NO, `-1` for
 selling YES or buying NO), canonical fill price `f`, mark price `m`, and quantity `q`:

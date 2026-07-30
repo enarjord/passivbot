@@ -35,9 +35,9 @@ def test_hyperliquid_price_binary_market_maps_official_asset_encodings():
     assert market.capabilities.complementary_books_merged is True
     assert market.price_grid.kind == "significant_figures"
     assert market.price_grid.max_significant_figures == 5
-    assert market.qty_step == 1.0
-    assert market.min_order_qty == 1.0
-    assert market.min_order_notional == 10.0
+    assert market.qty_step is None
+    assert market.min_order_qty is None
+    assert market.min_order_notional is None
 
 
 def test_initial_normalized_market_contract_rejects_non_unit_payouts():
@@ -166,7 +166,17 @@ def test_polymarket_rust_spec_preserves_order_entry_and_delayed_close_boundaries
 def test_hyperliquid_rust_spec_bounds_follow_significant_figure_grid():
     market = hyperliquid.normalize_market(load_fixture("hyperliquid_price_binary.json"))
 
-    spec = normalized_market_to_rust_spec(market)
+    with pytest.raises(ValueError, match="quantity constraints"):
+        normalized_market_to_rust_spec(market)
+
+    spec = normalized_market_to_rust_spec(
+        replace(
+            market,
+            qty_step=1.0,
+            min_order_qty=1.0,
+            min_order_notional=10.0,
+        )
+    )
 
     assert spec["min_price"] == pytest.approx(1e-8)
     assert spec["max_price"] == pytest.approx(0.99999)

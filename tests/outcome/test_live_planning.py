@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -26,8 +27,13 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
 
 
 def market():
-    return hyperliquid.normalize_market(
-        json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
+    return replace(
+        hyperliquid.normalize_market(
+            json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
+        ),
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
     )
 
 

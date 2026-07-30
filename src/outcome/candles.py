@@ -48,14 +48,27 @@ def _deduplicate_economic_events(
     trades: Sequence[NormalizedOutcomeTrade],
 ) -> list[tuple[int, NormalizedOutcomeTrade]]:
     retained = _deduplicate(trades)
-    seen: set[tuple[str, ...]] = set()
+    side_occurrences: dict[
+        tuple[str, ...],
+        dict[OutcomeSide, int],
+    ] = defaultdict(lambda: defaultdict(int))
+    seen_occurrences: set[tuple[tuple[str, ...], int]] = set()
     economic: list[tuple[int, NormalizedOutcomeTrade]] = []
     for item in retained:
-        key = item[1].economic_deduplication_key
+        trade = item[1]
+        key = trade.economic_deduplication_key
         if key is not None:
-            if key in seen:
+            # Hyperliquid can mirror one merged-book match into one YES and one NO
+            # record.  Its available pairing tuple is not globally unique when a
+            # transaction contains repeated equal-price/equal-size matches, so pair
+            # the nth retained record from each native side instead of dropping every
+            # record after the first tuple occurrence.
+            occurrence = side_occurrences[key][trade.outcome]
+            side_occurrences[key][trade.outcome] += 1
+            occurrence_key = (key, occurrence)
+            if occurrence_key in seen_occurrences:
                 continue
-            seen.add(key)
+            seen_occurrences.add(occurrence_key)
         economic.append(item)
     return economic
 

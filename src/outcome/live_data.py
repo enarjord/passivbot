@@ -127,6 +127,7 @@ async def collect_verified_outcome_signal_window(
         raise ValueError("max_live_trade_lag_ms must be non-negative")
     if archive is not None and not collector_session:
         raise ValueError("archived outcome collection requires collector_session")
+    verification_lag_ms = max(delivery_lag_ms, max_live_trade_lag_ms)
     clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
     if archive is not None:
         try:
@@ -218,7 +219,7 @@ async def collect_verified_outcome_signal_window(
                 collection_end_ms = (
                     coverage_start_ms
                     + min_observations * 1_000
-                    + delivery_lag_ms
+                    + verification_lag_ms
                 )
     finally:
         close = getattr(stream, "aclose", None)
@@ -228,7 +229,7 @@ async def collect_verified_outcome_signal_window(
     if first_received_ms is None:
         raise OutcomeNoPublicFill("outcome signal collection completed without a public fill")
     coverage_start_ms = ((first_received_ms + 999) // 1_000) * 1_000
-    coverage_end_ms = ((clock() - delivery_lag_ms) // 1_000) * 1_000
+    coverage_end_ms = ((clock() - verification_lag_ms) // 1_000) * 1_000
     if coverage_end_ms <= coverage_start_ms:
         raise OutcomeIncompleteVerifiedSignal(
             "outcome collection did not complete one verified signal second"

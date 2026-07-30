@@ -19,6 +19,7 @@ from outcome.evaluation import (
     evaluate_ema_anchor_outcome_modes,
     summarize_outcome_strategy_modes,
 )
+from outcome.models import NormalizedOutcomeMarket, OutcomePriceGridChange, OutcomeVenue
 from outcome.rust_runner import normalized_market_to_rust_spec
 
 
@@ -61,6 +62,52 @@ def _require_fee_free_market(market) -> None:
         )
 
 
+def _load_archived_market_and_grid_window(
+    archive: OutcomeTradeArchive,
+    discovered_market: NormalizedOutcomeMarket,
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[NormalizedOutcomeMarket, list[OutcomePriceGridChange]]:
+    market = archive.load_market_metadata_at(
+        OutcomeVenue.POLYMARKET,
+        discovered_market.market_id,
+        observed_at_or_before_ms=start_ms,
+    )
+    if market is None:
+        raise ValueError(
+            "Polymarket archive has no market metadata valid at the window start"
+        )
+    if (
+        market.quote_asset != discovered_market.quote_asset
+        or market.yes_asset != discovered_market.yes_asset
+        or market.no_asset != discovered_market.no_asset
+    ):
+        raise ValueError("archived Polymarket market identity disagrees with Gamma")
+    if market.price_grid.kind != "fixed_step" or market.price_grid.fixed_step is None:
+        raise ValueError("Polymarket evaluation requires a fixed price grid")
+    if market.min_order_qty is None:
+        raise ValueError("Polymarket evaluation requires a minimum order quantity")
+    _require_fee_free_market(market)
+    grid_coverage = archive.load_verified_price_grid_coverage(
+        market.venue,
+        market.market_id,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    if not _proves_interval(grid_coverage, start_ms, end_ms):
+        raise ValueError(
+            "archive does not prove complete Polymarket price-grid coverage"
+        )
+    price_grid_changes = archive.load_price_grid_changes(
+        market.venue,
+        market.market_id,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    return market, price_grid_changes
+
+
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gamma-market-id", required=True)
@@ -94,18 +141,19 @@ async def _main() -> int:
     if args.start_ms % 1_000 or args.end_ms % 1_000:
         parser.error("--start-ms and --end-ms must be second-aligned")
 
-    market = polymarket.normalize_market(
+    discovered_market = polymarket.normalize_market(
         await _fetch_gamma_market(args.gamma_market_id),
         quote_asset=args.quote_asset,
     )
-    if market.price_grid.kind != "fixed_step" or market.price_grid.fixed_step is None:
-        raise ValueError("Polymarket evaluation requires a fixed price grid")
-    if market.min_order_qty is None:
-        raise ValueError("Polymarket evaluation requires a minimum order quantity")
-    _require_fee_free_market(market)
 
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
+        market, price_grid_changes = _load_archived_market_and_grid_window(
+            archive,
+            discovered_market,
+            start_ms=args.start_ms,
+            end_ms=args.end_ms,
+        )
         trades = []
         for asset in (market.yes_asset, market.no_asset):
             coverage = archive.load_verified_coverage(
@@ -174,6 +222,7 @@ async def _main() -> int:
         strategy_params=strategy_params,
         settlement_time_ms=args.end_ms,
         yes_fraction=0.0,
+        price_grid_changes=price_grid_changes,
     )
     evaluations = evaluate_ema_anchor_outcome_modes(payload)
     summaries = summarize_outcome_strategy_modes(evaluations)
@@ -191,6 +240,7 @@ async def _main() -> int:
                 },
                 "coverage": {"start_ms": args.start_ms, "end_ms": args.end_ms},
                 "actual_fill_records": len(trades),
+                "price_grid_changes": len(price_grid_changes),
                 "signal_candles": len(payload["signal_candles"]),
                 "execution_candles": len(payload["execution_candles"]),
                 "assumptions": {

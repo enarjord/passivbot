@@ -151,8 +151,7 @@ class OutcomeTradeArchive:
                     payload_sha256 TEXT NOT NULL,
                     normalized_market_json TEXT NOT NULL,
                     collector_session TEXT,
-                    archived_at_ms INTEGER NOT NULL,
-                    UNIQUE(venue, market_id, payload_sha256)
+                    archived_at_ms INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS outcome_market_metadata_lookup
                     ON outcome_market_metadata(
@@ -294,6 +293,49 @@ class OutcomeTradeArchive:
                 );
                 """
             )
+            table_sql_row = connection.execute(
+                """
+                SELECT sql
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'outcome_market_metadata'
+                """
+            ).fetchone()
+            table_sql = "" if table_sql_row is None else str(table_sql_row["sql"])
+            compact_table_sql = "".join(table_sql.split())
+            if "UNIQUE(venue,market_id,payload_sha256)" in compact_table_sql:
+                connection.executescript(
+                    """
+                    ALTER TABLE outcome_market_metadata
+                        RENAME TO outcome_market_metadata_legacy;
+                    CREATE TABLE outcome_market_metadata (
+                        record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        venue TEXT NOT NULL,
+                        market_id TEXT NOT NULL,
+                        observed_at_ms INTEGER NOT NULL,
+                        observation_source TEXT NOT NULL,
+                        contract_fingerprint TEXT NOT NULL,
+                        payload_sha256 TEXT NOT NULL,
+                        normalized_market_json TEXT NOT NULL,
+                        collector_session TEXT,
+                        archived_at_ms INTEGER NOT NULL
+                    );
+                    INSERT INTO outcome_market_metadata (
+                        record_id, venue, market_id, observed_at_ms,
+                        observation_source, contract_fingerprint, payload_sha256,
+                        normalized_market_json, collector_session, archived_at_ms
+                    )
+                    SELECT
+                        record_id, venue, market_id, observed_at_ms,
+                        observation_source, contract_fingerprint, payload_sha256,
+                        normalized_market_json, collector_session, archived_at_ms
+                    FROM outcome_market_metadata_legacy;
+                    DROP TABLE outcome_market_metadata_legacy;
+                    CREATE INDEX outcome_market_metadata_lookup
+                        ON outcome_market_metadata(
+                            venue, market_id, observed_at_ms, record_id
+                        );
+                    """
+                )
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(outcome_trades)").fetchall()
@@ -355,6 +397,18 @@ class OutcomeTradeArchive:
                 f"outcome market {market.venue.value}:{market.market_id} "
                 "has conflicting immutable metadata"
             )
+        predecessor = connection.execute(
+            """
+            SELECT payload_sha256
+            FROM outcome_market_metadata
+            WHERE venue = ? AND market_id = ? AND observed_at_ms <= ?
+            ORDER BY observed_at_ms DESC, record_id DESC
+            LIMIT 1
+            """,
+            (market.venue.value, market.market_id, int(observed_at_ms)),
+        ).fetchone()
+        if predecessor is not None and predecessor["payload_sha256"] == payload_sha256:
+            return False
         with connection:
             cursor = connection.execute(
                 """
@@ -396,6 +450,29 @@ class OutcomeTradeArchive:
             _market_from_payload(json.loads(row["normalized_market_json"]))
             for row in rows
         ]
+
+    def load_market_metadata_at(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        *,
+        observed_at_or_before_ms: int,
+    ) -> NormalizedOutcomeMarket | None:
+        if observed_at_or_before_ms < 0:
+            raise ValueError("market metadata query time must be non-negative")
+        row = self._connect().execute(
+            """
+            SELECT normalized_market_json
+            FROM outcome_market_metadata
+            WHERE venue = ? AND market_id = ? AND observed_at_ms <= ?
+            ORDER BY observed_at_ms DESC, record_id DESC
+            LIMIT 1
+            """,
+            (venue.value, str(market_id), int(observed_at_or_before_ms)),
+        ).fetchone()
+        if row is None:
+            return None
+        return _market_from_payload(json.loads(row["normalized_market_json"]))
 
     def append_trade(
         self,

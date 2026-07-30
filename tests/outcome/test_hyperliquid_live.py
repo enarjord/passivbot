@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -19,7 +20,13 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
 
 def market_fixture():
     payload = json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
-    return payload, hyperliquid.normalize_market(payload)
+    market = hyperliquid.normalize_market(payload)
+    return payload, replace(
+        market,
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
+    )
 
 
 def spot_state():
@@ -272,6 +279,20 @@ def test_hip4_action_builder_uses_official_asset_id_and_strict_constraints():
             outcome=OutcomeSide.YES,
             side=OutcomeOrderSide.BUY,
             native_price="0.400001",
+            qty="25",
+        )
+
+
+def test_hip4_action_builder_fails_closed_without_authoritative_quantity_constraints():
+    payload = json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
+    market = hyperliquid.normalize_market(payload)
+
+    with pytest.raises(ValueError, match="quantity step is unavailable"):
+        hyperliquid.build_limit_order_action(
+            market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.BUY,
+            native_price="0.4",
             qty="25",
         )
 

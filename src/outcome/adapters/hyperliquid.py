@@ -138,9 +138,13 @@ def normalize_market(payload: Mapping[str, Any]) -> NormalizedOutcomeMarket:
             max_significant_figures=5,
             max_decimal_places=8,
         ),
-        qty_step=1.0,
-        min_order_qty=1.0,
-        min_order_notional=10.0,
+        # outcomeMeta does not currently expose side-token size precision or
+        # market-specific order minima.  Keep them unavailable so live planning
+        # and order construction fail closed instead of treating generic spot
+        # assumptions as authoritative HIP-4 constraints.
+        qty_step=None,
+        min_order_qty=None,
+        min_order_notional=None,
         lifecycle=MarketLifecycle(
             trading_open_time_ms=parsed["trading_open_time_ms"],
             trading_close_time_ms=parsed["expiry_time_ms"],

@@ -7,9 +7,18 @@ from pathlib import Path
 import pytest
 
 from outcome.adapters import hyperliquid, polymarket
-from outcome.models import OutcomeFeeMetadata
+from outcome.archive import OutcomeTradeArchive
+from outcome.candles import VerifiedCoverage
+from outcome.models import (
+    OutcomeFeeMetadata,
+    OutcomePriceGridChange,
+    OutcomePriceGridMetadata,
+)
 from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
-from tools.evaluate_polymarket_outcome_window import _require_fee_free_market
+from tools.evaluate_polymarket_outcome_window import (
+    _load_archived_market_and_grid_window,
+    _require_fee_free_market,
+)
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
@@ -55,3 +64,54 @@ def test_archived_fee_formula_fails_closed_when_not_representable():
     with pytest.raises(ValueError, match="no Rust translation"):
         _rust_fee_formula(hip4, "archived")
     assert _rust_fee_formula(hip4, "notional") == "notional"
+
+
+def test_polymarket_window_uses_start_metadata_and_archived_grid_changes(tmp_path):
+    discovered = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    fee_free = OutcomeFeeMetadata(
+        formula="venue_reported_zero",
+        maker_rate=0.0,
+        taker_rate=0.0,
+    )
+    start_market = replace(discovered, fee_metadata=fee_free)
+    current_market = replace(
+        start_market,
+        price_grid=OutcomePriceGridMetadata(kind="fixed_step", fixed_step=0.001),
+    )
+    change = OutcomePriceGridChange(
+        venue=start_market.venue,
+        market_id=start_market.market_id,
+        timestamp_ms=3_000,
+        received_time_ms=3_100,
+        old_grid=start_market.price_grid,
+        new_grid=current_market.price_grid,
+        raw_payload={"event_type": "tick_size_change"},
+    )
+    archive = OutcomeTradeArchive(tmp_path / "polymarket-window.sqlite")
+    archive.append_market_metadata(
+        start_market,
+        observed_at_ms=1_000,
+        observation_source="gamma",
+    )
+    archive.append_market_metadata(
+        current_market,
+        observed_at_ms=3_100,
+        observation_source="gamma",
+    )
+    archive.append_price_grid_change(change, collector_session="grid")
+    archive.record_verified_price_grid_coverage(
+        start_market.venue,
+        start_market.market_id,
+        VerifiedCoverage(1_000, 5_000),
+        collector_session="grid",
+    )
+
+    market, changes = _load_archived_market_and_grid_window(
+        archive,
+        current_market,
+        start_ms=2_000,
+        end_ms=5_000,
+    )
+
+    assert market.price_grid == start_market.price_grid
+    assert changes == [change]

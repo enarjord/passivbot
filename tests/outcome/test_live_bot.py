@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
@@ -41,8 +42,13 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
 
 
 def market():
-    return hyperliquid.normalize_market(
-        json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
+    return replace(
+        hyperliquid.normalize_market(
+            json.loads((FIXTURES / "hyperliquid_price_binary.json").read_text())
+        ),
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
     )
 
 
@@ -317,6 +323,7 @@ async def test_collected_cycle_uses_verified_fill_seed_for_live_rust_plan():
         params(),
         min_observations=3,
         delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
         wall_clock_ms=lambda: now_ms,
         trade_stream=seeded_stream(),
         now_ms=now_ms,

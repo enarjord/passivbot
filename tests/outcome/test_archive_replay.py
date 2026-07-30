@@ -26,11 +26,20 @@ from outcome.models import (
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
 
 
+def hyperliquid_market_with_fixture_constraints(raw_market):
+    return replace(
+        hyperliquid.normalize_market(raw_market),
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
+    )
+
+
 def test_full_contract_replay_rejects_midmarket_constraint_changes():
     raw_market = json.loads(
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
-    initial = hyperliquid.normalize_market(raw_market)
+    initial = hyperliquid_market_with_fixture_constraints(raw_market)
     changed = replace(initial, min_order_qty=initial.min_order_qty + 1.0)
 
     with pytest.raises(ValueError, match="changing quantity or minimum-order"):
@@ -42,7 +51,7 @@ def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
     market = replace(
-        hyperliquid.normalize_market(raw_market),
+        hyperliquid_market_with_fixture_constraints(raw_market),
         lifecycle=MarketLifecycle(
             trading_open_time_ms=1_000,
             trading_close_time_ms=5_000,
@@ -138,7 +147,7 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
     initial = replace(
-        hyperliquid.normalize_market(raw_market),
+        hyperliquid_market_with_fixture_constraints(raw_market),
         lifecycle=MarketLifecycle(
             trading_open_time_ms=1_000,
             scheduled_event_time_ms=5_000,
@@ -229,7 +238,7 @@ def test_replay_does_not_treat_resolution_as_polymarket_capital_release(tmp_path
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
     market = replace(
-        hyperliquid.normalize_market(raw_market),
+        hyperliquid_market_with_fixture_constraints(raw_market),
         venue=OutcomeVenue.POLYMARKET,
         lifecycle=MarketLifecycle(
             trading_open_time_ms=1_000,
@@ -278,7 +287,7 @@ def test_polymarket_replay_requires_separate_verified_price_grid_history(tmp_pat
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
     market = replace(
-        hyperliquid.normalize_market(raw_market),
+        hyperliquid_market_with_fixture_constraints(raw_market),
         venue=OutcomeVenue.POLYMARKET,
         lifecycle=MarketLifecycle(
             trading_open_time_ms=1_000,

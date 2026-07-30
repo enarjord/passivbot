@@ -130,6 +130,7 @@ async def test_polymarket_collector_uses_same_actual_fill_and_zero_second_contra
         market,
         min_observations=3,
         delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
         wall_clock_ms=lambda: 5_100,
         trade_stream=stream(),
         archive=archive,
@@ -169,7 +170,7 @@ async def test_late_in_window_fill_prevents_verified_coverage(tmp_path):
                 collector_sequence=sequence,
             )
 
-    clock_values = iter((1_900, 2_500, 2_500, 3_100, 3_100))
+    clock_values = iter((1_900, 2_500, 2_500, 5_000, 5_000))
     with pytest.raises(
         OutcomeIncompleteVerifiedSignal,
         match="outside the allowed delivery lag",
@@ -192,3 +193,52 @@ async def test_late_in_window_fill_prevents_verified_coverage(tmp_path):
         start_ms=0,
         end_ms=10_000,
     ) == []
+
+
+@pytest.mark.asyncio
+async def test_collector_waits_through_maximum_accepted_trade_lag():
+    market = polymarket_market()
+
+    async def stream():
+        yield NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id="seed",
+            collector_sequence=1,
+        )
+        yield NormalizedOutcomeTrade(
+            venue=market.venue,
+            market_id=market.market_id,
+            asset_id=market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.6,
+            canonical_yes_price=0.6,
+            qty=1.0,
+            exchange_time_ms=2_900,
+            received_time_ms=4_500,
+            source_event_id="accepted-late-fill",
+            collector_sequence=2,
+        )
+
+    clock_values = iter((2_500, 2_500, 5_000, 5_000))
+    window = await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=1,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=2_000,
+        wall_clock_ms=lambda: next(clock_values),
+        trade_stream=stream(),
+    )
+
+    assert window.coverage == VerifiedCoverage(2_000, 3_000)
+    assert window.candles[0].close == pytest.approx(0.6)
+    assert window.candles[0].volume == pytest.approx(1.0)

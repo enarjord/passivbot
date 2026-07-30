@@ -126,6 +126,36 @@ def test_signal_candle_counts_mirrored_merged_book_trade_once():
     assert candles[0].trade_count == 1
 
 
+def test_signal_candle_pairs_repeated_equal_merged_book_trades_by_occurrence():
+    trades = [
+        replace(
+            trade(
+                1_100,
+                0.4,
+                1.0,
+                f"{outcome.value}-{occurrence}",
+                outcome=outcome,
+                sequence_id=str(sequence),
+            ),
+            economic_event_id="same-transaction-price-and-quantity",
+        )
+        for sequence, (occurrence, outcome) in enumerate(
+            (
+                (0, OutcomeSide.YES),
+                (1, OutcomeSide.YES),
+                (0, OutcomeSide.NO),
+                (1, OutcomeSide.NO),
+            ),
+            start=1,
+        )
+    ]
+
+    candles = trades_to_canonical_signal_1s_candles(trades)
+
+    assert candles[0].volume == 2.0
+    assert candles[0].trade_count == 2
+
+
 @pytest.mark.parametrize(
     "builder",
     [trades_to_1s_candles, trades_to_canonical_signal_1s_candles],

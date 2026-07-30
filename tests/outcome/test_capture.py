@@ -83,6 +83,7 @@ async def test_capture_archives_books_and_grid_without_using_them_as_candles(tmp
         min_observations=3,
         max_wait_seconds=1.0,
         delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
         wall_clock_ms=lambda: 5_100,
         trade_stream=trades(),
         book_stream=books(),

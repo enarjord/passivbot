@@ -96,7 +96,13 @@ All notable user-facing changes will be documented in this file.
   jobs no longer dilute duration-weighted metrics. YES-only sizing uses the headroom and collateral
   cost of its single inventory-increasing quote. HIP-4 account snapshots are conservatively aged
   from the start of their concurrent reads, while malformed public signal data enters the
-  observable cancel-only safety path without hiding caller configuration errors.
+  observable cancel-only safety path without hiding caller configuration errors. Current HIP-4
+  outcome metadata no longer fabricates quantity precision or order minima, so planning and order
+  construction fail closed until those constraints are authoritative. Repeated equal mirrored
+  fills remain distinct economic events, verified live coverage waits through the maximum accepted
+  trade lag, and agreeing merged-book closes provide one-second markout while conflicts remain
+  unavailable. Metadata history now preserves nonconsecutive state reversions, and bounded
+  Polymarket evaluations replay the archived start-window metadata and verified price-grid changes.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
