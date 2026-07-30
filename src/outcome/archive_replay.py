@@ -147,6 +147,18 @@ def build_archived_ema_anchor_replay(
     end_ms = market.lifecycle.trading_close_time_ms
     if start_ms is None or end_ms is None or end_ms <= start_ms:
         raise ValueError(f"outcome market {market_id} has no complete trading lifecycle")
+    if (
+        archive.load_market_metadata_at(
+            venue,
+            market_id,
+            observed_at_or_before_ms=start_ms,
+        )
+        is None
+    ):
+        raise ValueError(
+            f"outcome archive has no market metadata observed by trading open "
+            f"for {market_id}"
+        )
     settlement = _authoritative_settlement(
         archive.load_settlements(venue, market_id),
         market_id=market_id,

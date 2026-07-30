@@ -46,6 +46,40 @@ def test_full_contract_replay_rejects_midmarket_constraint_changes():
         consolidated_archived_market([initial, changed])
 
 
+def test_full_contract_replay_requires_metadata_observed_by_trading_open(tmp_path):
+    raw_market = json.loads(
+        (FIXTURES / "hyperliquid_price_binary.json").read_text()
+    )
+    market = replace(
+        hyperliquid_market_with_fixture_constraints(raw_market),
+        lifecycle=MarketLifecycle(
+            trading_open_time_ms=1_000,
+            trading_close_time_ms=5_000,
+            scheduled_event_time_ms=5_000,
+        ),
+    )
+    archive = OutcomeTradeArchive(tmp_path / "late-metadata.sqlite")
+    archive.append_market_metadata(
+        market,
+        observed_at_ms=1_500,
+        observation_source="late_import",
+    )
+
+    with pytest.raises(ValueError, match="metadata observed by trading open"):
+        build_archived_ema_anchor_replay(
+            archive,
+            venue=market.venue,
+            market_id=market.market_id,
+            fee_schedule={
+                "maker_rate": 0.0,
+                "taker_rate": 0.0,
+                "formula": "notional",
+            },
+            requested_collateral=10.0,
+            strategy_params={"execution_mode": "accumulate_pairs"},
+        )
+
+
 def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
     raw_market = json.loads(
         (FIXTURES / "hyperliquid_price_binary.json").read_text()

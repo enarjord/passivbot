@@ -23,6 +23,7 @@ class OutcomeStrategyEvaluation:
     trading_fees_paid: float
     settlement_fees_paid: float
     fees_paid: float
+    rebates_earned: float
     pre_settlement_yes_qty: float
     pre_settlement_no_qty: float
     pre_settlement_yes_cost: float
@@ -54,6 +55,8 @@ class OutcomeStrategyModeSummary:
     max_settlement_fees_paid: float
     min_total_fees_paid: float
     max_total_fees_paid: float
+    min_rebates_earned: float
+    max_rebates_earned: float
     worst_net_pnl: float
     best_net_pnl: float
     settlement_sensitivity: float
@@ -124,6 +127,7 @@ def evaluate_ema_anchor_outcome_modes(
                     trading_fees_paid=float(output["trading_fees_paid"]),
                     settlement_fees_paid=float(output["settlement_fees_paid"]),
                     fees_paid=float(output["fees_paid"]),
+                    rebates_earned=float(output["rebates_earned"]),
                     pre_settlement_yes_qty=float(output["pre_settlement_yes_qty"]),
                     pre_settlement_no_qty=float(output["pre_settlement_no_qty"]),
                     pre_settlement_yes_cost=float(output["pre_settlement_yes_cost"]),
@@ -213,6 +217,7 @@ def summarize_outcome_strategy_modes(
         net_pnls = [case.net_pnl for case in cases]
         settlement_fees = [case.settlement_fees_paid for case in cases]
         total_fees = [case.fees_paid for case in cases]
+        rebates = [case.rebates_earned for case in cases]
         larger_buy_qty = max(
             baseline.cumulative_yes_buy_qty,
             baseline.cumulative_no_buy_qty,
@@ -235,6 +240,8 @@ def summarize_outcome_strategy_modes(
                 max_settlement_fees_paid=max(settlement_fees),
                 min_total_fees_paid=min(total_fees),
                 max_total_fees_paid=max(total_fees),
+                min_rebates_earned=min(rebates),
+                max_rebates_earned=max(rebates),
                 worst_net_pnl=min(net_pnls),
                 best_net_pnl=max(net_pnls),
                 settlement_sensitivity=max(net_pnls) - min(net_pnls),

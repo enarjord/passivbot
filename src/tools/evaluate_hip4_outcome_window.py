@@ -21,7 +21,7 @@ from outcome.evaluation import (
     evaluate_ema_anchor_outcome_modes,
     summarize_outcome_strategy_modes,
 )
-from outcome.models import OutcomeVenue
+from outcome.models import NormalizedOutcomeMarket, OutcomeVenue
 from outcome.rust_runner import normalized_market_to_rust_spec
 
 
@@ -68,6 +68,26 @@ def _proves_interval(
         if cursor >= end_ms:
             return True
     return False
+
+
+def _window_market_spec(
+    market: NormalizedOutcomeMarket,
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> dict:
+    market_spec = normalized_market_to_rust_spec(market)
+    # This evaluator covers only the requested sample, so lifecycle gates and
+    # inventory-time metrics must use the same synthetic window boundaries.
+    market_spec.update(
+        {
+            "trading_opens_ms": start_ms,
+            "order_entry_opens_ms": start_ms,
+            "trading_closes_ms": end_ms,
+            "scheduled_event_ms": end_ms,
+        }
+    )
+    return market_spec
 
 
 async def _main() -> int:
@@ -183,7 +203,11 @@ async def _main() -> int:
         "execution_mode": "accumulate_pairs",
     }
     payload = build_trade_derived_ema_anchor_input(
-        market_spec=normalized_market_to_rust_spec(market),
+        market_spec=_window_market_spec(
+            market,
+            start_ms=args.start_ms,
+            end_ms=args.end_ms,
+        ),
         trades=trades,
         verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
         fee_schedule={
@@ -195,7 +219,7 @@ async def _main() -> int:
         },
         starting_collateral=args.starting_collateral,
         strategy_params=strategy_params,
-        settlement_time_ms=market.lifecycle.scheduled_event_time_ms,
+        settlement_time_ms=args.end_ms,
         yes_fraction=0.0,
     )
     summaries = summarize_outcome_strategy_modes(

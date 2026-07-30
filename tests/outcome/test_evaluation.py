@@ -138,6 +138,21 @@ def test_evaluation_runs_modes_and_both_settlement_outcomes():
         == pytest.approx(-0.01)
     )
 
+    strategy_payload["fee_schedule"]["maker_rate"] = -0.01
+    rebate_evaluations = evaluate_ema_anchor_outcome_modes(
+        strategy_payload,
+        execution_modes=["accumulate_pairs"],
+        settlement_fractions=[0.0],
+    )
+    assert rebate_evaluations[0].rebates_earned > 0.0
+    rebate_summary = summarize_outcome_strategy_modes(rebate_evaluations)[0]
+    assert rebate_summary.min_rebates_earned == pytest.approx(
+        rebate_evaluations[0].rebates_earned
+    )
+    assert rebate_summary.max_rebates_earned == pytest.approx(
+        rebate_evaluations[0].rebates_earned
+    )
+
 
 def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
     strategy_payload = {

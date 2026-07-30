@@ -103,6 +103,10 @@ All notable user-facing changes will be documented in this file.
   trade lag, and agreeing merged-book closes provide one-second markout while conflicts remain
   unavailable. Metadata history now preserves nonconsecutive state reversions, and bounded
   Polymarket evaluations replay the archived start-window metadata and verified price-grid changes.
+  Full-contract replay now requires metadata observed by trading open; bounded HIP-4 evaluations
+  use their requested synthetic lifecycle and settlement boundaries. Mutation validation rejects
+  creates targeting kept-order slots, and strategy-mode summaries retain settlement-scenario
+  rebate ranges.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

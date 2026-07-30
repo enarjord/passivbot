@@ -408,6 +408,39 @@ async def test_executor_rejects_forged_create_cloid_before_any_mutation():
 
 
 @pytest.mark.asyncio
+async def test_executor_rejects_create_for_slot_occupied_by_kept_order():
+    desired = plan()
+    bid_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    account = snapshot(
+        (order("1", outcome=OutcomeSide.YES, price=0.49, cloid=bid_cloid),)
+    )
+    reconciliation = reconcile_outcome_orders(market(), desired, account)
+    assert reconciliation.kept[0].intent.slot == "canonical_bid"
+    assert reconciliation.creates[0].intent.slot == "canonical_ask"
+    forged_create = replace(
+        reconciliation.creates[0],
+        intent=reconciliation.kept[0].intent,
+        client_order_id=managed_outcome_client_order_id(
+            "913",
+            slot="canonical_bid",
+            observation_end_ms=reconciliation.observation_end_ms,
+        ),
+    )
+    forged = replace(reconciliation, creates=(forged_create,))
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="slot occupied by a kept order"):
+        await execute_hip4_order_reconciliation(client, market(), forged)
+
+    assert client.cancelled == []
+    assert client.created == []
+
+
+@pytest.mark.asyncio
 async def test_executor_rejects_created_order_with_wrong_authoritative_terms():
     reconciliation = reconcile_outcome_orders(
         market(),

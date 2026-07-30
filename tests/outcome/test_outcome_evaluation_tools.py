@@ -15,6 +15,7 @@ from outcome.models import (
     OutcomePriceGridMetadata,
 )
 from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
+from tools.evaluate_hip4_outcome_window import _window_market_spec
 from tools.evaluate_polymarket_outcome_window import (
     _load_archived_market_and_grid_window,
     _require_fee_free_market,
@@ -115,3 +116,19 @@ def test_polymarket_window_uses_start_metadata_and_archived_grid_changes(tmp_pat
 
     assert market.price_grid == start_market.price_grid
     assert changes == [change]
+
+
+def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
+    market = replace(
+        hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json")),
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
+    )
+
+    spec = _window_market_spec(market, start_ms=2_000, end_ms=5_000)
+
+    assert spec["trading_opens_ms"] == 2_000
+    assert spec["order_entry_opens_ms"] == 2_000
+    assert spec["trading_closes_ms"] == 5_000
+    assert spec["scheduled_event_ms"] == 5_000

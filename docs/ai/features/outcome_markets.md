@@ -375,20 +375,23 @@ as if capital were reusable. The orchestrator accounts for overlapping markets, 
 sets, delayed resolution/redemption, and venue-specific settlement timing.
 
 An archived full-contract job is admissible only when the archive contains immutable market
-metadata, one consistent authoritative settlement payout, actual fills, and continuous verified
-coverage for both native side assets from trading open through trading close. The archive replay
-builder also requires independent full-window price-grid stream coverage on venues such as
-Polymarket where tick-size changes are a separate event source. Fill coverage does not prove grid
-coverage. A bounded live capture without an authoritative grid-subscription readiness boundary
-archives observed changes but does not certify grid coverage. The builder supplies the
-authoritative capital-release timestamp and payout to Rust; resolution-only evidence remains
-archived but is not a release timestamp. The EMA-anchor job adapter invokes the EMA strategy
-kernel—not the generic scripted-action simulator—before the shared-wallet orchestrator locks that
-job's allocation until that release.
+metadata observed no later than trading open, one consistent authoritative settlement payout,
+actual fills, and continuous verified coverage for both native side assets from trading open
+through trading close. A later import cannot retroactively prove mutable fees or order constraints
+at the opening boundary. The archive replay builder also requires independent full-window
+price-grid stream coverage on venues such as Polymarket where tick-size changes are a separate
+event source. Fill coverage does not prove grid coverage. A bounded live capture without an
+authoritative grid-subscription readiness boundary archives observed changes but does not certify
+grid coverage. The builder supplies the authoritative capital-release timestamp and payout to
+Rust; resolution-only evidence remains archived but is not a release timestamp. The EMA-anchor job
+adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
+shared-wallet orchestrator locks that job's allocation until that release.
 
 Any bounded outcome-window evaluation uses the archived market metadata state valid at the start
 of its requested window, not the latest discovery row. It requires verified grid-stream coverage
-for that window and replays every retained grid change in chronological order.
+for that window and replays every retained grid change in chronological order. Strategy lifecycle
+gates, settlement, and inventory-time metrics use synthetic open and close boundaries matching the
+requested sample; the result is not presented as a full-contract replay.
 
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,
@@ -396,6 +399,9 @@ maker ratio, fill rate, and post-fill adverse selection. `pair_completion_ratio`
 cumulative YES and NO buy quantities (`min(YES buys, NO buys) / max(YES buys, NO buys)`), not on
 the final flatness of inventory. Buying YES and later selling YES is a round trip with zero pair
 completion, even though no settlement residual remains.
+
+Settlement-scenario evaluations retain each run's total rebates. Mode summaries report the minimum
+and maximum rebate totals rather than dropping them or assuming settlement rebates are invariant.
 
 The Rust result reports cumulative YES/NO buys, pair completion, peak absolute residual, and
 time-weighted absolute residual and total token inventory from trading open through settlement.
@@ -454,9 +460,10 @@ belong to the retained market, outcome side, and exact expected client-order ID.
 executor independently validates every cancellation and creation against the deterministic
 Passivbot outcome namespace before its first write, then verifies the complete final managed-order
 set rather than trusting the previously constructed reconciliation object. Kept orders must still
-match their exact expected remaining quantity and terms. If final verification fails, the executor
-cancels every surviving managed quote for the market, continues through individual cancellation
-errors, and verifies the managed set absent before propagating the failure.
+match their exact expected remaining quantity and terms. A create may not target a managed slot
+already occupied by a kept order. If final verification fails, the executor cancels every
+surviving managed quote for the market, continues through individual cancellation errors, and
+verifies the managed set absent before propagating the failure.
 
 If the verified actual-fill signal is unavailable or stale, new and replacement quotes are
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:
