@@ -14,6 +14,7 @@ from candlestick_manager import (
     ONE_MIN_MS,
     _floor_minute,
 )
+from passivbot_exceptions import FatalBotException
 
 ONE_HOUR_MS = 3_600_000
 
@@ -173,6 +174,74 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
     method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
     with pytest.raises(Exception, match="MissingEma"):
         await method(bot, snapshot, return_snapshot=True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_orchestrator_rejects_unknown_rust_symbol_before_conversion(
+    monkeypatch,
+):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    class FakeBot:
+        positions = {}
+        balance = 1000.0
+        PB_modes = {}
+        effective_min_cost = {}
+        _config_hedge_mode = False
+        hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            return False
+
+        def get_raw_balance(self):
+            return float(self.balance)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+    snapshot = {
+        "symbols": [],
+        "last_prices": {},
+        "m1_close_emas": {},
+        "m1_volume_emas": {},
+        "m1_log_range_emas": {},
+        "h1_log_range_emas": {},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    def fake_compute(_json_str):
+        return json.dumps(
+            {
+                "orders": [
+                    {
+                        "symbol_idx": 999,
+                        "qty": 1.0,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "limit",
+                        "execution_priority": "ordinary",
+                    }
+                ],
+                "diagnostics": {},
+            }
+        )
+
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    with pytest.raises(FatalBotException, match="unknown symbol_idx 999"):
+        await method(FakeBot(), snapshot, return_snapshot=False)
 
 
 def _rust_bot_params(**overrides):

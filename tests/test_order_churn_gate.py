@@ -220,6 +220,16 @@ def test_snapshot_and_attempt_windows_prune():
     assert snapshots[0].monotonic_seconds == 601.0
 
 
+def test_raw_rust_order_batch_with_unknown_symbol_is_fatal_as_a_whole():
+    orders = [
+        {"symbol_idx": 0},
+        {"symbol_idx": 999},
+    ]
+
+    with pytest.raises(FatalBotException, match="unknown symbol_idx 999"):
+        reconciler.validate_rust_orchestrator_order_symbols(orders, {0: SYMBOL})
+
+
 @pytest.mark.asyncio
 async def test_malformed_rust_ideal_is_fatal_before_reconciliation():
     invalid = _order(price=100.0)
