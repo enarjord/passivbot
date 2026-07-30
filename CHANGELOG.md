@@ -8,9 +8,12 @@ All notable user-facing changes will be documented in this file.
   candles through the canonical candle path, reducing routine candle REST
   pressure while retaining REST for startup basis, gaps, reconnect recovery,
   prolonged silence, and periodic integrity audits. CCXT cache provenance and
-  successor timestamps prove finality; WebSocket silence never creates a
-  synthetic no-trade candle, and unstable streams cool down to REST-only
-  maintenance before retrying automatically.
+  successor timestamps prove finality; each watcher session primes its first
+  snapshot without persisting replayed rows, integrity audits force a REST
+  overlap even when the WebSocket tail is fresh, and WebSocket silence never
+  creates a synthetic no-trade candle. Unstable streams cool down to REST-only
+  maintenance before retrying automatically, and the subscription reconciler
+  remains ready for runtime transitions into forager mode.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

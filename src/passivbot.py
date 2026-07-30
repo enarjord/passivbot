@@ -20369,19 +20369,35 @@ class Passivbot:
                 self._forager_surface_check_ms = surface_checks
                 surface_attempts[(sym, timeframe)] = int(utc_ms())
                 self._forager_surface_attempt_ms = surface_attempts
-                candle_task = self.cm.get_candles(
-                    sym,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                    # Background candidate refresh is best-effort. A 1ms TTL
-                    # still forces an ordinary stale read while allowing a
-                    # successful partial sparse response to reach gap repair
-                    # instead of aborting at a terminal empty page.
-                    max_age_ms=1,
-                    timeframe=timeframe,
-                    strict=False,
-                    max_lookback_candles=int(required_candles),
+                ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                    self,
+                    timeframe,
+                    pre_health,
+                    now_ms=now,
                 )
+                if ws_rest_audit_due:
+                    # A canonical WS tail is already fresh, so the ordinary
+                    # get_candles/refresh path would skip network I/O. Force a
+                    # bounded overlap specifically for the REST integrity audit.
+                    candle_task = self.cm.refresh(
+                        sym,
+                        through_ts=end_ts,
+                        force_overlap=True,
+                    )
+                else:
+                    candle_task = self.cm.get_candles(
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        # Background candidate refresh is best-effort. A 1ms TTL
+                        # still forces an ordinary stale read while allowing a
+                        # successful partial sparse response to reach gap repair
+                        # instead of aborting at a terminal empty page.
+                        max_age_ms=1,
+                        timeframe=timeframe,
+                        strict=False,
+                        max_lookback_candles=int(required_candles),
+                    )
                 if max_refresh_ms > 0:
                     remaining_s = max(
                         0.001,

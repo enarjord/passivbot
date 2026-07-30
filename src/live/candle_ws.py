@@ -35,6 +35,11 @@ def reconnect_delay_seconds(consecutive_failures: int) -> float:
 
 
 def forager_ws_candles_enabled(bot: Any) -> bool:
+    """Return whether the configured transport can maintain forager WS tasks.
+
+    The reconciler intentionally starts even before a side enters forager mode;
+    ``desired_forager_ws_symbols`` keeps its subscription set empty until then.
+    """
     if not bool(
         get_optional_live_value(
             getattr(bot, "config", {}) or {},
@@ -56,9 +61,6 @@ def forager_ws_candles_enabled(bot: Any) -> bool:
         ) <= 0:
             return False
     except (TypeError, ValueError):
-        return False
-    is_forager_mode = getattr(bot, "is_forager_mode", None)
-    if not callable(is_forager_mode) or not bool(is_forager_mode()):
         return False
     ccp = getattr(bot, "ccp", None)
     if ccp is None:
@@ -117,7 +119,6 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
         while not bool(getattr(bot, "stop_signal_received", False)):
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
-                consecutive_failures = 0
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
                     # Some venues return hundreds of cached rows on every
@@ -128,6 +129,7 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     result = ingest(symbol, tail_rows)
                     if inspect.isawaitable(result):
                         await result
+                consecutive_failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

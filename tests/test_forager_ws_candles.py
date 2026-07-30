@@ -29,6 +29,29 @@ def _manager(tmp_path, *, now_ms: int) -> CandlestickManager:
     return cm
 
 
+async def _prime_and_finalize_ws_row(
+    cm: CandlestickManager,
+    symbol: str,
+    row: list,
+) -> int:
+    """Observe one open bucket, then seal it with a fresh successor."""
+    ts = int(row[0])
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [row],
+            now_ms=ts + ONE_MIN_MS - 10_000,
+        )
+        == 0
+    )
+    close = float(row[4])
+    return await cm.ingest_live_ws_ohlcv(
+        symbol,
+        [[ts + ONE_MIN_MS, close, close, close, close, 0.0]],
+        now_ms=ts + ONE_MIN_MS + 1_000,
+    )
+
+
 @pytest.mark.asyncio
 async def test_ws_requires_canonical_basis_then_persists_only_finalized_rows(
     tmp_path,
@@ -41,7 +64,7 @@ async def test_ws_requires_canonical_basis_then_persists_only_finalized_rows(
         await cm.ingest_live_ws_ohlcv(
             symbol,
             [[4 * ONE_MIN_MS, 101, 103, 100, 102, 4]],
-            now_ms=now_ms,
+            now_ms=5 * ONE_MIN_MS - 10_000,
         )
         == 0
     )
@@ -98,10 +121,13 @@ async def test_cached_forager_ema_uses_contiguous_ws_tail(tmp_path):
         merge_cache=True,
         last_refresh_ms=now_ms,
     )
-    await cm.ingest_live_ws_ohlcv(
-        symbol,
-        [[4 * ONE_MIN_MS, 101, 102, 101, 102, 3]],
-        now_ms=now_ms,
+    assert (
+        await _prime_and_finalize_ws_row(
+            cm,
+            symbol,
+            [4 * ONE_MIN_MS, 101, 102, 101, 102, 3],
+        )
+        == 1
     )
 
     metrics = await cm.get_latest_cached_ema_metric_spans(
@@ -145,10 +171,13 @@ async def test_persisted_ws_tail_is_reproducible_after_manager_restart(tmp_path)
         merge_cache=True,
         last_refresh_ms=3 * ONE_MIN_MS,
     )
-    await first.ingest_live_ws_ohlcv(
-        symbol,
-        [[4 * ONE_MIN_MS, 101, 102, 101, 102, 3]],
-        now_ms=now_ms,
+    assert (
+        await _prime_and_finalize_ws_row(
+            first,
+            symbol,
+            [4 * ONE_MIN_MS, 101, 102, 101, 102, 3],
+        )
+        == 1
     )
     expected = await first.get_latest_cached_ema_metrics(
         symbol,
@@ -184,10 +213,13 @@ async def test_ws_reconnect_gap_and_silence_remain_missing(tmp_path):
     )
 
     assert await cm.ingest_live_ws_ohlcv(symbol, [], now_ms=now_ms) == 0
-    await cm.ingest_live_ws_ohlcv(
-        symbol,
-        [[3 * ONE_MIN_MS, 101, 101, 101, 101, 1]],
-        now_ms=now_ms,
+    assert (
+        await _prime_and_finalize_ws_row(
+            cm,
+            symbol,
+            [3 * ONE_MIN_MS, 101, 101, 101, 101, 1],
+        )
+        == 1
     )
     report = cm.get_completed_candle_health(
         symbol,
@@ -212,10 +244,13 @@ async def test_rest_correction_replaces_persisted_ws_row_and_invalidates_ema(tmp
         merge_cache=True,
         last_refresh_ms=now_ms,
     )
-    await cm.ingest_live_ws_ohlcv(
-        symbol,
-        [[2 * ONE_MIN_MS, 100, 102, 99, 101, 2]],
-        now_ms=now_ms,
+    assert (
+        await _prime_and_finalize_ws_row(
+            cm,
+            symbol,
+            [2 * ONE_MIN_MS, 100, 102, 99, 101, 2],
+        )
+        == 1
     )
     before = await cm.get_latest_cached_ema_metrics(
         symbol,
@@ -290,10 +325,13 @@ async def test_delayed_ws_correction_overwrites_persisted_row(tmp_path):
         last_refresh_ms=ONE_MIN_MS,
     )
 
-    await cm.ingest_live_ws_ohlcv(
-        symbol,
-        [[2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]],
-        now_ms=3 * ONE_MIN_MS + 1_000,
+    assert (
+        await _prime_and_finalize_ws_row(
+            cm,
+            symbol,
+            [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2],
+        )
+        == 1
     )
     assert (
         await cm.ingest_live_ws_ohlcv(
@@ -330,10 +368,13 @@ async def test_rest_omission_does_not_delete_validated_ws_candle(tmp_path):
         merge_cache=True,
         last_refresh_ms=2 * ONE_MIN_MS,
     )
-    await cm.ingest_live_ws_ohlcv(
-        symbol,
-        [[3 * ONE_MIN_MS, 100, 101, 99, 100.5, 1]],
-        now_ms=4 * ONE_MIN_MS + 1_000,
+    assert (
+        await _prime_and_finalize_ws_row(
+            cm,
+            symbol,
+            [3 * ONE_MIN_MS, 100, 101, 99, 100.5, 1],
+        )
+        == 1
     )
 
     cm._persist_batch(
@@ -355,6 +396,59 @@ async def test_rest_omission_does_not_delete_validated_ws_candle(tmp_path):
         3 * ONE_MIN_MS,
         4 * ONE_MIN_MS,
     ]
+
+
+@pytest.mark.asyncio
+async def test_first_post_reconnect_snapshot_cannot_persist_replayed_partial_row(
+    tmp_path,
+):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    cm._persist_batch(
+        symbol,
+        _candles((ONE_MIN_MS, 100, 100, 100, 100, 1)),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    partial = [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+    current = [3 * ONE_MIN_MS, 100.5, 101, 100, 100.7, 0.2]
+
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial],
+            now_ms=3 * ONE_MIN_MS - 10_000,
+        )
+        == 0
+    )
+    cm.clear_live_ws_ohlcv_state(symbol)
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial, current],
+            now_ms=3 * ONE_MIN_MS + 1_000,
+        )
+        == 0
+    )
+    changed_current = [3 * ONE_MIN_MS, 100.5, 102, 100, 101, 0.5]
+    assert (
+        await cm.ingest_live_ws_ohlcv(
+            symbol,
+            [partial, changed_current],
+            now_ms=3 * ONE_MIN_MS + 2_000,
+        )
+        == 0
+    )
+
+    disk = cm._load_from_disk(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    assert not np.any(disk["ts"] == 2 * ONE_MIN_MS)
+    assert cm.get_last_final_ts(symbol) == ONE_MIN_MS
 
 
 class _BlockingCCP:
@@ -461,6 +555,43 @@ def test_repeated_ws_failures_enter_rest_fallback_cooldown():
 
 
 @pytest.mark.asyncio
+async def test_ingestion_failures_advance_to_rest_fallback_cooldown():
+    delays = []
+
+    class _SuccessfulWatcher:
+        has = {"watchOHLCV": True}
+
+        async def watch_ohlcv(self, _symbol, _timeframe):
+            return [[ONE_MIN_MS, 1, 1, 1, 1, 1]]
+
+    class _FailingManager:
+        async def ingest_live_ws_ohlcv(self, _symbol, _rows):
+            raise OSError("persistence unavailable")
+
+        def clear_live_ws_ohlcv_state(self, _symbol):
+            return None
+
+    bot = SimpleNamespace(
+        ccp=_SuccessfulWatcher(),
+        cm=_FailingManager(),
+        stop_signal_received=False,
+        get_exchange_time=lambda: 10_000_000,
+    )
+
+    async def record_sleep(delay_s, *, stage):
+        assert stage == "forager_ws_candle_reconnect"
+        delays.append(delay_s)
+        if len(delays) == 5:
+            bot.stop_signal_received = True
+
+    bot._sleep_unless_shutdown = record_sleep
+
+    await candle_ws.watch_forager_ws_symbol(bot, "BTC/USDT:USDT")
+
+    assert delays == [1.0, 2.0, 4.0, 8.0, 300.0]
+
+
+@pytest.mark.asyncio
 async def test_dynamic_subscriptions_follow_flat_forager_universe():
     ccp = _BlockingCCP()
     bot = SimpleNamespace(
@@ -503,6 +634,40 @@ async def test_dynamic_subscriptions_follow_flat_forager_universe():
     await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
+@pytest.mark.asyncio
+async def test_ws_maintainer_starts_before_forager_mode_becomes_active():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {
+        "live": {
+            "enable_forager_ws_candles": True,
+            "max_ohlcv_fetches_per_minute": 30,
+        }
+    }
+    bot.ws_enabled = True
+    bot.ccp = SimpleNamespace(
+        has={"watchOHLCV": True},
+        watch_ohlcv=lambda *_args: None,
+    )
+    bot.monitor_publisher = None
+    bot.is_forager_mode = lambda _pside=None: False
+    blocker = asyncio.Event()
+
+    async def wait_for_stop():
+        await blocker.wait()
+
+    bot.maintain_hourly_cycle = wait_for_stop
+    bot.watch_orders = wait_for_stop
+    bot.maintain_forager_ws_candles = wait_for_stop
+
+    await bot.start_data_maintainers()
+
+    assert "maintain_forager_ws_candles" in bot.maintainers
+    tasks = list(bot.maintainers.values())
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def test_ws_tail_rest_audit_is_periodic_and_one_minute_only():
     bot = SimpleNamespace(
         config={"live": {"forager_ws_candle_rest_audit_minutes": 30}}
@@ -540,6 +705,158 @@ def test_ws_tail_rest_audit_is_periodic_and_one_minute_only():
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_forager_due_ws_audit_forces_rest_overlap(monkeypatch):
+    import passivbot as passivbot_module
+
+    symbol = "BTC/USDT:USDT"
+    now_ms = 100 * ONE_MIN_MS
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    monkeypatch.setattr(
+        passivbot_module,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: ({symbol: 3}, {symbol: 0}, {symbol: True}),
+    )
+    monkeypatch.setattr(
+        Passivbot,
+        "_urgent_active_candle_symbols",
+        lambda _bot: [],
+    )
+
+    class _AuditCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.refresh_calls = []
+
+        async def refresh(self, called_symbol, **kwargs):
+            self.refresh_calls.append((called_symbol, kwargs))
+
+        async def get_candles(self, *_args, **_kwargs):
+            raise AssertionError("due WS audit must bypass ordinary get_candles")
+
+    class _AuditBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_refresh_seconds": 0,
+                "forager_ws_candle_rest_audit_minutes": 30,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        start_time_ms = now_ms
+        cm = _AuditCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, _pside):
+            return 0
+
+        def bp(self, *_args, **_kwargs):
+            return 0.0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _forager_refresh_budget(self, *_args, **_kwargs):
+            return 1
+
+        def _forager_target_staleness_ms(self, *_args, **_kwargs):
+            return 0
+
+        _shutdown_requested = Passivbot._shutdown_requested
+
+    health = {
+        "coverage_ok": True,
+        "age_ms": 0,
+        "last_cached_ts": now_ms - ONE_MIN_MS,
+        "missing_candles": 0,
+        "tail_gap_candles": 0,
+        "tail_only": False,
+        "leading_gap_only": False,
+        "no_basis": False,
+        "last_refresh_ms": now_ms - 31 * ONE_MIN_MS,
+        "last_ws_persist_ms": now_ms - ONE_MIN_MS,
+        "ws_persisted_contributed_to_tail": True,
+    }
+    monkeypatch.setattr(
+        Passivbot,
+        "_candidate_candle_surface_health",
+        lambda *_args, **_kwargs: dict(health),
+    )
+
+    bot = _AuditBot()
+    await Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert bot.cm.refresh_calls == [
+        (
+            symbol,
+            {
+                "through_ts": now_ms - ONE_MIN_MS,
+                "force_overlap": True,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_force_overlap_refresh_fetches_when_canonical_tail_is_fresh(
+    tmp_path,
+):
+    now_ms = 5 * ONE_MIN_MS + 10_000
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=now_ms)
+    cm.exchange = object()
+    cm._persist_batch(
+        symbol,
+        _candles(
+            (3 * ONE_MIN_MS, 100, 100, 100, 100, 1),
+            (4 * ONE_MIN_MS, 100, 101, 99, 100.5, 2),
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=ONE_MIN_MS,
+    )
+    calls = []
+
+    async def fetch(symbol_arg, start_ts, end_ts, **kwargs):
+        calls.append((symbol_arg, start_ts, end_ts))
+        corrected = _candles(
+            (4 * ONE_MIN_MS, 100, 102, 99, 101.5, 3),
+        )
+        on_batch = kwargs.get("on_batch")
+        if on_batch is not None:
+            on_batch(corrected)
+        return corrected
+
+    cm._fetch_ohlcv_paginated = fetch
+
+    await cm.refresh(symbol, through_ts=4 * ONE_MIN_MS)
+    assert calls == []
+
+    await cm.refresh(
+        symbol,
+        through_ts=4 * ONE_MIN_MS,
+        force_overlap=True,
+    )
+
+    assert len(calls) == 1
+    disk = cm._load_from_disk(
+        symbol,
+        4 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        timeframe="1m",
+    )
+    assert float(disk[-1]["c"]) == pytest.approx(101.5)
+    assert cm.get_last_refresh_ms(symbol) > ONE_MIN_MS
 
 
 def test_forager_staleness_uses_persisted_ws_canonical_tail():
