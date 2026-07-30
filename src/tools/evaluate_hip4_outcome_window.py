@@ -18,6 +18,7 @@ from outcome.archive_replay import consolidated_archived_market
 from outcome.backtest_input import build_trade_derived_ema_anchor_input
 from outcome.candles import VerifiedCoverage
 from outcome.evaluation import (
+    ema_warmup_observations,
     evaluate_ema_anchor_outcome_modes,
     summarize_outcome_strategy_modes,
 )
@@ -256,7 +257,7 @@ async def _main() -> int:
     strategy_params = {
         "ema_span_fast_seconds": args.ema_fast_seconds,
         "ema_span_slow_seconds": args.ema_slow_seconds,
-        "ema_warmup_seconds": int(args.ema_slow_seconds),
+        "ema_warmup_seconds": ema_warmup_observations(args.ema_slow_seconds),
         "quote_offset": args.quote_offset,
         "inventory_skew": args.inventory_skew,
         "clip_qty": args.clip_qty,

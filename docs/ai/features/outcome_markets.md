@@ -384,7 +384,8 @@ surfacing a settlement-archive write failure.
 
 `ema_anchor_outcome` is a derivative strategy, not a direct reuse of perpetual-futures sizing.
 EMA spans are measured in seconds against the dense actual-fill-derived one-second signal series
-and must be at least one one-second observation.
+and must be at least one one-second observation. Warmup covers the complete configured slow span:
+a fractional-second span is rounded up to the next whole one-second observation, never truncated.
 Quote offsets and inventory skew are absolute probability points on `[0, payout_unit]`; they are
 not unbounded multiplicative percentages. Every quote remains a canonical bid or ask but resolves
 to an executable native YES/NO buy or inventory-backed sell.

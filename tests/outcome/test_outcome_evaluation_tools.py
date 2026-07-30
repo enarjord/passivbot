@@ -10,6 +10,7 @@ import pytest
 from outcome.adapters import hyperliquid, polymarket
 from outcome.archive import OutcomeTradeArchive
 from outcome.candles import VerifiedCoverage
+from outcome.evaluation import ema_warmup_observations
 from outcome.models import (
     MarketLifecycle,
     OutcomeFeeMetadata,
@@ -40,6 +41,52 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "outcome"
 
 def fixture(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
+
+
+@pytest.mark.parametrize(
+    ("span_seconds", "candle_interval_seconds", "expected"),
+    (
+        (1.0, 1.0, 1),
+        (1.9, 1.0, 2),
+        (2.0, 1.0, 2),
+        (2.1, 1.0, 3),
+        (2.1, 0.5, 5),
+    ),
+)
+def test_ema_warmup_observations_cover_full_span(
+    span_seconds,
+    candle_interval_seconds,
+    expected,
+):
+    assert (
+        ema_warmup_observations(
+            span_seconds,
+            candle_interval_seconds=candle_interval_seconds,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("span_seconds", "candle_interval_seconds"),
+    (
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (float("nan"), 1.0),
+        (float("inf"), 1.0),
+        (1.0, 0.0),
+        (1.0, float("nan")),
+    ),
+)
+def test_ema_warmup_observations_reject_invalid_durations(
+    span_seconds,
+    candle_interval_seconds,
+):
+    with pytest.raises(ValueError, match="finite and positive"):
+        ema_warmup_observations(
+            span_seconds,
+            candle_interval_seconds=candle_interval_seconds,
+        )
 
 
 def test_archived_polymarket_fee_curve_maps_to_probability_variance():

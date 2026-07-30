@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 from typing import Any, Iterable, Mapping
 
 from outcome.orchestrator import OutcomePostFillAdverseSelection
@@ -78,6 +79,23 @@ class OutcomeStrategyModeSummary:
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
     post_fill_adverse_selection: tuple[OutcomePostFillAdverseSelection, ...]
+
+
+def ema_warmup_observations(
+    span_seconds: float,
+    *,
+    candle_interval_seconds: float = 1.0,
+) -> int:
+    """Return whole observations needed to cover an EMA span without truncation."""
+
+    if not math.isfinite(span_seconds) or span_seconds <= 0.0:
+        raise ValueError("EMA span seconds must be finite and positive")
+    if (
+        not math.isfinite(candle_interval_seconds)
+        or candle_interval_seconds <= 0.0
+    ):
+        raise ValueError("candle interval seconds must be finite and positive")
+    return math.ceil(span_seconds / candle_interval_seconds)
 
 
 def evaluate_ema_anchor_outcome_modes(
