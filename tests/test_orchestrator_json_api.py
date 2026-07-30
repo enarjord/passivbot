@@ -1871,6 +1871,10 @@ def test_forager_respects_n_positions_selects_one_coin():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT", 1: "ETH/USDT:USDT"},
+    )
     assert out["orders"], "expected at least one order"
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
     selection = out["diagnostics"]["forager_selections"][0]
@@ -2298,6 +2302,35 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
 
     assert any(o["order_type"].startswith("entry_") for o in out["orders"])
     assert out["diagnostics"]["min_effective_cost_blocks"] == []
+
+
+def test_live_validator_accepts_real_min_effective_cost_diagnostic():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.01,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        effective_min_cost=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
+    inp["global"]["filter_by_min_effective_cost"] = True
+
+    out = compute(pbr, inp)
+
+    assert out["diagnostics"]["min_effective_cost_blocks"]
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"})
 
 
 def test_manual_positions_consume_twel_entry_gate_budget():

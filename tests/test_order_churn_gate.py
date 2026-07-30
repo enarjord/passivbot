@@ -88,6 +88,54 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
     return {"orders": orders, "diagnostics": {"symbol_states": symbol_states}}
 
 
+def _raw_min_effective_cost_block(**overrides) -> dict:
+    block = {
+        "symbol_idx": 0,
+        "pside": "long",
+        "balance": 1_000.0,
+        "effective_limit": 10.0,
+        "entry_initial_qty_pct": 0.01,
+        "projected_initial_cost": 5.0,
+        "effective_min_cost": 10.0,
+    }
+    block.update(overrides)
+    return block
+
+
+def _raw_forager_selection(**overrides) -> dict:
+    selection = {
+        "pside": "long",
+        "slots_to_fill": 1,
+        "score_hysteresis_pct": 0.1,
+        "selected_symbol_indices": [0],
+        "incumbent_symbol_indices": [0],
+        "top_scores": [
+            {
+                "symbol_idx": 0,
+                "rank": 0,
+                "score": 1.0,
+                "volume_component": 1.0,
+                "ema_readiness_component": 1.0,
+                "volatility_component": 1.0,
+                "selected": True,
+                "incumbent": True,
+            }
+        ],
+        "hysteresis_events": [
+            {
+                "incumbent_symbol_idx": 0,
+                "incumbent_score": 1.0,
+                "challenger_symbol_idx": 0,
+                "challenger_score": 1.0,
+                "score_gap": 0.0,
+                "kept_incumbent": True,
+            }
+        ],
+    }
+    selection.update(overrides)
+    return selection
+
+
 def test_no_history_and_single_move_fail_open():
     state = OrderChurnGateState()
     first = _order(price=100.0)
@@ -336,6 +384,99 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
 
     with pytest.raises(FatalBotException, match="invalid qty"):
         reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
+@pytest.mark.parametrize(
+    ("diagnostics", "error"),
+    [
+        ({"min_effective_cost_blocks": {}}, "must be a list"),
+        (
+            {
+                "min_effective_cost_blocks": [
+                    _raw_min_effective_cost_block(symbol_idx="0")
+                ]
+            },
+            "invalid symbol_idx",
+        ),
+        (
+            {
+                "min_effective_cost_blocks": [
+                    _raw_min_effective_cost_block(balance=None)
+                ]
+            },
+            "invalid balance",
+        ),
+        ({"forager_selections": {}}, "must be a list"),
+        (
+            {"forager_selections": [_raw_forager_selection(slots_to_fill="1")]},
+            "invalid slots_to_fill",
+        ),
+        (
+            {
+                "forager_selections": [
+                    _raw_forager_selection(selected_symbol_indices=["0"])
+                ]
+            },
+            "invalid symbol_idx",
+        ),
+        (
+            {"forager_selections": [_raw_forager_selection(top_scores={})]},
+            "top_scores must be a list",
+        ),
+        (
+            {
+                "forager_selections": [
+                    _raw_forager_selection(
+                        top_scores=[
+                            {
+                                **_raw_forager_selection()["top_scores"][0],
+                                "score": "1.0",
+                            }
+                        ]
+                    )
+                ]
+            },
+            "invalid score",
+        ),
+        (
+            {"forager_selections": [_raw_forager_selection(hysteresis_events={})]},
+            "hysteresis_events must be a list",
+        ),
+        (
+            {
+                "forager_selections": [
+                    _raw_forager_selection(
+                        hysteresis_events=[
+                            {
+                                **_raw_forager_selection()["hysteresis_events"][0],
+                                "kept_incumbent": 1,
+                            }
+                        ]
+                    )
+                ]
+            },
+            "invalid kept_incumbent",
+        ),
+    ],
+)
+def test_raw_rust_output_rejects_malformed_consumed_diagnostics(diagnostics, error):
+    out = _raw_rust_output()
+    out["diagnostics"].update(diagnostics)
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
+def test_raw_rust_output_accepts_complete_consumed_diagnostics():
+    out = _raw_rust_output()
+    out["diagnostics"].update(
+        {
+            "min_effective_cost_blocks": [_raw_min_effective_cost_block()],
+            "forager_selections": [_raw_forager_selection()],
+        }
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}) == []
 
 
 def test_raw_rust_output_malformed_json_is_fatal():

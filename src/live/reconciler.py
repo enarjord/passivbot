@@ -1185,6 +1185,139 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
             )
+
+    def validate_diagnostic_symbol_idx(value: object, context: str) -> None:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value not in expected_symbol_idxs
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid symbol_idx"
+            )
+
+    def validate_diagnostic_pside(value: object, context: str) -> None:
+        if value not in {"long", "short"}:
+            raise FatalBotException(f"Rust orchestrator {context} has invalid pside")
+
+    def validate_diagnostic_finite_fields(
+        item: dict, fields: tuple[str, ...], context: str
+    ) -> None:
+        for field in fields:
+            value = item.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator {context} has invalid {field}"
+                )
+
+    def validate_diagnostic_symbol_idx_list(value: object, context: str) -> None:
+        if not isinstance(value, list):
+            raise FatalBotException(f"Rust orchestrator {context} must be a list")
+        for symbol_idx in value:
+            validate_diagnostic_symbol_idx(symbol_idx, context)
+
+    min_effective_cost_blocks = diagnostics.get("min_effective_cost_blocks", [])
+    if not isinstance(min_effective_cost_blocks, list):
+        raise FatalBotException(
+            "Rust orchestrator min_effective_cost_blocks must be a list"
+        )
+    min_cost_finite_fields = (
+        "balance",
+        "effective_limit",
+        "entry_initial_qty_pct",
+        "projected_initial_cost",
+        "effective_min_cost",
+    )
+    for block_idx, block in enumerate(min_effective_cost_blocks):
+        context = f"min_effective_cost_block {block_idx}"
+        if not isinstance(block, dict):
+            raise FatalBotException(f"Rust orchestrator {context} must be a mapping")
+        validate_diagnostic_symbol_idx(block.get("symbol_idx"), context)
+        validate_diagnostic_pside(block.get("pside"), context)
+        validate_diagnostic_finite_fields(block, min_cost_finite_fields, context)
+
+    forager_selections = diagnostics.get("forager_selections", [])
+    if not isinstance(forager_selections, list):
+        raise FatalBotException("Rust orchestrator forager_selections must be a list")
+    score_finite_fields = (
+        "score",
+        "volume_component",
+        "ema_readiness_component",
+        "volatility_component",
+    )
+    event_finite_fields = (
+        "incumbent_score",
+        "challenger_score",
+        "score_gap",
+    )
+    for selection_idx, selection in enumerate(forager_selections):
+        context = f"forager_selection {selection_idx}"
+        if not isinstance(selection, dict):
+            raise FatalBotException(f"Rust orchestrator {context} must be a mapping")
+        validate_diagnostic_pside(selection.get("pside"), context)
+        slots_to_fill = selection.get("slots_to_fill")
+        if (
+            isinstance(slots_to_fill, bool)
+            or not isinstance(slots_to_fill, int)
+            or slots_to_fill < 0
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid slots_to_fill"
+            )
+        validate_diagnostic_finite_fields(selection, ("score_hysteresis_pct",), context)
+        for field in ("selected_symbol_indices", "incumbent_symbol_indices"):
+            validate_diagnostic_symbol_idx_list(
+                selection.get(field), f"{context} {field}"
+            )
+
+        top_scores = selection.get("top_scores")
+        if not isinstance(top_scores, list):
+            raise FatalBotException(
+                f"Rust orchestrator {context} top_scores must be a list"
+            )
+        for score_idx, score in enumerate(top_scores):
+            score_context = f"{context} top_score {score_idx}"
+            if not isinstance(score, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator {score_context} must be a mapping"
+                )
+            validate_diagnostic_symbol_idx(score.get("symbol_idx"), score_context)
+            rank = score.get("rank")
+            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
+                raise FatalBotException(
+                    f"Rust orchestrator {score_context} has invalid rank"
+                )
+            validate_diagnostic_finite_fields(score, score_finite_fields, score_context)
+            for field in ("selected", "incumbent"):
+                if not isinstance(score.get(field), bool):
+                    raise FatalBotException(
+                        f"Rust orchestrator {score_context} has invalid {field}"
+                    )
+
+        hysteresis_events = selection.get("hysteresis_events")
+        if not isinstance(hysteresis_events, list):
+            raise FatalBotException(
+                f"Rust orchestrator {context} hysteresis_events must be a list"
+            )
+        for event_idx, event in enumerate(hysteresis_events):
+            event_context = f"{context} hysteresis_event {event_idx}"
+            if not isinstance(event, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator {event_context} must be a mapping"
+                )
+            for field in ("incumbent_symbol_idx", "challenger_symbol_idx"):
+                validate_diagnostic_symbol_idx(
+                    event.get(field), f"{event_context} {field}"
+                )
+            validate_diagnostic_finite_fields(event, event_finite_fields, event_context)
+            if not isinstance(event.get("kept_incumbent"), bool):
+                raise FatalBotException(
+                    f"Rust orchestrator {event_context} has invalid kept_incumbent"
+                )
     return orders
 
 

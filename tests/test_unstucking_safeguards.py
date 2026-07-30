@@ -39,6 +39,34 @@ def _empty_orchestrator_output(input_json: str) -> str:
     )
 
 
+def _single_symbol_orchestrator_output(**diagnostics) -> str:
+    return json.dumps(
+        {
+            "orders": [],
+            "diagnostics": {
+                "symbol_states": [
+                    {
+                        "symbol_idx": 0,
+                        "long": {
+                            "input_mode": None,
+                            "effective_mode": "normal",
+                            "active": True,
+                            "allow_initial": True,
+                        },
+                        "short": {
+                            "input_mode": None,
+                            "effective_mode": "normal",
+                            "active": True,
+                            "allow_initial": True,
+                        },
+                    }
+                ],
+                **diagnostics,
+            },
+        }
+    )
+
+
 def _make_mock_pbr():
     module = types.ModuleType("passivbot_rust")
 
@@ -3088,32 +3116,30 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
         ('{"diagnostics": {}}', "missing required orders field"),
         ("{", "malformed JSON"),
         (
-            json.dumps(
-                {
-                    "orders": [],
-                    "diagnostics": {
-                        "symbol_states": [
-                            {
-                                "symbol_idx": 0,
-                                "long": {
-                                    "input_mode": None,
-                                    "effective_mode": "normal",
-                                    "active": True,
-                                    "allow_initial": True,
-                                },
-                                "short": {
-                                    "input_mode": None,
-                                    "effective_mode": "normal",
-                                    "active": True,
-                                    "allow_initial": True,
-                                },
-                            }
-                        ],
-                        "loss_gate_blocks": {},
-                    },
-                }
-            ),
+            _single_symbol_orchestrator_output(loss_gate_blocks={}),
             "loss_gate_blocks must be a list",
+        ),
+        (
+            _single_symbol_orchestrator_output(
+                min_effective_cost_blocks=[{"symbol_idx": "0"}]
+            ),
+            "invalid symbol_idx",
+        ),
+        (
+            _single_symbol_orchestrator_output(
+                forager_selections=[
+                    {
+                        "pside": "long",
+                        "slots_to_fill": 1,
+                        "score_hysteresis_pct": 0.1,
+                        "selected_symbol_indices": ["0"],
+                        "incumbent_symbol_indices": [],
+                        "top_scores": [],
+                        "hysteresis_events": [],
+                    }
+                ]
+            ),
+            "invalid symbol_idx",
         ),
     ],
 )
