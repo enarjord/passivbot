@@ -123,6 +123,25 @@
    requirements, empty results, partial pagination failures, and other failed fetches remain
    eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
    entry slots are open.
+   When enabled and supported by CCXT Pro, proven-final public 1m WebSocket rows for flat forager
+   candidates are persisted through the same canonical candle path as REST rows. Because CCXT may
+   repeat a sliding cache, the first nonempty snapshot of each watcher session only primes
+   provenance. A changed row may correct its existing canonical timestamp, but extending canonical
+   history requires a fresh successor timestamp proving a trusted preceding bucket closed;
+   processing time is not post-boundary transport provenance. The current in-progress minute is
+   rejected, an existing canonical basis is required, and WebSocket silence and reconnect gaps remain
+   missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
+   EMA state. WebSocket shard persistence must be read-verified before the row is exposed to cache
+   and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
+   the complete fallback for startup basis, historical and internal gaps,
+   prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
+   bounded REST overlap even while the persisted WebSocket tail is current; a successful REST
+   omission alone does not disprove a validated WebSocket candle. Repeated stream or ingestion errors
+   enter a bounded cooldown while REST continues, then retry automatically. The subscription
+   reconciler remains alive when the transport is configured but no side is yet in forager mode, so
+   runtime mode transitions are handled without restart. Dynamic subscriptions include only sides
+   currently using forager mode, follow their flat approved universe, and are removed when a symbol
+   enters the urgent active-candle universe.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing

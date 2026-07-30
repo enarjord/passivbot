@@ -55,7 +55,7 @@ from fill_events_manager import (
     fill_event_pnl_pending,
     signed_fee_paid_from_payload,
 )
-from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -8190,6 +8190,14 @@ class Passivbot:
                     and missing_candles == tail_gap_candles,
                     "leading_gap_only": leading_gap_only,
                     "no_basis": no_basis,
+                    "last_refresh_ms": int(report.get("last_refresh_ms", 0) or 0),
+                    "last_ws_final_ts": report.get("last_ws_final_ts"),
+                    "last_ws_persist_ms": int(
+                        report.get("last_ws_persist_ms", 0) or 0
+                    ),
+                    "ws_persisted_contributed_to_tail": bool(
+                        report.get("ws_persisted_contributed_to_tail")
+                    ),
                 }
         except Exception:
             # Compatibility fallback for lightweight candle-manager doubles and
@@ -8216,6 +8224,37 @@ class Passivbot:
             "no_basis": age_ms >= now,
             "last_cached_ts": None,
         }
+
+    def _forager_ws_rest_audit_due(
+        self,
+        timeframe: str,
+        surface_health: Dict[str, Any],
+        *,
+        now_ms: int,
+    ) -> bool:
+        """Return whether a WS-advanced 1m tail needs its REST integrity audit."""
+        if str(timeframe) != "1m" or not bool(
+            surface_health.get("ws_persisted_contributed_to_tail")
+        ):
+            return False
+        audit_minutes_raw = get_optional_live_value(
+            self.config,
+            "forager_ws_candle_rest_audit_minutes",
+            30.0,
+        )
+        try:
+            audit_ms = int(float(audit_minutes_raw) * 60_000)
+        except (TypeError, ValueError):
+            audit_ms = 30 * 60_000
+        last_refresh_ms = int(surface_health.get("last_refresh_ms", 0) or 0)
+        last_ws_persist_ms = int(
+            surface_health.get("last_ws_persist_ms", 0) or 0
+        )
+        if last_ws_persist_ms <= last_refresh_ms:
+            return False
+        return last_refresh_ms <= 0 or int(now_ms) - last_refresh_ms >= max(
+            60_000, audit_ms
+        )
 
     def _rank_symbols_by_candle_staleness(
         self, symbols: Iterable[str], *, now_ms: Optional[int] = None
@@ -20186,9 +20225,15 @@ class Passivbot:
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
+            ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                self,
+                timeframe,
+                surface_health,
+                now_ms=now,
+            )
             if age_ms <= target_age_ms and (
                 bool(surface_health.get("coverage_ok")) or tail_only
-            ):
+            ) and not ws_rest_audit_due:
                 surface_checks[surface_key] = checked_ms
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
@@ -20328,19 +20373,35 @@ class Passivbot:
                 self._forager_surface_check_ms = surface_checks
                 surface_attempts[(sym, timeframe)] = int(utc_ms())
                 self._forager_surface_attempt_ms = surface_attempts
-                candle_task = self.cm.get_candles(
-                    sym,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                    # Background candidate refresh is best-effort. A 1ms TTL
-                    # still forces an ordinary stale read while allowing a
-                    # successful partial sparse response to reach gap repair
-                    # instead of aborting at a terminal empty page.
-                    max_age_ms=1,
-                    timeframe=timeframe,
-                    strict=False,
-                    max_lookback_candles=int(required_candles),
+                ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                    self,
+                    timeframe,
+                    pre_health,
+                    now_ms=now,
                 )
+                if ws_rest_audit_due:
+                    # A canonical WS tail is already fresh, so the ordinary
+                    # get_candles/refresh path would skip network I/O. Force a
+                    # bounded overlap specifically for the REST integrity audit.
+                    candle_task = self.cm.refresh(
+                        sym,
+                        through_ts=end_ts,
+                        force_overlap=True,
+                    )
+                else:
+                    candle_task = self.cm.get_candles(
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        # Background candidate refresh is best-effort. A 1ms TTL
+                        # still forces an ordinary stale read while allowing a
+                        # successful partial sparse response to reach gap repair
+                        # instead of aborting at a terminal empty page.
+                        max_age_ms=1,
+                        timeframe=timeframe,
+                        strict=False,
+                        max_lookback_candles=int(required_candles),
+                    )
                 if max_refresh_ms > 0:
                     remaining_s = max(
                         0.001,
@@ -20759,6 +20820,8 @@ class Passivbot:
             maintainer_names.append("maintain_monitor_snapshot")
         if self.ws_enabled:
             maintainer_names.append("watch_orders")
+            if candle_ws.forager_ws_candles_enabled(self):
+                maintainer_names.append("maintain_forager_ws_candles")
         else:
             logging.info(
                 "Websocket maintainers skipped (ws disabled via custom endpoints)."
@@ -20770,7 +20833,9 @@ class Passivbot:
         if hsl_replay_task is not None and not hsl_replay_task.done():
             self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
-    # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
+    async def maintain_forager_ws_candles(self):
+        """Maintain persistent finalized 1m WS ingestion for flat forager candidates."""
+        return await candle_ws.maintain_forager_ws_candles(self)
 
     async def calc_log_range(
         self,

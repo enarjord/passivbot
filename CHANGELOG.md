@@ -15,6 +15,20 @@ All notable user-facing changes will be documented in this file.
   Pending and synthetic fill estimates remain visible in fill diagnostics but
   no longer create temporary fill-identity bookkeeping solely to correct the
   uptime metric after enrichment.
+- Flat forager candidates can now persist proven-final public 1m WebSocket
+  candles through the canonical candle path, reducing routine candle REST
+  pressure while retaining REST for startup basis, gaps, reconnect recovery,
+  prolonged silence, and periodic integrity audits. CCXT cache provenance and
+  successor timestamps prove finality; each watcher session primes its first
+  snapshot without persisting replayed rows, integrity audits force a REST
+  overlap even when the WebSocket tail is fresh, and WebSocket silence never
+  creates a synthetic no-trade candle. Changed values may correct an existing
+  canonical timestamp, while extending the tail requires fresh-successor proof;
+  shard persistence is read-verified before a WebSocket candle is exposed to
+  cache and EMA readers, including on immutable legacy-backed days. Unstable
+  streams cool down to REST-only maintenance before retrying automatically, and
+  the subscription reconciler remains ready for runtime transitions into
+  forager mode.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

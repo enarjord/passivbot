@@ -58,6 +58,12 @@ def test_enable_archive_candle_fetch_preserved():
     assert out["live"]["enable_archive_candle_fetch"] is True
 
 
+def test_forager_ws_candle_defaults_in_template():
+    template = get_template_config()
+    assert template["live"]["enable_forager_ws_candles"] is True
+    assert template["live"]["forager_ws_candle_rest_audit_minutes"] == 30
+
+
 def test_margin_mode_preference_in_template():
     template = get_template_config()
     assert template["live"]["margin_mode_preference"] == "cross"
