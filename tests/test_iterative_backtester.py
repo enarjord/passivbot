@@ -265,3 +265,42 @@ def test_session_initialize_infers_combined_mode_from_exchange_count(monkeypatch
 
     assert session.backtest_exchanges == ["binance", "bybit"]
     assert session.combine_ohlcvs is True
+
+
+def test_load_config_rejects_scenario_limits_before_loading_markets(
+    monkeypatch, tmp_path
+):
+    config_path = tmp_path / "cfg.json"
+    config_path.write_text("{}", encoding="utf-8")
+    config = {
+        "backtest": {"exchanges": ["binance"]},
+        "optimize": {
+            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+            "limits": [
+                {
+                    "metric": "drawdown_worst_strategy_eq",
+                    "penalize_if": "greater_than",
+                    "scenario": "base",
+                    "value": 0.5,
+                }
+            ],
+        },
+    }
+    market_loads = []
+
+    monkeypatch.setattr(ib, "load_prepared_config", lambda *args, **kwargs: config)
+    monkeypatch.setattr(ib, "parse_overrides", lambda loaded, **kwargs: loaded)
+
+    async def fake_load_markets(exchange, **kwargs):
+        market_loads.append(exchange)
+
+    monkeypatch.setattr(ib, "load_markets", fake_load_markets)
+
+    session = ib.IterativeBacktestSession(config_path, None, False)
+    with pytest.raises(
+        ValueError,
+        match="iterative-backtester cannot resolve scenario label\\(s\\): base",
+    ):
+        asyncio.run(session._load_config())
+
+    assert market_loads == []

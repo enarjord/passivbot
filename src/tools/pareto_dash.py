@@ -25,7 +25,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from opt_utils import load_results
 from config.limits import normalize_limit_entries
-from config.scoring import extract_objective_specs, from_engine_value
+from config.scoring import (
+    default_scoring_weights,
+    extract_objective_specs,
+    from_engine_value,
+)
+from limit_utils import resolve_auto_limit_entries
 
 
 def discover_runs(root: str) -> List[str]:
@@ -238,6 +243,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         raw_configs[config_id] = entry
         base = {"_id": config_id}
         suite_values, scenario_values, scenario_labels = _extract_suite_metrics(entry)
+        suite_aggregated_metric_names = _suite_aggregated_metric_names(entry)
         objective_values, objective_labels, objective_cols = _extract_objectives(entry)
         params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
@@ -245,7 +251,9 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         for key in row:
             if key.startswith("bot."):
                 param_cols.add(key)
-            elif key != "_id" and not _looks_like_stat_column(key):
+            elif key != "_id" and not _looks_like_stat_column(
+                key, suite_aggregated_metric_names
+            ):
                 aggregated_cols.add(key)
         for scenario, metric_values in scenario_values.items():
             for metric, value in metric_values.items():
@@ -329,12 +337,63 @@ def _select_closest_to_ideal(df: pd.DataFrame, metrics: List[str]) -> Optional[p
 
 
 LIMIT_PATTERNS = [
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less_equal),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
-    (re.compile(r"^\s*(?P<key>[A-Za-z0-9_.]+)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*<=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less_equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*>=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater_equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*<\s*(?P<val>[-+eE0-9.]+)\s*$"), np.less),
+    (re.compile(r"^\s*(?P<key>.+?)\s*>\s*(?P<val>[-+eE0-9.]+)\s*$"), np.greater),
+    (re.compile(r"^\s*(?P<key>.+?)\s*!=\s*(?P<val>[-+eE0-9.]+)\s*$"), np.not_equal),
+    (re.compile(r"^\s*(?P<key>.+?)\s*==?\s*(?P<val>[-+eE0-9.]+)\s*$"), np.equal),
 ]
+
+
+def _parse_limit_term(term: str):
+    for pattern, op in LIMIT_PATTERNS:
+        match = pattern.match(term)
+        if not match:
+            continue
+        try:
+            value = float(match.group("val"))
+        except ValueError:
+            return None
+        key = match.group("key").strip()
+        if key.startswith('"') and key.endswith('"'):
+            try:
+                decoded = json.loads(key)
+            except (TypeError, ValueError):
+                return None
+            if not isinstance(decoded, str):
+                return None
+            key = decoded
+        return key, op, value
+    return None
+
+
+def _split_limit_terms(line: str) -> List[str]:
+    terms: List[str] = []
+    start = 0
+    in_quotes = False
+    escaped = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if in_quotes and escaped:
+            escaped = False
+        elif in_quotes and char == "\\":
+            escaped = True
+        elif char == '"':
+            in_quotes = not in_quotes
+        elif not in_quotes and line.startswith("||", index):
+            terms.append(line[start:index])
+            index += 2
+            start = index
+            continue
+        index += 1
+    terms.append(line[start:])
+    return terms
+
+
+def _encode_limit_key(key: str) -> str:
+    return json.dumps(key) if "||" in key or "\n" in key or "\r" in key else key
 
 
 def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
@@ -344,13 +403,13 @@ def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
     for line in exprs:
         if not line:
             continue
-        for pattern, _ in LIMIT_PATTERNS:
-            m = pattern.match(line)
-            if m:
-                key = m.group("key")
-                if key not in metrics:
-                    metrics.append(key)
-                break
+        for term in _split_limit_terms(str(line)):
+            parsed = _parse_limit_term(term.strip())
+            if parsed is None:
+                continue
+            key, _op, _value = parsed
+            if key not in metrics:
+                metrics.append(key)
     return metrics
 
 
@@ -362,30 +421,53 @@ def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
         line = line.strip()
         if not line:
             continue
-        matched = False
-        for pattern, op in LIMIT_PATTERNS:
-            m = pattern.match(line)
-            if not m:
-                continue
-            matched = True
-            key = m.group("key")
-            try:
-                val = float(m.group("val"))
-            except ValueError:
-                continue
-            if key not in df.columns:
-                continue
-            col = df[key]
-            mask &= op(col, val)
-            break
-        if not matched:
+        raw_terms = [term.strip() for term in _split_limit_terms(line) if term.strip()]
+        parsed_terms = [_parse_limit_term(term) for term in raw_terms]
+        if (
+            not raw_terms
+            or any(parsed is None for parsed in parsed_terms)
+            or any(parsed[0] not in df.columns for parsed in parsed_terms)
+        ):
             continue
+        line_mask = pd.Series(False, index=df.index)
+        for key, op, val in parsed_terms:
+            line_mask |= op(df[key], val)
+        mask &= line_mask
     return mask
 
 
-def _looks_like_stat_column(name: str) -> bool:
+def _suite_aggregated_metric_names(entry: dict) -> set[str]:
+    suite_metrics = entry.get("suite_metrics")
+    if not isinstance(suite_metrics, dict):
+        return set()
+    metrics = suite_metrics.get("metrics")
+    if isinstance(metrics, dict):
+        return {
+            str(metric)
+            for metric, payload in metrics.items()
+            if isinstance(payload, dict)
+            and _ensure_float(payload.get("aggregated")) is not None
+        }
+    aggregate = suite_metrics.get("aggregate")
+    if not isinstance(aggregate, dict):
+        return set()
+    aggregated = aggregate.get("aggregated")
+    if not isinstance(aggregated, dict):
+        return set()
+    return {
+        str(metric)
+        for metric, value in aggregated.items()
+        if _ensure_float(value) is not None
+    }
+
+
+def _looks_like_stat_column(
+    name: str, aggregated_metric_names: Iterable[str] = ()
+) -> bool:
+    if name in aggregated_metric_names:
+        return False
     lowered = name.lower()
-    return lowered.endswith(("_mean", "_min", "_max", "_std"))
+    return lowered.endswith(("_mean", "_min", "_max", "_std", "_median"))
 
 
 def _limits_to_exprs(limits_cfg: Any) -> List[str]:
@@ -394,14 +476,25 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
         exprs.append(limits_cfg)
         return exprs
     try:
-        normalized = normalize_limit_entries(limits_cfg)
+        normalized = resolve_auto_limit_entries(
+            normalize_limit_entries(limits_cfg),
+            default_scoring_weights(),
+        )
     except Exception:
         return exprs
     for entry in normalized:
+        if not bool(entry.get("enabled", True)):
+            continue
         metric = entry.get("metric")
         mode = entry.get("penalize_if")
         if not metric or not mode:
             continue
+        scenario = entry.get("scenario")
+        if scenario is not None:
+            metric = f"{scenario}__{metric}"
+        elif entry.get("stat") is not None:
+            metric = f"{metric}_{entry['stat']}"
+        metric = _encode_limit_key(str(metric))
         if mode == "greater_than":
             num = _ensure_float(entry.get("value"))
             if num is not None:
@@ -434,6 +527,13 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
                 if low is not None and high is not None:
                     exprs.append(f"{metric}>={low}")
                     exprs.append(f"{metric}<={high}")
+        elif mode == "inside_range":
+            rng = entry.get("range")
+            if isinstance(rng, (list, tuple)) and len(rng) == 2:
+                low = _ensure_float(rng[0])
+                high = _ensure_float(rng[1])
+                if low is not None and high is not None:
+                    exprs.append(f"{metric}<={low} || {metric}>={high}")
     return exprs
 
 

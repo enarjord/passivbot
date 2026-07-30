@@ -4,7 +4,7 @@ from copy import deepcopy
 from difflib import get_close_matches
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from config.limits import resolve_limit_stat
+from config.limits import resolve_limit_basis
 from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, METRIC_ALIASES, canonical_metric_name
 
 _BOUNDARY_VIOLATION_EPSILON = 1e-12
@@ -15,6 +15,33 @@ _KNOWN_LIMIT_METRICS = (
     | {f"{metric}_btc" for metric in CURRENCY_METRICS}
     | set(METRIC_ALIASES)
 )
+
+
+def resolve_auto_limit_entries(
+    limits: Iterable[Dict[str, Any]],
+    scoring_weights: Dict[str, float],
+) -> List[Dict[str, Any]]:
+    """Resolve legacy ``penalize_if=auto`` entries using optimizer scoring directions."""
+    weights = scoring_weights or {}
+    resolved: List[Dict[str, Any]] = []
+    for raw_entry in limits:
+        entry = deepcopy(raw_entry)
+        if not bool(entry.get("enabled", True)):
+            resolved.append(entry)
+            continue
+        mode = entry.get("penalize_if") or "greater_than"
+        if mode == "auto":
+            metric = entry.get("metric")
+            if not metric:
+                continue
+            canonical_metric = canonical_metric_name(str(metric))
+            _validate_limit_metric(canonical_metric, raw_entry)
+            weight = weights.get(canonical_metric)
+            if weight is None:
+                continue
+            entry["penalize_if"] = "less_than" if weight < 0 else "greater_than"
+        resolved.append(entry)
+    return resolved
 
 
 def expand_limit_checks(
@@ -32,8 +59,8 @@ def expand_limit_checks(
         return []
     weights = scoring_weights or {}
     checks: List[Dict[str, Any]] = []
-    for raw_entry in limits:
-        entry = deepcopy(raw_entry)
+    for entry in resolve_auto_limit_entries(limits, weights):
+        raw_entry = entry
         if isinstance(entry, dict) and not bool(entry.get("enabled", True)):
             continue
         metric = entry.get("metric")
@@ -42,11 +69,6 @@ def expand_limit_checks(
         metric = canonical_metric_name(str(metric))
         _validate_limit_metric(metric, raw_entry)
         mode = entry.get("penalize_if") or "greater_than"
-        if mode == "auto":
-            weight = weights.get(metric)
-            if weight is None:
-                continue
-            mode = "less_than" if weight < 0 else "greater_than"
         if mode in {
             "greater_than",
             "greater_than_or_equal",
@@ -180,15 +202,16 @@ def _build_single_bound_check(
     numeric_bound = _ensure_float(bound)
     if numeric_bound is None:
         return None
-    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{stat}"
+    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
+    metric_key = f"{metric}_{basis.stat}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "bound": numeric_bound,
         "penalty_weight": penalty_weight,
-        "stat": stat,
+        "stat": basis.stat,
+        "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }
 
@@ -210,14 +233,15 @@ def _build_range_check(
         return None
     if low > high:
         low, high = high, low
-    stat = resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{stat}"
+    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
+    metric_key = f"{metric}_{basis.stat}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "range": (low, high),
         "penalty_weight": penalty_weight,
-        "stat": stat,
+        "stat": basis.stat,
+        "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }
