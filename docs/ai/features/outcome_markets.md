@@ -358,6 +358,8 @@ construction route to observable cancel-only handling while any required constra
 unavailable; generic spot assumptions are not HIP-4 outcome constraints. The bounded HIP-4
 evaluation tool requires explicit quantity-step, minimum-quantity, and minimum-notional inputs and
 reports them as experiment assumptions; they do not become live venue metadata.
+The bounded Polymarket evaluator likewise requires an explicit quantity step when retained market
+metadata does not provide one.
 
 HIP-4 lifecycle reconciliation first checks settlement rows present in the current `userFills`
 snapshot. After scheduled expiry it also queries `userFillsByTime` from the event timestamp
@@ -506,10 +508,11 @@ belong to the retained market, outcome side, and exact expected client-order ID.
 executor independently validates every cancellation and creation against the deterministic
 Passivbot outcome namespace before its first write, then verifies the complete final managed-order
 set rather than trusting the previously constructed reconciliation object. Kept orders must still
-match their exact expected remaining quantity and terms. A create may not target a managed slot
-already occupied by a kept order. If final verification fails, the executor cancels every
-surviving managed quote for the market, continues through individual cancellation errors, and
-verifies the managed set absent before propagating the failure.
+match their exact expected remaining quantity and terms, and at most one kept order may occupy each
+managed slot. A create may not target a managed slot already occupied by a kept order. If final
+verification fails, the executor cancels every surviving managed quote for the market, continues
+through individual cancellation errors, and verifies the managed set absent before propagating the
+failure.
 
 If the verified actual-fill signal is unavailable or stale, new and replacement quotes are
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:

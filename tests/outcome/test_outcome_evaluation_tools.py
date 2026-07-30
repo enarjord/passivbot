@@ -27,6 +27,7 @@ from tools.evaluate_hip4_outcome_window import (
     _window_market_spec,
 )
 from tools.evaluate_polymarket_outcome_window import (
+    _add_constraint_arguments as _add_polymarket_constraint_arguments,
     _load_archived_market_and_grid_window,
     _require_fee_free_market,
     _window_market_spec as _polymarket_window_market_spec,
@@ -281,3 +282,14 @@ def test_hip4_window_requires_explicit_quantity_constraint_assumptions():
     assert configured.qty_step == 1.0
     assert configured.min_order_qty == 10.0
     assert configured.min_order_notional == 5.0
+
+
+def test_polymarket_window_requires_explicit_quantity_step_assumption():
+    parser = argparse.ArgumentParser()
+    _add_polymarket_constraint_arguments(parser)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+    configured = parser.parse_args(["--qty-step", "0.01"])
+
+    assert configured.qty_step == 0.01

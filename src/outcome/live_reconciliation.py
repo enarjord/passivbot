@@ -614,8 +614,10 @@ def _validate_managed_reconciliation(
     create_slots = [creation.intent.slot for creation in reconciliation.creates]
     if len(create_slots) != len(set(create_slots)):
         raise ValueError("outcome reconciliation contains duplicate create slots")
-    kept_slots = {kept.intent.slot for kept in reconciliation.kept}
-    if set(create_slots) & kept_slots:
+    kept_slots = [kept.intent.slot for kept in reconciliation.kept]
+    if len(kept_slots) != len(set(kept_slots)):
+        raise ValueError("outcome reconciliation contains duplicate kept slots")
+    if set(create_slots) & set(kept_slots):
         raise ValueError(
             "outcome reconciliation cannot create a slot occupied by a kept order"
         )

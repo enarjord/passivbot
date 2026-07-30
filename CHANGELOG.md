@@ -132,6 +132,8 @@ All notable user-facing changes will be documented in this file.
   Cancel-only unavailable-signal cycles now apply the same settlement-archive ordering guarantee.
   Shared-wallet portfolio evaluation rejects mixed quote assets, and normalized trades reject
   inconsistent native-to-canonical YES price mappings.
+  Reconciliation rejects duplicate kept orders in one managed quote slot before mutation, and the
+  bounded Polymarket evaluator requires an explicit quantity-step assumption.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

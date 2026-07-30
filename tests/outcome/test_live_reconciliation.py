@@ -507,6 +507,34 @@ async def test_executor_rejects_create_for_slot_occupied_by_kept_order():
 
 
 @pytest.mark.asyncio
+async def test_executor_rejects_duplicate_kept_slots_before_any_mutation():
+    desired = replace(plan(), intents=(plan().intents[0],))
+    bid_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    reconciliation = reconcile_outcome_orders(
+        market(),
+        desired,
+        snapshot((order("1", outcome=OutcomeSide.YES, price=0.49, cloid=bid_cloid),)),
+    )
+    duplicate_slot = replace(reconciliation.kept[0], order_id="2")
+    forged = replace(
+        reconciliation,
+        creates=(),
+        kept=(reconciliation.kept[0], duplicate_slot),
+    )
+    client = FakeClient()
+
+    with pytest.raises(ValueError, match="duplicate kept slots"):
+        await execute_hip4_order_reconciliation(client, market(), forged)
+
+    assert client.cancelled == []
+    assert client.created == []
+
+
+@pytest.mark.asyncio
 async def test_executor_rejects_created_order_with_wrong_authoritative_terms():
     reconciliation = reconcile_outcome_orders(
         market(),

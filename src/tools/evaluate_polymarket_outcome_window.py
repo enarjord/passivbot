@@ -82,6 +82,15 @@ def _window_market_spec(
     return normalized_market_to_rust_spec(synthetic_market, qty_step=qty_step)
 
 
+def _add_constraint_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--qty-step",
+        required=True,
+        type=float,
+        help="Explicit authoritative quantity step or clearly labeled experiment assumption",
+    )
+
+
 def _load_archived_market_and_grid_window(
     archive: OutcomeTradeArchive,
     discovered_market: NormalizedOutcomeMarket,
@@ -144,7 +153,7 @@ async def _main() -> int:
         help="SQLite archive containing normalized fills and verified coverage",
     )
     parser.add_argument("--starting-collateral", type=float, default=1_000.0)
-    parser.add_argument("--qty-step", type=float, default=0.01)
+    _add_constraint_arguments(parser)
     parser.add_argument("--ema-fast-seconds", type=float, default=5.0)
     parser.add_argument("--ema-slow-seconds", type=float, default=20.0)
     parser.add_argument("--quote-offset", type=float, default=0.01)
