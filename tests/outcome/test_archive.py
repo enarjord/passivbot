@@ -4,6 +4,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -244,6 +246,50 @@ def test_market_metadata_versions_quote_asset_as_mutable_transport_state(tmp_pat
     assert archive.load_market_metadata(original.venue, original.market_id) == [
         original,
         updated_quote_asset,
+    ]
+
+
+def test_market_metadata_fingerprint_check_is_serialized_with_insert(tmp_path):
+    db_path = tmp_path / "concurrent-metadata.sqlite"
+    first_archive = OutcomeTradeArchive(db_path)
+    second_archive = OutcomeTradeArchive(db_path)
+    original = market()
+    conflicting = replace(original, description="conflicting immutable contract")
+    started = threading.Event()
+    errors: list[BaseException] = []
+
+    def append_conflicting() -> None:
+        started.set()
+        try:
+            second_archive.append_market_metadata(
+                conflicting,
+                observed_at_ms=1_000,
+                observation_source="collector-2",
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            second_archive.close()
+
+    with first_archive.write_transaction():
+        assert first_archive.append_market_metadata(
+            original,
+            observed_at_ms=1_000,
+            observation_source="collector-1",
+        )
+        writer = threading.Thread(target=append_conflicting)
+        writer.start()
+        assert started.wait(timeout=1.0)
+        time.sleep(0.05)
+        assert writer.is_alive()
+
+    writer.join(timeout=2.0)
+    assert not writer.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+    assert "conflicting immutable metadata" in str(errors[0])
+    assert first_archive.load_market_metadata(original.venue, original.market_id) == [
+        original
     ]
 
 

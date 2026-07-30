@@ -24,6 +24,7 @@ from tools.evaluate_hip4_outcome_window import (
 from tools.evaluate_polymarket_outcome_window import (
     _load_archived_market_and_grid_window,
     _require_fee_free_market,
+    _window_market_spec as _polymarket_window_market_spec,
 )
 
 
@@ -137,6 +138,29 @@ def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
         end_ms=5_000,
         qty_step=1.0,
         min_order_qty=1.0,
+    )
+
+    assert spec["trading_opens_ms"] == 2_000
+    assert spec["order_entry_opens_ms"] == 2_000
+    assert spec["trading_closes_ms"] == 5_000
+    assert spec["scheduled_event_ms"] == 5_000
+
+
+def test_polymarket_window_applies_synthetic_close_before_rust_translation():
+    market = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    active_market = replace(
+        market,
+        lifecycle=replace(
+            market.lifecycle,
+            trading_close_time_ms=None,
+        ),
+    )
+
+    spec = _polymarket_window_market_spec(
+        active_market,
+        start_ms=2_000,
+        end_ms=5_000,
+        qty_step=0.01,
     )
 
     assert spec["trading_opens_ms"] == 2_000

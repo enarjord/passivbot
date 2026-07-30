@@ -188,6 +188,7 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
             accepting_orders=True,
         ),
     )
+    discovery = replace(initial, min_order_qty=2.0)
     closed = replace(
         initial,
         lifecycle=replace(
@@ -197,6 +198,11 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
         ),
     )
     archive = OutcomeTradeArchive(tmp_path / "lifecycle.sqlite")
+    archive.append_market_metadata(
+        discovery,
+        observed_at_ms=100,
+        observation_source="discovery",
+    )
     archive.append_market_metadata(
         initial,
         observed_at_ms=500,
@@ -265,6 +271,7 @@ def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
 
     assert replay.market.lifecycle.trading_close_time_ms == 5_000
     assert replay.market.lifecycle.accepting_orders is False
+    assert replay.market.min_order_qty == 1.0
 
 
 def test_replay_does_not_treat_resolution_as_polymarket_capital_release(tmp_path):

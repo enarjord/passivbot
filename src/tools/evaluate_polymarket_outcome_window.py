@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -60,6 +60,26 @@ def _require_fee_free_market(market) -> None:
             "Polymarket evaluation requires an explicitly fee-free market; "
             f"unsupported fee metadata formula {market.fee_metadata.formula!r}"
         )
+
+
+def _window_market_spec(
+    market: NormalizedOutcomeMarket,
+    *,
+    start_ms: int,
+    end_ms: int,
+    qty_step: float,
+) -> dict:
+    synthetic_market = replace(
+        market,
+        lifecycle=replace(
+            market.lifecycle,
+            trading_open_time_ms=start_ms,
+            order_acceptance_time_ms=start_ms,
+            trading_close_time_ms=end_ms,
+            scheduled_event_time_ms=end_ms,
+        ),
+    )
+    return normalized_market_to_rust_spec(synthetic_market, qty_step=qty_step)
 
 
 def _load_archived_market_and_grid_window(
@@ -179,16 +199,13 @@ async def _main() -> int:
     finally:
         archive.close()
 
-    market_spec = normalized_market_to_rust_spec(market, qty_step=args.qty_step)
     # This tool evaluates only the archived sample. These are deliberately synthetic
     # boundaries and must not be reported as a full-contract backtest.
-    market_spec.update(
-        {
-            "trading_opens_ms": args.start_ms,
-            "order_entry_opens_ms": args.start_ms,
-            "trading_closes_ms": args.end_ms,
-            "scheduled_event_ms": args.end_ms,
-        }
+    market_spec = _window_market_spec(
+        market,
+        start_ms=args.start_ms,
+        end_ms=args.end_ms,
+        qty_step=args.qty_step,
     )
     strategy_params = {
         "ema_span_fast_seconds": args.ema_fast_seconds,

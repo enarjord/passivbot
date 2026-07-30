@@ -685,8 +685,9 @@ def _determine_needed_individual_exchanges(
 def _apply_candle_aggregation(hlcvs, timestamps, btc_usd_prices, mss, interval):
     """Aggregate candles and update mss metadata. Returns (hlcvs, timestamps, btc_usd_prices)."""
     n_before = hlcvs.shape[0]
+    interval = int(interval)
     hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-        hlcvs, timestamps, btc_usd_prices, int(interval)
+        hlcvs, timestamps, btc_usd_prices, interval
     )
     logging.debug(
         "[suite] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
@@ -695,9 +696,41 @@ def _apply_candle_aggregation(hlcvs, timestamps, btc_usd_prices, mss, interval):
         hlcvs.shape[0],
         offset_bars,
     )
+    target_steps = hlcvs.shape[0]
+    source_steps = target_steps * interval
+    for coin, coin_meta in mss.items():
+        if coin == "__meta__" or not isinstance(coin_meta, dict):
+            continue
+        first_source = max(
+            0,
+            min(
+                source_steps,
+                int(coin_meta.get("first_valid_index", 0)) - int(offset_bars),
+            ),
+        )
+        last_source = max(
+            0,
+            min(
+                source_steps - 1,
+                int(coin_meta.get("last_valid_index", n_before - 1))
+                - int(offset_bars),
+            ),
+        )
+        first_target = (first_source + interval - 1) // interval
+        last_target = ((last_source + 1) // interval) - 1
+        if first_target >= target_steps:
+            first_target = target_steps
+        if last_target >= target_steps:
+            last_target = target_steps - 1
+        if last_target < 0:
+            first_target = target_steps
+            last_target = 0
+        coin_meta["first_valid_index"] = int(first_target)
+        coin_meta["last_valid_index"] = int(last_target)
     meta = mss.setdefault("__meta__", {})
-    meta["data_interval_minutes"] = int(interval)
-    meta["candle_interval_offset_bars"] = int(offset_bars)
+    meta["data_interval_minutes"] = interval
+    meta["source_candle_interval_offset_bars"] = int(offset_bars)
+    meta["candle_interval_offset_bars"] = 0
     return hlcvs, timestamps, btc_usd_prices
 
 

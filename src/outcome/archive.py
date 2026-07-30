@@ -162,6 +162,17 @@ class OutcomeTradeArchive:
             with connection:
                 yield connection
 
+    @contextmanager
+    def _immediate_write_connection(self) -> Iterator[sqlite3.Connection]:
+        """Serialize a read-check-write invariant with other archive writers."""
+
+        connection = self._connect()
+        if getattr(self._local, "write_transaction_active", False):
+            yield connection
+        else:
+            with self.write_transaction():
+                yield connection
+
     def close(self) -> None:
         connection = getattr(self._local, "connection", None)
         if connection is not None:
@@ -471,36 +482,40 @@ class OutcomeTradeArchive:
         )
         payload_sha256 = hashlib.sha256(payload_json.encode()).hexdigest()
         contract_fingerprint = _contract_fingerprint(market)
-        connection = self._connect()
-        existing_fingerprints = {
-            row["contract_fingerprint"]
-            for row in connection.execute(
+        with self._immediate_write_connection() as connection:
+            existing_fingerprints = {
+                row["contract_fingerprint"]
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT contract_fingerprint
+                    FROM outcome_market_metadata
+                    WHERE venue = ? AND market_id = ?
+                    """,
+                    (market.venue.value, market.market_id),
+                ).fetchall()
+            }
+            if existing_fingerprints and existing_fingerprints != {
+                contract_fingerprint
+            }:
+                raise ValueError(
+                    f"outcome market {market.venue.value}:{market.market_id} "
+                    "has conflicting immutable metadata"
+                )
+            predecessor = connection.execute(
                 """
-                SELECT DISTINCT contract_fingerprint
+                SELECT payload_sha256
                 FROM outcome_market_metadata
-                WHERE venue = ? AND market_id = ?
+                WHERE venue = ? AND market_id = ? AND observed_at_ms <= ?
+                ORDER BY observed_at_ms DESC, record_id DESC
+                LIMIT 1
                 """,
-                (market.venue.value, market.market_id),
-            ).fetchall()
-        }
-        if existing_fingerprints and existing_fingerprints != {contract_fingerprint}:
-            raise ValueError(
-                f"outcome market {market.venue.value}:{market.market_id} "
-                "has conflicting immutable metadata"
-            )
-        predecessor = connection.execute(
-            """
-            SELECT payload_sha256
-            FROM outcome_market_metadata
-            WHERE venue = ? AND market_id = ? AND observed_at_ms <= ?
-            ORDER BY observed_at_ms DESC, record_id DESC
-            LIMIT 1
-            """,
-            (market.venue.value, market.market_id, int(observed_at_ms)),
-        ).fetchone()
-        if predecessor is not None and predecessor["payload_sha256"] == payload_sha256:
-            return False
-        with self._write_connection() as connection:
+                (market.venue.value, market.market_id, int(observed_at_ms)),
+            ).fetchone()
+            if (
+                predecessor is not None
+                and predecessor["payload_sha256"] == payload_sha256
+            ):
+                return False
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO outcome_market_metadata (
@@ -536,6 +551,29 @@ class OutcomeTradeArchive:
             ORDER BY observed_at_ms, record_id
             """,
             (venue.value, str(market_id)),
+        ).fetchall()
+        return [
+            _market_from_payload(json.loads(row["normalized_market_json"]))
+            for row in rows
+        ]
+
+    def load_market_metadata_observed_after(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        *,
+        observed_after_ms: int,
+    ) -> list[NormalizedOutcomeMarket]:
+        if observed_after_ms < 0:
+            raise ValueError("market metadata query time must be non-negative")
+        rows = self._connect().execute(
+            """
+            SELECT normalized_market_json
+            FROM outcome_market_metadata
+            WHERE venue = ? AND market_id = ? AND observed_at_ms > ?
+            ORDER BY observed_at_ms, record_id
+            """,
+            (venue.value, str(market_id), int(observed_after_ms)),
         ).fetchall()
         return [
             _market_from_payload(json.loads(row["normalized_market_json"]))

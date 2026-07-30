@@ -551,6 +551,48 @@ async def test_enabled_post_only_order_preflights_state_book_and_current_market(
 
 
 @pytest.mark.asyncio
+async def test_vault_mutations_query_and_sign_for_the_vault_trading_account(monkeypatch):
+    payload, market = market_fixture()
+    session = FakeSession(payload)
+    client = HyperliquidOutcomeLiveClient(
+        session,
+        account_address="0xsigner",
+        vault_address="0xvault",
+        allow_mutations=True,
+    )
+    monkeypatch.setattr("outcome.hyperliquid_live.time.time", lambda: 1784900000.0)
+
+    await client.submit_limit_order(
+        market,
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price="0.4",
+        qty="25",
+    )
+    await client.fetch_settlement_evidence(
+        market,
+        start_time_ms=market.lifecycle.scheduled_event_time_ms,
+        end_time_ms=market.lifecycle.scheduled_event_time_ms + 1_000,
+    )
+
+    account_request_types = {
+        "spotClearinghouseState",
+        "frontendOpenOrders",
+        "userFills",
+        "userFillsByTime",
+        "userFees",
+    }
+    account_requests = [
+        request
+        for request in session.public_requests
+        if request["type"] in account_request_types
+    ]
+    assert {request["user"] for request in account_requests} == {"0xvault"}
+    assert session.private_requests[0]["vaultAddress"] == "0xvault"
+    assert session.signed[0][2] == "0xvault"
+
+
+@pytest.mark.asyncio
 async def test_post_only_buy_preflight_reserves_conservative_account_maker_fee(monkeypatch):
     payload, market = market_fixture()
     session = FakeSession(payload)

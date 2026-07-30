@@ -330,10 +330,12 @@ For current HIP-4 markets, derive the quote asset from each live `outcomeMeta.qu
 than hardcoding a settlement token. Reconcile side-token inventory from
 `spotClearinghouseState`; outcome rows use the `+<encoding>` coin form and may omit the ordinary
 spot token index. Reconcile orders and fills by their `#<encoding>` coin. Fill-level `fee` and
-`feeToken` are authoritative. Fetch the account's current `userFees` rates as a required live
-input. Until HIP-4-specific fee incidence is authoritative, strategy edge gating uses the larger
-non-negative maker rate reported for regular and spot trading as a conservative per-share floor;
-that floor does not overwrite actual fill fees or assert a settlement-fee rate.
+`feeToken` are authoritative. When actions target a vault, use the vault address—not the signing
+master or agent address—for balances, orders, fills, settlement recovery, and `userFees`; vault
+volume has its own fee tier. Fetch the trading account's current `userFees` rates as a required
+live input. Until HIP-4-specific fee incidence is authoritative, strategy edge gating uses the
+larger non-negative maker rate reported for regular and spot trading as a conservative per-share
+floor; that floor does not overwrite actual fill fees or assert a settlement-fee rate.
 
 Current `outcomeMeta` rows do not expose authoritative side-token quantity precision or
 market-specific order minima. Keep quantity step, minimum quantity, and minimum notional

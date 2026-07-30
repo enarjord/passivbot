@@ -255,10 +255,15 @@ class HyperliquidOutcomeLiveClient:
     ) -> None:
         if not account_address.strip():
             raise ValueError("HIP-4 account address must not be empty")
+        if vault_address is not None and not vault_address.strip():
+            raise ValueError("HIP-4 vault address must not be empty")
         self.session = session
         self.account_address = account_address
         self.allow_mutations = bool(allow_mutations)
         self.vault_address = vault_address
+        # Hyperliquid actions signed for a vault mutate the vault's own balances, orders, fills,
+        # and fee tier. The signer/master address remains distinct signing identity.
+        self.trading_address = vault_address or account_address
 
     async def fetch_account_snapshot(
         self,
@@ -278,26 +283,26 @@ class HyperliquidOutcomeLiveClient:
             self.session.publicPostInfo(
                 {
                     "type": "spotClearinghouseState",
-                    "user": self.account_address,
+                    "user": self.trading_address,
                 }
             ),
             self.session.publicPostInfo(
                 {
                     "type": "frontendOpenOrders",
-                    "user": self.account_address,
+                    "user": self.trading_address,
                 }
             ),
             self.session.publicPostInfo(
                 {
                     "type": "userFills",
-                    "user": self.account_address,
+                    "user": self.trading_address,
                     "aggregateByTime": False,
                 }
             ),
             self.session.publicPostInfo(
                 {
                     "type": "userFees",
-                    "user": self.account_address,
+                    "user": self.trading_address,
                 }
             ),
         )
@@ -488,7 +493,7 @@ class HyperliquidOutcomeLiveClient:
             payload = await self.session.publicPostInfo(
                 {
                     "type": "userFillsByTime",
-                    "user": self.account_address,
+                    "user": self.trading_address,
                     "startTime": int(start_time_ms),
                     "endTime": int(end_time_ms),
                     "aggregateByTime": False,

@@ -116,7 +116,11 @@ All notable user-facing changes will be documented in this file.
   Missing HIP-4 order constraints now route live cycles to observable cancel-only handling;
   bounded HIP-4 evaluation requires explicit reported constraint assumptions. Identity-less
   Polymarket sessions reject overlapping verified coverage atomically, and complementary
-  tick-size events deduplicate as one normalized market-level transition.
+  tick-size events deduplicate as one normalized market-level transition. Full-contract replay
+  starts from the latest metadata state valid at trading open, metadata fingerprint checks are
+  serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
+  tier, suite pre-aggregation converts validity indices, and active Polymarket evaluation windows
+  apply their synthetic close before Rust translation.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
