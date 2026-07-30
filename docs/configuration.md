@@ -428,6 +428,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - Graceful stop: The bot continues trading as normal but does not open a new position after the current position is fully closed.
   - If `auto_gs=false`, positions on disapproved coins are put on manual mode.
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
+- **enable_forager_ws_candles**: Persists proven-final public 1m WebSocket candles for flat forager candidates when the exchange supports CCXT Pro `watchOHLCV`. The first nonempty snapshot of each watcher session only primes provenance. Changed values may correct an existing canonical timestamp, but extending canonical history requires fresh-successor proof, and persistence is read-verified before cache/EMA exposure. REST remains the complete fallback for startup basis, gaps, reconnect recovery, prolonged silence, and forced periodic integrity overlaps. WebSocket silence never proves a no-trade candle, and unstable streams cool down while REST maintenance continues. The lightweight reconciler stays ready for later runtime transitions into forager mode. Default is `true`; set `false` to use REST-only candidate maintenance. A zero `max_ohlcv_fetches_per_minute` disables this network path too.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 - **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
@@ -475,6 +476,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **market_snapshot_ticker_strategy**: Selects the live market-snapshot ticker path. `auto` lets Passivbot choose the exchange-appropriate default, `bulk` requests one broad ticker snapshot when the exchange supports it, and `symbols` fetches tickers symbol by symbol.
 - **custom_endpoints_path**: Optional live-config path to a custom endpoint override JSON file. Set to `null` to use the default auto-discovery behavior, set to a path such as `configs/custom_endpoints.json` to force that file, or set to `"none"` to disable endpoint overrides even if the default file exists. See [Running live](live.md#custom-exchange-endpoints).
 - **forager_score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
+- **forager_ws_candle_rest_audit_minutes**: Maximum time a healthy WebSocket-advanced flat-candidate 1m tail may defer its next REST integrity audit. Default is `30`; accepted values are greater than `0` and at most `60`. Missing basis, internal gaps, WebSocket silence, reconnect gaps, and active position/open-order surfaces continue to use the existing REST readiness and refresh rules.
 - **order_match_tolerance_pct**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. The accepted range is `0.0` through `0.01` inclusive (0% through 1%). Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.
 - **order_replacement_churn_gate_activation_count**: Account-wide connector-bound create-attempt count in the rolling window below which far churn-evidenced ordinary orders may still be placed. Default `10`; `0` disables only this economy deferral. Exact reconciliation and cancel-confirm-refresh-replan safety remain active. Market, risk-critical, and near-market creates never wait for economy capacity but still count.
 - **order_replacement_churn_gate_window_minutes**: Window for per-symbol Rust-ideal history and account-wide create-attempt accounting. Default `10.0` minutes. State is RAM-only and resets on bot restart.
@@ -656,7 +658,8 @@ The optimizer reuses the backtest suite configuration when `--suite [y/n]` is en
   score objectives from that scenario by default, or to `null` to use suite aggregation by
   default. Individual `optimize.scoring` entries may override the default with a named `scenario`
   or explicit `scenario: null`, and aggregate-based entries may set their own `aggregate` reducer.
-  Limits remain suite-aggregated.
+  Individual `optimize.limits` entries independently select either a named scenario or a suite
+  aggregate statistic.
 
 Use `--suite-config path/to/file.json` to layer additional scenario definitions at runtime.
 
@@ -671,7 +674,12 @@ Any metric listed above can be used when defining limits. Currency-specific metr
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
 - Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
-- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). If omitted, Passivbot uses the metric's `backtest.aggregate` rule, then `backtest.aggregate.default`, then `mean`.
+- Optional `scenario`: a named suite scenario to evaluate for this limit. Omitted or explicit
+  `null` uses suite aggregation. A named scenario uses that scenario's metric value and cannot be
+  combined with `stat`; unknown labels and scenario limits outside suite optimization are rejected.
+- Optional `stat`: for suite-aggregate limits, the statistic to compare against (`min`, `max`,
+  `mean`, `std`, or `median`). If omitted, Passivbot uses the metric's `backtest.aggregate` rule,
+  then `backtest.aggregate.default`, then `mean`.
 
 #### Format
 
@@ -679,7 +687,18 @@ Define limits in `optimize.limits` as a list:
 
 ```json
 "limits": [
-  {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "scenario": "base",
+    "value": 0.5
+  },
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "stat": "max",
+    "value": 0.7
+  },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
   {"metric": "adg_btc", "penalize_if": "<", "value": 0.0005, "stat": "mean"},
   {"metric": "hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02},
@@ -706,6 +725,7 @@ written as keep conditions, matching `pareto_store.py` filtering:
 passivbot optimize \
   --clear-limits \
   --limit 'drawdown_worst <= 0.35' \
+  --limit 'drawdown_worst_strategy_eq <= 0.5 scenario=base' \
   --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
   --limit 'adg > 0.0008 stat=mean'

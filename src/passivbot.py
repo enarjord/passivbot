@@ -57,7 +57,7 @@ from fill_events_manager import (
     fill_event_pnl_pending,
     signed_fee_paid_from_payload,
 )
-from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -1514,8 +1514,8 @@ class Passivbot:
         self._health_orders_placed = 0
         self._health_orders_cancelled = 0
         self._health_fills = 0
-        self._health_pnl = 0.0  # sum of realized PnL from fills
-        self._health_counted_synthetic_pnl_by_key: dict[str, float] = {}
+        # Authoritative net realized PnL observed during this process.
+        self._health_pnl = 0.0
         self._health_errors = 0
         self._health_ws_reconnects = 0
         self._health_rate_limits = 0
@@ -1667,6 +1667,44 @@ class Passivbot:
     def _live_max_realized_loss_pct(self) -> float:
         value = self.live_value("max_realized_loss_pct")
         return 1.0 if value is None else float(value)
+
+    def _unstuck_uses_realized_pnl(self) -> bool:
+        symbols: list[Optional[str]] = [None]
+        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
+        for pside in ("long", "short"):
+            if (
+                float(
+                    self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+                )
+                <= 0.0
+            ):
+                continue
+            for symbol in symbols:
+                if (
+                    bool(self.bp(pside, "unstuck_enabled", symbol))
+                    and float(
+                        self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0
+                    )
+                    > 0.0
+                    and float(self.bp(pside, "unstuck_close_pct", symbol) or 0.0)
+                    > 0.0
+                    and float(self.bp(pside, "unstuck_threshold", symbol) or 0.0)
+                    > 0.0
+                ):
+                    return True
+        return False
+
+    def _orchestrator_uses_realized_pnl(self) -> bool:
+        return (
+            self._live_max_realized_loss_pct() < 1.0
+            or self._unstuck_uses_realized_pnl()
+        )
+
+    def _live_risk_uses_authoritative_pnl(self) -> bool:
+        return (
+            self._orchestrator_uses_realized_pnl()
+            or self._equity_hard_stop_enabled()
+        )
 
     def bot_value(self, pside: str, key: str):
         bot_side = self.config.get("bot", {}).get(pside, {})
@@ -8154,6 +8192,14 @@ class Passivbot:
                     and missing_candles == tail_gap_candles,
                     "leading_gap_only": leading_gap_only,
                     "no_basis": no_basis,
+                    "last_refresh_ms": int(report.get("last_refresh_ms", 0) or 0),
+                    "last_ws_final_ts": report.get("last_ws_final_ts"),
+                    "last_ws_persist_ms": int(
+                        report.get("last_ws_persist_ms", 0) or 0
+                    ),
+                    "ws_persisted_contributed_to_tail": bool(
+                        report.get("ws_persisted_contributed_to_tail")
+                    ),
                 }
         except Exception:
             # Compatibility fallback for lightweight candle-manager doubles and
@@ -8180,6 +8226,37 @@ class Passivbot:
             "no_basis": age_ms >= now,
             "last_cached_ts": None,
         }
+
+    def _forager_ws_rest_audit_due(
+        self,
+        timeframe: str,
+        surface_health: Dict[str, Any],
+        *,
+        now_ms: int,
+    ) -> bool:
+        """Return whether a WS-advanced 1m tail needs its REST integrity audit."""
+        if str(timeframe) != "1m" or not bool(
+            surface_health.get("ws_persisted_contributed_to_tail")
+        ):
+            return False
+        audit_minutes_raw = get_optional_live_value(
+            self.config,
+            "forager_ws_candle_rest_audit_minutes",
+            30.0,
+        )
+        try:
+            audit_ms = int(float(audit_minutes_raw) * 60_000)
+        except (TypeError, ValueError):
+            audit_ms = 30 * 60_000
+        last_refresh_ms = int(surface_health.get("last_refresh_ms", 0) or 0)
+        last_ws_persist_ms = int(
+            surface_health.get("last_ws_persist_ms", 0) or 0
+        )
+        if last_ws_persist_ms <= last_refresh_ms:
+            return False
+        return last_refresh_ms <= 0 or int(now_ms) - last_refresh_ms >= max(
+            60_000, audit_ms
+        )
 
     def _rank_symbols_by_candle_staleness(
         self, symbols: Iterable[str], *, now_ms: Optional[int] = None
@@ -12328,6 +12405,7 @@ class Passivbot:
             return False
 
         try:
+            authoritative_pnl_required = self._live_risk_uses_authoritative_pnl()
             # Use the same lookback window
             lookback_config_value = self.live_value("pnls_max_lookback_days")
             lookback = parse_pnls_max_lookback_days(
@@ -12405,7 +12483,7 @@ class Passivbot:
             flush_enriched_events = collect_enriched_events
 
             # Check whether the cache proves the configured fill-history
-            # lookback before risk gates consume realized PnL.
+            # lookback before fill-dependent planning.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
             coverage_status = self._pnl_history_coverage_status(
@@ -12427,7 +12505,12 @@ class Passivbot:
             repair_degraded = getattr(
                 self._pnls_manager, "refresh_degraded_pnl_events", None
             )
-            if coverage_ready and degraded_before and callable(repair_degraded):
+            if (
+                authoritative_pnl_required
+                and coverage_ready
+                and degraded_before
+                and callable(repair_degraded)
+            ):
                 degraded_repair_attempted = True
                 try:
                     await repair_degraded(
@@ -12502,7 +12585,7 @@ class Passivbot:
             elif needs_lookback_refresh:
                 refresh_mode = "lookback_bootstrap"
                 logging.info(
-                    "[fills] proving fill-history lookback before risk planning | "
+                    "[fills] proving fill-history lookback before fill-dependent planning | "
                     "start=%s scope=%s covered_start=%s reason=%s",
                     ts_to_date(age_limit)[:19] if age_limit is not None else "all",
                     history_scope,
@@ -12591,8 +12674,9 @@ class Passivbot:
             flush_enriched_events()
             # Trailing fill confirmation only needs proof that a fill-cache
             # refresh completed after the position snapshot. Keep this
-            # separate from the risk-authoritative fills generation below,
-            # which must still wait for PnL enrichment and history coverage.
+            # separate from the planning-authoritative fills generation below.
+            # Coverage is always required; PnL enrichment is required only
+            # when an enabled live risk feature consumes realized PnL.
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
@@ -12629,7 +12713,10 @@ class Passivbot:
                 lookback=lookback,
             )
             coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
-            if pnls_safe and coverage_ready_after:
+            fills_ready = coverage_ready_after and (
+                pnls_safe or not authoritative_pnl_required
+            )
+            if fills_ready:
                 self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
@@ -12637,7 +12724,7 @@ class Passivbot:
                 self._trailing_fill_refresh_generation = (
                     fill_refresh_attempt_generation
                 )
-            elif pnls_safe and not coverage_ready_after:
+            elif not coverage_ready_after:
                 self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
                 state = getattr(self, "_fill_coverage_retry_state", {}) or {}
                 next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
@@ -12688,16 +12775,16 @@ class Passivbot:
             self._emit_fills_refresh_summary_event(
                 source=source,
                 refresh_mode=refresh_mode,
-                status="succeeded" if pnls_safe and coverage_ready_after else "deferred",
+                status="succeeded" if fills_ready else "deferred",
                 reason_code=(
                     "fills_refresh_succeeded"
-                    if pnls_safe and coverage_ready_after
+                    if fills_ready
                     else (
                         "pending_pnl_enrichment"
-                        if pending_pnl_events
+                        if authoritative_pnl_required and pending_pnl_events
                         else (
                             "degraded_pnl_enrichment"
-                            if degraded_pnl_events
+                            if authoritative_pnl_required and degraded_pnl_events
                             else "fill_history_coverage_unavailable"
                         )
                     )
@@ -12717,7 +12804,7 @@ class Passivbot:
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
-            return pnls_safe and coverage_ready_after
+            return fills_ready
 
         except RateLimitExceeded as e:
             flush_enriched_events()
@@ -12860,12 +12947,11 @@ class Passivbot:
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
         for event in new_events:
-            if fill_event_pnl_pending(event):
+            if fill_event_pnl_pending(event) or FillEventsManager.synthetic_pnl_events(
+                [event]
+            ):
                 continue
-            net_pnl = fill_event_net_pnl(event)
-            self._health_pnl += net_pnl
-            if FillEventsManager.synthetic_pnl_events([event]):
-                Passivbot._mark_health_fill_pnl_counted(self, event, net_pnl)
+            self._health_pnl += fill_event_net_pnl(event)
 
         batch_summary = len(new_events) > 20
         pending_count = 0
@@ -12926,48 +13012,6 @@ class Passivbot:
                     pending_pnl_count=pending_count,
                 )
 
-    @staticmethod
-    def _health_fill_identity_keys(event: object) -> set[str]:
-        keys: set[str] = set()
-        event_id = str(getattr(event, "id", "") or "")
-        if event_id:
-            keys.add(f"id:{event_id}")
-        for source_id in getattr(event, "source_ids", None) or ():
-            normalized = str(source_id or "")
-            if normalized:
-                keys.add(f"source:{normalized}")
-        return keys
-
-    def _health_fill_counted_net_pnl(self, event: object) -> float | None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", {}) or {}
-        for key in Passivbot._health_fill_identity_keys(event):
-            if key in counted:
-                return float(counted[key])
-        return None
-
-    def _mark_health_fill_pnl_counted(
-        self, event: object, net_pnl: float | None = None
-    ) -> None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
-        if counted is None:
-            counted = {}
-            self._health_counted_synthetic_pnl_by_key = counted
-        amount = (
-            fill_event_net_pnl(event)
-            if net_pnl is None
-            else float(net_pnl)
-        )
-        for key in Passivbot._health_fill_identity_keys(event):
-            counted[key] = amount
-
-    def _forget_health_fill_pnl_counted(self, *events: object) -> None:
-        counted = getattr(self, "_health_counted_synthetic_pnl_by_key", None)
-        if not counted:
-            return
-        for event in events:
-            for key in Passivbot._health_fill_identity_keys(event):
-                counted.pop(key, None)
-
     def _log_enriched_fill_events(self, transitions: list[tuple[object, object]]) -> None:
         """Log authoritative PnL replacing pending or synthetic cached values."""
         if not transitions:
@@ -12975,21 +13019,16 @@ class Passivbot:
         for previous, event in sorted(
             transitions, key=lambda item: item[1].timestamp
         ):
-            counted_net_pnl = Passivbot._health_fill_counted_net_pnl(self, previous)
-            previous_counted = counted_net_pnl is not None
-            previous_net_pnl = float(counted_net_pnl or 0.0)
-            pnl_delta = fill_event_net_pnl(event) - previous_net_pnl
-            self._health_pnl += pnl_delta
-            Passivbot._forget_health_fill_pnl_counted(self, previous, event)
+            authoritative_net_pnl = fill_event_net_pnl(event)
+            self._health_pnl += authoritative_net_pnl
             previous_source = str(
                 getattr(previous, "pnl_source", "") or "pending"
             ).lower()
             logging.info(
                 "[fill] authoritative realized pnl replaced cached estimate | "
-                "previous_source=%s previous_counted=%s pnl_delta=%+.8g | %s",
+                "previous_source=%s authoritative_net_pnl=%+.8g | %s",
                 previous_source,
-                str(previous_counted).lower(),
-                pnl_delta,
+                authoritative_net_pnl,
                 self._log_fill_event(event),
             )
 
@@ -13039,6 +13078,8 @@ class Passivbot:
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if getattr(self, "_pnls_manager", None) is None:
+            return {"max": 0.0, "last": 0.0}
+        if not self._orchestrator_uses_realized_pnl():
             return {"max": 0.0, "last": 0.0}
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
@@ -16521,6 +16562,8 @@ class Passivbot:
 
     def _auto_unstuck_allowed_live(self) -> bool:
         if self._pnls_manager is None:
+            return False
+        if not self._unstuck_uses_realized_pnl():
             return False
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
@@ -20273,9 +20316,15 @@ class Passivbot:
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
+            ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                self,
+                timeframe,
+                surface_health,
+                now_ms=now,
+            )
             if age_ms <= target_age_ms and (
                 bool(surface_health.get("coverage_ok")) or tail_only
-            ):
+            ) and not ws_rest_audit_due:
                 surface_checks[surface_key] = checked_ms
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
@@ -20415,19 +20464,35 @@ class Passivbot:
                 self._forager_surface_check_ms = surface_checks
                 surface_attempts[(sym, timeframe)] = int(utc_ms())
                 self._forager_surface_attempt_ms = surface_attempts
-                candle_task = self.cm.get_candles(
-                    sym,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                    # Background candidate refresh is best-effort. A 1ms TTL
-                    # still forces an ordinary stale read while allowing a
-                    # successful partial sparse response to reach gap repair
-                    # instead of aborting at a terminal empty page.
-                    max_age_ms=1,
-                    timeframe=timeframe,
-                    strict=False,
-                    max_lookback_candles=int(required_candles),
+                ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                    self,
+                    timeframe,
+                    pre_health,
+                    now_ms=now,
                 )
+                if ws_rest_audit_due:
+                    # A canonical WS tail is already fresh, so the ordinary
+                    # get_candles/refresh path would skip network I/O. Force a
+                    # bounded overlap specifically for the REST integrity audit.
+                    candle_task = self.cm.refresh(
+                        sym,
+                        through_ts=end_ts,
+                        force_overlap=True,
+                    )
+                else:
+                    candle_task = self.cm.get_candles(
+                        sym,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        # Background candidate refresh is best-effort. A 1ms TTL
+                        # still forces an ordinary stale read while allowing a
+                        # successful partial sparse response to reach gap repair
+                        # instead of aborting at a terminal empty page.
+                        max_age_ms=1,
+                        timeframe=timeframe,
+                        strict=False,
+                        max_lookback_candles=int(required_candles),
+                    )
                 if max_refresh_ms > 0:
                     remaining_s = max(
                         0.001,
@@ -20846,6 +20911,8 @@ class Passivbot:
             maintainer_names.append("maintain_monitor_snapshot")
         if self.ws_enabled:
             maintainer_names.append("watch_orders")
+            if candle_ws.forager_ws_candles_enabled(self):
+                maintainer_names.append("maintain_forager_ws_candles")
         else:
             logging.info(
                 "Websocket maintainers skipped (ws disabled via custom endpoints)."
@@ -20857,7 +20924,9 @@ class Passivbot:
         if hsl_replay_task is not None and not hsl_replay_task.done():
             self.maintainers["hsl_coin_replay"] = hsl_replay_task
 
-    # Legacy websocket 1m ohlcv watchers removed; CandlestickManager is authoritative
+    async def maintain_forager_ws_candles(self):
+        """Maintain persistent finalized 1m WS ingestion for flat forager candidates."""
+        return await candle_ws.maintain_forager_ws_candles(self)
 
     async def calc_log_range(
         self,

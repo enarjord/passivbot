@@ -58,14 +58,14 @@
     starve the others. Connectors whose authoritative PnL endpoint uses a timestamp
     different from execution time must search that timestamp independently in bounded,
     advancing windows while retaining the narrow execution lookup. Preserve ordinary
-    recent-fill overlap for routine ingestion, and defer risk planning without consuming
-    restart budget until every in-lookback row is authoritatively replaced. Report every
-    successful replacement before attempting later fallible fetches. Uptime health adds
-    the full authoritative net PnL when the previous cached value was not counted by this
-    process, and applies a delta against the exact net PnL previously counted for an
-    outstanding runtime synthetic row. Discard that temporary accounting after
-    enrichment; authoritative fills must not accumulate identity state. Structured
-    `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
+    recent-fill overlap for routine ingestion. When an enabled PnL consumer requires
+    authoritative history, defer that planning without consuming restart budget until
+    every in-lookback row is authoritatively replaced. Report every successful
+    replacement before attempting later fallible fetches. Uptime health PnL counts
+    authoritative net realized PnL only: pending and synthetic values remain visible in
+    fill diagnostics but do not enter the health counter, and later enrichment adds the
+    full authoritative amount without retaining fill-identity accounting state.
+    Structured `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
     `degraded_pnl_count` fields through the centralized payload sanitizer.
 
 ## Runtime Provenance
@@ -109,8 +109,10 @@ logs, runtime windows, and immutable manifests.
    rather than silently treated as complete.
 5. Old synthetic rows remain outside ordinary recent-fill overlap to avoid repeatedly
    widening every routine refresh. Risk-blocking degraded rows use a separate bounded
-   repair path so proven coverage cannot strand an otherwise recoverable authoritative
-   exchange record. Repair-only calls do not advance `last_refresh_ms`; the subsequent
+   repair path when an enabled HSL, auto-unstuck, or realized-loss consumer requires
+   authoritative PnL. With all such consumers disabled, covered structural fill history
+   remains ready while degraded rows stay visible for later repair. Repair-only calls do
+   not advance `last_refresh_ms`; the subsequent
    ordinary recent refresh must still cover downtime from the prior successful
    checkpoint. Bybit keeps the execution-time range narrow while rotating a separate
    closed-PnL `updatedTime` range toward the present; each auxiliary range spans at most
@@ -152,8 +154,10 @@ merely because an auxiliary endpoint failed.
 3. PnL attachment behavior when auxiliary endpoints fail.
 4. Provenance round-trip, preservation during refresh/deduplication, and legacy
    rows remaining unattributed.
-5. Old degraded synthetic PnL is refetched in bounded windows, authoritative
-   replacement is persisted, and unresolved rows defer live planning without restarts.
+5. Old degraded synthetic PnL is refetched in bounded windows when an enabled
+   authoritative-PnL consumer requires it, authoritative replacement is persisted, and
+   unresolved rows defer those consumers without restarts. With every PnL consumer
+   disabled, unresolved PnL does not block covered structural fill history.
 
 ## Key Code
 

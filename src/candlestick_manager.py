@@ -282,6 +282,8 @@ CANDLE_DTYPE = np.dtype(
     ]
 )
 
+_LIVE_WS_OBSERVATION_RETENTION_MS = 2 * 60 * ONE_MIN_MS
+
 EMA_SERIES_DTYPE = np.dtype(
     [
         ("ts", "int64"),
@@ -819,6 +821,13 @@ class CandlestickManager:
         self._shard_paths_cache: Dict[Tuple[str, str], Dict[str, str]] = {}
 
         self._cache: Dict[str, np.ndarray] = {}
+        # Recent public websocket observations are RAM-only provenance used to
+        # distinguish a fresh/changed CCXT update from rows repeated out of
+        # CCXT Pro's sliding cache. Proven-final rows themselves are persisted
+        # through the canonical 1m candle path.
+        self._live_ws_ohlcv_observations: Dict[
+            str, Dict[int, Tuple[Tuple[float, ...], bool]]
+        ] = {}
         self._index: Dict[str, dict] = {}
         self._index_mtime: Dict[
             str, Optional[Tuple[int, int, int]]
@@ -2352,6 +2361,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        merge_memory_cache: bool = True,
     ) -> Optional[np.ndarray]:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache.
 
@@ -2360,6 +2370,9 @@ class CandlestickManager:
         Note: Legacy data from `historical_data/` is automatically migrated to the
         primary cache on CandlestickManager initialization. The legacy fallback below
         remains as a safety net for any data that wasn't migrated.
+
+        Set ``merge_memory_cache=False`` to inspect canonical disk contents
+        without merging their rows into the in-memory candle cache.
         """
         try:
             tf_norm = self._normalize_timeframe_arg(timeframe, tf)
@@ -2547,6 +2560,8 @@ class CandlestickManager:
                 # Disk-load telemetry must never break cache loading.
                 pass
             if tf_norm == "1m":
+                if not merge_memory_cache:
+                    return merged_disk
                 existing = self._ensure_symbol_cache(symbol)
                 merged = self._merge_overwrite(existing, merged_disk)
                 self._cache[symbol] = merged
@@ -2674,6 +2689,7 @@ class CandlestickManager:
         last_refresh_ms: Optional[int] = None,
         defer_index: bool = False,
         skip_memory_retention: bool = False,
+        source: Optional[str] = None,
     ) -> None:
         """Merge `batch` into memory (optional) and persist incrementally to disk.
 
@@ -2681,11 +2697,16 @@ class CandlestickManager:
             defer_index: If True, defer index.json write until flush_deferred_index is called.
             skip_memory_retention: If True, skip memory retention enforcement to preserve
                 full historical data in cache (useful for backtest data preparation).
+            source: Optional ingestion provenance. ``"ws"`` records the latest
+                finalized WebSocket timestamp without advancing REST refresh
+                metadata.
         """
         if batch.size == 0:
             return
         arr = np.sort(_ensure_dtype(batch), order="ts")
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
+        source_norm = str(source or "").lower()
+        persist_before_cache = tf_norm == "1m" and source_norm == "ws"
         candle_content_changed = True
         replaces_synthetic = False
         if tf_norm == "1m":
@@ -2716,8 +2737,40 @@ class CandlestickManager:
                 synthetic
                 and any(int(ts) in synthetic for ts in incoming_unique["ts"])
             )
+        # WebSocket rows become canonical trading inputs only after the shard
+        # write succeeds. A failed write must not leave restart-sensitive
+        # candles or EMA state visible exclusively in RAM.
+        if persist_before_cache:
+            self._save_range_incremental(
+                symbol,
+                arr,
+                timeframe=tf_norm,
+                defer_index=defer_index,
+            )
+            durable = self._load_from_disk(
+                symbol,
+                int(arr[0]["ts"]),
+                int(arr[-1]["ts"]),
+                timeframe=tf_norm,
+                merge_memory_cache=False,
+            )
+            durable_by_ts = (
+                {int(row["ts"]): row for row in durable}
+                if isinstance(durable, np.ndarray) and durable.size
+                else {}
+            )
+            if any(
+                int(row["ts"]) not in durable_by_ts
+                or not np.array_equal(durable_by_ts[int(row["ts"])], row)
+                for row in arr
+            ):
+                # A legacy-backed day may intentionally reject a primary
+                # overlay. Treat any other successful-but-invisible save the
+                # same way: do not expose restart-sensitive content in RAM.
+                raise OSError("WebSocket candle persistence verification failed")
         if tf_norm == "1m" and (candle_content_changed or replaces_synthetic):
             self._projected_open_tail_ema_cache.pop(symbol, None)
+            self._invalidate_ema_cache(symbol, timeframe="1m")
 
         # Update inception_ts if this is new earliest data for 1m (defer save until end)
         if tf_norm == "1m":
@@ -2741,8 +2794,25 @@ class CandlestickManager:
             # If so, mark that EMAs should be recomputed for this symbol
             self._check_synthetic_replacement(symbol, arr)
 
-        self._save_range_incremental(symbol, arr, timeframe=tf_norm, defer_index=defer_index)
+        if not persist_before_cache:
+            self._save_range_incremental(
+                symbol,
+                arr,
+                timeframe=tf_norm,
+                defer_index=defer_index,
+            )
         if tf_norm == "1m":
+            if source_norm == "ws":
+                idx = self._ensure_symbol_index(symbol, tf="1m")
+                meta = idx.setdefault("meta", {})
+                meta["last_ws_final_ts"] = max(
+                    int(meta.get("last_ws_final_ts", 0) or 0),
+                    int(arr[-1]["ts"]),
+                )
+                meta["last_ws_persist_ms"] = int(self._now_ms())
+                self._index[f"{symbol}::1m"] = idx
+                if not defer_index:
+                    self._save_index(symbol, tf="1m")
             gaps_changed = self._trim_known_gaps_covered_by_rows(
                 symbol,
                 arr,
@@ -4001,6 +4071,16 @@ class CandlestickManager:
             last_runtime_ts: Optional[int] = None
             if runtime_arr.size:
                 last_runtime_ts = int(np.max(runtime_arr["ts"].astype(np.int64)))
+            last_ws_final_ts = (
+                self.get_last_live_ws_ohlcv_ts(symbol)
+                if step_ms == ONE_MIN_MS
+                else 0
+            )
+            last_ws_persist_ms = (
+                self.get_last_live_ws_persist_ms(symbol)
+                if step_ms == ONE_MIN_MS
+                else 0
+            )
 
             synthetic_count = 0
             if step_ms == ONE_MIN_MS:
@@ -4088,6 +4168,15 @@ class CandlestickManager:
                 ),
                 "last_disk_ts": last_disk_ts,
                 "last_runtime_ts": last_runtime_ts,
+                "last_ws_final_ts": (
+                    int(last_ws_final_ts) if last_ws_final_ts > 0 else None
+                ),
+                "last_ws_persist_ms": int(last_ws_persist_ms),
+                "ws_persisted_contributed_to_tail": bool(
+                    last_ws_final_ts > 0
+                    and last_cached_ts is not None
+                    and int(last_ws_final_ts) == int(last_cached_ts)
+                ),
                 "last_refresh_ms": int(last_refresh_ms),
                 "refresh_age_ms": (
                     int(max(0, ts_now - int(last_refresh_ms))) if int(last_refresh_ms) > 0 else None
@@ -4927,6 +5016,176 @@ class CandlestickManager:
                 keep[i - 1] = False
             last = ts[i]
         return arr[keep]
+
+    def get_last_live_ws_ohlcv_ts(self, symbol: str) -> int:
+        """Return the newest finalized WS candle persisted for this symbol."""
+        idx = self._ensure_symbol_index(symbol, tf="1m")
+        try:
+            return int(idx.get("meta", {}).get("last_ws_final_ts", 0) or 0)
+        except Exception:
+            return 0
+
+    def get_last_live_ws_persist_ms(self, symbol: str) -> int:
+        """Return when a finalized WS candle was most recently persisted."""
+        idx = self._ensure_symbol_index(symbol, tf="1m")
+        try:
+            return int(idx.get("meta", {}).get("last_ws_persist_ms", 0) or 0)
+        except Exception:
+            return 0
+
+    def clear_live_ws_ohlcv_state(self, symbol: str) -> None:
+        """Discard volatile CCXT-cache provenance without deleting candles."""
+        self._live_ws_ohlcv_observations.pop(symbol, None)
+
+    async def ingest_live_ws_ohlcv(
+        self,
+        symbol: str,
+        rows: list,
+        *,
+        now_ms: Optional[int] = None,
+    ) -> int:
+        """Persist proven-final public WS rows through the canonical 1m path.
+
+        CCXT Pro may repeat its whole sliding OHLCV cache on each update. The
+        first non-empty snapshot of each watcher session only primes provenance.
+        After that, a changed row may correct an already canonical timestamp.
+        A new canonical timestamp additionally requires a fresh successor
+        proving a trusted preceding bucket closed. The current minute,
+        malformed rows, silence, and reconnect gaps never synthesize candles.
+        An existing disk/index basis is required before WS may extend history.
+        """
+        now = int(self._now_ms() if now_ms is None else now_ms)
+        latest_finalized = _floor_minute(now) - ONE_MIN_MS
+        if latest_finalized < 0:
+            return 0
+        arr = self._normalize_ccxt_ohlcv(rows)
+        if arr.size == 0:
+            return 0
+
+        cutoff = int(
+            latest_finalized - _LIVE_WS_OBSERVATION_RETENTION_MS + ONE_MIN_MS
+        )
+        arr = arr[arr["ts"].astype(np.int64) >= cutoff]
+        if arr.size == 0:
+            return 0
+
+        session_primed = symbol in self._live_ws_ohlcv_observations
+        previous = self._live_ws_ohlcv_observations.get(symbol, {})
+        current: Dict[int, Tuple[Tuple[float, ...], bool]] = {}
+        changed_or_new: set[int] = set()
+        rows_by_ts: Dict[int, np.void] = {}
+        for row in arr:
+            ts = int(row["ts"])
+            values = tuple(float(value) for value in row.tolist())
+            rows_by_ts[ts] = row
+            prior = previous.get(ts)
+            if prior is None or prior[0] != values:
+                changed_or_new.add(ts)
+            # A row first seen while its bucket is still open may later be
+            # sealed by a fresh successor. Processing time cannot prove a
+            # boundary crossing because a pre-boundary payload may resume from
+            # the event loop only after the bucket closes. Past rows in the
+            # first snapshot of a watcher session are untrusted replay-cache
+            # contents until that row itself changes.
+            successor_eligible = (
+                now < ts + ONE_MIN_MS
+                if not session_primed
+                else bool(
+                    prior is None
+                    or prior[0] != values
+                    or prior[1]
+                )
+            )
+            current[ts] = (values, successor_eligible)
+        # The first non-empty snapshot of every watcher session establishes
+        # provenance only. It may be a replay of a partial pre-disconnect row,
+        # so reconnect recovery remains REST-owned.
+        if not session_primed:
+            self._live_ws_ohlcv_observations[symbol] = current
+            return 0
+        # In CCXT ``newUpdates`` mode the fresh successor may be returned
+        # alone. Reuse the immediately preceding observation only within the
+        # same uninterrupted watcher session so that successor provenance can
+        # seal it without inventing or remotely refetching the row.
+        successor_proven_predecessors: set[int] = set()
+        for successor_ts in changed_or_new:
+            predecessor_ts = int(successor_ts - ONE_MIN_MS)
+            prior_predecessor = previous.get(predecessor_ts)
+            if prior_predecessor is None or not bool(prior_predecessor[1]):
+                continue
+            successor_proven_predecessors.add(predecessor_ts)
+            if predecessor_ts not in rows_by_ts:
+                predecessor = np.array(
+                    [prior_predecessor[0]],
+                    dtype=CANDLE_DTYPE,
+                )
+                rows_by_ts[predecessor_ts] = predecessor[0]
+        # A first-ever WS snapshot must not become a restart-sensitive trading
+        # basis. REST or previously persisted canonical data must exist first.
+        if int(self.get_last_final_ts(symbol) or 0) <= 0:
+            self._live_ws_ohlcv_observations[symbol] = current
+            return 0
+
+        candidate_rows = []
+        for ts, row in rows_by_ts.items():
+            if ts > latest_finalized:
+                continue
+            if (
+                ts in changed_or_new
+                or ts in successor_proven_predecessors
+            ):
+                candidate_rows.append(tuple(row.tolist()))
+        if not candidate_rows:
+            self._live_ws_ohlcv_observations[symbol] = current
+            return 0
+        candidates = np.array(candidate_rows, dtype=CANDLE_DTYPE)
+
+        async with self._acquire_fetch_lock(symbol, "1m"):
+            disk = self._load_from_disk(
+                symbol,
+                int(candidates[0]["ts"]),
+                int(candidates[-1]["ts"]),
+                timeframe="1m",
+            )
+            cached = self._slice_ts_range(
+                self._ensure_symbol_cache(symbol),
+                int(candidates[0]["ts"]),
+                int(candidates[-1]["ts"]),
+            )
+            canonical = self._merge_overwrite(disk, cached)
+            canonical_by_ts = {int(row["ts"]): row for row in canonical}
+            # Value changes alone can correct a timestamp already admitted by
+            # REST or WS. Extending canonical history requires independent
+            # post-boundary proof, so a pre-boundary update delayed in the
+            # consumer queue cannot become final merely because wall time
+            # advanced before it was processed.
+            eligible_rows = [
+                row
+                for row in candidates
+                if int(row["ts"]) in canonical_by_ts
+                or int(row["ts"]) in successor_proven_predecessors
+            ]
+            changed_rows = [
+                tuple(row.tolist())
+                for row in eligible_rows
+                if int(row["ts"]) not in canonical_by_ts
+                or not np.array_equal(canonical_by_ts[int(row["ts"])], row)
+            ]
+            if not changed_rows:
+                self._live_ws_ohlcv_observations[symbol] = current
+                return 0
+            persisted = np.array(changed_rows, dtype=CANDLE_DTYPE)
+            self._persist_batch(
+                symbol,
+                persisted,
+                timeframe="1m",
+                merge_cache=True,
+                source="ws",
+            )
+        # Commit the new provenance frame only after any required persistence
+        # succeeds. A failed write remains retryable on the next WS update.
+        self._live_ws_ohlcv_observations[symbol] = current
+        return int(persisted.shape[0])
 
     def _rejected_ccxt_ohlcv_timestamps(
         self,
@@ -9513,12 +9772,15 @@ class CandlestickManager:
         through_ts: Optional[int] = None,
         *,
         raise_on_partial_empty_page: bool = False,
+        force_overlap: bool = False,
     ) -> None:
         """Fetch new candles and merge into cache.
 
         - Overlaps by `overlap_candles`
         - Excludes current in-progress minute
         - No-op if `self.exchange` is None
+        - ``force_overlap`` performs the overlap fetch even when the cached tail
+          is already current; this is used for periodic REST integrity audits.
         """
         if self.exchange is None:
             return None
@@ -9546,7 +9808,7 @@ class CandlestickManager:
             proposed_since = end_exclusive - self.default_window_candles * ONE_MIN_MS
         else:
             last_ts = existing_last_ts if existing_last_ts is not None else 0
-            if last_ts >= end_exclusive - ONE_MIN_MS:
+            if last_ts >= end_exclusive - ONE_MIN_MS and not force_overlap:
                 self._log(
                     "debug",
                     "refresh_skip_fresh",
@@ -9582,7 +9844,7 @@ class CandlestickManager:
                 since = end_exclusive - self.default_window_candles * ONE_MIN_MS
             else:
                 last_ts = existing_last_ts if existing_last_ts is not None else 0
-                if last_ts >= end_exclusive - ONE_MIN_MS:
+                if last_ts >= end_exclusive - ONE_MIN_MS and not force_overlap:
                     self._log(
                         "debug",
                         "refresh_skip_fresh",
@@ -9612,6 +9874,7 @@ class CandlestickManager:
                 since=since,
                 end_exclusive=end_exclusive,
                 existing_last_ts=existing_last_ts,
+                force_overlap=bool(force_overlap),
             )
 
             def _persist_refresh_batch(batch: np.ndarray) -> None:
@@ -9628,11 +9891,15 @@ class CandlestickManager:
                     last_refresh_ms=now_fetch,
                 )
 
-            fetch_ranges = self._fetch_ranges_excluding_deferred_gaps(
-                symbol,
-                since,
-                end_exclusive - ONE_MIN_MS,
-                now_ms=now,
+            fetch_ranges = (
+                [(int(since), int(end_exclusive - ONE_MIN_MS))]
+                if force_overlap
+                else self._fetch_ranges_excluding_deferred_gaps(
+                    symbol,
+                    since,
+                    end_exclusive - ONE_MIN_MS,
+                    now_ms=now,
+                )
             )
             attempted_unknown_gaps: List[Tuple[int, int]] = []
             for fetch_start, fetch_end in fetch_ranges:

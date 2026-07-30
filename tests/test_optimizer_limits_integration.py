@@ -237,3 +237,72 @@ def test_limit_can_use_median_stat_emitted_by_metric_schema():
 
     assert pytest.approx(scores[0]) == (5.0 - 4.0) * 1e6
     assert pytest.approx(penalty) == (5.0 - 4.0) * 1e6
+
+
+def test_evaluator_combines_scenario_specific_and_suite_stat_limit_penalties():
+    limits = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg_strategy_eq"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    evaluator.build_limit_checks({"default": "mean"})
+
+    scores, penalty = evaluator.calc_fitness(
+        {"adg_strategy_eq_mean": 0.002},
+        limit_metrics={"drawdown_worst_strategy_eq_max": 0.8},
+        scenario_limit_metrics={
+            "base": {"drawdown_worst_strategy_eq_mean": 0.6},
+        },
+    )
+
+    expected_penalty = ((0.6 - 0.5) + (0.8 - 0.7)) * 1e6
+    assert scores == pytest.approx((expected_penalty,))
+    assert penalty == pytest.approx(expected_penalty)
+
+
+def test_scenario_specific_limit_requires_suite_metrics():
+    limits = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.5,
+        },
+    ]
+    evaluator = Evaluator({}, {}, {}, _make_config(limits))
+
+    with pytest.raises(ValueError, match="requires suite mode"):
+        evaluator.calc_fitness(
+            {
+                "adg_mean": 0.001,
+                "drawdown_worst_strategy_eq_mean": 0.6,
+            }
+        )
+
+
+def test_iterative_backtester_rejects_scenario_specific_optimize_limits():
+    from tools.iterative_backtester import build_limit_checks
+
+    with pytest.raises(ValueError, match="require suite optimizer evaluation"):
+        build_limit_checks(
+            [
+                {
+                    "metric": "drawdown_worst_strategy_eq",
+                    "penalize_if": "greater_than",
+                    "scenario": "base",
+                    "value": 0.5,
+                }
+            ],
+            {},
+        )

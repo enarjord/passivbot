@@ -4,6 +4,31 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill readiness now separates proven structural fill history from realized-PnL
+  quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
+  auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
+  planning when every authoritative-PnL consumer is disabled. Zero-exposure unstuck
+  configurations follow Rust's disabled behavior, monitor snapshots leave disabled
+  unstuck allowances unavailable instead of reading unsafe PnL, and coverage failures
+  retain their coverage-specific diagnostics and retry classification.
+- Live health-summary PnL now counts authoritative net realized PnL only.
+  Pending and synthetic fill estimates remain visible in fill diagnostics but
+  no longer create temporary fill-identity bookkeeping solely to correct the
+  uptime metric after enrichment.
+- Flat forager candidates can now persist proven-final public 1m WebSocket
+  candles through the canonical candle path, reducing routine candle REST
+  pressure while retaining REST for startup basis, gaps, reconnect recovery,
+  prolonged silence, and periodic integrity audits. CCXT cache provenance and
+  successor timestamps prove finality; each watcher session primes its first
+  snapshot without persisting replayed rows, integrity audits force a REST
+  overlap even when the WebSocket tail is fresh, and WebSocket silence never
+  creates a synthetic no-trade candle. Changed values may correct an existing
+  canonical timestamp, while extending the tail requires fresh-successor proof;
+  shard persistence is read-verified before a WebSocket candle is exposed to
+  cache and EMA readers, including on immutable legacy-backed days. Unstable
+  streams cool down to REST-only maintenance before retrying automatically, and
+  the subscription reconciler remains ready for runtime transitions into
+  forager mode.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then
@@ -48,8 +73,24 @@ All notable user-facing changes will be documented in this file.
   entry may set `scenario` to a named suite scenario, set it explicitly to `null` to use suite
   aggregation, and optionally set `aggregate` to `mean`, `min`, `max`, `std`, or `median`.
   Omitting `scenario` inherits `optimize.objective_scenario`; aggregate objectives without an
-  explicit reducer inherit the metric-specific or default `backtest.aggregate` rule. Limits remain
-  suite-aggregated.
+  explicit reducer inherit the metric-specific or default `backtest.aggregate` rule.
+- Optimizer suite limits may now select a named `scenario` independently of scoring. Limits with
+  an omitted or null `scenario` keep using suite aggregation and their explicit `stat` or
+  `backtest.aggregate` fallback. Named-scenario limits use that scenario's metric value and reject
+  an accompanying `stat`. Scenario labels are normalized consistently and retain generated labels
+  after filtering. Named-scenario limits are validated against the active labels before data
+  preparation, including when suite mode is disabled. The Pareto dashboard also applies forbidden
+  `inside_range` bands and optimizer-compatible `auto` directions to scenario-specific limit
+  columns, quotes scenario labels containing its boolean separator, honors disabled limits, and
+  parses generated not-equal filters. Pareto CLI filtering likewise resolves `auto` limits with
+  the optimizer's default metric directions. Iterative backtesting rejects unsupported
+  scenario-specific limits before loading markets or preparing datasets.
+- Optimizer starting configs may now be pre-filtered from stored Pareto metrics with
+  `--filter-starting-configs` and optionally reduced with the same `anchors-farthest` selection as
+  `pareto-compress` via `--compress-starting-configs N` (`--starting-configs-max N`). The optimizer
+  warns that stored metrics are not verified against the new run and fails loudly when metric
+  artifacts are missing, malformed, or all rejected. Active-scenario aggregate preselection matches
+  suite runtime behavior by aggregating each metric over the selected scenarios that emitted it.
 - Live EMA preparation now batches compatible spans per symbol and metric family, including bounded
   cache-only fallbacks for stale forager candidates, and complete candle windows bypass redundant
   Python gap reconstruction. A failed combined read retries each span through its primary reader

@@ -191,6 +191,25 @@ def validate_config(
         raise ValueError(
             "config.live.max_forager_candle_refresh_seconds must be finite and > 0.0"
         )
+    try:
+        ws_candle_audit_minutes = float(
+            config["live"]["forager_ws_candle_rest_audit_minutes"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "config.live.forager_ws_candle_rest_audit_minutes must be numeric"
+        ) from exc
+    if (
+        not math.isfinite(ws_candle_audit_minutes)
+        or ws_candle_audit_minutes <= 0.0
+        or ws_candle_audit_minutes > 60.0
+    ):
+        raise ValueError(
+            "config.live.forager_ws_candle_rest_audit_minutes must be finite, "
+            "> 0.0 and <= 60.0"
+        )
+    if not isinstance(config["live"]["enable_forager_ws_candles"], bool):
+        raise TypeError("config.live.enable_forager_ws_candles must be a boolean")
     for key in ("fee_pct_fallback", "fee_pct_sanity_abs_max"):
         try:
             value = float(config["live"][key])

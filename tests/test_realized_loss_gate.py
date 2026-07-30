@@ -83,6 +83,7 @@ _DEFAULT_RISK_CACHE = object()
 def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
+    bot._orchestrator_uses_realized_pnl = lambda: True
     bot._pnls_manager = MagicMock()
     def _get_events(start_ms=None, end_ms=None, symbol=None):
         out = list(events)
@@ -177,6 +178,79 @@ class _FailingConsoleSink:
 # ---------------------------------------------------------------------------
 
 
+class TestRealizedPnlConsumers:
+    @staticmethod
+    def _make_bot(
+        *,
+        max_realized_loss_pct=1.0,
+        hsl_enabled=False,
+        total_wallet_exposure_limit=1.0,
+        values=None,
+    ):
+        bot = object.__new__(Passivbot)
+        bot.coin_overrides = {}
+        bot._live_max_realized_loss_pct = lambda: max_realized_loss_pct
+        bot._equity_hard_stop_enabled = lambda: hsl_enabled
+        bot.bot_value = lambda pside, key: (
+            total_wallet_exposure_limit
+            if key == "total_wallet_exposure_limit"
+            else 0.0
+        )
+        values = values or {}
+        bot.bp = lambda pside, key, symbol=None: values.get(
+            (symbol, pside, key),
+            values.get((None, pside, key), False if key == "unstuck_enabled" else 0.0),
+        )
+        return bot
+
+    def test_disabled_risk_features_do_not_require_authoritative_pnl(self):
+        bot = self._make_bot()
+
+        assert bot._live_risk_uses_authoritative_pnl() is False
+
+    @pytest.mark.parametrize(
+        "max_realized_loss_pct,hsl_enabled",
+        [(0.99, False), (1.0, True)],
+    )
+    def test_realized_loss_gate_or_hsl_requires_authoritative_pnl(
+        self, max_realized_loss_pct, hsl_enabled
+    ):
+        bot = self._make_bot(
+            max_realized_loss_pct=max_realized_loss_pct,
+            hsl_enabled=hsl_enabled,
+        )
+
+        assert bot._live_risk_uses_authoritative_pnl() is True
+
+    @pytest.mark.parametrize("symbol", [None, "SOL/USDT:USDT"])
+    def test_enabled_unstuck_requires_authoritative_pnl(self, symbol):
+        values = {
+            (symbol, "long", "unstuck_enabled"): True,
+            (symbol, "long", "unstuck_loss_allowance_pct"): 0.01,
+            (symbol, "long", "unstuck_close_pct"): 0.1,
+            (symbol, "long", "unstuck_threshold"): 0.9,
+        }
+        bot = self._make_bot(values=values)
+        if symbol is not None:
+            bot.coin_overrides = {symbol: {}}
+
+        assert bot._live_risk_uses_authoritative_pnl() is True
+
+    def test_unstuck_with_zero_total_exposure_does_not_require_pnl(self):
+        values = {
+            (None, "long", "unstuck_enabled"): True,
+            (None, "long", "unstuck_loss_allowance_pct"): 0.01,
+            (None, "long", "unstuck_close_pct"): 0.1,
+            (None, "long", "unstuck_threshold"): 0.9,
+        }
+        bot = self._make_bot(
+            total_wallet_exposure_limit=0.0,
+            values=values,
+        )
+
+        assert bot._live_risk_uses_authoritative_pnl() is False
+
+
 class TestGetRealizedPnlCumsumStats:
     def test_no_manager_returns_zeros(self):
         bot = object.__new__(Passivbot)
@@ -188,6 +262,26 @@ class TestGetRealizedPnlCumsumStats:
         bot = _make_bot_with_events([])
         result = bot._get_realized_pnl_cumsum_stats()
         assert result == {"max": 0.0, "last": 0.0}
+
+    @pytest.mark.parametrize(
+        "pnl_status,pnl_source",
+        [("pending", "unknown"), ("complete", "synthetic_degraded")],
+    )
+    def test_disabled_consumers_do_not_read_unsafe_pnl(
+        self, pnl_status, pnl_source
+    ):
+        bot = _make_bot_with_events(
+            [
+                _make_fill_event(
+                    -10.0,
+                    pnl_status=pnl_status,
+                    pnl_source=pnl_source,
+                )
+            ]
+        )
+        bot._orchestrator_uses_realized_pnl = lambda: False
+
+        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
 
     def test_single_positive_event(self):
         bot = _make_bot_with_events([_make_fill_event(50.0)])
