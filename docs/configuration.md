@@ -658,7 +658,8 @@ The optimizer reuses the backtest suite configuration when `--suite [y/n]` is en
   score objectives from that scenario by default, or to `null` to use suite aggregation by
   default. Individual `optimize.scoring` entries may override the default with a named `scenario`
   or explicit `scenario: null`, and aggregate-based entries may set their own `aggregate` reducer.
-  Limits remain suite-aggregated.
+  Individual `optimize.limits` entries independently select either a named scenario or a suite
+  aggregate statistic.
 
 Use `--suite-config path/to/file.json` to layer additional scenario definitions at runtime.
 
@@ -673,7 +674,12 @@ Any metric listed above can be used when defining limits. Currency-specific metr
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
 - Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
-- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). If omitted, Passivbot uses the metric's `backtest.aggregate` rule, then `backtest.aggregate.default`, then `mean`.
+- Optional `scenario`: a named suite scenario to evaluate for this limit. Omitted or explicit
+  `null` uses suite aggregation. A named scenario uses that scenario's metric value and cannot be
+  combined with `stat`; unknown labels and scenario limits outside suite optimization are rejected.
+- Optional `stat`: for suite-aggregate limits, the statistic to compare against (`min`, `max`,
+  `mean`, `std`, or `median`). If omitted, Passivbot uses the metric's `backtest.aggregate` rule,
+  then `backtest.aggregate.default`, then `mean`.
 
 #### Format
 
@@ -681,7 +687,18 @@ Define limits in `optimize.limits` as a list:
 
 ```json
 "limits": [
-  {"metric": "drawdown_worst_btc", "penalize_if": ">", "value": 0.3},
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "scenario": "base",
+    "value": 0.5
+  },
+  {
+    "metric": "drawdown_worst_strategy_eq",
+    "penalize_if": "greater_than",
+    "stat": "max",
+    "value": 0.7
+  },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
   {"metric": "adg_btc", "penalize_if": "<", "value": 0.0005, "stat": "mean"},
   {"metric": "hard_stop_time_in_red_pct", "penalize_if": ">", "value": 0.02},
@@ -708,6 +725,7 @@ written as keep conditions, matching `pareto_store.py` filtering:
 passivbot optimize \
   --clear-limits \
   --limit 'drawdown_worst <= 0.35' \
+  --limit 'drawdown_worst_strategy_eq <= 0.5 scenario=base' \
   --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
   --limit 'adg > 0.0008 stat=mean'
