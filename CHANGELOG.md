@@ -24,8 +24,10 @@ All notable user-facing changes will be documented in this file.
 - Optimizer suite limits may now select a named `scenario` independently of scoring. Limits with
   an omitted or null `scenario` keep using suite aggregation and their explicit `stat` or
   `backtest.aggregate` fallback. Named-scenario limits use that scenario's metric value and reject
-  an accompanying `stat`. Scenario labels are normalized consistently, and named-scenario limits
-  are rejected before data preparation when suite mode is disabled.
+  an accompanying `stat`. Scenario labels are normalized consistently and retain generated labels
+  after filtering. Named-scenario limits are validated against the active labels before data
+  preparation, including when suite mode is disabled. The Pareto dashboard also applies forbidden
+  `inside_range` bands to scenario-specific limit columns.
 - Optimizer starting configs may now be pre-filtered from stored Pareto metrics with
   `--filter-starting-configs` and optionally reduced with the same `anchors-farthest` selection as
   `pareto-compress` via `--compress-starting-configs N` (`--starting-configs-max N`). The optimizer

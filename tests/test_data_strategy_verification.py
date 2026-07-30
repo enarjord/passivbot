@@ -924,4 +924,13 @@ class TestScenarioFiltering:
 
         filtered = filter_scenarios_by_label(scenarios, ["stress"])
 
-        assert filtered == scenarios
+        assert filtered == [{"label": "stress", "coins": ["BTC"]}]
+
+    def test_filter_preserves_generated_scenario_label(self):
+        scenarios = [{"label": "base"}, {"coins": ["BTC"]}]
+
+        filtered = filter_scenarios_by_label(scenarios, ["scenario_02"])
+        built, _aggregate_cfg = build_scenarios({"scenarios": filtered})
+
+        assert filtered == [{"label": "scenario_02", "coins": ["BTC"]}]
+        assert [scenario.label for scenario in built] == ["scenario_02"]

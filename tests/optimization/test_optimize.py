@@ -827,6 +827,28 @@ def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
     optimize._validate_optimizer_limit_suite_mode(config, suite_enabled=False)
 
 
+def test_validate_optimizer_limit_suite_mode_rejects_unknown_scenario_early():
+    config = optimize.get_template_config()
+    config["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "stres",
+            "value": 0.50,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="selects unknown scenario 'stres'.*base, stress",
+    ):
+        optimize._validate_optimizer_limit_suite_mode(
+            config,
+            suite_enabled=True,
+            scenario_labels=["base", "stress"],
+        )
+
+
 def test_optimize_parser_accepts_short_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",

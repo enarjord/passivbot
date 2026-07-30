@@ -2841,11 +2841,15 @@ def _validate_optimizer_limit_suite_mode(
     config: Mapping[str, Any],
     *,
     suite_enabled: bool,
+    scenario_labels: Sequence[str] | None = None,
 ) -> None:
-    if suite_enabled:
-        return
     optimize_cfg = config.get("optimize")
     limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
+    available_labels = (
+        {str(label).strip() for label in scenario_labels}
+        if scenario_labels is not None
+        else None
+    )
     for entry in limits:
         if not isinstance(entry, Mapping) or not bool(entry.get("enabled", True)):
             continue
@@ -2853,10 +2857,18 @@ def _validate_optimizer_limit_suite_mode(
         if scenario is None:
             continue
         metric = str(entry.get("metric", "")).strip() or "<missing>"
-        raise ValueError(
-            f"scenario-specific optimizer limit on {metric!r} requires suite mode "
-            f"(scenario {scenario!r}); enable the optimizer suite or remove the scenario selector."
-        )
+        normalized_scenario = str(scenario).strip()
+        if not suite_enabled:
+            raise ValueError(
+                f"scenario-specific optimizer limit on {metric!r} requires suite mode "
+                f"(scenario {scenario!r}); enable the optimizer suite or remove the scenario selector."
+            )
+        if available_labels is not None and normalized_scenario not in available_labels:
+            available = ", ".join(sorted(available_labels)) or "<none>"
+            raise ValueError(
+                f"optimizer limit on {metric!r} selects unknown scenario "
+                f"{normalized_scenario!r}; available labels: {available}"
+            )
 
 
 def iter_anchored_fine_tune_seed_configs(config: dict):
@@ -3105,9 +3117,11 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
+    active_suite_scenario_labels = _active_suite_scenario_labels(suite_cfg)
     _validate_optimizer_limit_suite_mode(
         config,
         suite_enabled=bool(suite_cfg.get("enabled")),
+        scenario_labels=active_suite_scenario_labels,
     )
 
     preselected_starting_configs = None
@@ -3120,7 +3134,7 @@ async def main():
             aggregate_cfg=(
                 suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
             ),
-            scenario_labels=_active_suite_scenario_labels(suite_cfg),
+            scenario_labels=active_suite_scenario_labels,
         )
     fine_tune_params = (
         [p.strip() for p in (args.fine_tune_params or "").split(",") if p.strip()]

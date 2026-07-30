@@ -227,11 +227,14 @@ def filter_scenarios_by_label(
         return scenarios
 
     label_set = {str(label).strip() for label in labels}
-    filtered = [
-        scenario
-        for index, scenario in enumerate(scenarios, 1)
-        if _normalize_scenario_label(scenario.get("label"), index) in label_set
-    ]
+    filtered = []
+    for index, scenario in enumerate(scenarios, 1):
+        normalized_label = _normalize_scenario_label(scenario.get("label"), index)
+        if normalized_label not in label_set:
+            continue
+        normalized_scenario = dict(scenario)
+        normalized_scenario["label"] = normalized_label
+        filtered.append(normalized_scenario)
 
     if not filtered:
         available = [

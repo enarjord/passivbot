@@ -340,6 +340,19 @@ LIMIT_PATTERNS = [
 ]
 
 
+def _parse_limit_term(term: str):
+    for pattern, op in LIMIT_PATTERNS:
+        match = pattern.match(term)
+        if not match:
+            continue
+        try:
+            value = float(match.group("val"))
+        except ValueError:
+            return None
+        return match.group("key"), op, value
+    return None
+
+
 def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
     metrics: List[str] = []
     if not exprs:
@@ -347,13 +360,13 @@ def _extract_limit_metrics(exprs: Iterable[str]) -> List[str]:
     for line in exprs:
         if not line:
             continue
-        for pattern, _ in LIMIT_PATTERNS:
-            m = pattern.match(line)
-            if m:
-                key = m.group("key")
-                if key not in metrics:
-                    metrics.append(key)
-                break
+        for term in str(line).split("||"):
+            parsed = _parse_limit_term(term.strip())
+            if parsed is None:
+                continue
+            key, _op, _value = parsed
+            if key not in metrics:
+                metrics.append(key)
     return metrics
 
 
@@ -365,24 +378,18 @@ def _apply_limits(df: pd.DataFrame, exprs: Optional[str]) -> pd.Series:
         line = line.strip()
         if not line:
             continue
-        matched = False
-        for pattern, op in LIMIT_PATTERNS:
-            m = pattern.match(line)
-            if not m:
-                continue
-            matched = True
-            key = m.group("key")
-            try:
-                val = float(m.group("val"))
-            except ValueError:
-                continue
-            if key not in df.columns:
-                continue
-            col = df[key]
-            mask &= op(col, val)
-            break
-        if not matched:
+        raw_terms = [term.strip() for term in line.split("||") if term.strip()]
+        parsed_terms = [_parse_limit_term(term) for term in raw_terms]
+        if (
+            not raw_terms
+            or any(parsed is None for parsed in parsed_terms)
+            or any(parsed[0] not in df.columns for parsed in parsed_terms)
+        ):
             continue
+        line_mask = pd.Series(False, index=df.index)
+        for key, op, val in parsed_terms:
+            line_mask |= op(df[key], val)
+        mask &= line_mask
     return mask
 
 
@@ -471,6 +478,13 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
                 if low is not None and high is not None:
                     exprs.append(f"{metric}>={low}")
                     exprs.append(f"{metric}<={high}")
+        elif mode == "inside_range":
+            rng = entry.get("range")
+            if isinstance(rng, (list, tuple)) and len(rng) == 2:
+                low = _ensure_float(rng[0])
+                high = _ensure_float(rng[1])
+                if low is not None and high is not None:
+                    exprs.append(f"{metric}<={low} || {metric}>={high}")
     return exprs
 
 
