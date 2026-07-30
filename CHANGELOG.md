@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill readiness now separates proven structural fill history from realized-PnL
+  quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
+  auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
+  planning when every authoritative-PnL consumer is disabled.
 - Live health-summary PnL now counts authoritative net realized PnL only.
   Pending and synthetic fill estimates remain visible in fill diagnostics but
   no longer create temporary fill-identity bookkeeping solely to correct the

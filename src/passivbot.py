@@ -1666,6 +1666,37 @@ class Passivbot:
         value = self.live_value("max_realized_loss_pct")
         return 1.0 if value is None else float(value)
 
+    def _unstuck_uses_realized_pnl(self) -> bool:
+        symbols: list[Optional[str]] = [None]
+        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                if (
+                    bool(self.bp(pside, "unstuck_enabled", symbol))
+                    and float(
+                        self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0
+                    )
+                    > 0.0
+                    and float(self.bp(pside, "unstuck_close_pct", symbol) or 0.0)
+                    > 0.0
+                    and float(self.bp(pside, "unstuck_threshold", symbol) or 0.0)
+                    > 0.0
+                ):
+                    return True
+        return False
+
+    def _orchestrator_uses_realized_pnl(self) -> bool:
+        return (
+            self._live_max_realized_loss_pct() < 1.0
+            or self._unstuck_uses_realized_pnl()
+        )
+
+    def _live_risk_uses_authoritative_pnl(self) -> bool:
+        return (
+            self._orchestrator_uses_realized_pnl()
+            or self._equity_hard_stop_enabled()
+        )
+
     def bot_value(self, pside: str, key: str):
         bot_side = self.config.get("bot", {}).get(pside, {})
         sentinel = object()
@@ -12237,6 +12268,7 @@ class Passivbot:
             return False
 
         try:
+            authoritative_pnl_required = self._live_risk_uses_authoritative_pnl()
             # Use the same lookback window
             lookback_config_value = self.live_value("pnls_max_lookback_days")
             lookback = parse_pnls_max_lookback_days(
@@ -12314,7 +12346,7 @@ class Passivbot:
             flush_enriched_events = collect_enriched_events
 
             # Check whether the cache proves the configured fill-history
-            # lookback before risk gates consume realized PnL.
+            # lookback before fill-dependent planning.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
             coverage_status = self._pnl_history_coverage_status(
@@ -12336,7 +12368,12 @@ class Passivbot:
             repair_degraded = getattr(
                 self._pnls_manager, "refresh_degraded_pnl_events", None
             )
-            if coverage_ready and degraded_before and callable(repair_degraded):
+            if (
+                authoritative_pnl_required
+                and coverage_ready
+                and degraded_before
+                and callable(repair_degraded)
+            ):
                 degraded_repair_attempted = True
                 try:
                     await repair_degraded(
@@ -12411,7 +12448,7 @@ class Passivbot:
             elif needs_lookback_refresh:
                 refresh_mode = "lookback_bootstrap"
                 logging.info(
-                    "[fills] proving fill-history lookback before risk planning | "
+                    "[fills] proving fill-history lookback before fill-dependent planning | "
                     "start=%s scope=%s covered_start=%s reason=%s",
                     ts_to_date(age_limit)[:19] if age_limit is not None else "all",
                     history_scope,
@@ -12500,8 +12537,9 @@ class Passivbot:
             flush_enriched_events()
             # Trailing fill confirmation only needs proof that a fill-cache
             # refresh completed after the position snapshot. Keep this
-            # separate from the risk-authoritative fills generation below,
-            # which must still wait for PnL enrichment and history coverage.
+            # separate from the planning-authoritative fills generation below.
+            # Coverage is always required; PnL enrichment is required only
+            # when an enabled live risk feature consumes realized PnL.
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
@@ -12538,7 +12576,10 @@ class Passivbot:
                 lookback=lookback,
             )
             coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
-            if pnls_safe and coverage_ready_after:
+            fills_ready = coverage_ready_after and (
+                pnls_safe or not authoritative_pnl_required
+            )
+            if fills_ready:
                 self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
@@ -12546,7 +12587,7 @@ class Passivbot:
                 self._trailing_fill_refresh_generation = (
                     fill_refresh_attempt_generation
                 )
-            elif pnls_safe and not coverage_ready_after:
+            elif not coverage_ready_after:
                 self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
                 state = getattr(self, "_fill_coverage_retry_state", {}) or {}
                 next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
@@ -12597,10 +12638,10 @@ class Passivbot:
             self._emit_fills_refresh_summary_event(
                 source=source,
                 refresh_mode=refresh_mode,
-                status="succeeded" if pnls_safe and coverage_ready_after else "deferred",
+                status="succeeded" if fills_ready else "deferred",
                 reason_code=(
                     "fills_refresh_succeeded"
-                    if pnls_safe and coverage_ready_after
+                    if fills_ready
                     else (
                         "pending_pnl_enrichment"
                         if pending_pnl_events
@@ -12626,7 +12667,7 @@ class Passivbot:
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
-            return pnls_safe and coverage_ready_after
+            return fills_ready
 
         except RateLimitExceeded as e:
             flush_enriched_events()
@@ -12900,6 +12941,8 @@ class Passivbot:
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if getattr(self, "_pnls_manager", None) is None:
+            return {"max": 0.0, "last": 0.0}
+        if not self._orchestrator_uses_realized_pnl():
             return {"max": 0.0, "last": 0.0}
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
@@ -16382,6 +16425,8 @@ class Passivbot:
 
     def _auto_unstuck_allowed_live(self) -> bool:
         if self._pnls_manager is None:
+            return False
+        if not self._unstuck_uses_realized_pnl():
             return False
         start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()

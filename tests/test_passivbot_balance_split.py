@@ -4378,6 +4378,7 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
     monkeypatch, caplog
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -4443,6 +4444,7 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     monkeypatch, caplog, source, add_new_fill
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_event = SimpleNamespace(
         timestamp=1_700_000_000_000,
         id="fill-1",
@@ -5739,6 +5741,7 @@ def test_trailing_status_reappearing_item_is_operator_visible(monkeypatch):
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -5781,6 +5784,7 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_full_history():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -5837,6 +5841,7 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
 @pytest.mark.asyncio
 async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(
             timestamp=1_700_000_000_000,
@@ -5895,6 +5900,7 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
@@ -5992,6 +5998,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     monkeypatch,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     wall_ms = {"value": now_ms}
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: wall_ms["value"])
@@ -6119,6 +6126,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
@@ -6223,6 +6231,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
@@ -6340,6 +6349,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     failure_stage,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
@@ -6480,8 +6490,111 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pnl_status,pnl_source",
+    [
+        ("pending", "unknown"),
+        ("complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
+    ],
+)
+async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disabled(
+    pnl_status, pnl_source
+):
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    lookback_days = 30.0
+    start_ms = now_ms - int(lookback_days * 86_400_000)
+    event = SimpleNamespace(
+        timestamp=start_ms + 60_000,
+        id="degraded-close",
+        source_ids=["degraded-close"],
+        symbol="SOL/USDT:USDT",
+        position_side="long",
+        side="sell",
+        qty=-4.0,
+        price=103.0,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status=pnl_status,
+        pnl_source=pnl_source,
+    )
+
+    class _Cache:
+        def load_metadata(self):
+            return {
+                "covered_start_ms": start_ms,
+                "oldest_event_ts": event.timestamp,
+                "history_scope": "window",
+                "known_gaps": [],
+            }
+
+        def get_known_gaps(self):
+            return []
+
+        def get_covered_start_ms(self):
+            return start_ms
+
+    class _Manager:
+        def __init__(self):
+            self.cache = _Cache()
+            self.refresh_latest = AsyncMock()
+            self.refresh_degraded_pnl_events = AsyncMock()
+
+        def get_events(self, start_ms=None, end_ms=None):
+            events = [event]
+            if start_ms is not None:
+                events = [event for event in events if event.timestamp >= start_ms]
+            if end_ms is not None:
+                events = [event for event in events if event.timestamp <= end_ms]
+            return events
+
+        def get_history_scope(self):
+            return "window"
+
+        def set_history_scope(self, _scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": lookback_days,
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager()
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = MagicMock()
+    bot._record_authoritative_surface = MagicMock()
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = MagicMock()
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls(source="staged_blocking")
+
+    assert result is True
+    bot._pnls_manager.refresh_degraded_pnl_events.assert_not_awaited()
+    bot._record_authoritative_surface.assert_called_once()
+    expected_pending = 1 if pnl_status == "pending" else 0
+    expected_degraded = 1 if pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED else 0
+    assert bot._last_fill_refresh_pending_pnl_count == expected_pending
+    assert bot._last_fill_refresh_degraded_pnl_count == expected_degraded
+    summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
+    assert summary["status"] == "succeeded"
+    assert summary["reason_code"] == "fills_refresh_succeeded"
+    assert summary["pending_pnl_count"] == expected_pending
+    assert summary["degraded_pnl_count"] == expected_degraded
+
+
+@pytest.mark.asyncio
 async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -6536,6 +6649,7 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
     monkeypatch,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     position_anchor_ms = now_ms - 2 * 60 * 60 * 1000
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
@@ -6617,6 +6731,7 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
     monkeypatch,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
     position_anchor_ms = now_ms - 180 * 24 * 60 * 60 * 1000
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
@@ -6696,6 +6811,7 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
     caplog, capsys, shutdown_requested
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     secret = "api_key=fill-refresh-secret https://private.example.invalid/fills"
 
     class HostileKey:
@@ -6826,6 +6942,7 @@ async def test_routine_fill_prefetch_failure_logs_only_exception_type(
 @pytest.mark.asyncio
 async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -6885,6 +7002,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
 @pytest.mark.asyncio
 async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -6939,6 +7057,7 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
 @pytest.mark.asyncio
 async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error():
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -7013,6 +7132,7 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
 @pytest.mark.asyncio
 async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
         SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
     ]
@@ -8217,6 +8337,7 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
         "unstuck_loss_allowance_pct": 0.2 if pside == "long" else 0.0,
         "total_wallet_exposure_limit": 0.5,
     }.get(key, 0.0)
+    bot._unstuck_uses_realized_pnl = lambda: True
     monkeypatch.setattr(
         pb_mod.pbr, "calc_auto_unstuck_allowance", lambda *a: 77.0
     )
