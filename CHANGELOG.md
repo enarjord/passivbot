@@ -113,6 +113,10 @@ All notable user-facing changes will be documented in this file.
   summaries retain settlement-scenario rebate ranges. Quote-asset changes remain versioned
   metadata instead of conflicting immutable contract terms, trade identities are enforced across
   both outcome assets, and Polymarket coverage waits for initial books from both subscriptions.
+  Missing HIP-4 order constraints now route live cycles to observable cancel-only handling;
+  bounded HIP-4 evaluation requires explicit reported constraint assumptions. Identity-less
+  Polymarket sessions reject overlapping verified coverage atomically, and complementary
+  tick-size events deduplicate as one normalized market-level transition.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

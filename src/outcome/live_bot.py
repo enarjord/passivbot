@@ -48,6 +48,7 @@ class OutcomePlanningUnavailableReason(str, Enum):
     INCOMPLETE_VERIFIED_SIGNAL = "incomplete_verified_signal"
     STALE_VERIFIED_SIGNAL = "stale_verified_signal"
     SIGNAL_COLLECTION_FAILED = "signal_collection_failed"
+    MARKET_CONSTRAINTS_UNAVAILABLE = "market_constraints_unavailable"
     MARKET_EXPIRED_AWAITING_SETTLEMENT = "market_expired_awaiting_settlement"
     MARKET_SETTLED = "market_settled"
 

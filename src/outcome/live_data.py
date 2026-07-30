@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import time
 from typing import AsyncIterator, Callable, Sequence
 
-from outcome.archive import OutcomeTradeArchive
+from outcome.archive import OutcomeTradeArchive, OutcomeVerifiedCoverageOverlap
 from outcome.candles import (
     VerifiedCoverage,
     trades_to_canonical_signal_1s_candles,
@@ -153,6 +153,7 @@ async def collect_verified_outcome_signal_window(
     collection_end_ms: int | None = None
     first_received_ms: int | None = None
     trades: list[NormalizedOutcomeTrade] = []
+    deferred_archive_trades: list[NormalizedOutcomeTrade] = []
     rejected_trade_times_ms: list[int] = []
     try:
         while True:
@@ -202,12 +203,15 @@ async def collect_verified_outcome_signal_window(
                     "outcome live trade omitted collector chronology"
                 )
             if archive is not None:
-                try:
-                    archive.append_trade(trade, collector_session=collector_session)
-                except ValueError as exc:
-                    raise OutcomeInvalidPublicSignal(
-                        "outcome public trade conflicted with retained live evidence"
-                    ) from exc
+                if market.venue is OutcomeVenue.POLYMARKET:
+                    deferred_archive_trades.append(trade)
+                else:
+                    try:
+                        archive.append_trade(trade, collector_session=collector_session)
+                    except ValueError as exc:
+                        raise OutcomeInvalidPublicSignal(
+                            "outcome public trade conflicted with retained live evidence"
+                        ) from exc
             delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
             if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
                 rejected_trade_times_ms.append(trade.exchange_time_ms)
@@ -242,32 +246,76 @@ async def collect_verified_outcome_signal_window(
         raise OutcomeIncompleteVerifiedSignal(
             "outcome collection observed an in-window fill outside the allowed delivery lag"
         )
-    try:
-        window = build_verified_outcome_signal_window(
-            trades,
-            coverage,
-            min_observations=min_observations,
-        )
-    except OutcomeIncompleteVerifiedSignal:
-        raise
-    except ValueError as exc:
-        raise OutcomeInvalidPublicSignal(
-            "outcome public fills could not produce a valid signal window"
-        ) from exc
-    if archive is not None:
+    def materialize_window() -> VerifiedOutcomeSignalWindow:
         try:
-            for asset in (market.yes_asset, market.no_asset):
-                archive.record_verified_coverage(
-                    market.venue,
-                    market.market_id,
-                    asset.asset_id,
-                    coverage,
-                    collector_session=str(collector_session),
-                )
+            return build_verified_outcome_signal_window(
+                trades,
+                coverage,
+                min_observations=min_observations,
+            )
+        except OutcomeIncompleteVerifiedSignal:
+            raise
         except ValueError as exc:
             raise OutcomeInvalidPublicSignal(
-                "outcome verified coverage conflicted with retained live evidence"
+                "outcome public fills could not produce a valid signal window"
             ) from exc
+
+    if archive is not None and market.venue is OutcomeVenue.POLYMARKET:
+        try:
+            with archive.write_transaction():
+                if any(
+                    trade.source_event_id is None and trade.sequence_id is None
+                    for trade in deferred_archive_trades
+                ):
+                    for asset in (market.yes_asset, market.no_asset):
+                        archive.require_no_verified_coverage_overlap(
+                            market.venue,
+                            market.market_id,
+                            asset.asset_id,
+                            coverage,
+                        )
+                for trade in deferred_archive_trades:
+                    archive.append_trade(
+                        trade,
+                        collector_session=collector_session,
+                    )
+                window = materialize_window()
+                for asset in (market.yes_asset, market.no_asset):
+                    archive.record_verified_coverage(
+                        market.venue,
+                        market.market_id,
+                        asset.asset_id,
+                        coverage,
+                        collector_session=str(collector_session),
+                    )
+        except OutcomeIncompleteVerifiedSignal:
+            raise
+        except OutcomeInvalidPublicSignal:
+            raise
+        except OutcomeVerifiedCoverageOverlap as exc:
+            raise OutcomeInvalidPublicSignal(
+                "Polymarket identity-less fills cannot certify overlapping coverage"
+            ) from exc
+        except ValueError as exc:
+            raise OutcomeInvalidPublicSignal(
+                "outcome public trade conflicted with retained live evidence"
+            ) from exc
+    else:
+        window = materialize_window()
+        if archive is not None:
+            try:
+                for asset in (market.yes_asset, market.no_asset):
+                    archive.record_verified_coverage(
+                        market.venue,
+                        market.market_id,
+                        asset.asset_id,
+                        coverage,
+                        collector_session=str(collector_session),
+                    )
+            except ValueError as exc:
+                raise OutcomeInvalidPublicSignal(
+                    "outcome verified coverage conflicted with retained live evidence"
+                ) from exc
     return window
 
 

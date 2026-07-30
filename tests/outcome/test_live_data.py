@@ -6,6 +6,7 @@ from outcome.archive import OutcomeTradeArchive
 from outcome.candles import VerifiedCoverage
 from outcome.live_data import (
     OutcomeIncompleteVerifiedSignal,
+    OutcomeInvalidPublicSignal,
     build_verified_outcome_signal_window,
     collect_verified_polymarket_signal_window,
 )
@@ -242,3 +243,66 @@ async def test_collector_waits_through_maximum_accepted_trade_lag():
     assert window.coverage == VerifiedCoverage(2_000, 3_000)
     assert window.candles[0].close == pytest.approx(0.6)
     assert window.candles[0].volume == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_polymarket_identityless_collector_rejects_overlapping_coverage(
+    tmp_path,
+):
+    market = polymarket_market()
+    archive = OutcomeTradeArchive(tmp_path / "overlap.sqlite")
+
+    def stream():
+        async def _stream():
+            yield NormalizedOutcomeTrade(
+                venue=market.venue,
+                market_id=market.market_id,
+                asset_id=market.yes_asset.asset_id,
+                outcome=OutcomeSide.YES,
+                native_side=OutcomeOrderSide.BUY,
+                native_price=0.4,
+                canonical_yes_price=0.4,
+                qty=1.0,
+                exchange_time_ms=1_900,
+                received_time_ms=1_950,
+                source_event_id=None,
+                collector_sequence=1,
+                raw_payload={"event_type": "last_trade_price"},
+            )
+
+        return _stream()
+
+    await collect_verified_polymarket_signal_window(
+        market,
+        min_observations=3,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: 5_100,
+        trade_stream=stream(),
+        archive=archive,
+        collector_session="first",
+    )
+    with pytest.raises(
+        OutcomeInvalidPublicSignal,
+        match="cannot certify overlapping coverage",
+    ):
+        await collect_verified_polymarket_signal_window(
+            market,
+            min_observations=3,
+            delivery_lag_ms=0,
+            max_live_trade_lag_ms=100,
+            wall_clock_ms=lambda: 5_100,
+            trade_stream=stream(),
+            archive=archive,
+            collector_session="second",
+        )
+
+    assert len(
+        archive.load_trades(
+            market.venue,
+            market.market_id,
+            market.yes_asset.asset_id,
+            start_ms=0,
+            end_ms=10_000,
+        )
+    ) == 1

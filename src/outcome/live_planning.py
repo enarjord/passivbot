@@ -25,7 +25,11 @@ DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS = 5_000
 
 class OutcomeSignalPlanningUnavailable(ValueError):
     def __init__(self, reason: str, message: str) -> None:
-        if reason not in {"incomplete_verified_signal", "stale_verified_signal"}:
+        if reason not in {
+            "incomplete_verified_signal",
+            "stale_verified_signal",
+            "market_constraints_unavailable",
+        }:
             raise ValueError("unsupported outcome signal unavailability reason")
         super().__init__(message)
         self.reason = reason
@@ -169,6 +173,15 @@ def build_ema_anchor_outcome_live_plan(
     account_fee_floor = account.fee_rates.conservative_maker_rate * market.payout_unit
     effective_fee_per_share = max(configured_fee_per_share, account_fee_floor)
     configured_params["estimated_fee_per_share"] = effective_fee_per_share
+    if (
+        market.qty_step is None
+        or market.min_order_qty is None
+        or market.min_order_notional is None
+    ):
+        raise OutcomeSignalPlanningUnavailable(
+            "market_constraints_unavailable",
+            "HIP-4 order constraints are unavailable for live planning",
+        )
     payload = {
         "market": normalized_market_to_rust_spec(market),
         "strategy_params": configured_params,

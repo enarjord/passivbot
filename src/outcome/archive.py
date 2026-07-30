@@ -33,6 +33,10 @@ def _utc_ms() -> int:
     return int(time.time() * 1_000)
 
 
+class OutcomeVerifiedCoverageOverlap(ValueError):
+    """An identity-less collector attempted to certify an already-covered interval."""
+
+
 def _market_payload(market: NormalizedOutcomeMarket) -> dict:
     return {
         "venue": market.venue.value,
@@ -249,7 +253,8 @@ class OutcomeTradeArchive:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS outcome_price_grid_change_identity
                     ON outcome_price_grid_changes(
-                        venue, market_id, exchange_time_ms, payload_sha256
+                        venue, market_id, exchange_time_ms,
+                        old_grid_json, new_grid_json
                     );
                 CREATE INDEX IF NOT EXISTS outcome_price_grid_change_time_lookup
                     ON outcome_price_grid_changes(
@@ -397,6 +402,23 @@ class OutcomeTradeArchive:
                 CREATE UNIQUE INDEX outcome_trades_sequence_identity
                     ON outcome_trades(venue, market_id, sequence_id)
                     WHERE sequence_id IS NOT NULL;
+                """
+            )
+            connection.executescript(
+                """
+                DROP INDEX IF EXISTS outcome_price_grid_change_identity;
+                DELETE FROM outcome_price_grid_changes
+                WHERE record_id NOT IN (
+                    SELECT MIN(record_id)
+                    FROM outcome_price_grid_changes
+                    GROUP BY venue, market_id, exchange_time_ms,
+                             old_grid_json, new_grid_json
+                );
+                CREATE UNIQUE INDEX outcome_price_grid_change_identity
+                    ON outcome_price_grid_changes(
+                        venue, market_id, exchange_time_ms,
+                        old_grid_json, new_grid_json
+                    );
                 """
             )
             metadata_rows = connection.execute(
@@ -1049,6 +1071,35 @@ class OutcomeTradeArchive:
                     collector_session,
                     _utc_ms(),
                 ),
+            )
+
+    def require_no_verified_coverage_overlap(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        asset_id: str,
+        coverage: VerifiedCoverage,
+    ) -> None:
+        overlap = self._connect().execute(
+            """
+            SELECT 1
+            FROM outcome_verified_coverage
+            WHERE venue = ? AND market_id = ? AND asset_id = ?
+              AND end_ms > ? AND start_ms < ?
+            LIMIT 1
+            """,
+            (
+                venue.value,
+                str(market_id),
+                str(asset_id),
+                coverage.start_ms,
+                coverage.end_ms,
+            ),
+        ).fetchone()
+        if overlap is not None:
+            raise OutcomeVerifiedCoverageOverlap(
+                "identity-less outcome collection overlaps retained verified "
+                f"coverage for {venue.value}:{market_id}:{asset_id}"
             )
 
     def load_verified_coverage(

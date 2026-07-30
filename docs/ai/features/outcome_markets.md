@@ -300,6 +300,10 @@ A historical source batch commits its metadata observation, trades, settlement e
 verified coverage atomically. Conflicting or malformed evidence anywhere in the batch rolls the
 entire batch back, so overlapping coverage can never expose rows from a failed partial import.
 
+Because current Polymarket market-channel trades lack authoritative event identity, bounded live
+collections archive their fills and coverage atomically and reject any overlap with already
+verified coverage. They never deduplicate those fills by transaction hash or payload similarity.
+
 Polymarket collateral identity is versioned transport metadata, not a permanent `USDC` constant.
 Gamma currently omits it on some market rows, and the venue is migrating from USDC.e to pUSD.
 Collectors and historical importers must therefore receive an explicit authoritative
@@ -334,8 +338,10 @@ that floor does not overwrite actual fill fees or assert a settlement-fee rate.
 Current `outcomeMeta` rows do not expose authoritative side-token quantity precision or
 market-specific order minima. Keep quantity step, minimum quantity, and minimum notional
 unavailable unless an independently authoritative source supplies them. Live planning and order
-construction must fail closed while any required constraint is unavailable; generic spot
-assumptions are not HIP-4 outcome constraints.
+construction route to observable cancel-only handling while any required constraint is
+unavailable; generic spot assumptions are not HIP-4 outcome constraints. The bounded HIP-4
+evaluation tool requires explicit quantity-step and minimum-quantity inputs and reports them as
+experiment assumptions; they do not become live venue metadata.
 
 HIP-4 lifecycle reconciliation first checks settlement rows present in the current `userFills`
 snapshot. After scheduled expiry it also queries `userFillsByTime` from the event timestamp
@@ -396,8 +402,10 @@ at the opening boundary. The archive replay builder also requires independent fu
 price-grid stream coverage on venues such as Polymarket where tick-size changes are a separate
 event source. Fill coverage does not prove grid coverage. A bounded live capture without an
 authoritative grid-subscription readiness boundary archives observed changes but does not certify
-grid coverage. The builder supplies the authoritative capital-release timestamp and payout to
-Rust; resolution-only evidence remains archived but is not a release timestamp. The EMA-anchor job
+grid coverage. Identical timestamped old-grid to new-grid transitions emitted for complementary
+assets are one normalized market-level change. The builder supplies the authoritative
+capital-release timestamp and payout to Rust; resolution-only evidence remains archived but is not
+a release timestamp. The EMA-anchor job
 adapter invokes the EMA strategy kernel—not the generic scripted-action simulator—before the
 shared-wallet orchestrator locks that job's allocation until that release.
 

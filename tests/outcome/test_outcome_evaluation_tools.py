@@ -17,6 +17,7 @@ from outcome.models import (
 )
 from tools.evaluate_archived_outcome_portfolio import _rust_fee_formula
 from tools.evaluate_hip4_outcome_window import (
+    _add_constraint_arguments,
     _add_window_phase_arguments,
     _window_market_spec,
 )
@@ -130,7 +131,13 @@ def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
         min_order_notional=10.0,
     )
 
-    spec = _window_market_spec(market, start_ms=2_000, end_ms=5_000)
+    spec = _window_market_spec(
+        market,
+        start_ms=2_000,
+        end_ms=5_000,
+        qty_step=1.0,
+        min_order_qty=1.0,
+    )
 
     assert spec["trading_opens_ms"] == 2_000
     assert spec["order_entry_opens_ms"] == 2_000
@@ -156,3 +163,17 @@ def test_hip4_window_close_phases_default_to_disabled_and_are_configurable():
     assert defaults.entry_cutoff_ms_before_close == 0
     assert configured.risk_reduction_only_ms_before_close == 30_000
     assert configured.entry_cutoff_ms_before_close == 5_000
+
+
+def test_hip4_window_requires_explicit_quantity_constraint_assumptions():
+    parser = argparse.ArgumentParser()
+    _add_constraint_arguments(parser)
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+    configured = parser.parse_args(
+        ["--qty-step", "1", "--min-order-qty", "10"]
+    )
+
+    assert configured.qty_step == 1.0
+    assert configured.min_order_qty == 10.0

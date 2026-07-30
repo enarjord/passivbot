@@ -75,8 +75,14 @@ def _window_market_spec(
     *,
     start_ms: int,
     end_ms: int,
+    qty_step: float,
+    min_order_qty: float,
 ) -> dict:
-    market_spec = normalized_market_to_rust_spec(market)
+    market_spec = normalized_market_to_rust_spec(
+        market,
+        qty_step=qty_step,
+        min_order_qty=min_order_qty,
+    )
     # This evaluator covers only the requested sample, so lifecycle gates and
     # inventory-time metrics must use the same synthetic window boundaries.
     market_spec.update(
@@ -105,6 +111,21 @@ def _add_window_phase_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_constraint_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--qty-step",
+        required=True,
+        type=float,
+        help="Explicit authoritative quantity step or clearly labeled experiment assumption",
+    )
+    parser.add_argument(
+        "--min-order-qty",
+        required=True,
+        type=float,
+        help="Explicit authoritative minimum quantity or clearly labeled experiment assumption",
+    )
+
+
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     market_selector = parser.add_mutually_exclusive_group(required=True)
@@ -128,6 +149,7 @@ async def _main() -> int:
     parser.add_argument("--max-total-inventory-qty", type=float, default=500.0)
     parser.add_argument("--max-abs-residual-qty", type=float, default=50.0)
     parser.add_argument("--min-locked-pair-edge", type=float, default=0.001)
+    _add_constraint_arguments(parser)
     _add_window_phase_arguments(parser)
     parser.add_argument(
         "--maker-rate",
@@ -168,6 +190,13 @@ async def _main() -> int:
         for rate in (args.maker_rate, args.taker_rate, args.settlement_rate)
     ):
         parser.error("fee rates must be finite")
+    if (
+        not math.isfinite(args.qty_step)
+        or args.qty_step <= 0.0
+        or not math.isfinite(args.min_order_qty)
+        or args.min_order_qty <= 0.0
+    ):
+        parser.error("quantity constraints must be finite and positive")
 
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
@@ -230,6 +259,8 @@ async def _main() -> int:
             market,
             start_ms=args.start_ms,
             end_ms=args.end_ms,
+            qty_step=args.qty_step,
+            min_order_qty=args.min_order_qty,
         ),
         trades=trades,
         verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
@@ -268,6 +299,8 @@ async def _main() -> int:
                     "taker_rate": args.taker_rate,
                     "fee_incidence": args.fee_incidence,
                     "settlement_rate": args.settlement_rate,
+                    "qty_step": args.qty_step,
+                    "min_order_qty": args.min_order_qty,
                     "settlement_scenarios": [0.0, 1.0],
                 },
                 "strategy_params": strategy_params,

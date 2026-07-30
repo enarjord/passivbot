@@ -264,6 +264,53 @@ async def test_stale_signal_routes_normal_cycle_to_cancel_only_safety():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_constraint",
+    ("qty_step", "min_order_qty", "min_order_notional"),
+)
+async def test_missing_market_constraints_route_cycle_to_cancel_only_safety(
+    missing_constraint,
+):
+    signal_candles = candles()
+    now_ms = signal_candles[-1].timestamp_ms + 1_000
+    cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=signal_candles[-1].timestamp_ms,
+    )
+    managed_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="7",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=25.0,
+        original_qty=25.0,
+        timestamp_ms=signal_candles[-1].timestamp_ms,
+        client_order_id=cloid,
+    )
+    client = ReadOnlyClient(snapshot(now_ms, open_orders=(managed_order,)))
+    unavailable_market = replace(market(), **{missing_constraint: None})
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        unavailable_market,
+        params(),
+        signal_candles,
+        now_ms=now_ms,
+    )
+
+    assert cycle.plan is None
+    assert (
+        cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.MARKET_CONSTRAINTS_UNAVAILABLE
+    )
+    assert cycle.reconciliation.creates == ()
+    assert len(cycle.reconciliation.cancels) == 1
+
+
+@pytest.mark.asyncio
 async def test_signal_expiring_before_execution_routes_to_cancel_only_safety():
     signal_candles = candles()
     observation_end_ms = signal_candles[-1].timestamp_ms + 1_000

@@ -423,6 +423,20 @@ def test_archive_round_trips_dynamic_price_grid_events(tmp_path):
 
     assert archive.append_price_grid_change(change, collector_session="session-1") is True
     assert archive.append_price_grid_change(replace(change, received_time_ms=9_999)) is False
+    assert (
+        archive.append_price_grid_change(
+            replace(
+                change,
+                received_time_ms=10_000,
+                raw_payload={
+                    "event_type": "tick_size_change",
+                    "asset_id": "complementary-token",
+                },
+            ),
+            collector_session="session-1",
+        )
+        is False
+    )
     assert archive.load_price_grid_changes(
         OutcomeVenue.POLYMARKET,
         "condition",
