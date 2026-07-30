@@ -2153,6 +2153,91 @@ async def test_doctor_repairs_metadata_only_legacy_cache_for_any_exchange(tmp_pa
     assert [ev.id for ev in FillEventCache(cache_dir).load()] == ["current-row"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete_aggregate", [False, True])
+async def test_hyperliquid_metadata_repair_reloads_current_contract_cache(
+    tmp_path: Path,
+    incomplete_aggregate: bool,
+):
+    late_add, close = _hyperliquid_same_millisecond_events()
+    early_add = deepcopy(late_add)
+    early_add["id"] = "early-add"
+    early_add["qty"] = 2.0
+    early_add["price"] = 53.0
+    early_raw = early_add["raw"][0]["data"]
+    early_raw.update({"id": "early-add", "amount": 2.0, "price": 53.0})
+    early_raw["info"].update(
+        {
+            "tid": "early-add",
+            "sz": "2.0",
+            "px": "53.0",
+            "startPosition": "651.21",
+        }
+    )
+    components = [early_add, close, late_add]
+    for event in components:
+        event.update(
+            {
+                "source_ids": [event["id"]],
+                "datetime": "",
+                "fee_paid": -0.01,
+                "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+                "fee_source": fem.FEE_SOURCE_REPORTED_QUOTE,
+                "fee_quality": fem.FEE_QUALITY_EXACT,
+                "fee_currency": "USDC",
+                "fee_conversion_source": "same_currency",
+                "fee_notional": abs(event["qty"]) * event["price"],
+                "fee_ratio": -0.01 / (abs(event["qty"]) * event["price"]),
+                "pnl_status": "complete",
+                "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+                "fees": {"currency": "USDC", "cost": 0.01},
+                "pb_order_type": "unknown",
+                "client_order_id": "",
+                "c_mult": 1.0,
+            }
+        )
+        raw_trade = event["raw"][0]["data"]
+        raw_trade.update(
+            {
+                "timestamp": event["timestamp"],
+                "symbol": event["symbol"],
+                "fee": {"currency": "USDC", "cost": 0.01},
+            }
+        )
+    cache_dir = tmp_path / "metadata_only_hyperliquid_aggregate"
+    cache_dir.mkdir()
+    legacy_coalesced = fem._coalesce_events(components)
+    if incomplete_aggregate:
+        legacy_coalesced[0]["raw"] = legacy_coalesced[0]["raw"][:1]
+    (cache_dir / f"{fem._day_key(components[0]['timestamp'])}.json").write_text(
+        json.dumps(legacy_coalesced),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    if incomplete_aggregate:
+        assert report["repaired"] is False
+        assert report["action"] == "rebuild_cache"
+        assert report["normalization_error_type"] == "RuntimeError"
+        assert manager.get_events() == []
+        return
+
+    assert report["repaired"] is True
+    expected_ids = ["early-add", close["id"], late_add["id"]]
+    assert [event.id for event in manager.get_events()] == expected_ids
+    assert [event.id for event in FillEventCache(cache_dir).load()] == expected_ids
+    assert manager.get_events()[-1].psize == pytest.approx(655.06)
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert manager.get_events()[-1].pprice == pytest.approx(expected_pprice)
+
+
 def test_fill_event_cache_quarantine_for_rebuild_moves_legacy_payload(tmp_path: Path):
     cache_dir = tmp_path / "fills"
     cache_dir.mkdir()

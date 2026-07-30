@@ -4460,6 +4460,32 @@ class FillEventsManager:
             self.cache.update_metadata_from_events(
                 self._events, mark_refreshed=False
             )
+            self._loaded = False
+            self._events = []
+            try:
+                await self.ensure_loaded()
+            except FillEventCacheContractError as exc:
+                self._loaded = False
+                self._events = []
+                report.update(
+                    {
+                        "action": "rebuild_cache",
+                        "message": (
+                            "fill cache metadata was repaired, but current-contract "
+                            "normalization failed; quarantine and rebuild the cache"
+                        ),
+                        "normalization_error_type": bounded_exception_type(exc),
+                        "anomaly_events_after": max(1, len(self.cache._data_files())),
+                    }
+                )
+                logger.warning(
+                    "[fills-doctor] metadata repair exposed a cache normalization "
+                    "failure; rebuild required | exchange=%s user=%s error_type=%s",
+                    self.exchange,
+                    self.user,
+                    report["normalization_error_type"],
+                )
+                return report
             report["repaired"] = True
             report["anomaly_events_after"] = 0
             report["anomaly_examples_after"] = []
