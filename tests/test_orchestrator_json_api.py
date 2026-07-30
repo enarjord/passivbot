@@ -2703,6 +2703,7 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     inp["global"]["max_realized_loss_pct"] = 0.019
 
     out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"})
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_unstuck_long" in order_types

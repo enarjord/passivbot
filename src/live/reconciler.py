@@ -1123,6 +1123,68 @@ def validate_rust_orchestrator_output(
         raise FatalBotException(
             "Rust orchestrator symbol_states do not cover the requested symbols"
         )
+
+    loss_gate_blocks = diagnostics.get("loss_gate_blocks", [])
+    if not isinstance(loss_gate_blocks, list):
+        raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
+    finite_fields = (
+        "qty",
+        "price",
+        "projected_pnl",
+        "balance_before",
+        "projected_balance_after",
+        "balance_peak",
+        "balance_floor",
+        "max_realized_loss_pct",
+    )
+    for block_idx, block in enumerate(loss_gate_blocks):
+        if not isinstance(block, dict):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} must be a mapping"
+            )
+        symbol_idx = block.get("symbol_idx")
+        if (
+            isinstance(symbol_idx, bool)
+            or not isinstance(symbol_idx, int)
+            or symbol_idx not in expected_symbol_idxs
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid symbol_idx"
+            )
+        pside = block.get("pside")
+        if pside not in {"long", "short"}:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid pside"
+            )
+        order_type = block.get("order_type")
+        if not isinstance(order_type, str) or not order_type.endswith(f"_{pside}"):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid order_type"
+            )
+        try:
+            _pb_attr("pbr").order_type_snake_to_id(order_type)
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid order_type"
+            ) from exc
+        for field in finite_fields:
+            value = block.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator loss_gate_block {block_idx} has invalid {field}"
+                )
+        if float(block["qty"]) == 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid qty"
+            )
+        if float(block["price"]) <= 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
+            )
     return orders
 
 

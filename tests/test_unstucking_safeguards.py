@@ -3087,6 +3087,34 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
     [
         ('{"diagnostics": {}}', "missing required orders field"),
         ("{", "malformed JSON"),
+        (
+            json.dumps(
+                {
+                    "orders": [],
+                    "diagnostics": {
+                        "symbol_states": [
+                            {
+                                "symbol_idx": 0,
+                                "long": {
+                                    "input_mode": None,
+                                    "effective_mode": "normal",
+                                    "active": True,
+                                    "allow_initial": True,
+                                },
+                                "short": {
+                                    "input_mode": None,
+                                    "effective_mode": "normal",
+                                    "active": True,
+                                    "allow_initial": True,
+                                },
+                            }
+                        ],
+                        "loss_gate_blocks": {},
+                    },
+                }
+            ),
+            "loss_gate_blocks must be a list",
+        ),
     ],
 )
 async def test_orchestrator_invalid_output_emits_correlated_failed_return(

@@ -305,6 +305,39 @@ def test_raw_rust_output_requires_complete_symbol_state_coverage():
         )
 
 
+@pytest.mark.parametrize(
+    ("loss_gate_blocks", "error"),
+    [
+        ({}, "must be a list"),
+        (["invalid"], "must be a mapping"),
+        ([{"symbol_idx": 999}], "invalid symbol_idx"),
+        ([{"symbol_idx": 0, "pside": "both"}], "invalid pside"),
+    ],
+)
+def test_raw_rust_output_rejects_malformed_loss_gate_diagnostics(
+    loss_gate_blocks, error
+):
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = loss_gate_blocks
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
+def test_raw_rust_output_rejects_incomplete_loss_gate_block():
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+        }
+    ]
+
+    with pytest.raises(FatalBotException, match="invalid qty"):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
 def test_raw_rust_output_malformed_json_is_fatal():
     with pytest.raises(FatalBotException, match="malformed JSON"):
         reconciler.parse_and_validate_rust_orchestrator_output("{", {0: SYMBOL})
