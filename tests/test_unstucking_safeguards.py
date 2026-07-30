@@ -3270,6 +3270,15 @@ def _make_order(
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
+    bot._bp_defaults.update(
+        {
+            "unstuck_enabled": True,
+            "unstuck_loss_allowance_pct": 0.01,
+            "unstuck_close_pct": 0.1,
+            "unstuck_threshold": 0.5,
+        }
+    )
+    bot._bot_value_defaults["total_wallet_exposure_limit"] = 0.5
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 

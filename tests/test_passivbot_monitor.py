@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 
@@ -6436,6 +6436,35 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
     assert bot._live_event_pipeline is None
 
 
+def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.open_orders = {}
+    bot.has_open_unstuck_order = lambda: False
+    bot._unstuck_uses_realized_pnl = lambda: False
+    bot._calc_unstuck_allowances_live = MagicMock(
+        side_effect=AssertionError("must not read nonauthoritative PnL")
+    )
+    bot._calc_unstuck_allowance_for_logging = MagicMock(
+        side_effect=AssertionError("must not read nonauthoritative PnL")
+    )
+    bot.bot_value = lambda pside, key: {
+        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_pct": 0.0,
+        "unstuck_threshold": 0.9,
+    }[key]
+
+    section = bot._build_monitor_unstuck_section()
+
+    bot._calc_unstuck_allowances_live.assert_not_called()
+    bot._calc_unstuck_allowance_for_logging.assert_not_called()
+    assert section["sides"]["long"]["status"] == "unstuck_disabled"
+    assert section["sides"]["long"]["allowance_live"] is None
+    assert section["sides"]["short"]["status"] == "unstuck_disabled"
+    assert section["sides"]["short"]["allowance_live"] is None
+
+
 @pytest.mark.asyncio
 async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent():
     import passivbot as pb_mod
@@ -6773,6 +6802,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             return self._coin_bot_values[(pside, key)]
 
         def has_open_unstuck_order(self):
+            return True
+
+        def _unstuck_uses_realized_pnl(self):
             return True
 
         def _calc_unstuck_allowance_for_logging(self, pside):

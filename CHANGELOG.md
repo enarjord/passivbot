@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill readiness now separates proven structural fill history from realized-PnL
+  quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
+  auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
+  planning when every authoritative-PnL consumer is disabled. Zero-exposure unstuck
+  configurations follow Rust's disabled behavior, monitor snapshots leave disabled
+  unstuck allowances unavailable instead of reading unsafe PnL, and coverage failures
+  retain their coverage-specific diagnostics and retry classification.
 - Live health-summary PnL now counts authoritative net realized PnL only.
   Pending and synthetic fill estimates remain visible in fill diagnostics but
   no longer create temporary fill-identity bookkeeping solely to correct the
