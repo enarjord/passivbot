@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from outcome.orchestrator import (
     OutcomeBacktestJob,
+    OutcomePostFillAdverseSelection,
     SingleOutcomeBacktestResult,
 )
 from outcome.models import NormalizedOutcomeMarket
@@ -150,6 +151,8 @@ def summary_from_rust_output(output: Mapping[str, Any]) -> SingleOutcomeBacktest
         fills_count=int(output["fills_count"]),
         maker_fills_count=int(output["maker_fills_count"]),
         traded_notional=float(output["traded_notional"]),
+        trading_fees_paid=float(output["trading_fees_paid"]),
+        settlement_fees_paid=float(output["settlement_fees_paid"]),
         fees_paid=float(output["fees_paid"]),
         rebates_earned=float(output["rebates_earned"]),
         gross_spread_pnl=float(output["gross_spread_pnl"]),
@@ -174,8 +177,47 @@ def summary_from_rust_output(output: Mapping[str, Any]) -> SingleOutcomeBacktest
         worst_case_settlement_equity_min=float(
             output["worst_case_settlement_equity_min"]
         ),
+        post_fill_adverse_selection=post_fill_adverse_selection_from_rust_output(
+            output["post_fill_adverse_selection"]
+        ),
         residual_qty_timeline=tuple(residual_qty_timeline),
     )
+
+
+def post_fill_adverse_selection_from_rust_output(
+    raw_metrics: Any,
+) -> tuple[OutcomePostFillAdverseSelection, ...]:
+    if not isinstance(raw_metrics, list):
+        raise TypeError("Rust outcome backtest omitted post-fill adverse selection")
+    metrics = []
+    for raw in raw_metrics:
+        if not isinstance(raw, Mapping):
+            raise TypeError("Rust outcome backtest returned a malformed markout metric")
+        metrics.append(
+            OutcomePostFillAdverseSelection(
+                horizon_ms=int(raw["horizon_ms"]),
+                total_fills_count=int(raw["total_fills_count"]),
+                observed_fills_count=int(raw["observed_fills_count"]),
+                total_fill_qty=float(raw["total_fill_qty"]),
+                observed_fill_qty=float(raw["observed_fill_qty"]),
+                fill_qty_coverage_ratio=(
+                    None
+                    if raw["fill_qty_coverage_ratio"] is None
+                    else float(raw["fill_qty_coverage_ratio"])
+                ),
+                total_adverse_selection_quote=(
+                    None
+                    if raw["total_adverse_selection_quote"] is None
+                    else float(raw["total_adverse_selection_quote"])
+                ),
+                mean_adverse_selection_per_share=(
+                    None
+                    if raw["mean_adverse_selection_per_share"] is None
+                    else float(raw["mean_adverse_selection_per_share"])
+                ),
+            )
+        )
+    return tuple(metrics)
 
 
 def make_rust_outcome_job(payload: Mapping[str, Any]) -> OutcomeBacktestJob:

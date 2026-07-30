@@ -124,6 +124,19 @@ def test_evaluation_runs_modes_and_both_settlement_outcomes():
     assert summaries[0].max_abs_residual_qty == pytest.approx(0.0)
     assert summaries[0].time_weighted_abs_residual_qty == pytest.approx(0.0)
     assert summaries[0].time_weighted_total_inventory_qty == pytest.approx(1.5)
+    assert summaries[0].trading_fees_paid == pytest.approx(0.0)
+    assert summaries[0].min_settlement_fees_paid == pytest.approx(0.0)
+    assert summaries[0].max_settlement_fees_paid == pytest.approx(0.0)
+    assert summaries[0].min_total_fees_paid == pytest.approx(0.0)
+    assert summaries[0].max_total_fees_paid == pytest.approx(0.0)
+    assert len(summaries[0].post_fill_adverse_selection) == 1
+    assert summaries[0].post_fill_adverse_selection[0].horizon_ms == 1_000
+    assert (
+        summaries[0]
+        .post_fill_adverse_selection[0]
+        .mean_adverse_selection_per_share
+        == pytest.approx(-0.01)
+    )
 
 
 def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
@@ -158,6 +171,7 @@ def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
             "maker_rate": 0.0,
             "taker_rate": 0.0,
             "formula": "notional",
+            "settlement_rate": 0.1,
         },
         "starting_collateral": 10.0,
         "strategy_params": {
@@ -216,8 +230,13 @@ def test_mode_summary_exposes_unpaired_inventory_as_settlement_sensitivity():
     assert summary.cumulative_no_buy_qty == pytest.approx(0.0)
     assert summary.complementary_buy_qty == pytest.approx(0.0)
     assert summary.pair_completion_ratio == pytest.approx(0.0)
-    assert summary.settlement_sensitivity == pytest.approx(1.0)
+    assert summary.settlement_sensitivity == pytest.approx(0.9)
     assert summary.max_paired_qty == pytest.approx(0.0)
     assert summary.max_abs_residual_qty == pytest.approx(1.0)
     assert summary.time_weighted_abs_residual_qty == pytest.approx(0.75)
     assert summary.time_weighted_total_inventory_qty == pytest.approx(0.75)
+    assert summary.trading_fees_paid == pytest.approx(0.0)
+    assert summary.min_settlement_fees_paid == pytest.approx(0.0)
+    assert summary.max_settlement_fees_paid == pytest.approx(0.1)
+    assert summary.min_total_fees_paid == pytest.approx(0.0)
+    assert summary.max_total_fees_paid == pytest.approx(0.1)

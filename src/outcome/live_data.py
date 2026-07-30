@@ -30,6 +30,10 @@ class OutcomeIncompleteVerifiedSignal(ValueError):
     """Actual fills arrived, but they did not prove the required dense signal window."""
 
 
+class OutcomeInvalidPublicSignal(ValueError):
+    """Public fill data or retained evidence failed validation during collection."""
+
+
 @dataclass(frozen=True)
 class VerifiedOutcomeSignalWindow:
     coverage: VerifiedCoverage
@@ -125,12 +129,17 @@ async def collect_verified_outcome_signal_window(
         raise ValueError("archived outcome collection requires collector_session")
     clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
     if archive is not None:
-        archive.append_market_metadata(
-            market,
-            observed_at_ms=clock(),
-            observation_source="live_fill_collection_start",
-            collector_session=str(collector_session),
-        )
+        try:
+            archive.append_market_metadata(
+                market,
+                observed_at_ms=clock(),
+                observation_source="live_fill_collection_start",
+                collector_session=str(collector_session),
+            )
+        except ValueError as exc:
+            raise OutcomeInvalidPublicSignal(
+                "outcome market metadata conflicted with retained live evidence"
+            ) from exc
     owns_stream = trade_stream is None
     stream_factory = (
         (lambda: stream_hyperliquid_public_trades((market,)))
@@ -179,12 +188,25 @@ async def collect_verified_outcome_signal_window(
                 collection_end_ms = None
                 stream = stream_factory()
                 continue
+            except ValueError as exc:
+                raise OutcomeInvalidPublicSignal(
+                    "outcome public trade stream returned malformed data"
+                ) from exc
             if trade.market_id != market.market_id:
-                raise ValueError("outcome public trade stream returned a different market")
+                raise OutcomeInvalidPublicSignal(
+                    "outcome public trade stream returned a different market"
+                )
             if trade.collector_sequence is None:
-                raise ValueError("outcome live trade omitted collector chronology")
+                raise OutcomeInvalidPublicSignal(
+                    "outcome live trade omitted collector chronology"
+                )
             if archive is not None:
-                archive.append_trade(trade, collector_session=collector_session)
+                try:
+                    archive.append_trade(trade, collector_session=collector_session)
+                except ValueError as exc:
+                    raise OutcomeInvalidPublicSignal(
+                        "outcome public trade conflicted with retained live evidence"
+                    ) from exc
             delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
             if not -1_000 <= delivery_delay_ms <= max_live_trade_lag_ms:
                 rejected_trade_times_ms.append(trade.exchange_time_ms)
@@ -219,20 +241,32 @@ async def collect_verified_outcome_signal_window(
         raise OutcomeIncompleteVerifiedSignal(
             "outcome collection observed an in-window fill outside the allowed delivery lag"
         )
-    window = build_verified_outcome_signal_window(
-        trades,
-        coverage,
-        min_observations=min_observations,
-    )
+    try:
+        window = build_verified_outcome_signal_window(
+            trades,
+            coverage,
+            min_observations=min_observations,
+        )
+    except OutcomeIncompleteVerifiedSignal:
+        raise
+    except ValueError as exc:
+        raise OutcomeInvalidPublicSignal(
+            "outcome public fills could not produce a valid signal window"
+        ) from exc
     if archive is not None:
-        for asset in (market.yes_asset, market.no_asset):
-            archive.record_verified_coverage(
-                market.venue,
-                market.market_id,
-                asset.asset_id,
-                coverage,
-                collector_session=str(collector_session),
-            )
+        try:
+            for asset in (market.yes_asset, market.no_asset):
+                archive.record_verified_coverage(
+                    market.venue,
+                    market.market_id,
+                    asset.asset_id,
+                    coverage,
+                    collector_session=str(collector_session),
+                )
+        except ValueError as exc:
+            raise OutcomeInvalidPublicSignal(
+                "outcome verified coverage conflicted with retained live evidence"
+            ) from exc
     return window
 
 

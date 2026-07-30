@@ -7,6 +7,7 @@ import pytest
 from outcome.orchestrator import (
     InsufficientCapitalPolicy,
     OutcomeBacktestJob,
+    OutcomePostFillAdverseSelection,
     SingleOutcomeBacktestResult,
     run_outcome_portfolio_backtest,
 )
@@ -29,6 +30,8 @@ def result(
         fills_count=10,
         maker_fills_count=8,
         traded_notional=20.0,
+        trading_fees_paid=0.08,
+        settlement_fees_paid=0.02,
         fees_paid=0.1,
         rebates_earned=0.02,
         gross_spread_pnl=pnl + 0.1,
@@ -45,6 +48,18 @@ def result(
         time_weighted_abs_residual_qty=0.5,
         time_weighted_total_inventory_qty=6.0,
         worst_case_settlement_equity_min=max(0.0, allocation - 2.0),
+        post_fill_adverse_selection=(
+            OutcomePostFillAdverseSelection(
+                horizon_ms=1_000,
+                total_fills_count=10,
+                observed_fills_count=10,
+                total_fill_qty=10.0,
+                observed_fill_qty=10.0,
+                fill_qty_coverage_ratio=1.0,
+                total_adverse_selection_quote=0.5,
+                mean_adverse_selection_per_share=0.05,
+            ),
+        ),
     )
 
 
@@ -97,12 +112,22 @@ def test_settled_capital_and_profit_are_reused_only_after_settlement():
     assert portfolio.orders_placed_count == 40
     assert portfolio.order_fill_ratio == pytest.approx(0.5)
     assert portfolio.maker_fill_ratio == pytest.approx(0.8)
+    assert portfolio.trading_fees_paid == pytest.approx(0.16)
+    assert portfolio.settlement_fees_paid == pytest.approx(0.04)
+    assert portfolio.fees_paid == pytest.approx(0.2)
     assert portfolio.cumulative_yes_buy_qty == pytest.approx(20.0)
     assert portfolio.cumulative_no_buy_qty == pytest.approx(16.0)
     assert portfolio.pair_completion_ratio == pytest.approx(0.8)
     assert portfolio.max_abs_residual_qty == pytest.approx(1.0)
     assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.5)
     assert portfolio.time_weighted_total_inventory_qty == pytest.approx(6.0)
+    assert len(portfolio.post_fill_adverse_selection) == 1
+    markout = portfolio.post_fill_adverse_selection[0]
+    assert markout.horizon_ms == 1_000
+    assert markout.total_fills_count == 20
+    assert markout.total_fill_qty == pytest.approx(20.0)
+    assert markout.total_adverse_selection_quote == pytest.approx(1.0)
+    assert markout.mean_adverse_selection_per_share == pytest.approx(0.05)
 
 
 def test_same_timestamp_settlement_is_released_before_new_market_allocation():
@@ -136,6 +161,74 @@ def test_overlapping_market_residual_peaks_are_aggregated_chronologically():
     )
 
     assert portfolio.max_abs_residual_qty == pytest.approx(10.0)
+
+
+def test_same_timestamp_residual_changes_are_applied_atomically():
+    decreasing = replace(
+        result("z-decreasing", 0, 10_000, 40.0, 0.0),
+        max_abs_residual_qty=5.0,
+        residual_qty_timeline=((1_000, 5.0), (2_000, 0.0)),
+    )
+    increasing = replace(
+        result("a-increasing", 500, 9_000, 40.0, 0.0),
+        max_abs_residual_qty=5.0,
+        residual_qty_timeline=((2_000, 5.0),),
+    )
+
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            OutcomeBacktestJob(
+                "z-decreasing",
+                0,
+                10_000,
+                40.0,
+                lambda _: decreasing,
+            ),
+            OutcomeBacktestJob(
+                "a-increasing",
+                500,
+                9_000,
+                40.0,
+                lambda _: increasing,
+            ),
+        ],
+        starting_collateral=100.0,
+    )
+
+    assert portfolio.max_abs_residual_qty == pytest.approx(5.0)
+
+
+def test_skipped_far_future_market_does_not_extend_portfolio_horizon():
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            job("executed", 0, 10_000, 60.0, 0.0),
+            job("skipped", 1_000, 100_000, 60.0, 0.0),
+        ],
+        starting_collateral=100.0,
+        insufficient_capital_policy=InsufficientCapitalPolicy.SKIP,
+    )
+
+    assert [item.market_id for item in portfolio.market_results] == ["executed"]
+    assert [item.market_id for item in portfolio.skipped_markets] == ["skipped"]
+    assert portfolio.allocated_collateral_time_ratio == pytest.approx(0.6)
+    assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.5)
+    assert portfolio.time_weighted_total_inventory_qty == pytest.approx(6.0)
+
+
+def test_all_skipped_portfolio_has_zero_duration_metrics():
+    portfolio = run_outcome_portfolio_backtest(
+        [job("skipped", 1_000, 100_000, 200.0, 0.0)],
+        starting_collateral=100.0,
+        insufficient_capital_policy=InsufficientCapitalPolicy.SKIP,
+    )
+
+    assert portfolio.market_results == ()
+    assert [item.market_id for item in portfolio.skipped_markets] == ["skipped"]
+    assert portfolio.ending_collateral == pytest.approx(100.0)
+    assert portfolio.allocated_collateral_time_ratio == pytest.approx(0.0)
+    assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.0)
+    assert portfolio.time_weighted_total_inventory_qty == pytest.approx(0.0)
+    assert portfolio.post_fill_adverse_selection == ()
 
 
 def test_empty_portfolio_preserves_wallet():

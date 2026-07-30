@@ -4,7 +4,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from outcome.rust_runner import run_outcome_ema_anchor_backtest
+from outcome.orchestrator import OutcomePostFillAdverseSelection
+from outcome.rust_runner import (
+    post_fill_adverse_selection_from_rust_output,
+    run_outcome_ema_anchor_backtest,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +20,8 @@ class OutcomeStrategyEvaluation:
     net_pnl: float
     gross_spread_pnl: float
     settlement_pnl: float
+    trading_fees_paid: float
+    settlement_fees_paid: float
     fees_paid: float
     pre_settlement_yes_qty: float
     pre_settlement_no_qty: float
@@ -34,6 +40,7 @@ class OutcomeStrategyEvaluation:
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
     worst_case_settlement_equity_min: float
+    post_fill_adverse_selection: tuple[OutcomePostFillAdverseSelection, ...]
 
 
 @dataclass(frozen=True)
@@ -42,7 +49,11 @@ class OutcomeStrategyModeSummary:
     execution_mode: str
     settlement_cases: int
     gross_spread_pnl: float
-    fees_paid: float
+    trading_fees_paid: float
+    min_settlement_fees_paid: float
+    max_settlement_fees_paid: float
+    min_total_fees_paid: float
+    max_total_fees_paid: float
     worst_net_pnl: float
     best_net_pnl: float
     settlement_sensitivity: float
@@ -63,6 +74,7 @@ class OutcomeStrategyModeSummary:
     max_abs_residual_qty: float
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
+    post_fill_adverse_selection: tuple[OutcomePostFillAdverseSelection, ...]
 
 
 def evaluate_ema_anchor_outcome_modes(
@@ -109,6 +121,8 @@ def evaluate_ema_anchor_outcome_modes(
                     net_pnl=ending - starting,
                     gross_spread_pnl=float(output["gross_spread_pnl"]),
                     settlement_pnl=float(output["settlement_pnl"]),
+                    trading_fees_paid=float(output["trading_fees_paid"]),
+                    settlement_fees_paid=float(output["settlement_fees_paid"]),
                     fees_paid=float(output["fees_paid"]),
                     pre_settlement_yes_qty=float(output["pre_settlement_yes_qty"]),
                     pre_settlement_no_qty=float(output["pre_settlement_no_qty"]),
@@ -137,6 +151,11 @@ def evaluate_ema_anchor_outcome_modes(
                     worst_case_settlement_equity_min=float(
                         output["worst_case_settlement_equity_min"]
                     ),
+                    post_fill_adverse_selection=(
+                        post_fill_adverse_selection_from_rust_output(
+                            output["post_fill_adverse_selection"]
+                        )
+                    ),
                 )
             )
     return evaluations
@@ -159,7 +178,7 @@ def summarize_outcome_strategy_modes(
         baseline = cases[0]
         path_fields = (
             "gross_spread_pnl",
-            "fees_paid",
+            "trading_fees_paid",
             "pre_settlement_yes_qty",
             "pre_settlement_no_qty",
             "pre_settlement_paired_qty",
@@ -175,6 +194,7 @@ def summarize_outcome_strategy_modes(
             "time_weighted_abs_residual_qty",
             "time_weighted_total_inventory_qty",
             "worst_case_settlement_equity_min",
+            "post_fill_adverse_selection",
         )
         for case in cases[1:]:
             for field in path_fields:
@@ -191,6 +211,8 @@ def summarize_outcome_strategy_modes(
                     )
 
         net_pnls = [case.net_pnl for case in cases]
+        settlement_fees = [case.settlement_fees_paid for case in cases]
+        total_fees = [case.fees_paid for case in cases]
         larger_buy_qty = max(
             baseline.cumulative_yes_buy_qty,
             baseline.cumulative_no_buy_qty,
@@ -208,7 +230,11 @@ def summarize_outcome_strategy_modes(
                 execution_mode=execution_mode,
                 settlement_cases=len(cases),
                 gross_spread_pnl=baseline.gross_spread_pnl,
-                fees_paid=baseline.fees_paid,
+                trading_fees_paid=baseline.trading_fees_paid,
+                min_settlement_fees_paid=min(settlement_fees),
+                max_settlement_fees_paid=max(settlement_fees),
+                min_total_fees_paid=min(total_fees),
+                max_total_fees_paid=max(total_fees),
                 worst_net_pnl=min(net_pnls),
                 best_net_pnl=max(net_pnls),
                 settlement_sensitivity=max(net_pnls) - min(net_pnls),
@@ -231,6 +257,7 @@ def summarize_outcome_strategy_modes(
                 time_weighted_total_inventory_qty=(
                     baseline.time_weighted_total_inventory_qty
                 ),
+                post_fill_adverse_selection=baseline.post_fill_adverse_selection,
             )
         )
     return summaries

@@ -17,6 +17,7 @@ from outcome.hyperliquid_live import (
 )
 from outcome.live_data import (
     OutcomeIncompleteVerifiedSignal,
+    OutcomeInvalidPublicSignal,
     OutcomeNoPublicFill,
     VerifiedOutcomeSignalWindow,
     collect_verified_hyperliquid_signal_window,
@@ -308,7 +309,13 @@ async def run_hip4_outcome_collected_cycle(
             collector_session=collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
-    except (ConnectionError, OSError, aiohttp.ClientError, sqlite3.Error):
+    except (
+        OutcomeInvalidPublicSignal,
+        ConnectionError,
+        OSError,
+        aiohttp.ClientError,
+        sqlite3.Error,
+    ):
         cycle = await run_hip4_outcome_unavailable_cycle(
             client,
             market,

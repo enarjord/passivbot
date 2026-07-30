@@ -89,7 +89,14 @@ All notable user-facing changes will be documented in this file.
   acceptance separate from market open and permits authoritative trading close after the scheduled
   event, already-expired GTD orders are rejected at placement, and failed post-expiry settlement
   recovery remains observable without blocking protective managed-order cancellation. Perpetual hard-stop flat
-  confirmation remains minute-scoped when backtests use sub-minute candles.
+  confirmation remains minute-scoped when backtests use sub-minute candles. Outcome results now
+  separate trading and settlement fees and report extensible horizon-indexed post-fill adverse
+  selection, initially at one second, through single-market, settlement-scenario, and portfolio
+  summaries. Portfolio residual changes sharing a timestamp are applied atomically, and skipped
+  jobs no longer dilute duration-weighted metrics. YES-only sizing uses the headroom and collateral
+  cost of its single inventory-increasing quote. HIP-4 account snapshots are conservatively aged
+  from the start of their concurrent reads, while malformed public signal data enters the
+  observable cancel-only safety path without hiding caller configuration errors.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

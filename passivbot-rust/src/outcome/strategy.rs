@@ -411,19 +411,53 @@ impl OutcomeEmaAnchorState {
         let one_sided_pair_completion = params.execution_mode
             == OutcomeEmaAnchorExecutionMode::AccumulatePairs
             && inventory.residual_qty().abs() > EPSILON;
-        let inventory_headroom_per_intent = if one_sided_pair_completion {
-            remaining_inventory.min(inventory.residual_qty().abs())
+        let (bid_increases_inventory, ask_increases_inventory) = if one_sided_pair_completion {
+            (
+                inventory.residual_qty() < -EPSILON,
+                inventory.residual_qty() > EPSILON,
+            )
         } else {
-            remaining_inventory * 0.5
-        };
-        let collateral_cost_per_qty = if one_sided_pair_completion {
-            if inventory.residual_qty() > EPSILON {
-                market.payout_unit - ask_price + params.estimated_fee_per_share
-            } else {
-                bid_price + params.estimated_fee_per_share
+            match params.execution_mode {
+                OutcomeEmaAnchorExecutionMode::AccumulatePairs => (true, true),
+                OutcomeEmaAnchorExecutionMode::YesOnly => (true, false),
+                OutcomeEmaAnchorExecutionMode::InventoryAware => (
+                    sell_intent(
+                        Outcome::No,
+                        market.payout_unit - bid_price,
+                        params.clip_qty.min(inventory.available_no_qty()),
+                        market,
+                    )
+                    .is_none(),
+                    sell_intent(
+                        Outcome::Yes,
+                        ask_price,
+                        params.clip_qty.min(inventory.available_yes_qty()),
+                        market,
+                    )
+                    .is_none(),
+                ),
             }
+        };
+        let inventory_increasing_intents =
+            bid_increases_inventory as usize + ask_increases_inventory as usize;
+        let inventory_headroom_per_intent = if inventory_increasing_intents > 0 {
+            let aggregate_headroom = if one_sided_pair_completion {
+                remaining_inventory.min(inventory.residual_qty().abs())
+            } else {
+                remaining_inventory
+            };
+            aggregate_headroom / inventory_increasing_intents as f64
         } else {
-            bid_price + (market.payout_unit - ask_price) + 2.0 * params.estimated_fee_per_share
+            0.0
+        };
+        let collateral_cost_per_qty = if bid_increases_inventory {
+            bid_price + params.estimated_fee_per_share
+        } else {
+            0.0
+        } + if ask_increases_inventory {
+            market.payout_unit - ask_price + params.estimated_fee_per_share
+        } else {
+            0.0
         };
         let affordable_qty = if collateral_cost_per_qty > 0.0 {
             inventory.free_collateral / collateral_cost_per_qty
@@ -1086,6 +1120,36 @@ mod tests {
             .unwrap();
         assert!(flat.canonical_bid.is_some());
         assert!(flat.canonical_ask.is_none());
+    }
+
+    #[test]
+    fn yes_only_mode_uses_full_headroom_and_single_buy_collateral_cost() {
+        let mut state = OutcomeEmaAnchorState::default();
+        let mut parameters = params(OutcomeEmaAnchorExecutionMode::YesOnly);
+        parameters.clip_qty = 9.0;
+        parameters.max_total_inventory_qty = 9.0;
+        parameters.max_abs_residual_qty = 9.0;
+        let mut outcome_market = market();
+        outcome_market.min_qty = 5.0;
+        state
+            .update(0.5, outcome_market.payout_unit, &parameters)
+            .unwrap();
+        let inventory = OutcomeInventorySnapshot {
+            free_collateral: 4.5,
+            ..flat_inventory()
+        };
+
+        let quotes = state
+            .quote(2_000, 0.5, &outcome_market, &parameters, &inventory)
+            .unwrap();
+
+        let bid = quotes.canonical_bid.unwrap();
+        assert_eq!(
+            (bid.outcome, bid.side),
+            (Outcome::Yes, OutcomeOrderSide::Buy)
+        );
+        assert!((bid.qty - 9.0).abs() < 1e-12);
+        assert!(quotes.canonical_ask.is_none());
     }
 
     #[test]

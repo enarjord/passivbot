@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+from itertools import groupby
 import math
 from typing import Callable, Iterable
 
@@ -10,6 +11,68 @@ from typing import Callable, Iterable
 class InsufficientCapitalPolicy(str, Enum):
     FAIL = "fail"
     SKIP = "skip"
+
+
+@dataclass(frozen=True)
+class OutcomePostFillAdverseSelection:
+    horizon_ms: int
+    total_fills_count: int
+    observed_fills_count: int
+    total_fill_qty: float
+    observed_fill_qty: float
+    fill_qty_coverage_ratio: float | None
+    total_adverse_selection_quote: float | None
+    mean_adverse_selection_per_share: float | None
+
+    def __post_init__(self) -> None:
+        if self.horizon_ms <= 0:
+            raise ValueError("post-fill adverse-selection horizon must be positive")
+        if (
+            self.total_fills_count < 0
+            or not 0 <= self.observed_fills_count <= self.total_fills_count
+        ):
+            raise ValueError("invalid post-fill adverse-selection fill counts")
+        if (
+            not math.isfinite(self.total_fill_qty)
+            or self.total_fill_qty < 0.0
+            or not math.isfinite(self.observed_fill_qty)
+            or self.observed_fill_qty < 0.0
+            or self.observed_fill_qty > self.total_fill_qty + 1e-9
+        ):
+            raise ValueError("invalid post-fill adverse-selection quantities")
+        if (self.total_fills_count == 0) != (self.total_fill_qty == 0.0):
+            raise ValueError("post-fill adverse-selection fill count and quantity disagree")
+        if self.total_fill_qty > 0.0:
+            if (
+                self.fill_qty_coverage_ratio is None
+                or not math.isfinite(self.fill_qty_coverage_ratio)
+                or abs(
+                    self.fill_qty_coverage_ratio
+                    - self.observed_fill_qty / self.total_fill_qty
+                )
+                > 1e-9
+            ):
+                raise ValueError("post-fill adverse-selection coverage ratio disagrees")
+        elif self.fill_qty_coverage_ratio is not None:
+            raise ValueError("empty post-fill adverse selection must not invent coverage")
+        if self.observed_fill_qty > 0.0:
+            if (
+                self.total_adverse_selection_quote is None
+                or self.mean_adverse_selection_per_share is None
+                or not math.isfinite(self.total_adverse_selection_quote)
+                or not math.isfinite(self.mean_adverse_selection_per_share)
+                or abs(
+                    self.mean_adverse_selection_per_share
+                    - self.total_adverse_selection_quote / self.observed_fill_qty
+                )
+                > 1e-9
+            ):
+                raise ValueError("post-fill adverse-selection markout values disagree")
+        elif (
+            self.total_adverse_selection_quote is not None
+            or self.mean_adverse_selection_per_share is not None
+        ):
+            raise ValueError("unobserved post-fill adverse selection must remain unavailable")
 
 
 @dataclass(frozen=True)
@@ -23,6 +86,8 @@ class SingleOutcomeBacktestResult:
     fills_count: int
     maker_fills_count: int
     traded_notional: float
+    trading_fees_paid: float
+    settlement_fees_paid: float
     fees_paid: float
     rebates_earned: float
     gross_spread_pnl: float
@@ -39,6 +104,7 @@ class SingleOutcomeBacktestResult:
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
     worst_case_settlement_equity_min: float
+    post_fill_adverse_selection: tuple[OutcomePostFillAdverseSelection, ...]
     residual_qty_timeline: tuple[tuple[int, float], ...] = ()
 
     def __post_init__(self) -> None:
@@ -50,6 +116,8 @@ class SingleOutcomeBacktestResult:
             "starting_collateral",
             "ending_collateral",
             "traded_notional",
+            "trading_fees_paid",
+            "settlement_fees_paid",
             "fees_paid",
             "rebates_earned",
             "pre_settlement_yes_qty",
@@ -67,6 +135,10 @@ class SingleOutcomeBacktestResult:
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        if abs(
+            self.fees_paid - self.trading_fees_paid - self.settlement_fees_paid
+        ) > 1e-9:
+            raise ValueError("total fees disagree with trading plus settlement fees")
         for name in (
             "gross_spread_pnl",
             "settlement_pnl",
@@ -94,6 +166,14 @@ class SingleOutcomeBacktestResult:
             raise ValueError("orders_placed_count must be non-negative")
         if self.fills_count < 0 or not 0 <= self.maker_fills_count <= self.fills_count:
             raise ValueError("invalid fill counts")
+        horizons = [metric.horizon_ms for metric in self.post_fill_adverse_selection]
+        if len(horizons) != len(set(horizons)):
+            raise ValueError("post-fill adverse-selection horizons must be unique")
+        if any(
+            metric.total_fills_count != self.fills_count
+            for metric in self.post_fill_adverse_selection
+        ):
+            raise ValueError("post-fill adverse-selection fill count disagrees with result")
         previous_time = self.trading_open_time_ms
         for timestamp_ms, residual_qty in self.residual_qty_timeline:
             if (
@@ -131,10 +211,82 @@ def _portfolio_max_abs_residual_qty(
 
     current: dict[str, float] = {}
     peak = 0.0
-    for _timestamp_ms, _priority, market_id, _sequence, residual_qty in sorted(events):
-        current[market_id] = residual_qty
+    for _timestamp_ms, timestamp_events in groupby(
+        sorted(events),
+        key=lambda event: event[0],
+    ):
+        for (
+            _event_time,
+            _priority,
+            market_id,
+            _sequence,
+            residual_qty,
+        ) in timestamp_events:
+            current[market_id] = residual_qty
         peak = max(peak, sum(abs(value) for value in current.values()))
     return peak
+
+
+def _portfolio_post_fill_adverse_selection(
+    results: Iterable[SingleOutcomeBacktestResult],
+) -> tuple[OutcomePostFillAdverseSelection, ...]:
+    result_list = tuple(results)
+    if not result_list:
+        return ()
+    expected_horizons = {
+        metric.horizon_ms for metric in result_list[0].post_fill_adverse_selection
+    }
+    for result in result_list[1:]:
+        if {
+            metric.horizon_ms for metric in result.post_fill_adverse_selection
+        } != expected_horizons:
+            raise ValueError(
+                "single-outcome results use different adverse-selection horizons"
+            )
+    aggregated = []
+    for horizon_ms in sorted(expected_horizons):
+        metrics = [
+            next(
+                metric
+                for metric in result.post_fill_adverse_selection
+                if metric.horizon_ms == horizon_ms
+            )
+            for result in result_list
+        ]
+        total_fills_count = sum(metric.total_fills_count for metric in metrics)
+        observed_fills_count = sum(metric.observed_fills_count for metric in metrics)
+        total_fill_qty = sum(metric.total_fill_qty for metric in metrics)
+        observed_fill_qty = sum(metric.observed_fill_qty for metric in metrics)
+        total_adverse_selection_quote = (
+            sum(
+                metric.total_adverse_selection_quote
+                for metric in metrics
+                if metric.total_adverse_selection_quote is not None
+            )
+            if observed_fill_qty > 0.0
+            else None
+        )
+        aggregated.append(
+            OutcomePostFillAdverseSelection(
+                horizon_ms=horizon_ms,
+                total_fills_count=total_fills_count,
+                observed_fills_count=observed_fills_count,
+                total_fill_qty=total_fill_qty,
+                observed_fill_qty=observed_fill_qty,
+                fill_qty_coverage_ratio=(
+                    observed_fill_qty / total_fill_qty
+                    if total_fill_qty > 0.0
+                    else None
+                ),
+                total_adverse_selection_quote=total_adverse_selection_quote,
+                mean_adverse_selection_per_share=(
+                    total_adverse_selection_quote / observed_fill_qty
+                    if total_adverse_selection_quote is not None
+                    else None
+                ),
+            )
+        )
+    return tuple(aggregated)
 
 
 @dataclass(frozen=True)
@@ -173,6 +325,8 @@ class OutcomePortfolioBacktestResult:
     orders_placed_count: int
     maker_fills_count: int
     traded_notional: float
+    trading_fees_paid: float
+    settlement_fees_paid: float
     fees_paid: float
     rebates_earned: float
     gross_spread_pnl: float
@@ -186,6 +340,7 @@ class OutcomePortfolioBacktestResult:
     time_weighted_abs_residual_qty: float
     time_weighted_total_inventory_qty: float
     worst_case_settlement_equity_min: float
+    post_fill_adverse_selection: tuple[OutcomePostFillAdverseSelection, ...]
 
     @property
     def net_pnl(self) -> float:
@@ -230,6 +385,8 @@ def run_outcome_portfolio_backtest(
             fills_count=0,
             maker_fills_count=0,
             traded_notional=0.0,
+            trading_fees_paid=0.0,
+            settlement_fees_paid=0.0,
             fees_paid=0.0,
             rebates_earned=0.0,
             gross_spread_pnl=0.0,
@@ -243,6 +400,7 @@ def run_outcome_portfolio_backtest(
             time_weighted_abs_residual_qty=0.0,
             time_weighted_total_inventory_qty=0.0,
             worst_case_settlement_equity_min=starting_collateral,
+            post_fill_adverse_selection=(),
         )
 
     free_collateral = starting_collateral
@@ -307,7 +465,9 @@ def run_outcome_portfolio_backtest(
             result.trading_open_time_ms != job.trading_open_time_ms
             or result.settlement_time_ms != job.settlement_time_ms
         ):
-            raise ValueError("single-market runner returned lifecycle timestamps that differ from its job")
+            raise ValueError(
+                "single-market runner returned lifecycle timestamps that differ from its job"
+            )
         if abs(result.starting_collateral - job.requested_collateral) > 1e-9:
             raise ValueError("single-market runner changed its allocated starting collateral")
 
@@ -329,17 +489,44 @@ def run_outcome_portfolio_backtest(
             ),
         )
 
-    final_time_ms = max(
-        [job.settlement_time_ms for job in ordered_jobs]
-        + [last_event_time_ms]
-    )
-    advance_time(final_time_ms)
+    if not results:
+        return OutcomePortfolioBacktestResult(
+            starting_collateral=starting_collateral,
+            ending_collateral=starting_collateral,
+            market_results=(),
+            skipped_markets=tuple(skipped),
+            orders_placed_count=0,
+            fills_count=0,
+            maker_fills_count=0,
+            traded_notional=0.0,
+            trading_fees_paid=0.0,
+            settlement_fees_paid=0.0,
+            fees_paid=0.0,
+            rebates_earned=0.0,
+            gross_spread_pnl=0.0,
+            settlement_pnl=0.0,
+            max_concurrent_allocated_collateral=0.0,
+            allocated_collateral_time_ratio=0.0,
+            cumulative_yes_buy_qty=0.0,
+            cumulative_no_buy_qty=0.0,
+            pair_completion_ratio=0.0,
+            max_abs_residual_qty=0.0,
+            time_weighted_abs_residual_qty=0.0,
+            time_weighted_total_inventory_qty=0.0,
+            worst_case_settlement_equity_min=starting_collateral,
+            post_fill_adverse_selection=(),
+        )
+
+    final_time_ms = max(result.settlement_time_ms for result in results)
+    if last_event_time_ms < final_time_ms:
+        advance_time(final_time_ms)
     if pending_settlements:
         raise AssertionError("portfolio settlement queue was not fully released")
     if abs(allocated_collateral) > 1e-9:
         raise AssertionError("portfolio retained allocated collateral after final settlement")
 
-    portfolio_duration_ms = final_time_ms - ordered_jobs[0].trading_open_time_ms
+    portfolio_start_time_ms = min(result.trading_open_time_ms for result in results)
+    portfolio_duration_ms = final_time_ms - portfolio_start_time_ms
     utilization = (
         allocation_time_area / (starting_collateral * portfolio_duration_ms)
         if portfolio_duration_ms > 0
@@ -372,6 +559,8 @@ def run_outcome_portfolio_backtest(
         fills_count=sum(result.fills_count for result in results),
         maker_fills_count=sum(result.maker_fills_count for result in results),
         traded_notional=sum(result.traded_notional for result in results),
+        trading_fees_paid=sum(result.trading_fees_paid for result in results),
+        settlement_fees_paid=sum(result.settlement_fees_paid for result in results),
         fees_paid=sum(result.fees_paid for result in results),
         rebates_earned=sum(result.rebates_earned for result in results),
         gross_spread_pnl=sum(result.gross_spread_pnl for result in results),
@@ -393,4 +582,5 @@ def run_outcome_portfolio_backtest(
             else 0.0
         ),
         worst_case_settlement_equity_min=worst_case_equity_min,
+        post_fill_adverse_selection=_portfolio_post_fill_adverse_selection(results),
     )

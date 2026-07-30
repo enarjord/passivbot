@@ -305,6 +305,35 @@ async def test_account_snapshot_keeps_outcome_state_separate_and_surfaces_unknow
 
 
 @pytest.mark.asyncio
+async def test_account_snapshot_timestamp_is_conservative_across_concurrent_reads(
+    monkeypatch,
+):
+    payload, market = market_fixture()
+    clock = {"seconds": 1_784_900_000.0}
+
+    class UnevenSession(FakeSession):
+        async def publicPostInfo(self, request):
+            result = await super().publicPostInfo(request)
+            if request["type"] == "userFees":
+                clock["seconds"] += 20.0
+            return result
+
+    monkeypatch.setattr(
+        "outcome.hyperliquid_live.time.time",
+        lambda: clock["seconds"],
+    )
+    client = HyperliquidOutcomeLiveClient(
+        UnevenSession(payload),
+        account_address="0xaccount",
+    )
+
+    snapshot = await client.fetch_account_snapshot((market,))
+
+    assert snapshot.received_time_ms == 1_784_900_000_000
+    assert clock["seconds"] == 1_784_900_020.0
+
+
+@pytest.mark.asyncio
 async def test_account_snapshot_rejects_missing_required_user_fee_rate():
     payload, market = market_fixture()
     session = FakeSession(payload)

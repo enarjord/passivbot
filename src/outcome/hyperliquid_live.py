@@ -271,6 +271,9 @@ class HyperliquidOutcomeLiveClient:
         if len(quote_assets) != 1:
             raise ValueError("one HIP-4 account snapshot cannot mix quote assets")
         identifiers = _selected_identifiers(market_list)
+        # The aggregate is only as fresh as its oldest component. Timestamping at request start is
+        # conservative when one concurrent account endpoint responds much later than the others.
+        received_time_ms = int(time.time() * 1_000)
         state, open_orders, fills, user_fees = await asyncio.gather(
             self.session.publicPostInfo(
                 {
@@ -314,7 +317,6 @@ class HyperliquidOutcomeLiveClient:
         ):
             raise ValueError("Hyperliquid spot balances response must be an object array")
         quote_asset = next(iter(quote_assets))
-        received_time_ms = int(time.time() * 1_000)
         normalized_fills = hyperliquid.normalize_account_fills(fills, market_list)
         settlements = tuple(
             settlement

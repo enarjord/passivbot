@@ -155,6 +155,15 @@ def test_real_rust_binding_runs_strict_cross_and_settlement():
     assert output["fills_count"] == 1
     assert output["fills"][0]["fill"]["price"] == pytest.approx(0.4)
     assert output["ending_collateral"] == pytest.approx(10.6)
+    assert output["trading_fees_paid"] == pytest.approx(0.0)
+    assert output["settlement_fees_paid"] == pytest.approx(0.0)
+    assert output["fees_paid"] == pytest.approx(0.0)
+    assert len(output["post_fill_adverse_selection"]) == 1
+    markout = output["post_fill_adverse_selection"][0]
+    assert markout["horizon_ms"] == 1_000
+    assert markout["fill_qty_coverage_ratio"] == pytest.approx(1.0)
+    assert markout["total_adverse_selection_quote"] == pytest.approx(-0.02)
+    assert markout["mean_adverse_selection_per_share"] == pytest.approx(-0.02)
     assert output["fill_model"] == "trade_derived_1s_strict_cross_no_volume_cap"
 
 
@@ -168,6 +177,10 @@ def test_rust_jobs_compose_through_shared_wallet_orchestrator():
 
     assert portfolio.ending_collateral == pytest.approx(11.2)
     assert portfolio.fills_count == 2
+    assert (
+        portfolio.post_fill_adverse_selection[0].total_adverse_selection_quote
+        == pytest.approx(-0.04)
+    )
 
 
 def test_real_rust_ema_anchor_outcome_binding_uses_dense_signals_and_trade_candles():
@@ -181,6 +194,12 @@ def test_real_rust_ema_anchor_outcome_binding_uses_dense_signals_and_trade_candl
     assert output["pair_completion_ratio"] == pytest.approx(1.0)
     assert output["time_weighted_abs_residual_qty"] == pytest.approx(0.0)
     assert output["time_weighted_total_inventory_qty"] == pytest.approx(1.5)
+    assert (
+        output["post_fill_adverse_selection"][0][
+            "mean_adverse_selection_per_share"
+        ]
+        == pytest.approx(-0.01)
+    )
 
 
 def test_rust_ema_anchor_jobs_compose_through_shared_wallet_orchestrator():
@@ -205,6 +224,10 @@ def test_rust_ema_anchor_jobs_compose_through_shared_wallet_orchestrator():
     assert portfolio.pair_completion_ratio == pytest.approx(1.0)
     assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.0)
     assert portfolio.time_weighted_total_inventory_qty == pytest.approx(1.5)
+    assert (
+        portfolio.post_fill_adverse_selection[0].mean_adverse_selection_per_share
+        == pytest.approx(-0.01)
+    )
 
 
 def test_real_rust_live_planner_reconstructs_dense_ema_state():

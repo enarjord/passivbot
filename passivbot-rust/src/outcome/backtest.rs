@@ -10,6 +10,8 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+const INITIAL_POST_FILL_MARKOUT_HORIZONS_MS: &[u64] = &[1_000];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutcomeBacktestAction {
@@ -108,6 +110,21 @@ pub struct OutcomeEmaAnchorBacktestInput {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OutcomePostFillAdverseSelection {
+    pub horizon_ms: u64,
+    pub total_fills_count: usize,
+    pub observed_fills_count: usize,
+    pub total_fill_qty: f64,
+    pub observed_fill_qty: f64,
+    pub fill_qty_coverage_ratio: Option<f64>,
+    /// Signed quote-currency markout. Positive values mean price moved against the fills.
+    pub total_adverse_selection_quote: Option<f64>,
+    /// Quantity-weighted signed markout per share. Positive values are adverse.
+    pub mean_adverse_selection_per_share: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SingleOutcomeBacktestOutput {
     pub strategy_kind: String,
     pub market_id: String,
@@ -120,6 +137,8 @@ pub struct SingleOutcomeBacktestOutput {
     pub fills_count: usize,
     pub maker_fills_count: usize,
     pub traded_notional: f64,
+    pub trading_fees_paid: f64,
+    pub settlement_fees_paid: f64,
     pub fees_paid: f64,
     pub rebates_earned: f64,
     pub gross_spread_pnl: f64,
@@ -139,6 +158,7 @@ pub struct SingleOutcomeBacktestOutput {
     pub time_weighted_abs_residual_qty: f64,
     pub time_weighted_total_inventory_qty: f64,
     pub worst_case_settlement_equity_min: f64,
+    pub post_fill_adverse_selection: Vec<OutcomePostFillAdverseSelection>,
     pub settlement: OutcomeSettlement,
     pub fill_model: String,
 }
@@ -366,9 +386,24 @@ pub fn run_single_outcome_backtest(
         .iter()
         .map(|fill| fill.fill.price * fill.fill.qty)
         .sum();
+    let post_fill_adverse_selection = calculate_post_fill_adverse_selection(
+        &fills,
+        input.market.payout_unit,
+        INITIAL_POST_FILL_MARKOUT_HORIZONS_MS,
+        |fill, mark_time_ms| {
+            mark_price_from_execution_candles(
+                &input.candles,
+                input.market.capabilities.complementary_books_merged,
+                fill,
+                mark_time_ms,
+            )
+        },
+    )?;
+    let trading_fees_paid = simulator.ledger().fees_paid();
     let settlement = simulator.settle(input.settlement_time_ms, input.yes_fraction)?;
     let ending_collateral = simulator.ledger().collateral();
     let fees_paid = simulator.ledger().fees_paid();
+    let settlement_fees_paid = settlement_fee_component(fees_paid, trading_fees_paid)?;
     let rebates_earned = simulator.ledger().rebates_earned();
 
     Ok(SingleOutcomeBacktestOutput {
@@ -386,6 +421,8 @@ pub fn run_single_outcome_backtest(
         fills_count: fills.len(),
         maker_fills_count: fills.len(),
         traded_notional,
+        trading_fees_paid,
+        settlement_fees_paid,
         fees_paid,
         rebates_earned,
         gross_spread_pnl: pre_settlement_trading_pnl + pre_settlement_merge_pnl + paired_locked_pnl,
@@ -405,6 +442,7 @@ pub fn run_single_outcome_backtest(
         time_weighted_abs_residual_qty: residual_qty_time_area_ms / lifecycle_duration_ms,
         time_weighted_total_inventory_qty: total_inventory_time_area_ms / lifecycle_duration_ms,
         worst_case_settlement_equity_min,
+        post_fill_adverse_selection,
         fills,
         settlement,
         fill_model: "trade_derived_1s_strict_cross_no_volume_cap".to_string(),
@@ -613,9 +651,17 @@ pub fn run_outcome_ema_anchor_backtest(
         .iter()
         .map(|fill| fill.fill.price * fill.fill.qty)
         .sum();
+    let post_fill_adverse_selection = calculate_post_fill_adverse_selection(
+        &fills,
+        input.market.payout_unit,
+        INITIAL_POST_FILL_MARKOUT_HORIZONS_MS,
+        |_fill, mark_time_ms| mark_price_from_signal_candles(&signals, mark_time_ms),
+    )?;
+    let trading_fees_paid = simulator.ledger().fees_paid();
     let settlement = simulator.settle(input.settlement_time_ms, input.yes_fraction)?;
     let ending_collateral = simulator.ledger().collateral();
     let fees_paid = simulator.ledger().fees_paid();
+    let settlement_fees_paid = settlement_fee_component(fees_paid, trading_fees_paid)?;
     let rebates_earned = simulator.ledger().rebates_earned();
 
     Ok(SingleOutcomeBacktestOutput {
@@ -629,6 +675,8 @@ pub fn run_outcome_ema_anchor_backtest(
         fills_count: fills.len(),
         maker_fills_count: fills.len(),
         traded_notional,
+        trading_fees_paid,
+        settlement_fees_paid,
         fees_paid,
         rebates_earned,
         gross_spread_pnl: pre_settlement_trading_pnl + pre_settlement_merge_pnl + paired_locked_pnl,
@@ -648,6 +696,7 @@ pub fn run_outcome_ema_anchor_backtest(
         time_weighted_abs_residual_qty: residual_qty_time_area_ms / lifecycle_duration_ms,
         time_weighted_total_inventory_qty: total_inventory_time_area_ms / lifecycle_duration_ms,
         worst_case_settlement_equity_min,
+        post_fill_adverse_selection,
         fills,
         settlement,
         fill_model: "trade_derived_1s_strict_cross_no_volume_cap".to_string(),
@@ -736,6 +785,107 @@ fn completion_ratio(yes_buy_qty: f64, no_buy_qty: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn settlement_fee_component(
+    total_fees_paid: f64,
+    trading_fees_paid: f64,
+) -> Result<f64, OutcomeError> {
+    let settlement_fees_paid = total_fees_paid - trading_fees_paid;
+    if settlement_fees_paid < -1e-12 {
+        return Err(OutcomeError::InvalidMarket(
+            "settlement reduced cumulative outcome fees".to_string(),
+        ));
+    }
+    Ok(settlement_fees_paid.max(0.0))
+}
+
+fn calculate_post_fill_adverse_selection<F>(
+    fills: &[SimulatedOutcomeFill],
+    payout_unit: f64,
+    horizons_ms: &[u64],
+    mut mark_price: F,
+) -> Result<Vec<OutcomePostFillAdverseSelection>, OutcomeError>
+where
+    F: FnMut(&SimulatedOutcomeFill, u64) -> Result<Option<f64>, OutcomeError>,
+{
+    let mut seen_horizons = HashSet::new();
+    let total_fill_qty: f64 = fills.iter().map(|fill| fill.fill.qty).sum();
+    let mut metrics = Vec::with_capacity(horizons_ms.len());
+    for &horizon_ms in horizons_ms {
+        if horizon_ms == 0 || !seen_horizons.insert(horizon_ms) {
+            return Err(OutcomeError::InvalidMarket(
+                "post-fill markout horizons must be unique and positive".to_string(),
+            ));
+        }
+        let mut observed_fills_count = 0_usize;
+        let mut observed_fill_qty = 0.0;
+        let mut total_adverse_selection_quote = 0.0;
+        for fill in fills {
+            let mark_time_ms = fill
+                .fill
+                .timestamp_ms
+                .checked_add(horizon_ms)
+                .ok_or_else(|| {
+                    OutcomeError::InvalidMarket(
+                        "post-fill markout timestamp overflowed".to_string(),
+                    )
+                })?;
+            let Some(mark_price) = mark_price(fill, mark_time_ms)? else {
+                continue;
+            };
+            let canonical_fill_price = fill.fill.canonical_yes_price(payout_unit)?;
+            let exposure_direction = fill.fill.canonical_yes_exposure_delta().signum();
+            let adverse_per_share = exposure_direction * (canonical_fill_price - mark_price);
+            observed_fills_count += 1;
+            observed_fill_qty += fill.fill.qty;
+            total_adverse_selection_quote += adverse_per_share * fill.fill.qty;
+        }
+        metrics.push(OutcomePostFillAdverseSelection {
+            horizon_ms,
+            total_fills_count: fills.len(),
+            observed_fills_count,
+            total_fill_qty,
+            observed_fill_qty,
+            fill_qty_coverage_ratio: (total_fill_qty > 0.0)
+                .then_some(observed_fill_qty / total_fill_qty),
+            total_adverse_selection_quote: (observed_fill_qty > 0.0)
+                .then_some(total_adverse_selection_quote),
+            mean_adverse_selection_per_share: (observed_fill_qty > 0.0)
+                .then_some(total_adverse_selection_quote / observed_fill_qty),
+        });
+    }
+    Ok(metrics)
+}
+
+fn mark_price_from_signal_candles(
+    candles: &[OutcomeSignalCandle],
+    mark_time_ms: u64,
+) -> Result<Option<f64>, OutcomeError> {
+    Ok(candles
+        .iter()
+        .find(|candle| candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms))
+        .map(|candle| candle.close))
+}
+
+fn mark_price_from_execution_candles(
+    candles: &[OutcomeCandle],
+    complementary_books_merged: bool,
+    fill: &SimulatedOutcomeFill,
+    mark_time_ms: u64,
+) -> Result<Option<f64>, OutcomeError> {
+    let mut matches = candles.iter().filter(|candle| {
+        candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms)
+            && (complementary_books_merged || candle.outcome == fill.fill.outcome)
+    });
+    let first = matches.next().map(|candle| candle.close);
+    if matches.next().is_some() {
+        return Err(OutcomeError::InvalidMarket(
+            "post-fill markout has multiple canonical closes for one native book and second"
+                .to_string(),
+        ));
+    }
+    Ok(first)
 }
 
 #[cfg(test)]
@@ -860,6 +1010,8 @@ mod tests {
             "trade_derived_1s_strict_cross_no_volume_cap"
         );
         assert!((output.ending_collateral - 10.091).abs() < 1e-12);
+        assert!((output.trading_fees_paid - 0.009).abs() < 1e-12);
+        assert!(output.settlement_fees_paid.abs() < 1e-12);
         assert!((output.fees_paid - 0.009).abs() < 1e-12);
         assert!((output.max_paired_qty - 1.0).abs() < 1e-12);
         assert!((output.max_abs_residual_qty - 1.0).abs() < 1e-12);
@@ -868,6 +1020,25 @@ mod tests {
         assert!((output.pair_completion_ratio - 1.0).abs() < 1e-12);
         assert!(output.time_weighted_abs_residual_qty.abs() < 1e-12);
         assert!((output.time_weighted_total_inventory_qty - 1.5).abs() < 1e-12);
+        assert_eq!(output.post_fill_adverse_selection.len(), 1);
+        let markout = &output.post_fill_adverse_selection[0];
+        assert_eq!(markout.horizon_ms, 1_000);
+        assert_eq!(markout.observed_fills_count, 2);
+        assert!((markout.fill_qty_coverage_ratio.unwrap() - 1.0).abs() < 1e-12);
+        assert!((markout.total_adverse_selection_quote.unwrap() + 0.04).abs() < 1e-12);
+        assert!((markout.mean_adverse_selection_per_share.unwrap() + 0.02).abs() < 1e-12);
+
+        let expanded = calculate_post_fill_adverse_selection(
+            &output.fills,
+            1.0,
+            &[1_000, 5_000],
+            |_fill, mark_time_ms| Ok((mark_time_ms == 3_000).then_some(0.5)),
+        )
+        .unwrap();
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(expanded[0].fill_qty_coverage_ratio, Some(1.0));
+        assert_eq!(expanded[1].fill_qty_coverage_ratio, Some(0.0));
+        assert!(expanded[1].total_adverse_selection_quote.is_none());
     }
 
     #[test]
@@ -907,6 +1078,43 @@ mod tests {
         .unwrap();
         assert_eq!(output.fills_count, 0);
         assert_eq!(output.ending_collateral, 10.0);
+    }
+
+    #[test]
+    fn backtest_reports_trading_and_settlement_fees_separately() {
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule {
+                maker_rate: 0.0,
+                taker_rate: 0.0,
+                formula: OutcomeFeeFormula::Notional,
+                incidence: crate::outcome::OutcomeFeeIncidence::EveryFill,
+                settlement_rate: 0.1,
+            },
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_500,
+                order: order("yes", Outcome::Yes, 0.4),
+            }],
+            candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.42,
+                high: 0.45,
+                low: 0.399,
+                close: 0.42,
+                volume: 0.1,
+            }],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert!(output.trading_fees_paid.abs() < 1e-12);
+        assert!((output.settlement_fees_paid - 0.1).abs() < 1e-12);
+        assert!((output.fees_paid - 0.1).abs() < 1e-12);
+        assert!((output.ending_collateral - 10.5).abs() < 1e-12);
     }
 
     #[test]

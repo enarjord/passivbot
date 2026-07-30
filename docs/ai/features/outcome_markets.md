@@ -163,6 +163,12 @@ the venue reports them as fill-level fees.
 
 Current zero-fee venue behavior is runtime metadata, not a permanent default.
 
+Backtest results report `trading_fees_paid`, `settlement_fees_paid`, and their sum
+`fees_paid` separately. Trading fees are captured before settlement and are invariant when the
+same fill path is replayed across alternative settlement outcomes. Settlement and total fees may
+vary with the winning inventory and payout. Settlement-scenario summaries compare only trading
+fees as a path invariant and report ranges for settlement and total fees.
+
 ## Orders And Fill Simulation
 
 The common order model preserves:
@@ -379,11 +385,33 @@ time-weighted absolute residual and total token inventory from trading open thro
 With one-second aggregate execution candles, all fills eligible in a bucket are applied at that
 bucket's timestamp and the resulting inventory is charged through that bucket's one-second end.
 This is a deterministic bucket model, not a claim about sub-second fill order. The shared-wallet
-orchestrator
-aggregates buy quantities before calculating portfolio pair completion and weights inventory-time
-areas across overlapping contracts on the common portfolio horizon. Portfolio peak residual is
-also swept chronologically as the sum of absolute per-market residuals, rather than taking the
-largest single-market peak.
+orchestrator aggregates buy quantities before calculating portfolio pair completion and weights
+inventory-time areas across overlapping contracts on the common executed-market horizon. Skipped
+jobs do not extend that horizon. Portfolio peak residual is swept chronologically as the sum of
+absolute per-market residuals; every release and fill-derived residual update sharing one timestamp
+is applied atomically before measuring the peak.
+
+Post-fill adverse selection is represented as a horizon-indexed collection so later experiments
+may add horizons without changing its aggregation contract. The initial collection contains only
+`horizon_ms = 1000`. A fill timestamp denotes the start of its one-second execution bucket, and its
+one-second mark is the canonical YES close at that bucket's end. EMA-anchor runs use the canonical
+signal close. Scripted-action runs use the canonicalized close from the native book that produced
+the fill, or the single merged-book close when the venue proves complementary books are merged.
+
+For canonical YES-equivalent exposure direction `d` (`+1` for buying YES or selling NO, `-1` for
+selling YES or buying NO), canonical fill price `f`, mark price `m`, and quantity `q`:
+
+```text
+adverse_selection_per_share = d * (f - m)
+adverse_selection_quote     = q * adverse_selection_per_share
+```
+
+Positive values are adverse and negative values are favorable. Each horizon reports total and
+observed fill count and quantity, quantity coverage, total quote-currency markout, and the
+quantity-weighted mean per share. An unavailable exact-horizon mark is excluded and remains
+observable through coverage; settlement payout is never substituted for a missing mark. Portfolio
+and mode summaries preserve the horizon and aggregate total markout before calculating the
+quantity-weighted mean.
 
 ## Live Safety
 

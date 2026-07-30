@@ -618,6 +618,76 @@ async def test_stream_disconnect_routes_to_executed_cancel_only_cycle():
 
 
 @pytest.mark.asyncio
+async def test_malformed_public_signal_routes_to_executed_cancel_only_cycle():
+    outcome_market = market()
+    start_ms = outcome_market.lifecycle.trading_open_time_ms
+    assert start_ms is not None
+
+    async def malformed_stream():
+        if False:  # pragma: no cover - keeps this an async generator
+            yield None
+        raise json.JSONDecodeError("malformed websocket payload", "{", 0)
+
+    now_ms = start_ms + 1_500
+    cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=candles()[-1].timestamp_ms,
+    )
+    managed_order = OutcomeOpenOrder(
+        market_id="913",
+        order_id="7",
+        asset_id="+9130",
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.49,
+        qty=25.0,
+        original_qty=25.0,
+        timestamp_ms=start_ms,
+        client_order_id=cloid,
+    )
+    client = SafetyMutationClient(
+        (
+            snapshot(now_ms, open_orders=(managed_order,)),
+            snapshot(now_ms),
+            snapshot(now_ms),
+        )
+    )
+
+    collected = await run_hip4_outcome_collected_cycle(
+        client,
+        outcome_market,
+        params(),
+        min_observations=3,
+        max_wait_seconds=1.0,
+        delivery_lag_ms=0,
+        wall_clock_ms=lambda: now_ms,
+        trade_stream=malformed_stream(),
+        execute=True,
+        now_ms=now_ms,
+    )
+
+    assert collected.signal_window is None
+    assert (
+        collected.cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED
+    )
+    assert client.cancelled == [("913", OutcomeSide.YES, 7, cloid)]
+    assert client.created == []
+
+
+@pytest.mark.asyncio
+async def test_signal_collection_configuration_errors_are_not_downgraded():
+    with pytest.raises(ValueError, match="min_observations must be positive"):
+        await run_hip4_outcome_collected_cycle(
+            ReadOnlyClient(snapshot(candles()[-1].timestamp_ms + 1_000)),
+            market(),
+            params(),
+            min_observations=0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_archive_failure_routes_to_cancel_only_cycle():
     class FailingArchive:
         def append_market_metadata(self, *args, **kwargs):
