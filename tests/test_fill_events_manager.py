@@ -2058,8 +2058,8 @@ async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path
     cache_dir.mkdir()
     stale_payload = [
         {
-            "id": "tid-a+tid-b",
-            "source_ids": ["tid-a", "tid-b"],
+            "id": "tid-a",
+            "source_ids": ["tid-a"],
             "timestamp": 1_700_000_000_000,
             "datetime": "",
             "symbol": "SUI/USDC:USDC",
@@ -8314,8 +8314,14 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cached_component_ids",
+    [set(), {"1"}, {"1", "3"}],
+    ids=["no-components", "one-component", "multiple-components"],
+)
 async def test_unreconciled_hyperliquid_aggregate_is_quarantined_before_refresh(
     tmp_path: Path,
+    cached_component_ids: set[str],
 ):
     def _component(event_id: str, start_position: float) -> Dict[str, object]:
         event = deepcopy(_hyperliquid_same_millisecond_events()[0])
@@ -8343,9 +8349,11 @@ async def test_unreconciled_hyperliquid_aggregate_is_quarantined_before_refresh(
     aggregate["raw"] = [
         raw
         for raw in aggregate["raw"]
-        if str(raw["data"]["id"]) in {"1", "3"}
+        if str(raw["data"]["id"]) in cached_component_ids
     ]
-    cache_path = tmp_path / "unreconciled_hyperliquid_aggregate"
+    cache_path = tmp_path / (
+        f"unreconciled_hyperliquid_aggregate_{len(cached_component_ids)}"
+    )
     FillEventCache(cache_path).save([FillEvent.from_dict(aggregate)])
     manager = FillEventsManager(
         exchange="hyperliquid",

@@ -1230,6 +1230,9 @@ def _expand_hyperliquid_coalesced_events(
     """Restore per-execution events from older Hyperliquid cache rows."""
     expanded: List[Dict[str, object]] = []
     for event in events:
+        parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+        source_ids = {str(value) for value in event.get("source_ids") or [] if value}
+        is_legacy_aggregate = len(parent_ids) > 1 or len(source_ids) > 1
         raw_trades = [
             item.get("data")
             for item in _normalize_raw_field(event.get("raw"))
@@ -1250,7 +1253,7 @@ def _expand_hyperliquid_coalesced_events(
                 continue
             seen_ids.add(trade_id)
             unique_trades.append(trade)
-        if len(unique_trades) <= 1:
+        if len(unique_trades) <= 1 and not is_legacy_aggregate:
             expanded.append(event)
             continue
 
