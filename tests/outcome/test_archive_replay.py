@@ -9,6 +9,7 @@ import pytest
 from outcome.adapters import hyperliquid
 from outcome.archive import OutcomeTradeArchive
 from outcome.archive_replay import (
+    _authoritative_settlement,
     build_archived_ema_anchor_replay,
     consolidated_archived_market,
 )
@@ -85,7 +86,7 @@ def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
         (FIXTURES / "hyperliquid_price_binary.json").read_text()
     )
     market = replace(
-        hyperliquid_market_with_fixture_constraints(raw_market),
+        hyperliquid.normalize_market(raw_market),
         lifecycle=MarketLifecycle(
             trading_open_time_ms=1_000,
             trading_close_time_ms=5_000,
@@ -162,11 +163,17 @@ def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
         },
         requested_collateral=100.0,
         strategy_params={"execution_mode": "accumulate_pairs"},
+        qty_step=1.0,
+        min_order_qty=1.0,
+        min_order_notional=10.0,
     )
 
     assert replay.actual_fill_records == 2
     assert replay.coverage == VerifiedCoverage(1_000, 5_000)
     assert replay.settlement.yes_fraction == 1.0
+    assert replay.payload["market"]["qty_step"] == 1.0
+    assert replay.payload["market"]["min_qty"] == 1.0
+    assert replay.payload["market"]["min_notional"] == 10.0
     assert replay.payload["settlement_time_ms"] == 5_100
     assert [row["timestamp_ms"] for row in replay.payload["signal_candles"]] == [
         1_000,
@@ -174,6 +181,32 @@ def test_full_contract_archive_builds_authoritative_settled_replay(tmp_path):
         3_000,
         4_000,
     ]
+
+
+def test_authoritative_settlement_must_match_market_payout_unit():
+    settlement = OutcomeSettlementEvidence(
+        venue=OutcomeVenue.HYPERLIQUID,
+        market_id="binary-1",
+        yes_fraction=1.0,
+        payout_unit=2.0,
+        settlement_time_ms=5_100,
+        capital_release_time_ms=5_100,
+        received_time_ms=5_200,
+        source_event_id="settlement",
+        evidence_source="fixture",
+        observed_yes_qty=1.0,
+        observed_no_qty=0.0,
+        collateral_payout=2.0,
+        fee=0.0,
+        fee_asset="USDC",
+    )
+
+    with pytest.raises(ValueError, match="settlement payout unit.*disagrees"):
+        _authoritative_settlement(
+            [settlement],
+            market_id=settlement.market_id,
+            payout_unit=1.0,
+        )
 
 
 def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):

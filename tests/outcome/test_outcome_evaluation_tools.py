@@ -18,10 +18,12 @@ from outcome.models import (
     OutcomePriceGridMetadata,
 )
 from tools.evaluate_archived_outcome_portfolio import (
+    _add_constraint_arguments as _add_portfolio_constraint_arguments,
     _load_archived_fee_market,
     _require_shared_quote_asset,
     _rust_fee_formula,
     _rust_fee_rates,
+    _validate_constraint_arguments as _validate_portfolio_constraint_arguments,
 )
 from tools.evaluate_hip4_outcome_window import (
     _add_constraint_arguments,
@@ -165,6 +167,27 @@ def test_shared_wallet_portfolio_requires_one_quote_asset():
     assert _require_shared_quote_asset([replay]) == replay.market.quote_asset
     with pytest.raises(ValueError, match="requires one shared quote asset"):
         _require_shared_quote_asset([replay, other_quote_asset])
+
+
+def test_archived_portfolio_accepts_explicit_missing_constraint_assumptions():
+    parser = argparse.ArgumentParser()
+    _add_portfolio_constraint_arguments(parser)
+    args = parser.parse_args(
+        [
+            "--qty-step",
+            "1",
+            "--min-order-qty",
+            "2",
+            "--min-order-notional",
+            "0",
+        ]
+    )
+
+    _validate_portfolio_constraint_arguments(parser, args)
+
+    assert args.qty_step == 1.0
+    assert args.min_order_qty == 2.0
+    assert args.min_order_notional == 0.0
 
 
 def test_archived_fee_formula_uses_opening_state_and_rejects_later_transition(

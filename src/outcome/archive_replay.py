@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import math
 from typing import Any, Mapping
 
 from outcome.archive import OutcomeTradeArchive
@@ -45,6 +46,7 @@ def _authoritative_settlement(
     settlements: list[OutcomeSettlementEvidence],
     *,
     market_id: str,
+    payout_unit: float,
 ) -> OutcomeSettlementEvidence:
     if not settlements:
         raise ValueError(f"outcome archive has no settlement evidence for {market_id}")
@@ -52,6 +54,17 @@ def _authoritative_settlement(
     payout_units = {settlement.payout_unit for settlement in settlements}
     if len(yes_fractions) != 1 or len(payout_units) != 1:
         raise ValueError(f"outcome archive has conflicting settlement evidence for {market_id}")
+    settlement_payout_unit = next(iter(payout_units))
+    if not math.isclose(
+        settlement_payout_unit,
+        payout_unit,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"outcome settlement payout unit {settlement_payout_unit} disagrees with "
+            f"market payout unit {payout_unit} for {market_id}"
+        )
     return max(
         settlements,
         key=lambda settlement: (
@@ -170,6 +183,8 @@ def build_archived_ema_anchor_replay(
     requested_collateral: float,
     strategy_params: Mapping[str, Any],
     qty_step: float | None = None,
+    min_order_qty: float | None = None,
+    min_order_notional: float | None = None,
 ) -> ArchivedOutcomeReplay:
     """Build one authoritative full-contract replay from retained metadata and fills."""
 
@@ -194,6 +209,7 @@ def build_archived_ema_anchor_replay(
     settlement = _authoritative_settlement(
         archive.load_settlements(venue, market_id),
         market_id=market_id,
+        payout_unit=market.payout_unit,
     )
     capital_release_time_ms = settlement.capital_release_time_ms
     if capital_release_time_ms is None:
@@ -245,9 +261,32 @@ def build_archived_ema_anchor_replay(
                 f"outcome archive does not prove full-contract price-grid coverage "
                 f"for {market_id}"
             )
+    missing_constraints = [
+        name
+        for name, archived, explicit in (
+            ("qty_step", market.qty_step, qty_step),
+            ("min_order_qty", market.min_order_qty, min_order_qty),
+            (
+                "min_order_notional",
+                market.min_order_notional,
+                min_order_notional,
+            ),
+        )
+        if archived is None and explicit is None
+    ]
+    if missing_constraints:
+        raise ValueError(
+            "full-contract outcome replay requires explicit assumptions for missing "
+            f"venue constraints: {', '.join(missing_constraints)}"
+        )
     full_coverage = VerifiedCoverage(start_ms, end_ms)
     payload = build_trade_derived_ema_anchor_input(
-        market_spec=normalized_market_to_rust_spec(market, qty_step=qty_step),
+        market_spec=normalized_market_to_rust_spec(
+            market,
+            qty_step=qty_step,
+            min_order_qty=min_order_qty,
+            min_order_notional=min_order_notional,
+        ),
         trades=trades,
         verified_coverage=(full_coverage,),
         fee_schedule=fee_schedule,

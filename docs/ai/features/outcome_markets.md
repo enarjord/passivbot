@@ -437,7 +437,11 @@ An archived full-contract job is admissible only when the archive contains immut
 metadata observed no later than trading open, one consistent authoritative settlement payout,
 actual fills, and continuous verified coverage for both native side assets from trading open
 through trading close. A later import cannot retroactively prove mutable fees or order constraints
-at the opening boundary. The archive replay builder also requires independent full-window
+at the opening boundary. When opening metadata omits a quantity step, minimum quantity, or minimum
+notional, full-contract replay requires an explicit user-supplied assumption for each missing
+constraint, rejects any assumption that conflicts with retained metadata, and records the
+overrides in its report. The authoritative settlement payout unit must match the market payout
+unit. The archive replay builder also requires independent full-window
 price-grid stream coverage on venues such as Polymarket where tick-size changes are a separate
 event source. Fill coverage does not prove grid coverage. A bounded live capture without an
 authoritative grid-subscription readiness boundary archives observed changes but does not certify

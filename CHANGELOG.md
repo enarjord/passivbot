@@ -89,8 +89,11 @@ All notable user-facing changes will be documented in this file.
   fee-enabled Polymarket window evaluation fails closed, EMA spans require at least one second,
   and Polygon log decoding verifies authoritative contract-address/topic pairs. The initial
   normalized venue scope now explicitly requires one collateral unit of payout; bounded Polymarket
-  captures retain grid changes without fabricating unproven grid-stream coverage. Outcome archive
-  imports now reject contradictory trades under the same source or sequence identity, attempted
+  captures retain grid changes without fabricating unproven grid-stream coverage. Full-contract
+  replay now exposes and records explicit minimum-quantity and minimum-notional assumptions
+  alongside quantity step when opening metadata omits them, and rejects settlement evidence whose
+  payout unit disagrees with the market. Outcome archive imports now reject contradictory trades
+  under the same source or sequence identity, attempted
   quote cleanup continues through individual cancellation errors, Rust keeps order-entry
   acceptance separate from market open and permits authoritative trading close after the scheduled
   event, already-expired GTD orders are rejected at placement, and failed post-expiry settlement
