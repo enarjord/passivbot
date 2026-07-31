@@ -4,7 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Stop refetching every account surface when a known fill gains authoritative PnL, and validate realized-PnL history once per Rust planning cycle instead of rescanning it for unstuck eligibility.
+- Stop refetching every account surface when a known fill only gains authoritative PnL, while retaining confirmation for new source identities or structural fill changes; validate realized-PnL history once per Rust planning cycle instead of rescanning it for unstuck eligibility.
 - Scope live fill-history readiness to enabled consumers: PnL risk keeps its configured lookback, entry cooldown proves only its structural-fill horizon, and bots without historical consumers use bounded recent ingestion.
 
 - Live fill-history coverage now has one canonical verdict owned by

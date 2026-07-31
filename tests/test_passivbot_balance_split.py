@@ -4594,6 +4594,95 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
         bot._request_authoritative_confirmation.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_source_ids", "current_id", "expect_new_event"),
+    [
+        (["fill-a", "fill-b"], "fill-a+fill-b", True),
+        (["fill-a"], "fill-a", False),
+    ],
+    ids=["mixed_new_source", "same_source_structural_change"],
+)
+async def test_update_pnls_confirms_non_pnl_only_enrichment(
+    current_source_ids, current_id, expect_new_event
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
+    previous = SimpleNamespace(
+        timestamp=1_700_000_000_000,
+        id="fill-a",
+        source_ids=["fill-a"],
+        symbol="BTC/USDT:USDT",
+        side="sell",
+        qty=-1.0,
+        price=100.0,
+        fee_paid=-0.01,
+        pb_order_type="close",
+        position_side="long",
+        client_order_id="pb-close",
+        pnl=0.0,
+        pnl_status="pending",
+        pnl_source=fem.PNL_SOURCE_PENDING,
+    )
+    current = SimpleNamespace(
+        **{
+            **vars(previous),
+            "id": current_id,
+            "source_ids": current_source_ids,
+            "qty": -2.0,
+            "pnl": 1.0,
+            "pnl_status": "complete",
+            "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+        }
+    )
+
+    class _Manager:
+        def __init__(self):
+            self._events = [previous]
+
+        async def refresh_latest(self, **_kwargs):
+            self._events = [current]
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return "all"
+
+        def set_history_scope(self, _scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = MagicMock()
+    bot._log_enriched_fill_events = MagicMock()
+    bot._request_authoritative_confirmation = MagicMock()
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = MagicMock()
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    assert await bot.update_pnls(source="staged_blocking") is True
+
+    bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    if expect_new_event:
+        bot._log_new_fill_events.assert_called_once_with([current])
+    else:
+        bot._log_new_fill_events.assert_not_called()
+    bot._request_authoritative_confirmation.assert_called_once_with(ACCOUNT_SURFACES)
+
+
 def test_min_effective_cost_blocks_are_aggregated(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}

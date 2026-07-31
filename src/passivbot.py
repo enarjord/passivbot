@@ -12287,6 +12287,7 @@ class Passivbot:
         post_refresh_coverage_status: dict[str, Any] = {}
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
+        structural_confirmation_required = False
 
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
@@ -12342,7 +12343,37 @@ class Passivbot:
                     keys.add(f"id:{event_id}")
                 return keys
 
+            def event_structure(event: object) -> tuple[object, ...]:
+                source_ids = tuple(
+                    sorted(
+                        str(value)
+                        for value in getattr(event, "source_ids", None) or ()
+                        if value
+                    )
+                )
+                if not source_ids:
+                    event_id = str(getattr(event, "id", "") or "")
+                    source_ids = (event_id,) if event_id else ()
+                structural_fields = (
+                    "timestamp",
+                    "symbol",
+                    "side",
+                    "qty",
+                    "price",
+                    "fee_paid",
+                    "pb_order_type",
+                    "position_side",
+                    "client_order_id",
+                    "psize",
+                    "pprice",
+                    "c_mult",
+                )
+                return (source_ids,) + tuple(
+                    getattr(event, field, None) for field in structural_fields
+                )
+
             def collect_enriched_events() -> list[tuple[object, object]]:
+                nonlocal structural_confirmation_required
                 transitions: list[tuple[object, object]] = []
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
@@ -12370,6 +12401,8 @@ class Passivbot:
                     )
                     if previous_needs_enrichment and current_is_authoritative:
                         transitions.append((previous, current))
+                        if event_structure(previous) != event_structure(current):
+                            structural_confirmation_required = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
@@ -12617,14 +12650,19 @@ class Passivbot:
                     src_ids = [ev.id] if getattr(ev, "id", None) else []
                 if not src_ids:
                     continue
-                if any(src_id in existing_source_ids for src_id in src_ids):
-                    continue
-                if any(src_id in seen_new_source_ids for src_id in src_ids):
+                unseen_source_ids = [
+                    src_id
+                    for src_id in src_ids
+                    if src_id not in existing_source_ids
+                    and src_id not in seen_new_source_ids
+                ]
+                if not unseen_source_ids:
                     continue
                 new_events.append(ev)
-                seen_new_source_ids.update(src_ids)
+                seen_new_source_ids.update(unseen_source_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
+            if new_events or structural_confirmation_required:
                 self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
