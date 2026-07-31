@@ -12287,7 +12287,14 @@ class Passivbot:
         post_refresh_coverage_status: dict[str, Any] = {}
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
-        structural_confirmation_required = False
+        account_confirmation_requested = False
+
+        def request_account_confirmation() -> None:
+            nonlocal account_confirmation_requested
+            if account_confirmation_requested:
+                return
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            account_confirmation_requested = True
 
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
@@ -12373,8 +12380,8 @@ class Passivbot:
                 )
 
             def collect_enriched_events() -> list[tuple[object, object]]:
-                nonlocal structural_confirmation_required
                 transitions: list[tuple[object, object]] = []
+                structural_transition = False
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
                     if current_keys & handled_enrichment_keys:
@@ -12402,11 +12409,13 @@ class Passivbot:
                     if previous_needs_enrichment and current_is_authoritative:
                         transitions.append((previous, current))
                         if event_structure(previous) != event_structure(current):
-                            structural_confirmation_required = True
+                            structural_transition = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
                     enriched_events.extend(transitions)
+                if structural_transition:
+                    request_account_confirmation()
                 return transitions
 
             flush_enriched_events = collect_enriched_events
@@ -12642,6 +12651,7 @@ class Passivbot:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             seen_new_source_ids: set[str] = set()
+            mixed_source_confirmation_required = False
             for ev in all_events:
                 src_ids = getattr(ev, "source_ids", None)
                 if src_ids:
@@ -12658,12 +12668,19 @@ class Passivbot:
                 ]
                 if not unseen_source_ids:
                     continue
-                new_events.append(ev)
+                has_known_source = any(
+                    src_id in existing_source_ids or src_id in seen_new_source_ids
+                    for src_id in src_ids
+                )
                 seen_new_source_ids.update(unseen_source_ids)
+                if has_known_source:
+                    mixed_source_confirmation_required = True
+                    continue
+                new_events.append(ev)
             if new_events:
                 self._log_new_fill_events(new_events)
-            if new_events or structural_confirmation_required:
-                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            if new_events or mixed_source_confirmation_required:
+                request_account_confirmation()
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
                 event

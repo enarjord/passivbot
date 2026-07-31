@@ -4596,15 +4596,15 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("current_source_ids", "current_id", "expect_new_event"),
+    ("current_source_ids", "current_id"),
     [
-        (["fill-a", "fill-b"], "fill-a+fill-b", True),
-        (["fill-a"], "fill-a", False),
+        (["fill-a", "fill-b"], "fill-a+fill-b"),
+        (["fill-a"], "fill-a"),
     ],
     ids=["mixed_new_source", "same_source_structural_change"],
 )
 async def test_update_pnls_confirms_non_pnl_only_enrichment(
-    current_source_ids, current_id, expect_new_event
+    current_source_ids, current_id
 ):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
@@ -4676,10 +4676,9 @@ async def test_update_pnls_confirms_non_pnl_only_enrichment(
     assert await bot.update_pnls(source="staged_blocking") is True
 
     bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
-    if expect_new_event:
-        bot._log_new_fill_events.assert_called_once_with([current])
-    else:
-        bot._log_new_fill_events.assert_not_called()
+    # A mixed aggregate is already accounted by the enrichment path, so it
+    # requests confirmation without counting the aggregate as a second fill.
+    bot._log_new_fill_events.assert_not_called()
     bot._request_authoritative_confirmation.assert_called_once_with(ACCOUNT_SURFACES)
 
 
@@ -6588,7 +6587,9 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", [None, "repair", "routine"])
+@pytest.mark.parametrize(
+    "failure_stage", [None, "repair", "repair_structural", "routine"]
+)
 async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative(
     failure_stage,
 ):
@@ -6614,6 +6615,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     authoritative = SimpleNamespace(
         **{
             **vars(degraded),
+            "source_ids": (
+                ["degraded-close", "new-close"]
+                if failure_stage == "repair_structural"
+                else ["degraded-close"]
+            ),
+            "qty": -5.0 if failure_stage == "repair_structural" else -4.0,
             "pnl": 3.0,
             "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
         }
@@ -6647,7 +6654,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
 
         async def _repair_degraded(self, **_kwargs):
             self._events = [authoritative]
-            if failure_stage == "repair":
+            if failure_stage in {"repair", "repair_structural"}:
                 raise RuntimeError("later repair range unavailable")
             return {
                 "attempted": True,
@@ -6712,7 +6719,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         start_ms=start_ms,
         end_ms=now_ms,
     )
-    if failure_stage == "repair":
+    if failure_stage in {"repair", "repair_structural"}:
         bot._pnls_manager.refresh_latest.assert_not_awaited()
     else:
         bot._pnls_manager.refresh_latest.assert_awaited_once_with(
@@ -6723,7 +6730,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     previous, current = bot._log_enriched_fill_events.call_args.args[0][0]
     assert previous is degraded
     assert current is authoritative
-    bot._request_authoritative_confirmation.assert_not_called()
+    if failure_stage == "repair_structural":
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
     if failure_stage is not None:
         return
     summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
