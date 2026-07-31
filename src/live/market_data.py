@@ -272,8 +272,6 @@ def _filter_limit_order_creations_by_market_distance(
     bot, orders: list[dict], snapshots: dict[str, MarketSnapshot]
 ) -> list[dict]:
     threshold = _limit_order_create_max_market_dist_pct(bot)
-    if threshold <= 0.0:
-        return orders
     order_market_diff = getattr(_passivbot_module(), "order_market_diff")
     kept: list[dict] = []
     skipped: list[dict] = []
@@ -293,7 +291,8 @@ def _filter_limit_order_creations_by_market_distance(
         price = float(order["price"])
         market_price = float(snapshot.last)
         dist = float(order_market_diff(side, price, market_price))
-        if dist > threshold:
+        order["_churn_gate_market_distance"] = dist
+        if threshold > 0.0 and dist > threshold:
             skipped.append(
                 {
                     "order": order,
@@ -693,7 +692,6 @@ def record_market_snapshot_surface(
         "market_snapshot",
         bot._market_snapshot_signature(symbols, snapshots),
         now_ms=_utc_ms(),
-        epoch=int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
     )
 
 

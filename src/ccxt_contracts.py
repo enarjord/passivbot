@@ -97,6 +97,10 @@ def get_bot_class(exchange: str):
         from exchanges.bitget import BitgetBot
 
         return BitgetBot
+    if exchange == "bitunix":
+        from exchanges.bitunix import BitunixBot
+
+        return BitunixBot
     if exchange == "bybit":
         from exchanges.bybit import BybitBot
 
@@ -148,6 +152,7 @@ def build_contract_bot(exchange: str, quote: str = "USDT"):
             "hedge_mode": True,
         }
     }
+    bot.coin_overrides = {}
     bot.user_info = {"exchange": bot.exchange}
     bot.cca = SimpleNamespace(has={}, options={})
     bot.ccp = None

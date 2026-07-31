@@ -113,7 +113,6 @@ def _reconciliation_bot(symbol: str, actual_orders: list[dict]) -> Passivbot:
     bot.is_pside_enabled = lambda pside: pside == "long"
     bot._annotate_order_deltas = lambda cancel, create: (cancel, create)
     bot._apply_order_match_tolerance = lambda cancel, create: (cancel, create, 0)
-    bot._apply_freshness_creation_guardrails = lambda create: (create, 0)
     bot._order_plan_summary_is_interesting = lambda **kwargs: False
 
     async def keep_sort(self, orders, _label):
@@ -196,6 +195,8 @@ async def test_malformed_open_order_snapshot_blocks_every_account_action():
 
 
 class _CreateBot:
+    _ensure_freshness_ledger = Passivbot._ensure_freshness_ledger
+
     def __init__(self, trace: FreshEntryEligibilityTrace):
         self._fresh_entry_eligibility_trace = trace
         self._order_wave_in_progress = {"event_id": "ow_1"}
@@ -543,6 +544,26 @@ async def test_pre_create_market_filter_records_exact_existing_gate_reasons():
     }
 
 
+def test_disabled_generic_distance_guard_still_annotates_churn_distance():
+    class Bot:
+        config = {"live": {"limit_order_create_max_market_dist_pct": 0.0}}
+
+    order = _initial("BTC/USDT:USDT", price=99.0)
+    snapshot = MarketSnapshot(
+        symbol=order["symbol"],
+        bid=99.0,
+        ask=101.0,
+        last=100.0,
+        fetched_ms=1,
+        source="test",
+    )
+
+    assert market_data._filter_limit_order_creations_by_market_distance(
+        Bot(), [order], {order["symbol"]: snapshot}
+    ) == [order]
+    assert order["_churn_gate_market_distance"] == pytest.approx(0.01)
+
+
 @pytest.mark.asyncio
 async def test_eligibility_emitter_failure_cannot_change_connector_batch(monkeypatch):
     order = _initial("BTC/USDT:USDT")
@@ -579,13 +600,6 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
 
     bot.execute_orders = fail_batch
     bot.add_to_recent_order_executions = lambda _order: None
-    bot._record_order_churn_signed_action_attempts = lambda count: (
-        "create-action",
-    )
-    completed_signed_actions = []
-    bot._complete_order_churn_signed_action_attempts = (
-        lambda tokens: completed_signed_actions.append(tokens)
-    )
     emitted = []
     bot._emit_order_churn_actions_accounted_event = lambda **kwargs: emitted.append(
         kwargs
@@ -597,7 +611,6 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
         await executor.execute_orders_parent(bot, [order])
 
     assert len(bot._order_churn_gate_state.action_attempt_timestamps) == 1
-    assert completed_signed_actions == []
     assert emitted == [
         {
             "action_count": 1,

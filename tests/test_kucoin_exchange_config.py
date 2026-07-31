@@ -1,11 +1,16 @@
 import asyncio
 import logging
 import math
+import socket
 import types
 
 import pytest
 
-from exchanges.kucoin import AsyncKucoinBrokerFutures, KucoinBot
+from exchanges.kucoin import (
+    AsyncKucoinBrokerFutures,
+    KucoinBot,
+    ProKucoinBrokerFutures,
+)
 from market_snapshot import MarketSnapshotProvider
 
 
@@ -34,6 +39,19 @@ class DummyCCA:
     async def set_leverage(self, **params):
         self.leverage_calls.append(params)
         return {"symbol": params["symbol"], "leverage": params["leverage"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_class", [AsyncKucoinBrokerFutures, ProKucoinBrokerFutures]
+)
+async def test_kucoin_clients_use_ipv4_transport(client_class):
+    exchange = client_class({})
+    try:
+        exchange.open()
+        assert exchange.tcp_connector._family == socket.AF_INET
+    finally:
+        await exchange.close()
 
 
 def make_bot():
@@ -226,6 +244,22 @@ def test_determine_pos_side_rejects_hedge_order_without_durable_payload():
 
     with pytest.raises(ValueError, match="missing durable long/short attribution"):
         bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "buy", "info": {}})
+
+
+def test_determine_pos_side_uses_exchange_hedge_mode_when_strategy_hedge_is_disabled():
+    bot = make_bot()
+    bot._config_hedge_mode = False
+
+    assert (
+        bot.determine_pos_side(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "info": {"positionSide": "LONG"},
+            }
+        )
+        == "long"
+    )
 
 
 def test_determine_pos_side_one_way_uses_side_and_reduce_only_not_position_state():

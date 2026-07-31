@@ -40,6 +40,8 @@ class HyperliquidBot(CCXTBot):
     # Full HIP-3 dex sweeps are safety sweeps. Startup and unknown-dex WS events still force
     # immediate full coverage, but steady-state refreshes should prefer active dexes.
     HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 30 * 60_000
+    ORDER_WS_CREATE_ACK_GRACE_SECONDS = 1.0
+    ORDER_WS_SUBMITTED_LOOKBACK_MS = 5_000
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -61,152 +63,6 @@ class HyperliquidBot(CCXTBot):
         self._hl_cache_generation = 0
         self._hl_user_abstraction = "unknown"
         self._hl_unified_enabled = False
-        self._hl_order_churn_rate_snapshot = None
-        self._hl_order_churn_local_actions = {}
-        self._hl_order_churn_local_action_sequence = 0
-        self._hl_order_churn_rate_next_refresh_monotonic = 0.0
-        self._hl_order_churn_rate_request_started_monotonic = 0.0
-
-    @staticmethod
-    def _hl_rate_limit_int(payload: dict, key: str) -> int:
-        value = payload.get(key)
-        if isinstance(value, bool):
-            raise ValueError(f"Hyperliquid userRateLimit {key} must be an integer")
-        parsed = float(value)
-        if not math.isfinite(parsed) or parsed < 0.0 or not parsed.is_integer():
-            raise ValueError(
-                f"Hyperliquid userRateLimit {key} must be a finite non-negative integer"
-            )
-        return int(parsed)
-
-    def _record_order_churn_signed_action_attempts(
-        self, count: int
-    ) -> tuple[int, ...]:
-        if count < 0:
-            raise ValueError("Hyperliquid signed action count must be non-negative")
-        if count == 0:
-            return ()
-        actions = getattr(self, "_hl_order_churn_local_actions", None)
-        if not isinstance(actions, dict):
-            actions = {}
-            self._hl_order_churn_local_actions = actions
-        sequence = int(
-            getattr(self, "_hl_order_churn_local_action_sequence", 0) or 0
-        )
-        now = time.monotonic()
-        tokens = []
-        for _ in range(count):
-            sequence += 1
-            actions[sequence] = {
-                "attempted_monotonic": now,
-                "completed_monotonic": None,
-            }
-            tokens.append(sequence)
-        self._hl_order_churn_local_action_sequence = sequence
-        return tuple(tokens)
-
-    def _complete_order_churn_signed_action_attempts(self, tokens) -> None:
-        actions = getattr(self, "_hl_order_churn_local_actions", None)
-        if not isinstance(actions, dict):
-            return
-        now = time.monotonic()
-        for token in tuple(tokens or ()):
-            record = actions.get(token)
-            if isinstance(record, dict) and record.get("completed_monotonic") is None:
-                record["completed_monotonic"] = now
-        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
-        request_started = float(
-            getattr(self, "_hl_order_churn_rate_request_started_monotonic", 0.0)
-            or 0.0
-        )
-        if not isinstance(snapshot, dict) and request_started <= 0.0:
-            for token in tuple(tokens or ()):
-                actions.pop(token, None)
-
-    async def _order_churn_far_create_headroom(self) -> int | None:
-        """Return conservative address-action headroom from userRateLimit plus local debits."""
-        now = time.monotonic()
-        snapshot = getattr(self, "_hl_order_churn_rate_snapshot", None)
-        if isinstance(snapshot, dict) and now < float(snapshot["expires_monotonic"]):
-            local_debits = len(
-                getattr(self, "_hl_order_churn_local_actions", {}) or {}
-            )
-            return max(0, int(snapshot["headroom"]) - local_debits)
-        if now < float(
-            getattr(self, "_hl_order_churn_rate_next_refresh_monotonic", 0.0) or 0.0
-        ):
-            return None
-
-        request_started = time.monotonic()
-        self._hl_order_churn_rate_request_started_monotonic = request_started
-        wallet_address = str(self.user_info.get("wallet_address") or "")
-        if not wallet_address:
-            logging.error("[order] Hyperliquid userRateLimit unavailable: missing wallet address")
-            self._hl_order_churn_rate_next_refresh_monotonic = now + 10.0
-            self._hl_order_churn_rate_request_started_monotonic = 0.0
-            return None
-        try:
-            payload = await self.cca.publicPostInfo(
-                {"type": "userRateLimit", "user": wallet_address}
-            )
-            if not isinstance(payload, dict):
-                raise ValueError("Hyperliquid userRateLimit response must be an object")
-            used = self._hl_rate_limit_int(payload, "nRequestsUsed")
-            cap = self._hl_rate_limit_int(payload, "nRequestsCap")
-            surplus = self._hl_rate_limit_int(payload, "nRequestsSurplus")
-            if used > 0 and surplus > 0:
-                raise ValueError("Hyperliquid userRateLimit response is contradictory")
-            # Official semantics:
-            #   used    = max(0, cumulative_used - reserved)
-            #   surplus = max(0, reserved - cumulative_used)
-            # Unconsumed reserved weight therefore extends the remaining
-            # address-action allowance; it is not included in ``cap`` once
-            # ``used`` has bottomed out at zero.
-            headroom = max(0, cap - used + surplus)
-            self._hl_order_churn_rate_snapshot = {
-                "headroom": headroom,
-                "used": used,
-                "cap": cap,
-                "surplus": surplus,
-                "request_started_monotonic": request_started,
-                "expires_monotonic": time.monotonic() + 30.0,
-            }
-            self._hl_order_churn_rate_next_refresh_monotonic = 0.0
-            actions = getattr(self, "_hl_order_churn_local_actions", {}) or {}
-            self._hl_order_churn_local_actions = {
-                token: record
-                for token, record in actions.items()
-                if float(record.get("attempted_monotonic", 0.0) or 0.0)
-                >= request_started
-                or record.get("completed_monotonic") is None
-                or float(record.get("completed_monotonic", 0.0) or 0.0)
-                >= request_started
-            }
-            return max(
-                0,
-                headroom
-                - len(self._hl_order_churn_local_actions),
-            )
-        except Exception as exc:
-            self._hl_order_churn_rate_snapshot = None
-            self._hl_order_churn_rate_next_refresh_monotonic = time.monotonic() + 10.0
-            logging.warning(
-                "[order] Hyperliquid userRateLimit unavailable; deferring only far churn-evidenced ordinary creates | error_type=%s",
-                type(exc).__name__,
-            )
-            return None
-        finally:
-            self._hl_order_churn_rate_request_started_monotonic = 0.0
-
-    def _order_churn_precreate_signed_action_costs(self, symbols) -> dict[str, int]:
-        configured = set(
-            getattr(self, "already_updated_exchange_config_symbols", set()) or set()
-        )
-        return {
-            str(symbol): 1
-            for symbol in symbols
-            if str(symbol) not in configured
-        }
 
     def _hl_state_fetch_concurrency(self) -> int:
         """Bound internal Hyperliquid account-state fanout to avoid rate-limit spikes."""
@@ -388,6 +244,39 @@ class HyperliquidBot(CCXTBot):
             "cross_capable": cross_capable,
             "only_isolated": only_isolated,
         }
+
+    def _effective_position_price_tick(
+        self,
+        symbol: str,
+        price: float,
+        comparison_price: float | None = None,
+    ) -> float:
+        """Account for Hyperliquid's decimal and significant-digit price ladder."""
+        static_step = super()._effective_position_price_tick(
+            symbol, price, comparison_price
+        )
+        prices = [abs(float(price))]
+        if comparison_price is not None:
+            prices.append(abs(float(comparison_price)))
+        positive_prices = [
+            candidate
+            for candidate in prices
+            if math.isfinite(candidate) and candidate > 0.0
+        ]
+        if not positive_prices:
+            return static_step
+        # The significant-digit ladder changes spacing at powers of ten. The
+        # lower endpoint determines the interval crossing that boundary.
+        ladder_price = min(positive_prices)
+        decimal_places = max(0, int(getattr(self, "n_decimal_places", 6) or 6))
+        significant_figures = max(
+            1, int(getattr(self, "n_significant_figures", 5) or 5)
+        )
+        decimal_step = 10.0 ** (-decimal_places)
+        significant_step = 10.0 ** (
+            math.floor(math.log10(ladder_price)) - significant_figures + 1
+        )
+        return max(static_step, decimal_step, significant_step)
 
     def _requires_isolated_margin(self, symbol: str) -> bool:
         """Check if a symbol requires isolated margin mode.
@@ -696,10 +585,57 @@ class HyperliquidBot(CCXTBot):
                 for order in res:
                     try:
                         order["position_side"] = self.determine_pos_side(order)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        if recovered is None:
+                            untrusted.append((order, exc))
+                            continue
+                        position_side, reduce_only = recovered
+                        order["position_side"] = position_side
+                        order["reduceOnly"] = reduce_only
+                        order["_pb_order_semantics_source"] = (
+                            "acknowledged_exchange_order_id"
+                        )
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order[
+                                "_pb_order_update_requires_authoritative_refresh"
+                            ] = True
+                    try:
                         order["qty"] = order["amount"]
-                        normalized.append(order)
                     except (KeyError, TypeError, ValueError) as exc:
                         untrusted.append((order, exc))
+                        continue
+                    normalized.append(order)
+                if untrusted and self._hl_recent_create_ack_pending():
+                    # Hyperliquid may publish the private WS open event before
+                    # the concurrent create request returns its exchange ID.
+                    # Yield briefly, then require the same exact acknowledged
+                    # ID contract as every other sparse update. Shape alone is
+                    # never used to attribute ownership or trading semantics.
+                    await asyncio.sleep(self.ORDER_WS_CREATE_ACK_GRACE_SECONDS)
+                    still_untrusted = []
+                    for order, exc in untrusted:
+                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        if recovered is None:
+                            still_untrusted.append((order, exc))
+                            continue
+                        position_side, reduce_only = recovered
+                        order["position_side"] = position_side
+                        order["reduceOnly"] = reduce_only
+                        order["_pb_order_semantics_source"] = (
+                            "acknowledged_exchange_order_id"
+                        )
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order[
+                                "_pb_order_update_requires_authoritative_refresh"
+                            ] = True
+                        try:
+                            order["qty"] = order["amount"]
+                        except (KeyError, TypeError, ValueError) as retry_exc:
+                            still_untrusted.append((order, retry_exc))
+                            continue
+                        normalized.append(order)
+                    untrusted = still_untrusted
                 if untrusted:
                     symbols = {
                         str(order.get("symbol") or "")
@@ -756,6 +692,212 @@ class HyperliquidBot(CCXTBot):
                 )
                 await asyncio.sleep(1)
                 logging.debug("[ws] %s: reconnecting...", self.exchange)
+
+    def _hl_recent_create_ack_pending(self) -> bool:
+        """Return whether a just-submitted create may still acquire its exchange ID."""
+        now_ms = (
+            int(self.get_exchange_time())
+            if callable(getattr(self, "get_exchange_time", None))
+            else utc_ms()
+        )
+        return any(
+            str(record.get("status") or "") == "submitted"
+            and 0
+            <= now_ms - int(record.get("timestamp", 0) or 0)
+            <= self.ORDER_WS_SUBMITTED_LOOKBACK_MS
+            for record in self._emitted_order_records()
+            if isinstance(record, dict)
+        )
+
+    def _hl_acknowledged_ws_order_semantics(
+        self, order: dict
+    ) -> tuple[str, bool] | None:
+        """Recover missing WS semantics from an exact acknowledged-order id.
+
+        Hyperliquid websocket order updates commonly omit ``reduceOnly`` and
+        client metadata.  Passivbot's acknowledged create records retain those
+        semantics together with the exchange-assigned order id.  An exact id
+        match is strong enough for websocket hint attribution; ambiguous,
+        malformed, contradictory, or foreign updates remain untrusted and
+        trigger the authoritative account-state refresh path.
+        """
+        if not isinstance(order, dict):
+            return None
+        info = order.get("info")
+        info_wrapper = info if isinstance(info, dict) else {}
+        nested_order = info_wrapper.get("order")
+        raw_info = nested_order if isinstance(nested_order, dict) else info_wrapper
+        raw_source_candidates = (info_wrapper, raw_info)
+        raw_sources = tuple(
+            source
+            for index, source in enumerate(raw_source_candidates)
+            if source
+            and all(
+                source is not prior for prior in raw_source_candidates[:index]
+            )
+        )
+
+        exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
+        exchange_ids = {
+            str(source.get(key))
+            for source in (order, *raw_sources)
+            for key in exchange_id_keys
+            if source.get(key) not in (None, "")
+        }
+        if len(exchange_ids) != 1:
+            return None
+        exchange_id = next(iter(exchange_ids))
+        side = str(order.get("side") or "").lower()
+        if not exchange_id or side not in {"buy", "sell"}:
+            return None
+        matches = [
+            record
+            for record in self._emitted_order_records()
+            if str(record.get("exchange_id") or "") == exchange_id
+        ]
+        if len(matches) != 1:
+            return None
+        record = matches[0]
+        client_id_keys = (
+            "custom_id",
+            "customId",
+            "client_order_id",
+            "clientOrderId",
+            "client_oid",
+            "clientOid",
+            "clOrdId",
+            "cloid",
+        )
+        client_ids = {
+            self._canonical_passivbot_custom_id(str(source.get(key)))
+            for source in (order, *raw_sources)
+            for key in client_id_keys
+            if source.get(key) not in (None, "")
+        }
+        record_client_id = str(record.get("canonical_custom_id") or "")
+        if client_ids and (
+            not record_client_id
+            or len(client_ids) != 1
+            or next(iter(client_ids)) != record_client_id
+        ):
+            return None
+        record_side = str(record.get("side") or "").lower()
+        position_side = str(record.get("position_side") or "").lower()
+        reduce_only = record.get("reduce_only")
+        if (
+            record.get("status") != "acknowledged"
+            or record_side != side
+            or position_side not in {"long", "short"}
+            or not isinstance(reduce_only, bool)
+        ):
+            return None
+        action_side = self._derive_one_way_position_side(
+            {"side": side, "reduceOnly": reduce_only}
+        )
+        if action_side != position_side:
+            return None
+        raw_side_values = [
+            source.get("side")
+            for source in raw_sources
+            if source.get("side") not in (None, "")
+        ]
+        for raw_side_value in raw_side_values:
+            raw_side = {
+                "a": "sell",
+                "ask": "sell",
+                "b": "buy",
+                "bid": "buy",
+                "buy": "buy",
+                "sell": "sell",
+            }.get(str(raw_side_value).strip().lower())
+            if raw_side is None or raw_side != side:
+                return None
+        raw_status_values = [
+            source.get("status")
+            for source in raw_sources
+            if source.get("status") not in (None, "")
+        ]
+        for raw_status_value in raw_status_values:
+            normalized_status = {
+                "open": "open",
+                "opened": "open",
+                "resting": "open",
+                "filled": "closed",
+                "closed": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(raw_status_value).strip().lower())
+            top_status = {
+                "open": "open",
+                "opened": "open",
+                "closed": "closed",
+                "filled": "closed",
+                "canceled": "canceled",
+                "cancelled": "canceled",
+                "rejected": "rejected",
+                "expired": "expired",
+            }.get(str(order.get("status") or "").strip().lower())
+            if normalized_status is None or (
+                top_status is not None and normalized_status != top_status
+            ):
+                return None
+        explicit_position_sides = [
+            value
+            for source in (order, *raw_sources)
+            for value in (source.get("position_side"), source.get("positionSide"))
+            if value not in (None, "")
+        ]
+        if any(
+            str(value).lower() != position_side for value in explicit_position_sides
+        ):
+            return None
+        durable_position_side = self._durable_order_position_side(order)
+        if (
+            durable_position_side in {"long", "short"}
+            and durable_position_side != position_side
+        ):
+            return None
+        authoritative_reduce_sources = raw_sources if raw_sources else (order,)
+        reduce_only_keys = ("reduce_only", "reduceOnly", "is_reduce_only")
+        raw_has_explicit_reduce_only = False
+        for source in authoritative_reduce_sources:
+            for key in reduce_only_keys:
+                if key not in source:
+                    continue
+                raw_has_explicit_reduce_only = True
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: source[key]}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
+        if raw_sources:
+            for key in reduce_only_keys:
+                if key not in order:
+                    continue
+                value = order[key]
+                # CCXT may synthesize a unified False when the native payload
+                # omits reduceOnly. Preserve that compatibility, but never
+                # discard a supplied True or contradict native semantics.
+                if value is False and not raw_has_explicit_reduce_only:
+                    continue
+                websocket_reduce_only = self._strict_order_reduce_only_response(
+                    {"info": {key: value}}
+                )
+                if (
+                    not isinstance(websocket_reduce_only, bool)
+                    or websocket_reduce_only != reduce_only
+                ):
+                    return None
+        return position_side, reduce_only
+
+    def _hl_ws_order_has_fill_progress(self, order: dict) -> bool:
+        """Compatibility wrapper for the shared CCXT fill-progress contract."""
+        return self._ws_order_update_has_fill_progress(order)
 
     def determine_pos_side(self, order):
         # Hyperliquid is one-way, but current position state must never label a
@@ -1411,8 +1553,19 @@ class HyperliquidBot(CCXTBot):
             # Could not recover - re-raise to trigger restart_bot_on_too_many_errors
             raise
 
+    async def _execute_order_and_record_ack(self, order: dict) -> dict:
+        """Publish each create acknowledgement before sibling batch tasks finish."""
+        executed = await self.execute_order(order)
+        if self.did_create_order(executed):
+            acknowledged = dict(executed)
+            for key, value in order.items():
+                if acknowledged.get(key) is None:
+                    acknowledged[key] = value
+            self._record_emitted_order_custom_id(acknowledged)
+        return executed
+
     async def execute_orders(self, orders: [dict]) -> [dict]:
-        return await self.execute_multiple(orders, "execute_order")
+        return await self.execute_multiple(orders, "_execute_order_and_record_ack")
 
     def did_create_order(self, executed) -> bool:
         did_create = super().did_create_order(executed)
@@ -1498,12 +1651,6 @@ class HyperliquidBot(CCXTBot):
                     params["vaultAddress"] = self.user_info["wallet_address"]
 
                 try:
-                    self._record_order_churn_allowance_attempts(
-                        1, action_kind="config"
-                    )
-                    signed_action_tokens = (
-                        self._record_order_churn_signed_action_attempts(1)
-                    )
                     res = await self.cca.set_margin_mode(
                         margin_mode, symbol=symbol, params=params
                     )
@@ -1517,17 +1664,11 @@ class HyperliquidBot(CCXTBot):
                         raise RuntimeError(
                             "Hyperliquid margin-mode response was not an authoritative success"
                         )
-                    self._complete_order_churn_signed_action_attempts(
-                        signed_action_tokens
-                    )
                     to_print = (
                         f"margin={format_exchange_config_response(res)} ({margin_mode})"
                     )
                 except Exception as e:
                     if '"code":"59107"' in str(e):
-                        self._complete_order_churn_signed_action_attempts(
-                            signed_action_tokens
-                        )
                         to_print = f"margin=ok (unchanged, {margin_mode})"
                     else:
                         raise

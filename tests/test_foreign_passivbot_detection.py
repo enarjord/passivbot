@@ -25,6 +25,7 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
         _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
         _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
         _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _is_market_execution_order = staticmethod(
             pb_mod.Passivbot._is_market_execution_order
         )
@@ -948,6 +949,69 @@ def test_ambiguous_create_records_use_shorter_prune_window():
         "0x0004-amb",
         "0x0004-ack",
     ]
+
+
+def test_acknowledged_emitted_identity_is_retained_while_order_remains_open():
+    import passivbot as pb_mod
+
+    now_ts = 200_000_000
+    bot = _make_detection_bot(now_ts=now_ts, start_ts=1_000_000)
+    custom_id = _pb_custom_id("entry_grid_normal_long", "resting")
+    emitted = {
+        "id": "long-lived-order",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.001,
+        "price": 10_000.0,
+        "custom_id": custom_id,
+    }
+    pb_mod.Passivbot._record_emitted_order_custom_id(
+        bot,
+        emitted,
+        emitted_ts=now_ts - pb_mod.FOREIGN_PASSIVBOT_LOOKBACK_MS - 1,
+    )
+    bot.open_orders = {"BTC/USDT:USDT": [dict(emitted)]}
+
+    pb_mod.Passivbot._prune_emitted_order_custom_ids(bot, now_ts)
+
+    assert len(bot.orders_emitted_to_exchange) == 1
+    assert bot.orders_emitted_to_exchange[0]["exchange_id"] == "long-lived-order"
+
+
+def test_expired_emitted_identity_is_pruned_when_open_order_identity_conflicts():
+    import passivbot as pb_mod
+
+    now_ts = 200_000_000
+    bot = _make_detection_bot(now_ts=now_ts, start_ts=1_000_000)
+    custom_id = _pb_custom_id("entry_grid_normal_long", "ours")
+    emitted = {
+        "id": "our-old-order",
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.001,
+        "price": 10_000.0,
+        "custom_id": custom_id,
+    }
+    pb_mod.Passivbot._record_emitted_order_custom_id(
+        bot,
+        emitted,
+        emitted_ts=now_ts - pb_mod.FOREIGN_PASSIVBOT_LOOKBACK_MS - 1,
+    )
+    bot.open_orders = {
+        "BTC/USDT:USDT": [
+            {
+                **emitted,
+                "id": "foreign-order",
+                "custom_id": _pb_custom_id("entry_grid_normal_long", "foreign"),
+            }
+        ]
+    }
+
+    pb_mod.Passivbot._prune_emitted_order_custom_ids(bot, now_ts)
+
+    assert bot.orders_emitted_to_exchange == []
 
 
 @pytest.mark.asyncio

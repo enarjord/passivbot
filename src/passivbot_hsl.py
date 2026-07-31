@@ -1967,10 +1967,9 @@ async def _hsl_replay_load_extend_and_reconcile_cache(
         field_name="live.pnls_max_lookback_days",
     )
     lookback_start = lookback.balance_history_start_ms(int(now_ms))
-    coverage_status = self._pnl_history_coverage_status(
+    coverage_status = self._fill_history_coverage_status(
         start_ms=None if lookback_start is None else int(lookback_start),
         end_ms=int(now_ms),
-        lookback=lookback,
     )
     if not bool(coverage_status.get("ready", False)):
         logging.info(

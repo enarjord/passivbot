@@ -114,6 +114,60 @@ class TestWatchOrdersTemplateMethod:
         assert call_args[0]["qty"] == 1.0
 
     @pytest.mark.asyncio
+    async def test_discards_semantically_invalid_row_without_reconnecting(self):
+        """A bad payload row should trigger REST refresh, not a transport reconnect."""
+        from exchanges.bitget import BitgetBot
+
+        bot = BitgetBot.__new__(BitgetBot)
+        bot.ccp = MagicMock()
+        bot.ccp.has = {"watchOrders": True}
+        bot.exchange = "bitget"
+        bot.is_uta = True
+        bot.stop_websocket = False
+        bot._health_ws_reconnects = 0
+        bot._untrusted_order_ws_last_warning_monotonic = float("-inf")
+        bot._log_symbols = lambda symbols, limit=8: ",".join(symbols[:limit]) or "-"
+        dirty = []
+        bot._mark_account_critical_state_dirty = lambda **kwargs: dirty.append(kwargs)
+        bot._do_watch_orders = AsyncMock(
+            return_value=[
+                {
+                    "symbol": "BAD/USDT:USDT",
+                    "amount": 1.0,
+                    "info": {},
+                },
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "amount": 2.0,
+                    "info": {"posSide": "long"},
+                },
+            ]
+        )
+
+        def stop_after_call(_orders):
+            bot.stop_websocket = True
+
+        bot.handle_order_update = MagicMock(side_effect=stop_after_call)
+
+        await bot.watch_orders()
+
+        bot._do_watch_orders.assert_awaited_once()
+        bot.handle_order_update.assert_called_once()
+        [normalized] = bot.handle_order_update.call_args.args[0]
+        assert normalized["symbol"] == "BTC/USDT:USDT"
+        assert normalized["position_side"] == "long"
+        assert bot._health_ws_reconnects == 0
+        assert dirty == [
+            {
+                "reason": "order_ws_semantics_unavailable",
+                "symbols": {"BAD/USDT:USDT"},
+                "source": "bitget_order_ws",
+                "level": 10,
+            }
+        ]
+
+    @pytest.mark.asyncio
     async def test_reconnect_backoff_increases_after_consecutive_failures(self, monkeypatch):
         """Repeated watch failures should back off instead of reconnecting every second."""
         from exchanges.ccxt_bot import CCXTBot

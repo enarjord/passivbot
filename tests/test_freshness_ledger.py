@@ -1,7 +1,7 @@
-from freshness_ledger import ACCOUNT_SURFACES, FreshnessLedger
+from freshness_ledger import FreshnessLedger
 
 
-def test_freshness_ledger_tracks_surface_generations():
+def test_freshness_ledger_tracks_current_epoch_surface_changes():
     ledger = FreshnessLedger(now_ms=1000)
 
     ledger.begin_epoch(now_ms=1100)
@@ -13,39 +13,22 @@ def test_freshness_ledger_tracks_surface_generations():
     assert changed is True
     assert unchanged is False
     assert changed_again is True
-    assert state.generation == 2
     assert state.updated_ms == 1400
     assert state.epoch == 1
+    assert ledger.surfaces_at_epoch() == {"positions"}
+    assert ledger.changed_surfaces_at_epoch() == {"positions"}
 
+    ledger.begin_epoch(now_ms=1500)
+    ledger.stamp("positions", (("BTC", "long", 0.2),), now_ms=1600)
+    ledger.stamp("open_orders", (), now_ms=1700)
 
-def test_symbol_block_clears_only_after_required_surfaces_reach_min_epoch():
-    ledger = FreshnessLedger(now_ms=1000)
-    ledger.begin_epoch(now_ms=1100)
-    ledger.stamp("positions", ("old",), now_ms=1200)
+    assert ledger.surfaces_at_epoch() == {"positions", "open_orders"}
+    assert ledger.changed_surfaces_at_epoch() == {"open_orders"}
+    assert ledger.changed_surfaces_at_epoch(1) == {"positions"}
 
-    ledger.flag_symbol_block(
-        "BTC/USDT:USDT",
-        reason="self_order_disappeared_position_may_be_stale",
-        required_surfaces=ACCOUNT_SURFACES,
-        min_epoch=2,
-        detected_ms=1300,
-    )
+    ledger.begin_epoch(now_ms=1800)
+    ledger.stamp("positions", (("BTC", "long", 0.3),), now_ms=1900)
+    ledger.stamp("positions", (("BTC", "long", 0.3),), now_ms=2000)
 
-    assert set(ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
-    assert ledger.surfaces_missing_after(ACCOUNT_SURFACES, 2) == [
-        "balance",
-        "fills",
-        "open_orders",
-        "positions",
-    ]
-
-    ledger.begin_epoch(now_ms=1400)
-    for surface in ("balance", "positions", "open_orders"):
-        ledger.stamp(surface, surface, now_ms=1500)
-
-    assert set(ledger.blocked_symbols()) == {"BTC/USDT:USDT"}
-    assert ledger.surfaces_missing_after(ACCOUNT_SURFACES, 2) == ["fills"]
-
-    ledger.stamp("fills", "fills", now_ms=1600)
-
-    assert ledger.blocked_symbols() == {}
+    assert ledger.surfaces_at_epoch() == {"positions"}
+    assert ledger.changed_surfaces_at_epoch() == {"positions"}

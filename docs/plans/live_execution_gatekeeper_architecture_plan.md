@@ -9,7 +9,7 @@ safe migration path for making live execution easier to inspect, test, and reaso
 
 The first implementation commitment is intentionally narrower than the full target architecture:
 build the event/data-packet spine and immutable per-cycle snapshot boundary first. Gatekeeper
-enforcement should remain conditional until the planning-availability contract is explicit and
+enforcement should remain conditional until the Rust planning-completeness contract is explicit and
 tested.
 
 ## Purpose
@@ -44,9 +44,9 @@ front-loaded:
 The key unresolved safety gap is downstream gatekeeper visibility. A gatekeeper can only evaluate
 actions Rust emitted. If stale or missing snapshot inputs cause Rust not to emit an order it would
 have emitted with fresh data, the gatekeeper cannot recover that missing action. The mitigation is
-not gatekeeping alone; it is an explicit planning-availability contract before enforcement.
+not gatekeeping alone; it is an explicit Rust planning-completeness contract before enforcement.
 
-This means the first useful plateau is Phases 1-2 plus a planning-availability audit surface. The
+This means the first useful plateau is Phases 1-2 plus a Rust planning-completeness audit surface. The
 full gatekeeper should be built only after that plateau is reviewed and the stale-input policy is
 settled.
 
@@ -408,44 +408,34 @@ Initial order classes:
 - `entry_cancel`
 - `protective_close_cancel`
 
-Initial availability values:
+The former passive Python implementation constructed every
+`snapshot symbol x position side x order class` combination after a globally valid snapshot had
+already been built. It was retired because it did not know actual position, mode, strategy, config,
+or Rust evaluation applicability; it therefore could not distinguish `not_applicable` from
+`available` or `unavailable`. Its routine Cartesian-product event also duplicated the real
+readiness and planning evidence without being safe to enforce.
 
-- `available`
-- `unavailable`
-- `degraded`
-- `not_applicable`
-- `unknown`
-
-Every non-`available` value needs a reason code and packet revision evidence:
+Do not reintroduce a Python-side hypothetical requirement matrix. The eventual completeness
+contract must describe decisions Rust actually evaluated:
 
 ```text
-PlanningAvailability
+PlanningCompleteness
   cycle_id
   snapshot_id
   symbol
   position_side
   order_class
-  status
+  outcome
   reason_code
-  required_surfaces
+  consumed_requirements
   packet_revisions
 ```
 
-Open policy choice:
-
-- For order classes whose Rust input cannot safely represent missing data, exclude or block the
-  affected symbol/order class before Rust and emit `planning_unavailable`.
-- For order classes where stale values are useful for diagnostics only, carry the stale packet in
-  `LiveSnapshot` but do not let it satisfy the requirement matrix.
-- Do not pass fabricated neutral defaults to Rust to force a shape.
-
-Gatekeeper enforcement must not be treated as complete until this contract is implemented at least
-in Python for live-only data surfaces, and reviewed for the Rust-owned strategy surfaces.
-
-The passive implementation reports live-surface availability derived from the frozen snapshot for
-each `(symbol, position_side, order_class)` record. It evaluates only diagnostic availability; it
-must not enforce, skip, or approve live trading decisions until a later gatekeeper phase explicitly
-consumes it with tests.
+Python owns live surface provenance, freshness, and exchange-write eligibility. Rust owns strategy
+applicability and must expose enough evaluation/completeness metadata to distinguish genuine
+no-order intent from an unavailable decision. Missing inputs must not be replaced with neutral
+defaults. An unavailable scope emits no create; existing order validity remains governed by the
+current Rust ideal set and reconciliation contract.
 
 Availability records should name canonical readiness requirements, not raw fetch artifacts. For
 example, `canonical_candles` means "the live candle handler has a continuous strategy-ready candle
@@ -459,46 +449,12 @@ and repair/backfill remains scheduled and observable. They should fail readiness
 canonical series cannot prove continuity, the previous close is unavailable, the gap exceeds policy,
 or overlap repair repeatedly fails.
 
-The current Python-side passive matrix is:
-
-- `hsl_panic_close`: account surfaces plus the action symbol's market prices. It does not require
-  candles, EMAs, or fill history.
-- `take_profit_close`: account surfaces plus the action symbol's market prices. The non-trailing TP
-  contract does not require fill history. It requires `canonical_candles` only when the planned
-  action's close threshold uses volatility weighting; the current passive matrix cannot inspect that
-  config/rationale yet, so enforcement must add conditional tests before consuming this class.
-- `trailing_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
-  history. A fill resets trailing state, and trailing evaluation needs the candle span from the last
-  symbol+side fill through the last strategy-ready completed minute.
-- `unstuck_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
-  history. Current Rust unstuck close pricing uses EMA bands, and fill history feeds
-  realized-PnL/loss-budget inputs.
-- `wel_twel_reduce_close`: account surfaces, the action symbol's market prices, and fill history for
-  `max_realized_loss_pct`. TWEL/WEL auto-reduce is portfolio/per-position repair, not trailing or
-  panic, and does not require candles unless the actual Rust order construction path later consumes
-  volatility/strategy indicators.
-- `initial_entry`, `risk_increasing_entry`: account surfaces, the action symbol's market prices,
-  canonical candles, and fill history. Canonical candles are the current live proxy for
-  strategy/EMA/volatility readiness; fills feed current live entry cooldown, trailing reset, and
-  realized-PnL/unstuck inputs. A separate strategy-surface stamp remains future work.
-- `entry_cancel`: balance, positions, and open orders.
-- `protective_close_cancel`: balance, positions, and open orders.
-
-Stale or missing symbol-scoped surfaces affect only records that require that symbol's surface.
-For example, unavailable canonical candles for a flat candidate symbol do not make protective or
-normal close availability unavailable for a different positioned symbol. Account surfaces and fill
-history remain global in the current snapshot contract; the target enforcement contract should
-scope fill readiness by symbol+side where the data model supports it.
-
 Monitor `planning_unavailable` events are a throttled operator-facing diagnostic emitted when
-staged planning is deferred. They are useful evidence that a loop could not plan, but they are not
-the complete future internal `PlanningAvailability` ledger. The future ledger must be able to
-represent every symbol+pside+order-class decision, including unavailable decisions that are not
-emitted to the monitor because of throttling.
-
-`snapshot.built` monitor payloads should stay compact and emit `PlanningAvailability.summary()`.
-Full record sets are available through the internal `PlanningAvailability.to_dict()` path and tests,
-not emitted in routine monitor snapshots.
+staged planning is deferred. `snapshot.built` records frozen surface provenance,
+`entry.initial_eligibility` records concrete post-plan entry outcomes, and Rust/reconciliation
+events record actual planning and action results. These remain observational; future completeness
+metadata should be emitted only for actual evaluated or unavailable scopes, preferably on
+transition or material failure rather than as a routine full-universe cross product.
 
 ## Rust Orchestrator Contract
 
@@ -785,7 +741,7 @@ in JSONL artifacts or DEBUG/TRACE.
 
 - Add this plan and review with external agents.
 - Record the agreed scope split: Phases 1-2 are green-lit as a behavior-preserving plateau;
-  gatekeeper enforcement is conditional on planning-availability work.
+  gatekeeper enforcement is conditional on Rust planning-completeness work.
 - Identify current call sites for snapshot building, Rust input building, reconciliation, gates, and
   executor writes.
 - Define initial `DataPacket`, `LiveSnapshot`, `PlannedAction`, and `GateDecision` types in tests
@@ -831,8 +787,8 @@ Exit criteria:
 
 ### Phase 2.5: Planning Availability Contract
 
-- Define `PlanningAvailability` records for symbol+pside+order-class evaluation.
-- Emit passive availability diagnostics before gatekeeper enforcement.
+- Define Rust-owned completeness records for actual symbol+pside+order-class evaluation.
+- Do not infer applicability through a Python Cartesian-product matrix.
 - Decide, per order class, whether stale values are excluded from Rust input, included only as
   diagnostic snapshot data, or allowed as an explicit fallback.
 - Add tests for silent-omission risks where missing data prevents order-class evaluation.
@@ -842,7 +798,7 @@ Exit criteria:
 - "No ideal order" can be distinguished from "order class unavailable" for the initial high-risk
   classes.
 - The stale-input policy is explicit enough for a reviewer to audit.
-- Gatekeeper enforcement can depend on availability records rather than assuming Rust evaluated
+- Gatekeeper enforcement can depend on completeness records rather than assuming Rust evaluated
   every order class.
 
 ### Phase 3: Explicit Action Planner
@@ -940,8 +896,9 @@ The smallest valuable slice:
 5. Add tests proving the current cycle uses frozen packet revisions.
 6. Emit minimal `planning_unavailable` events for account-critical or obviously stale non-account
    surfaces without changing execution.
-7. Add passive planning-availability reporting and diagnostic-isolation tests before any
-   gatekeeper enforcement work.
+7. Add Rust-origin planning-completeness reporting for decisions Rust actually evaluated, plus
+   diagnostic-isolation tests, before any gatekeeper enforcement work. Do not recreate a
+   Python-side Cartesian product of hypothetical symbol, side, and order-class decisions.
 
 This creates the diagnostic spine without changing order behavior. Gatekeeper enforcement should
-wait until the event, snapshot, and planning-availability boundaries are visible and testable.
+wait until the event, snapshot, and Rust planning-completeness boundaries are visible and testable.

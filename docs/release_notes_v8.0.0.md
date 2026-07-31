@@ -7,7 +7,7 @@ mainline release.
 
 ## Before upgrading
 
-- Use Python 3.12 and a current stable Rust toolchain.
+- Use Python 3.12 or 3.14 and a current stable Rust toolchain.
 - Back up the config you currently run and keep the exact v7 revision needed
   to reproduce its behavior.
 - Do not point v8 at an unreviewed v7 config. Normal v8 loading does not
@@ -121,7 +121,7 @@ before enabling or changing HSL settings.
 
 ## Upgrade checklist
 
-1. Install v8 in a Python 3.12 virtual environment and rebuild the Rust
+1. Install v8 in a Python 3.12 or 3.14 virtual environment and rebuild the Rust
    extension.
 2. Migrate the v7 config or start from the canonical v8 example.
 3. Resolve every migration report item; do not rely on best-effort output as a

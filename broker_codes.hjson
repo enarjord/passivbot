@@ -22,7 +22,8 @@
 	// Supported exchanges without a broker-code payload in Passivbot.
 	// Keep these explicit so typos in exchange names fail loudly.
 	hyperliquid: null
-	weex: null
+	bitunix: null
+	weex: "WEEX111164"
 	defx: null
 	paradex: null
 	fake: null

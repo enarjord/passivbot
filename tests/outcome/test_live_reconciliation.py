@@ -372,6 +372,30 @@ async def test_executor_cancels_all_attempted_orders_after_partial_create_failur
 
 
 @pytest.mark.asyncio
+async def test_final_verification_cleanup_cancels_late_visible_ambiguous_create():
+    desired = replace(plan(), intents=(plan().intents[0],))
+    reconciliation = reconcile_outcome_orders(market(), desired, snapshot())
+    creation = reconciliation.creates[0]
+    late_order = order(
+        "9",
+        outcome=creation.intent.outcome,
+        price=creation.intent.native_price,
+        cloid=creation.client_order_id,
+    )
+    client = FakeClient(
+        snapshot(),
+        snapshot((late_order,)),
+        snapshot(),
+    )
+
+    with pytest.raises(RuntimeError, match="created managed order"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [9]
+    assert [item[3] for item in client.cancelled] == [creation.client_order_id]
+
+
+@pytest.mark.asyncio
 async def test_create_preflight_failure_cancels_kept_managed_quotes():
     desired = plan()
     kept_cloid = managed_outcome_client_order_id(

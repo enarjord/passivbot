@@ -1,5 +1,6 @@
 from __future__ import annotations
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from exchanges.ipv4_transport import IPv4TransportMixin
 from passivbot import logging
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
@@ -48,7 +49,7 @@ def _add_kucoin_broker_name_header(signed: dict, options: dict) -> dict:
     return signed
 
 
-class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
+class AsyncKucoinBrokerFutures(IPv4TransportMixin, ccxt_async.kucoinfutures):
     """Asynchronous KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):
@@ -66,7 +67,7 @@ class AsyncKucoinBrokerFutures(ccxt_async.kucoinfutures):
         return signed
 
 
-class ProKucoinBrokerFutures(ccxt_pro.kucoinfutures):
+class ProKucoinBrokerFutures(IPv4TransportMixin, ccxt_pro.kucoinfutures):
     """Websocket-enabled KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):
@@ -166,11 +167,16 @@ class KucoinBot(CCXTBot):
         return
 
     def _get_position_side_for_order(self, order: dict) -> str:
-        """KuCoin: require durable open-order metadata, never current position state."""
-        if not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
-        ):
+        """KuCoin: normalize against the exchange account mode, not strategy mode.
+
+        The connector keeps the KuCoin account in hedge mode even when
+        ``live.hedge_mode`` disables simultaneous strategy exposure.  KuCoin
+        websocket updates in that account mode carry ``positionSide`` but do
+        not necessarily carry native ``reduceOnly``.  Treating the strategy
+        flag as the exchange account mode therefore makes otherwise valid
+        updates fail one-way attribution.
+        """
+        if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
         explicit = order.get("position_side")
         if explicit is None:
@@ -180,9 +186,54 @@ class KucoinBot(CCXTBot):
             return str(explicit).lower()
         raise ValueError("KuCoin open order missing durable long/short attribution")
 
+    def _normalize_order_update(self, order: dict) -> dict:
+        """Recover owned hedge-mode websocket rows with sparse pside metadata."""
+        try:
+            return super()._normalize_order_update(order)
+        except ValueError:
+            # KuCoin's actual account position mode is authoritative. The
+            # strategy exposure flag may be one-way while the account remains
+            # in hedge mode and emits hedge-position metadata.
+            if not bool(getattr(self, "hedge_mode", True)):
+                raise
+            info = order.get("info") or {}
+            if any(
+                value not in (None, "")
+                for value in (
+                    order.get("position_side"),
+                    order.get("positionSide"),
+                    info.get("positionSide"),
+                    info.get("posSide"),
+                )
+            ):
+                raise
+            if not self._sparse_ws_order_has_emitted_identity(order):
+                raise
+            position_side = self._durable_order_position_side(order)
+            if position_side not in {"long", "short"}:
+                raise
+            order["position_side"] = position_side
+            order["qty"] = order["amount"]
+            order["_pb_order_update_requires_authoritative_refresh"] = True
+            return order
+
     def determine_pos_side(self, order):
         """Compatibility route for the authoritative open-order attribution hook."""
         return self._get_position_side_for_order(order)
+
+    def _canonical_open_order_reduce_only(self, order: dict) -> bool | None:
+        """Derive KuCoin hedge close-only effect from side plus position side."""
+        if not bool(getattr(self, "hedge_mode", True)):
+            return self._strict_order_reduce_only_response(order)
+        side = str(
+            order.get("side") or (order.get("info") or {}).get("side") or ""
+        ).lower()
+        if side not in {"buy", "sell"}:
+            return None
+        position_side = self._get_position_side_for_order(order)
+        return (position_side == "long" and side == "sell") or (
+            position_side == "short" and side == "buy"
+        )
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """KuCoin: Fetch open orders with pagination.

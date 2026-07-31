@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 
@@ -268,7 +268,7 @@ def test_live_event_cycle_helpers_emit_structured_events():
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
-            self._authoritative_refresh_epoch = 7
+            self.freshness_ledger = SimpleNamespace(epoch=7)
             self.execution_scheduled = True
             self._live_event_cycle_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -314,6 +314,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 },
             },
             "authoritative_epoch": 999999,
+            "pending_pnl_count": 2,
+            "degraded_pnl_count": 1,
         },
     )
     assert bot._current_live_event_cycle_id() is None
@@ -364,6 +366,8 @@ def test_live_event_cycle_helpers_emit_structured_events():
                 ]
             },
         },
+        "pending_pnl_count": 2,
+        "degraded_pnl_count": 1,
         "authoritative_epoch": "[redacted]",
     }
     assert "SECRET" not in str(events[1].data)
@@ -701,104 +705,6 @@ def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
     assert wide_event.data["symbols_count"] == 40
     assert wide_event.data["symbols_truncated"] is True
     assert len(wide_event.data["symbols"]) == 32
-    assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-def test_planning_symbol_state_event_summarizes_and_bounds_records():
-    import passivbot as pb_mod
-    from live.planning_availability import (
-        PlanningAvailability,
-        PlanningAvailabilityRecord,
-    )
-
-    structured_sink = ListEventSink()
-    monitor_sink = ListEventSink()
-
-    class FakeBot:
-        _emit_live_event = pb_mod.Passivbot._emit_live_event
-        _emit_planning_symbol_state_event = (
-            pb_mod.Passivbot._emit_planning_symbol_state_event
-        )
-
-        def __init__(self):
-            self.exchange = "gateio"
-            self.user = "gateio_01"
-            self.bot_id = "bot_1"
-            self._live_event_current_cycle_id = "cy_3"
-            self._live_event_pipeline = LiveEventPipeline(
-                structured_sinks=[structured_sink],
-                monitor_sinks=[monitor_sink],
-            )
-
-    records = tuple(
-        PlanningAvailabilityRecord(
-            cycle_id=7,
-            snapshot_id="snap_7",
-            symbol=f"S{i:02d}/USDT:USDT",
-            position_side="long" if i % 2 == 0 else "short",
-            order_class="initial_entry" if i % 3 else "hsl_panic_close",
-            status="unavailable",
-            reason_code=(
-                "missing_canonical_candles" if i % 2 == 0 else "market_prices_too_old"
-            ),
-            required_surfaces=("balance", "market_prices", "canonical_candles"),
-            unavailable_surfaces=(
-                ("canonical_candles",) if i % 2 == 0 else ("market_prices",)
-            ),
-            packet_revisions=(("balance", 1),),
-            surface_epochs=(("completed_candles", 1, 2),),
-        )
-        for i in range(40)
-    )
-    availability = PlanningAvailability(
-        cycle_id=7,
-        snapshot_id="snap_7",
-        records=records,
-    )
-    bot = FakeBot()
-
-    bot._emit_planning_symbol_state_event(
-        availability,
-        context="rust order calculation",
-        sample_limit=5,
-    )
-
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    assert len(structured_sink.events) == 1
-    assert monitor_sink.events == structured_sink.events
-    event = structured_sink.events[0]
-    assert event.event_type == EventTypes.PLANNING_SYMBOL_STATE
-    assert event.level == "debug"
-    assert event.cycle_id == "cy_3"
-    assert event.snapshot_id == "snap_7"
-    assert event.status == "succeeded"
-    assert event.reason_code == "snapshot_symbol_state"
-    assert event.data["context"] == "rust order calculation"
-    assert event.data["summary"]["cycle_id"] == 7
-    assert event.data["summary"]["record_count"] == 40
-    assert event.data["summary"]["status_counts"] == {"unavailable": 40}
-    assert event.data["unavailable_count"] == 40
-    assert event.data["unavailable_by_reason"] == {
-        "market_prices_too_old": 20,
-        "missing_canonical_candles": 20,
-    }
-    assert event.data["unavailable_by_surface"] == {
-        "canonical_candles": 20,
-        "market_prices": 20,
-    }
-    assert event.data["unavailable_symbols_count"] == 40
-    assert event.data["unavailable_symbols_truncated"] is True
-    assert len(event.data["unavailable_symbols"]) == 32
-    assert event.data["records_sample_count"] == 5
-    assert event.data["records_truncated"] is True
-    assert event.data["records_sample"][0] == {
-        "symbol": "S00/USDT:USDT",
-        "pside": "long",
-        "order_class": "hsl_panic_close",
-        "reason_code": "missing_canonical_candles",
-        "unavailable_surfaces": ["canonical_candles"],
-        "required_surfaces": ["balance", "market_prices", "canonical_candles"],
-    }
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -3965,7 +3871,7 @@ async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
-            self._authoritative_refresh_epoch = 17
+            self.freshness_ledger = SimpleNamespace(epoch=17)
             self._authoritative_pending_confirmations = {"open_orders": 18}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -4023,7 +3929,7 @@ async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
             self.bot_id = "bot_1"
             self.live_event_debug_profiles = ("remote_calls",)
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {"open_orders": 22}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -4072,7 +3978,7 @@ async def test_authoritative_timed_fetch_failure_emits_classification_only():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = None
-            self._authoritative_refresh_epoch = 19
+            self.freshness_ledger = SimpleNamespace(epoch=19)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self._live_event_pipeline = LiveEventPipeline(
@@ -4115,7 +4021,7 @@ async def test_authoritative_timed_fetch_emit_failure_does_not_skip_fetch():
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_12"
-            self._authoritative_refresh_epoch = 20
+            self.freshness_ledger = SimpleNamespace(epoch=20)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
             self.fetch_called = False
@@ -4150,7 +4056,7 @@ async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception(
             self.user = "kucoin_01"
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_13"
-            self._authoritative_refresh_epoch = 21
+            self.freshness_ledger = SimpleNamespace(epoch=21)
             self._authoritative_pending_confirmations = {}
             self._live_event_remote_call_seq = 0
 
@@ -4706,6 +4612,64 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+@pytest.mark.parametrize(
+    "pnl_source",
+    [
+        "synthetic_fill_reconstruction_exact",
+        "synthetic_fill_reconstruction_degraded",
+    ],
+)
+def test_synthetic_fill_waits_for_authoritative_pnl_before_health_count(
+    caplog, pnl_source
+):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _emit_fill_ingested_event = lambda self, event, **kwargs: None
+        _live_event_console_available = lambda self: True
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _log_enriched_fill_events = pb_mod.Passivbot._log_enriched_fill_events
+        _log_fill_event = lambda self, event: f"id={event.id}"
+        _monitor_fill_payload = lambda self, event: {}
+        _monitor_record_event = lambda self, *args, **kwargs: None
+        _monitor_record_fill_history = lambda self, event: None
+
+        def __init__(self):
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    previous = SimpleNamespace(
+        id="degraded-close",
+        source_ids=["trade-1"],
+        timestamp=1_700_000_000_000,
+        pnl=5.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source=pnl_source,
+    )
+    authoritative = SimpleNamespace(
+        id="degraded-close",
+        timestamp=previous.timestamp,
+        pnl=3.0,
+        fee_paid=-0.1,
+        pnl_status="complete",
+        pnl_source="authoritative",
+    )
+    bot = FakeBot()
+
+    bot._log_new_fill_events([previous])
+
+    assert bot._health_fills == 1
+    assert bot._health_pnl == 0.0
+
+    with caplog.at_level(logging.INFO):
+        bot._log_enriched_fill_events([(previous, authoritative)])
+
+    assert bot._health_pnl == pytest.approx(2.9)
+    assert f"previous_source={pnl_source}" in caplog.text
+    assert "authoritative_net_pnl=+2.9" in caplog.text
+
+
 def test_log_new_fill_events_uses_structured_console_without_legacy_duplicate(caplog):
     import passivbot as pb_mod
 
@@ -5162,6 +5126,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         new_count=2,
         enriched_count=1,
         pending_pnl_count=0,
+        degraded_pnl_count=1,
         coverage_before={
             "ready": False,
             "reason": "window_coverage_not_proven",
@@ -5201,6 +5166,7 @@ def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
         "new_count": 2,
         "enriched_count": 1,
         "pending_pnl_count": 0,
+        "degraded_pnl_count": 1,
         "event_count_delta": 4,
         "coverage_before_ready": False,
         "coverage_before_reason": "window_coverage_not_proven",
@@ -5226,6 +5192,7 @@ async def test_execute_orders_parent_records_order_opened_event():
             pb_mod.Passivbot._is_market_execution_order
         )
         _log_market_execution_notice = pb_mod.Passivbot._log_market_execution_notice
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -5236,7 +5203,8 @@ async def test_execute_orders_parent_records_order_opened_event():
             self.bot_id = "bot_1"
             self._live_event_current_cycle_id = "cy_11"
             self._order_wave_in_progress = {"id": 7, "event_id": "ow_7"}
-            self.completed_signed_action_tokens = []
+            self.freshness_ledger = SimpleNamespace(epoch=0)
+            self._authoritative_pending_confirmations = {}
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5254,13 +5222,6 @@ async def test_execute_orders_parent_records_order_opened_event():
 
         def _log_order_action_summary(self, *args, **kwargs):
             return None
-
-        def _record_order_churn_signed_action_attempts(self, count):
-            assert count == 1
-            return ("create-action",)
-
-        def _complete_order_churn_signed_action_attempts(self, tokens):
-            self.completed_signed_action_tokens.append(tokens)
 
         async def execute_orders(self, orders):
             context = self._execution_connector_call_context
@@ -5293,7 +5254,6 @@ async def test_execute_orders_parent_records_order_opened_event():
 
     assert len(res) == 1
     assert bot._execution_connector_call_context is None
-    assert bot.completed_signed_action_tokens == [("create-action",)]
     assert bot._health_orders_placed == 1
     assert bot.monitor_publisher.events[-1]["kind"] == "order.opened"
     assert bot.monitor_publisher.events[-1]["symbol"] == "BTC/USDT:USDT"
@@ -5500,6 +5460,128 @@ def test_execution_failure_event_redacts_hostile_exception_metadata():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_rejection_event_sanitizes_structured_result_mapping():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gate_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ()
+            self._live_event_current_cycle_id = "cy_execution_rejection"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    order = {
+        "symbol": "DOGE/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "type": "limit",
+        "pb_order_type": "entry_initial_normal_long",
+        "qty": 1.0,
+        "price": 0.1,
+        "reduce_only": False,
+    }
+    result = {
+        "status": "rejected",
+        "info": {
+            "status": 400,
+            "code": -1013,
+            "label": "INVALID_PARAM_VALUE",
+            "message": "bad client id abcdefghijklmnopqrstuvwxyz012345",
+            "apiKey": "must-not-leak",
+        },
+    }
+
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_REJECTED,
+        order=order,
+        action="create",
+        status="failed",
+        reason_code="terminal_rejection",
+        level="warning",
+        index=0,
+        wave={"id": 25, "event_id": "ow_25"},
+        result=result,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.data["result_status"] == "rejected"
+    assert event.data["error_status"] == "400"
+    assert event.data["error_code"] == "-1013"
+    assert event.data["error_label"] == "INVALID_PARAM_VALUE"
+    assert event.data["error_reason"] == "bad client id <redacted>"
+    serialized = json.dumps(event.to_dict(), sort_keys=True)
+    assert "must-not-leak" not in serialized
+    assert "abcdefghijklmnopqrstuvwxyz012345" not in serialized
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_execution_order_success_does_not_project_native_success_as_error():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ()
+            self._live_event_current_cycle_id = "cy_execution_success"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED,
+        order={
+            "symbol": "DOGE/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "type": "limit",
+            "pb_order_type": "entry_initial_normal_long",
+            "qty": 1.0,
+            "price": 0.1,
+            "reduce_only": False,
+        },
+        action="create",
+        status="succeeded",
+        reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+        result={
+            "status": "open",
+            "info": {
+                "code": "0",
+                "msg": "",
+                "data": [{"sCode": "0", "sMsg": "Order placed"}],
+            },
+        },
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.data["result_status"] == "open"
+    assert not any(key.startswith("error_") for key in event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_connector_call_event_is_bounded_and_correlated_to_batch_action():
     import passivbot as pb_mod
 
@@ -5589,6 +5671,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
         _request_authoritative_confirmation = (
             pb_mod.Passivbot._request_authoritative_confirmation
         )
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _cancel_result_requires_full_authoritative_confirmation = (
             pb_mod.Passivbot._cancel_result_requires_full_authoritative_confirmation
         )
@@ -5600,11 +5683,10 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             self.live_event_debug_profiles = ("execution",)
             self._live_event_current_cycle_id = "cy_12"
             self._authoritative_pending_confirmations = {}
-            self._authoritative_refresh_epoch = 4
+            self.freshness_ledger = SimpleNamespace(epoch=4)
             self._order_wave_in_progress = {"id": 9, "event_id": "ow_9"}
             self._health_orders_cancelled = 0
             self.state_change_detected_by_symbol = set()
-            self.completed_signed_action_tokens = []
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -5622,13 +5704,6 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
 
         def _log_order_action_summary(self, *args, **kwargs):
             return None
-
-        def _record_order_churn_signed_action_attempts(self, count):
-            assert count == 1
-            return ("cancel-action",)
-
-        def _complete_order_churn_signed_action_attempts(self, tokens):
-            self.completed_signed_action_tokens.append(tokens)
 
         async def execute_cancellations(self, orders):
             context = self._execution_connector_call_context
@@ -5671,7 +5746,6 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
 
     assert len(res) == 1
     assert bot._execution_connector_call_context is None
-    assert bot.completed_signed_action_tokens == [("cancel-action",)]
     assert bot._authoritative_pending_confirmations == {
         "balance": 5,
         "positions": 5,
@@ -6362,6 +6436,35 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
     assert bot._live_event_pipeline is None
 
 
+def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.open_orders = {}
+    bot.has_open_unstuck_order = lambda: False
+    bot._unstuck_uses_realized_pnl = lambda: False
+    bot._calc_unstuck_allowances_live = MagicMock(
+        side_effect=AssertionError("must not read nonauthoritative PnL")
+    )
+    bot._calc_unstuck_allowance_for_logging = MagicMock(
+        side_effect=AssertionError("must not read nonauthoritative PnL")
+    )
+    bot.bot_value = lambda pside, key: {
+        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_pct": 0.0,
+        "unstuck_threshold": 0.9,
+    }[key]
+
+    section = bot._build_monitor_unstuck_section()
+
+    bot._calc_unstuck_allowances_live.assert_not_called()
+    bot._calc_unstuck_allowance_for_logging.assert_not_called()
+    assert section["sides"]["long"]["status"] == "unstuck_disabled"
+    assert section["sides"]["long"]["allowance_live"] is None
+    assert section["sides"]["short"]["status"] == "unstuck_disabled"
+    assert section["sides"]["short"]["allowance_live"] is None
+
+
 @pytest.mark.asyncio
 async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent():
     import passivbot as pb_mod
@@ -6472,6 +6575,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 "ETH/USDT:USDT": {"active": True},
             }
             self._orchestrator_ema_unavailable_symbols = set()
+            self._orchestrator_candidate_ema_unavailable_symbols = set()
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+            }
+            self._orchestrator_ema_unavailable_reasons = {}
+            self._forager_rank_feature_unavailable_by_side = {
+                "long": {"ETH/USDT:USDT"}
+            }
             self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
             self._orchestrator_trailing_unavailable_reasons = {
                 "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
@@ -6665,6 +6778,16 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 return True
             return pside == "long"
 
+        def is_approved(self, pside, symbol):
+            return (
+                symbol
+                in set(self.approved_coins_minus_ignored_coins.get(pside, set()))
+                and symbol not in set(self.ignored_coins.get(pside, set()))
+            )
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
         def live_value(self, key):
             if key == "forced_mode_long":
                 return ""
@@ -6679,6 +6802,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             return self._coin_bot_values[(pside, key)]
 
         def has_open_unstuck_order(self):
+            return True
+
+        def _unstuck_uses_realized_pnl(self):
             return True
 
         def _calc_unstuck_allowance_for_logging(self, pside):
@@ -6774,6 +6900,20 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "long"
     ]["minimum_fill_refresh_generation"] == 3
     assert snapshot["market"]["ETH/USDT:USDT"]["tradable"] is True
+    assert snapshot["market"]["BTC/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": True,
+        "rankability_reasons": [],
+        "ranking_feature_unavailable_psides": [],
+        "ema_unavailable_reasons": [],
+    }
+    assert snapshot["market"]["ETH/USDT:USDT"]["forager"] == {
+        "candidate_psides": ["long"],
+        "rankable": False,
+        "rankability_reasons": ["ranking_features_unavailable"],
+        "ranking_feature_unavailable_psides": ["long"],
+        "ema_unavailable_reasons": [],
+    }
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["entry_volatility_logrange_ema"]["long"] == pytest.approx(
         0.0
@@ -6819,6 +6959,167 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     )
     assert snapshot["recent"]["order_executions"][0]["execution_timestamp"] == 123456
     assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
+
+
+def test_monitor_forager_candidates_use_live_age_eligibility():
+    import passivbot as pb_mod
+
+    old_symbol = "OLD/USDT:USDT"
+    young_symbol = "YOUNG/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {old_symbol, young_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {old_symbol, young_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                old_symbol: {"active": True},
+                young_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {old_symbol, young_symbol}
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long" and symbol == old_symbol
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return True
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[old_symbol]["forager"]["candidate_psides"] == ["long"]
+    assert "forager" not in market[young_symbol]
+
+
+def test_monitor_forager_candidates_use_live_min_cost_eligibility():
+    import passivbot as pb_mod
+
+    cheap_symbol = "CHEAP/USDT:USDT"
+    expensive_symbol = "EXPENSIVE/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {cheap_symbol, expensive_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                cheap_symbol: {"active": True},
+                expensive_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {
+                cheap_symbol,
+                expensive_symbol,
+            }
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long"
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return pside == "long" and symbol == cheap_symbol
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[cheap_symbol]["forager"]["candidate_psides"] == ["long"]
+    assert "forager" not in market[expensive_symbol]
+
+    startup_bot = FakeBot()
+    del startup_bot._orchestrator_ema_bundle_completed
+    startup_market = startup_bot._build_monitor_market_section()
+    assert startup_market[cheap_symbol]["forager"]["rankable"] is False
+    assert startup_market[cheap_symbol]["forager"]["rankability_reasons"] == [
+        "ema_bundle_unevaluated"
+    ]
+
+
+def test_monitor_new_forager_candidate_waits_for_next_ema_bundle():
+    import passivbot as pb_mod
+
+    evaluated_symbol = "EVALUATED/USDT:USDT"
+    new_symbol = "NEW/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {
+                "long": {evaluated_symbol, new_symbol},
+                "short": set(),
+            }
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {evaluated_symbol, new_symbol},
+                "short": set(),
+            }
+            self.markets_dict = {
+                evaluated_symbol: {"active": True},
+                new_symbol: {"active": True},
+            }
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {evaluated_symbol}
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, symbol):
+            return pside == "long"
+
+        def effective_min_cost_is_low_enough(self, pside, symbol):
+            return pside == "long"
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    market = FakeBot()._build_monitor_market_section()
+
+    assert market[evaluated_symbol]["forager"]["rankable"] is True
+    assert market[new_symbol]["forager"]["rankable"] is False
+    assert market[new_symbol]["forager"]["rankability_reasons"] == [
+        "ema_bundle_unevaluated"
+    ]
 
 
 def test_monitor_trailing_section_marks_ema_anchor_diagnostics_not_applicable():
@@ -6961,6 +7262,93 @@ async def test_ema_anchor_monitor_snapshot_flush_skips_legacy_trailing_params():
             "reason": "strategy_has_no_trailing_diagnostics",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_monitor_snapshot_flushes_are_serialized():
+    import passivbot as pb_mod
+
+    class FakePublisher:
+        def write_snapshot(self, snapshot, *, ts=None, force=False):
+            return True
+
+    class FakeBot:
+        _monitor_flush_snapshot = pb_mod.Passivbot._monitor_flush_snapshot
+
+        def __init__(self):
+            self.monitor_publisher = FakePublisher()
+            self.active_builds = 0
+            self.max_active_builds = 0
+
+        async def _build_monitor_snapshot(self, *, now_ms=None):
+            self.active_builds += 1
+            self.max_active_builds = max(self.max_active_builds, self.active_builds)
+            await asyncio.sleep(0)
+            self.active_builds -= 1
+            return {}
+
+    bot = FakeBot()
+
+    assert await asyncio.gather(
+        bot._monitor_flush_snapshot(force=True),
+        bot._monitor_flush_snapshot(force=True),
+    ) == [True, True]
+    assert bot.max_active_builds == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_snapshot_maintainer_runs_without_planning_cycles():
+    import passivbot as pb_mod
+
+    bot = SimpleNamespace(
+        monitor_publisher=SimpleNamespace(snapshot_interval_ms=1),
+        stop_signal_received=False,
+    )
+    flush_count = 0
+
+    async def flush_snapshot():
+        nonlocal flush_count
+        flush_count += 1
+        if flush_count == 2:
+            bot.stop_signal_received = True
+        return True
+
+    async def sleep_unless_shutdown(_seconds, *, stage):
+        assert stage == "monitor_snapshot_interval"
+        await asyncio.sleep(0)
+
+    bot._monitor_flush_snapshot = flush_snapshot
+    bot._sleep_unless_shutdown = sleep_unless_shutdown
+
+    await pb_mod.Passivbot.maintain_monitor_snapshot(bot)
+
+    assert flush_count == 2
+
+
+@pytest.mark.asyncio
+async def test_monitor_snapshot_maintainer_is_registered_when_enabled():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.ws_enabled = False
+    bot.monitor_publisher = SimpleNamespace(snapshot_interval_ms=1_000)
+    blocker = asyncio.Event()
+
+    async def wait_for_stop():
+        await blocker.wait()
+
+    bot.maintain_hourly_cycle = wait_for_stop
+    bot.maintain_monitor_snapshot = wait_for_stop
+
+    await bot.start_data_maintainers()
+
+    assert set(bot.maintainers) == {
+        "maintain_hourly_cycle",
+        "maintain_monitor_snapshot",
+    }
+    tasks = list(bot.maintainers.values())
+    bot.stop_data_maintainers(verbose=False)
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def test_monitor_trailing_section_includes_trailing_grid_v7_diagnostics():

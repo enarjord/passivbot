@@ -682,6 +682,124 @@ async def test_forager_refresh_bounds_per_symbol_timeout_and_failure(monkeypatch
     assert caplog.text.count("error_type=RuntimeError") == 1
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
+    assert (
+        bot._forager_surface_failure_retry_after_ms[("TIMEOUT/USDT:USDT", "1m")]
+        == now_ms + pb_mod._FORAGER_TRANSIENT_FAILURE_RETRY_MS
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raise_terminal_empty", [False, True])
+async def test_forager_terminal_empty_page_uses_bounded_surface_backoff(
+    monkeypatch, caplog, raise_terminal_empty
+):
+    import numpy as np
+    import passivbot as pb_mod
+
+    now = {"ms": 1_000_000}
+    symbol = "EMPTY/USDC:USDC"
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now["ms"])
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: ({symbol: 10}, {symbol: 0}, {symbol: True}),
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot, "_urgent_active_candle_symbols", lambda _bot: []
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_refresh_budget",
+        lambda _bot, *args, **kwargs: 1,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_forager_target_staleness_ms",
+        lambda _bot, *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_candidate_candle_surface_health",
+        lambda _bot, *args, **kwargs: {
+            "age_ms": 60_000,
+            "coverage_ok": False,
+            "no_basis": True,
+        },
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def __init__(self):
+            self.calls = 0
+            self.kwargs = []
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls += 1
+            self.kwargs.append(dict(kwargs))
+            if raise_terminal_empty:
+                raise pb_mod.OhlcvTerminalEmptyPage(
+                    "bounded test failure",
+                    partial_rows=np.empty((0,), dtype=pb_mod.CANDLE_DTYPE),
+                    terminal_start_ts=0,
+                    requested_end_ts=60_000,
+                    pages=1,
+                )
+            return np.empty((0,), dtype=pb_mod.CANDLE_DTYPE)
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 12,
+                "max_forager_candle_refresh_seconds": 0,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        start_time_ms = now["ms"]
+
+        def __init__(self):
+            self.cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def bp(self, *args, **kwargs):
+            return 0.0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
+        _forager_target_staleness_ms = (
+            pb_mod.Passivbot._forager_target_staleness_ms
+        )
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    with caplog.at_level(logging.DEBUG):
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
+
+    assert bot.cm.calls == 1
+    assert bot.cm.kwargs[0]["max_age_ms"] == 1
+    assert (
+        bot._forager_surface_failure_retry_after_ms[(symbol, "1m")]
+        == now["ms"] + pb_mod._FORAGER_TERMINAL_EMPTY_RETRY_MS
+    )
+    if raise_terminal_empty:
+        assert caplog.text.count("error_type=OhlcvTerminalEmptyPage") == 1
+        assert "reached terminal empty page" in caplog.text
+    else:
+        assert "forager refresh made no tail progress" in caplog.text
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -2079,13 +2197,53 @@ def test_forager_target_staleness_obeys_configured_cap():
     import passivbot as pb_mod
 
     class FakeBot:
-        config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": 10,
+            }
+        }
         inactive_coin_candle_ttl_ms = 600_000
 
     bot = FakeBot()
     target_ms = pb_mod.Passivbot._forager_target_staleness_ms(bot, 100, 2)
 
     assert target_ms == 10 * 60_000
+
+
+def test_forager_target_staleness_does_not_derive_below_active_tail_grace():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": None,
+            }
+        }
+        inactive_coin_candle_ttl_ms = 600_000
+
+    bot = FakeBot()
+
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 18, 24) == 10 * 60_000
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 100, 2) == 50 * 60_000
+
+
+def test_forager_target_staleness_explicit_cap_may_shorten_active_tail_grace():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_active_candle_tail_gap_minutes": 10,
+                "max_forager_candle_staleness_minutes": 5,
+            }
+        }
+        inactive_coin_candle_ttl_ms = 600_000
+
+    bot = FakeBot()
+
+    assert pb_mod.Passivbot._forager_target_staleness_ms(bot, 18, 24) == 5 * 60_000
 
 
 def test_required_candle_health_window_failures_are_bounded_and_keep_other_side_windows(caplog):
@@ -2872,7 +3030,7 @@ async def test_forager_candidate_refresh_warms_required_native_h1_surface(monkey
     assert called_symbol == symbol
     assert kwargs["timeframe"] == "1h"
     assert kwargs["max_lookback_candles"] == 784
-    assert kwargs["max_age_ms"] == 0
+    assert kwargs["max_age_ms"] == 1
     assert kwargs["end_ts"] % (60 * 60_000) == 0
 
 
@@ -4221,6 +4379,11 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
         def _get_fetch_delay_seconds(self):
             return 0.0
 
+        def _forager_refresh_budget(self, *args, **kwargs):
+            self.budget_calls = getattr(self, "budget_calls", [])
+            self.budget_calls.append(dict(kwargs))
+            return pb_mod.Passivbot._forager_refresh_budget(self, *args, **kwargs)
+
         def bp(self, pside, key, symbol):
             if key == "forager_volume_ema_span_1m":
                 return 10.0
@@ -4229,7 +4392,6 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
             return 0.0
 
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
-        _forager_refresh_budget = pb_mod.Passivbot._forager_refresh_budget
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
@@ -4239,6 +4401,11 @@ async def test_forager_candidate_refresh_yields_after_wall_time_cap(
         await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert len(bot.cm.calls) == 2
+    assert [
+        call.get("max_cycle_budget")
+        for call in bot.budget_calls
+        if call.get("consume", True)
+    ] == [1, 1]
     assert "forager refresh paused by wall-time cap" in caplog.text
 
 
@@ -4733,7 +4900,12 @@ def test_completed_candle_freshness_blocks_bounded_gap_plus_tail(monkeypatch):
 async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypatch):
     import math
     import numpy as np
-    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
 
     cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
     symbol = "TAIL/USDT:USDT"
@@ -4745,7 +4917,21 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         dtype=CANDLE_DTYPE,
     )
     cm._cache[symbol] = seed.copy()
+    cm._add_known_gap(
+        symbol,
+        last_cached + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
     cm._ema_cache[symbol] = {("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)}
+    get_candles_calls = {"count": 0}
+    original_get_candles = cm.get_candles
+
+    async def counted_get_candles(*args, **kwargs):
+        get_candles_calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "get_candles", counted_get_candles)
 
     projected = await cm.get_projected_open_tail_ema_metrics(
         symbol,
@@ -4754,6 +4940,14 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         last_cached_ts=last_cached,
         max_tail_gap_ms=10 * ONE_MIN_MS,
     )
+    cached_projection = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0], "qv": [4.0], "log_range": [4.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    cached_projection["close"][4.0] = -1.0
 
     projected_rows = np.array(
         [
@@ -4777,6 +4971,427 @@ async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypat
         ("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)
     }
     assert math.isfinite(projected["qv"][4.0])
+    assert get_candles_calls["count"] == 1
+    assert projected["close"][4.0] == pytest.approx(100.0)
+    assert cm._get_known_gaps(symbol) == [
+        (last_cached + ONE_MIN_MS, latest_expected)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_allows_ten_minute_known_gap(tmp_path, monkeypatch):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TENMIN/USDT:USDT"
+    last_cached = 60 * ONE_MIN_MS
+    latest_expected = last_cached + 10 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    seed = np.array(
+        [(last_cached, 100.0, 101.0, 99.0, 100.0, 2.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = seed.copy()
+    cm._add_known_gap(
+        symbol,
+        last_cached + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0], "qv": [4.0], "log_range": [4.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert projected["close"][4.0] == pytest.approx(100.0)
+    assert projected["qv"][4.0] == pytest.approx(0.0)
+    assert projected["log_range"][4.0] == pytest.approx(0.0)
+    assert all(
+        math.isfinite(projected[metric][4.0])
+        for metric in ("close", "qv", "log_range")
+    )
+    assert np.array_equal(cm._cache[symbol], seed)
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_allows_bounded_internal_unknown_gap(
+    tmp_path, monkeypatch
+):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="kucoinfutures",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSETAIL/USDT:USDT"
+    t1 = ONE_MIN_MS
+    t2 = 2 * ONE_MIN_MS
+    t3 = 3 * ONE_MIN_MS
+    latest_expected = 5 * ONE_MIN_MS
+    monkeypatch.setattr(
+        "time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0
+    )
+    cm._cache[symbol] = np.array(
+        [
+            (t1, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t3, 110.0, 110.0, 110.0, 110.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t2,
+        t2,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    cm._add_known_gap(
+        symbol,
+        t3 + ONE_MIN_MS,
+        latest_expected,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [5.0], "qv": [5.0], "log_range": [5.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=t3,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert all(
+        math.isfinite(projected[metric][5.0])
+        for metric in ("close", "qv", "log_range")
+    )
+    assert list(cm._cache[symbol]["ts"]) == [t1, t3]
+    assert cm._synthetic_timestamps[symbol] == {t2}
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_rejects_missing_authoritative_anchor(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "NOANCHOR/USDT:USDT"
+    newest = 59 * ONE_MIN_MS
+    last_cached = newest + ONE_MIN_MS
+    latest_expected = last_cached + ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [(newest, 100.0, 100.0, 100.0, 100.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    with pytest.raises(RuntimeError, match="authoritative tail anchor missing"):
+        await cm.get_projected_open_tail_ema_metrics(
+            symbol,
+            {"close": [4.0]},
+            latest_expected_ts=latest_expected,
+            last_cached_ts=last_cached,
+            max_tail_gap_ms=10 * ONE_MIN_MS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_known_gap_is_replaced_by_late_real_candles(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "LATEKNOWN/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [(t58, 100.0, 100.0, 100.0, 100.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t59,
+        t60,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t58,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    assert projected["close"][3.0] == pytest.approx(100.0)
+    assert symbol in cm._projected_open_tail_ema_cache
+
+    real_late = np.array(
+        [
+            (t59, 110.0, 111.0, 109.0, 110.0, 3.0),
+            (t60, 120.0, 121.0, 119.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(
+        symbol,
+        real_late,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+
+    assert cm._get_known_gaps(symbol) == []
+    assert symbol not in cm._projected_open_tail_ema_cache
+    actual = await cm.get_latest_ema_close(
+        symbol,
+        3.0,
+        allow_remote_fetch=False,
+    )
+    expected_rows = np.array(
+        [
+            (t58, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t59, 110.0, 111.0, 109.0, 110.0, 3.0),
+            (t60, 120.0, 121.0, 119.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    assert actual == pytest.approx(cm._ema(expected_rows["c"].astype(float), 3.0))
+    assert actual != pytest.approx(projected["close"][3.0])
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_cache_survives_metadata_only_candle_refresh(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "UNCHANGED/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    real = np.array(
+        [
+            (t58, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (t59, 101.0, 102.0, 100.0, 101.0, 2.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = real.copy()
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    cache_before = dict(cm._projected_open_tail_ema_cache[symbol])
+
+    cm._persist_batch(
+        symbol,
+        real[-1:],
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+
+    assert cm._projected_open_tail_ema_cache[symbol] == cache_before
+    again = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    assert again == projected
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_cache_observes_external_candle_write(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cache_dir = str(tmp_path / "caches")
+    reader = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=cache_dir,
+    )
+    writer = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=cache_dir,
+    )
+    symbol = "SHARED/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    initial = np.array(
+        [
+            (t58, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (t59, 101.0, 102.0, 100.0, 101.0, 2.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    writer._persist_batch(
+        symbol,
+        initial,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t59,
+    )
+    get_candles_calls = {"count": 0}
+    original_get_candles = reader.get_candles
+
+    async def counted_get_candles(*args, **kwargs):
+        get_candles_calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(reader, "get_candles", counted_get_candles)
+    projected = await reader.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    late = np.array(
+        [(t60, 120.0, 121.0, 119.0, 120.0, 4.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    writer._persist_batch(
+        symbol,
+        late,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+    refreshed = await reader.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    expected_rows = np.concatenate((initial, late))
+    assert get_candles_calls["count"] == 2
+    assert refreshed["close"][3.0] == pytest.approx(
+        reader._ema(expected_rows["c"].astype(float), 3.0)
+    )
+    assert refreshed["close"][3.0] != pytest.approx(projected["close"][3.0])
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_cache_ignores_external_metadata_only_write(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cache_dir = str(tmp_path / "caches")
+    reader = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=cache_dir,
+    )
+    writer = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=cache_dir,
+    )
+    symbol = "SHAREDMETA/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    initial = np.array(
+        [
+            (t58, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (t59, 101.0, 102.0, 100.0, 101.0, 2.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    writer._persist_batch(
+        symbol,
+        initial,
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t59,
+    )
+    get_candles_calls = {"count": 0}
+    original_get_candles = reader.get_candles
+
+    async def counted_get_candles(*args, **kwargs):
+        get_candles_calls["count"] += 1
+        return await original_get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(reader, "get_candles", counted_get_candles)
+    projected = await reader.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    writer._persist_batch(
+        symbol,
+        initial[-1:],
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=t60,
+    )
+    again = await reader.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [3.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t59,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert again == projected
+    assert get_candles_calls["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -4813,6 +5428,7 @@ async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
         dtype=CANDLE_DTYPE,
     )
     cm._persist_batch(symbol, real_late, timeframe="1m", merge_cache=True, last_refresh_ms=t61)
+    assert symbol not in cm._projected_open_tail_ema_cache
     monkeypatch.setattr("time.time", lambda: (t61 + ONE_MIN_MS) / 1000.0)
 
     ema = await cm.get_latest_ema_close(symbol, 4.0, allow_remote_fetch=False)
@@ -4830,6 +5446,78 @@ async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
     assert t60 in cm._synthetic_timestamps.get(symbol, set())
     assert t59 not in cm._synthetic_timestamps.get(symbol, set())
     assert t61 not in cm._synthetic_timestamps.get(symbol, set())
+
+
+@pytest.mark.asyncio
+async def test_cached_forager_metrics_do_not_project_unverified_internal_gap(
+    tmp_path, monkeypatch
+):
+    import math
+    import numpy as np
+    from candlestick_manager import (
+        CANDLE_DTYPE,
+        GAP_REASON_FETCH_FAILED,
+        CandlestickManager,
+        ONE_MIN_MS,
+    )
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "CACHEDGAP/USDT:USDT"
+    t10 = 10 * ONE_MIN_MS
+    t11 = 11 * ONE_MIN_MS
+    t12 = 12 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (t12 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [
+            (t10, 100.0, 101.0, 99.0, 100.0, 2.0),
+            (t12, 102.0, 103.0, 101.0, 102.0, 3.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        t11,
+        t11,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    cm._ema_cache[symbol] = {
+        ("qv", 3.0, str(ONE_MIN_MS)): (12345.0, t12, t12),
+        ("log_range", 3.0, str(ONE_MIN_MS)): (0.01, t12, t12),
+    }
+
+    current = await cm.get_latest_ema_metrics(
+        symbol,
+        {"qv": 3.0, "log_range": 3.0},
+        max_age_ms=ONE_MIN_MS,
+    )
+    assert set(current) == {"qv", "log_range"}
+    assert all(math.isnan(value) for value in current.values())
+    cm._ema_cache.clear()
+    assert math.isnan(
+        await cm.get_latest_ema_quote_volume(
+            symbol,
+            3.0,
+            allow_remote_fetch=False,
+        )
+    )
+    assert math.isnan(
+        await cm.get_latest_ema_log_range(
+            symbol,
+            3.0,
+            allow_remote_fetch=False,
+        )
+    )
+
+    cached = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 3.0, "log_range": 3.0},
+        max_staleness_ms=10 * ONE_MIN_MS,
+    )
+    assert cached == {}
 
 
 @pytest.mark.asyncio

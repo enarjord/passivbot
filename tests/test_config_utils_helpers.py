@@ -202,26 +202,32 @@ def test_order_replacement_churn_gate_defaults_and_validation():
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
     assert live["order_replacement_churn_gate_market_dist_pct"] == pytest.approx(0.005)
-    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
-        0.002
-    )
+    assert live["order_match_tolerance_pct"] == pytest.approx(0.0002)
     validate_config(config, verbose=False)
 
     invalid_cases = (
+        ("order_match_tolerance_pct", True),
+        ("order_match_tolerance_pct", -0.0001),
+        ("order_match_tolerance_pct", 0.010001),
+        ("order_match_tolerance_pct", float("nan")),
+        ("order_match_tolerance_pct", float("inf")),
         ("order_replacement_churn_gate_activation_count", True),
         ("order_replacement_churn_gate_activation_count", -1),
         ("order_replacement_churn_gate_window_minutes", 0.0),
         ("order_replacement_churn_gate_stability_minutes", 11.0),
         ("order_replacement_churn_gate_market_dist_pct", 1.0),
         ("order_replacement_churn_gate_market_dist_pct", -0.1),
-        ("order_replacement_churn_gate_tracking_tolerance_pct", 0.0002),
-        ("order_replacement_churn_gate_tracking_tolerance_pct", float("inf")),
     )
     for key, value in invalid_cases:
         invalid = get_template_config()
         invalid["live"][key] = value
         with pytest.raises((TypeError, ValueError), match=key):
             validate_config(invalid, verbose=False)
+
+    for tolerance in (0.0, 0.01):
+        valid = get_template_config()
+        valid["live"]["order_match_tolerance_pct"] = tolerance
+        validate_config(valid, verbose=False)
 
 
 def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
@@ -230,7 +236,6 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
         "order_replacement_churn_gate_activation_count",
         "order_replacement_churn_gate_market_dist_pct",
         "order_replacement_churn_gate_stability_minutes",
-        "order_replacement_churn_gate_tracking_tolerance_pct",
         "order_replacement_churn_gate_window_minutes",
     ):
         source["live"].pop(key)
@@ -244,15 +249,30 @@ def test_retired_initial_entry_gate_migrates_distance_and_hydrates_defaults():
     assert live["order_replacement_churn_gate_activation_count"] == 10
     assert live["order_replacement_churn_gate_window_minutes"] == pytest.approx(10.0)
     assert live["order_replacement_churn_gate_stability_minutes"] == pytest.approx(2.0)
-    assert live["order_replacement_churn_gate_tracking_tolerance_pct"] == pytest.approx(
-        0.002
-    )
     changes = prepared["_transform_log"][-1]["details"]["changes"]
     assert {
         "action": "rename",
         "from": "live.initial_entry_exec_max_market_dist_pct",
         "to": "live.order_replacement_churn_gate_market_dist_pct",
         "value": 0.005,
+    } in changes
+
+
+def test_retired_churn_tracking_tolerance_is_removed():
+    source = get_template_config()
+    source["live"]["order_replacement_churn_gate_tracking_tolerance_pct"] = 0.002
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert (
+        "order_replacement_churn_gate_tracking_tolerance_pct"
+        not in prepared["live"]
+    )
+    changes = prepared["_transform_log"][-1]["details"]["changes"]
+    assert {
+        "action": "remove",
+        "path": "live.order_replacement_churn_gate_tracking_tolerance_pct",
+        "value": 0.002,
     } in changes
 
 
@@ -662,6 +682,78 @@ def test_normalize_limit_entries_preserves_optional_fields_on_canonical_entries(
     assert normalized[1]["enabled"] is False
 
 
+def test_normalize_limit_entries_supports_scenario_specific_limits():
+    raw = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": " base ",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+
+    assert config_utils.normalize_limit_entries(raw) == [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.5,
+        },
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            "stat": "max",
+            "value": 0.7,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "match"),
+    [
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "base",
+                "stat": "max",
+                "value": 0.5,
+            },
+            "cannot set both a named scenario and stat",
+        ),
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "",
+                "value": 0.5,
+            },
+            "non-empty scenario label",
+        ),
+        (
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": 123,
+                "value": 0.5,
+            },
+            "scenario label string or null",
+        ),
+    ],
+)
+def test_normalize_limit_entries_rejects_invalid_scenario_basis(entry, match):
+    with pytest.raises(ValueError, match=match):
+        config_utils.normalize_limit_entries([entry])
+
+
 def test_load_config_preserves_canonical_optimize_limits(tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
@@ -771,6 +863,41 @@ def test_parse_limit_cli_entry_supports_range_and_extras():
         "range": [0.05, 0.7],
         "stat": "mean",
         "enabled": False,
+    }
+
+
+def test_parse_limit_cli_entry_supports_scenario_selector():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq > 0.5 scenario=base"
+    )
+
+    assert entry == {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "less_than_or_equal",
+        "value": 0.5,
+        "scenario": "base",
+    }
+
+
+def test_parse_limit_cli_entry_preserves_none_scenario_label():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq > 0.5 scenario=none"
+    )
+
+    assert entry["scenario"] == "none"
+
+
+def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options():
+    entry = config_utils.parse_limit_cli_entry(
+        "drawdown_worst_strategy_eq<=0.7 scenario=null stat=max"
+    )
+
+    assert entry == {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "value": 0.7,
+        "scenario": None,
+        "stat": "max",
     }
 
 
@@ -1381,6 +1508,34 @@ def _single_line_help(help_text: str) -> str:
     return " ".join(help_text.split())
 
 
+def _assert_help_option_aliases(
+    help_text: str, long_option: str, short_option: str, metavar: str
+) -> None:
+    """Assert argparse exposes both aliases without depending on render order."""
+    normalized = _single_line_help(help_text)
+    long_rendered = f"{long_option} {metavar}"
+    short_rendered = f"{short_option} {metavar}"
+    assert (
+        f"{long_rendered}, {short_rendered}" in normalized
+        or f"{short_rendered}, {long_rendered}" in normalized
+        or f"{long_option}, {short_rendered}" in normalized
+        or f"{short_option}, {long_rendered}" in normalized
+    )
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        "--symbols CSV_OR_PATH, -s CSV_OR_PATH",
+        "-s CSV_OR_PATH, --symbols CSV_OR_PATH",
+        "--symbols, -s CSV_OR_PATH",
+        "-s, --symbols CSV_OR_PATH",
+    ],
+)
+def test_help_option_alias_assertion_accepts_supported_argparse_orderings(rendered):
+    _assert_help_option_aliases(rendered, "--symbols", "-s", "CSV_OR_PATH")
+
+
 def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     config = get_template_config()
     help_text = _format_parser_help_with_config("optimize", config, help_all=False)
@@ -1388,18 +1543,28 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "Coin Selection:" in help_text
     assert "Date Range:" in help_text
     assert "Optimizer:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
-    assert "--population-size INT, -ps INT" in help_text
-    assert "--backend BACKEND, -ob BACKEND" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
+    _assert_help_option_aliases(help_text, "--population-size", "-ps", "INT")
+    _assert_help_option_aliases(help_text, "--backend", "-ob", "BACKEND")
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "-l SPEC, --limit SPEC" in help_text
+    _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     assert "--clear-limits" in help_text
-    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
+    _assert_help_option_aliases(
+        help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
+    )
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-orders-allowed", "-moa", "Y/N"
+    )
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
     assert "--bot.long.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
@@ -1418,10 +1583,14 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
         in help_text
     )
     assert "--limits JSON_OR_HJSON" in help_text
-    assert "-l SPEC, --limit SPEC" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
+    _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
     assert "--bot.long.hsl.enabled Y/N" in help_text
     assert "--bot.short.hsl.enabled Y/N" in help_text
     assert "--bot.long.hsl.orange_tier_mode VALUE" in help_text
@@ -1466,13 +1635,17 @@ def test_live_default_help_shows_curated_groups():
     assert "Coin Selection:" in help_text
     assert "Behavior:" in help_text
     assert "Runtime:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
     assert "--minimum-coin-age-days FLOAT" in help_text
     assert "--hedge-mode Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
-    assert "--user VALUE, -u VALUE" in help_text
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
+    _assert_help_option_aliases(help_text, "--user", "-u", "VALUE")
     assert "--live.auto_gs" not in help_text
     assert "--optimize.iters" not in help_text
 
@@ -1485,14 +1658,24 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "Date Range:" in help_text
     assert "Backtest Runtime:" in help_text
     assert "Suite:" in help_text
-    assert "--symbols CSV_OR_PATH, -s CSV_OR_PATH" in help_text
+    _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     assert "--ignored-coins CSV_OR_PATH" in help_text
-    assert "--minimum-coin-age-days FLOAT, -mcad FLOAT" in help_text
-    assert "--hedge-mode Y/N, -hm Y/N" in help_text
-    assert "--market-orders-allowed Y/N, -moa Y/N" in help_text
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
-    assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
+    _assert_help_option_aliases(
+        help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
+    )
+    _assert_help_option_aliases(help_text, "--hedge-mode", "-hm", "Y/N")
+    _assert_help_option_aliases(
+        help_text, "--market-orders-allowed", "-moa", "Y/N"
+    )
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--max-realized-loss-pct", "-mrlp", "FLOAT"
+    )
+    _assert_help_option_aliases(
+        help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
+    )
     assert "--aggregate-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
@@ -1701,7 +1884,9 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     config = get_template_config()
     help_text = _format_parser_help_with_config("backtest", config, help_all=False)
 
-    assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    _assert_help_option_aliases(
+        help_text, "--market-order-near-touch-threshold", "-montt", "FLOAT"
+    )
     assert "--maker-fee-override FLOAT" in help_text
     assert "--taker-fee-override FLOAT" in help_text
 

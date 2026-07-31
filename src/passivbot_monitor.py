@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -588,6 +589,26 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
     ema_unavailable_symbols = set(
         getattr(self, "_orchestrator_ema_unavailable_symbols", set()) or set()
     )
+    candidate_ema_unavailable_symbols = set(
+        getattr(
+            self,
+            "_orchestrator_candidate_ema_unavailable_symbols",
+            set(),
+        )
+        or set()
+    )
+    ema_unavailable_reasons = getattr(
+        self, "_orchestrator_ema_unavailable_reasons", {}
+    ) or {}
+    rank_feature_unavailable_by_side = getattr(
+        self, "_forager_rank_feature_unavailable_by_side", {}
+    ) or {}
+    ema_bundle_completed = bool(
+        getattr(self, "_orchestrator_ema_bundle_completed", False)
+    )
+    ema_bundle_symbols = set(
+        getattr(self, "_orchestrator_ema_bundle_symbols", set()) or set()
+    )
     trailing_unavailable_symbols = set(
         getattr(self, "_orchestrator_trailing_unavailable_symbols", set()) or set()
     )
@@ -609,7 +630,11 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         if not market_active:
             tradability_reasons.append("market_inactive")
         if symbol in ema_unavailable_symbols:
-            tradability_reasons.append("required_ema_unavailable")
+            tradability_reasons.append(
+                "forager_candidate_required_ema_unavailable"
+                if symbol in candidate_ema_unavailable_symbols
+                else "required_ema_unavailable"
+            )
         symbol_trailing_reasons = trailing_unavailable_reasons.get(symbol, [])
         if isinstance(symbol_trailing_reasons, str):
             symbol_trailing_reasons = [symbol_trailing_reasons]
@@ -643,6 +668,50 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
             "has_position": bool(self.has_position(symbol=symbol)),
         }
+        forager_candidate_psides = []
+        for pside in ("long", "short"):
+            try:
+                forager_side = bool(self.is_forager_mode(pside))
+            except Exception:
+                forager_side = False
+            try:
+                age_eligible_approved = bool(self.is_approved(pside, symbol))
+            except Exception:
+                age_eligible_approved = False
+            try:
+                min_cost_eligible = bool(
+                    self.effective_min_cost_is_low_enough(pside, symbol)
+                )
+            except Exception:
+                min_cost_eligible = False
+            if forager_side and age_eligible_approved and min_cost_eligible:
+                forager_candidate_psides.append(pside)
+        if forager_candidate_psides:
+            rank_feature_psides = sorted(
+                pside
+                for pside in forager_candidate_psides
+                if symbol
+                in set(rank_feature_unavailable_by_side.get(pside, set()) or set())
+            )
+            rankability_reasons = []
+            if not ema_bundle_completed or symbol not in ema_bundle_symbols:
+                rankability_reasons.append("ema_bundle_unevaluated")
+            if rank_feature_psides:
+                rankability_reasons.append("ranking_features_unavailable")
+            if symbol in candidate_ema_unavailable_symbols:
+                rankability_reasons.append("required_ema_unavailable")
+            matching_ema_reasons = sorted(
+                str(reason)
+                for reason, reason_symbols in ema_unavailable_reasons.items()
+                if symbol in set(reason_symbols or set())
+            )
+            entry["forager"] = {
+                "candidate_psides": sorted(forager_candidate_psides),
+                "rankable": not rankability_reasons,
+                "rankability_reasons": sorted(set(rankability_reasons)),
+                "ranking_feature_unavailable_psides": rank_feature_psides,
+                "ema_unavailable_reasons": matching_ema_reasons,
+            }
         if symbol in trailing_unavailable_symbols:
             entry["trailing_unavailable_psides"] = sorted(
                 str(pside)
@@ -904,9 +973,15 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
 
 def _build_monitor_unstuck_section(self) -> dict[str, Any]:
     has_open = bool(self.has_open_unstuck_order())
-    # Allowances are pure budget facts and stay real while an unstuck order
-    # is open; has_open is reported alongside so the monitor shows both.
-    allowances_live = self._calc_unstuck_allowances_live()
+    # When unstuck is enabled, allowances are pure budget facts and stay real
+    # while an unstuck order is open. Disabled unstuck has no PnL-derived
+    # allowance to report.
+    unstuck_uses_realized_pnl = self._unstuck_uses_realized_pnl()
+    allowances_live = (
+        self._calc_unstuck_allowances_live()
+        if unstuck_uses_realized_pnl
+        else None
+    )
     out: dict[str, Any] = {
         "has_open_order": has_open,
         "open_orders": [],
@@ -927,10 +1002,18 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             payload["symbol"] = symbol
             out["open_orders"].append(payload)
     for pside in ("long", "short"):
-        info = self._calc_unstuck_allowance_for_logging(pside)
+        info = (
+            self._calc_unstuck_allowance_for_logging(pside)
+            if unstuck_uses_realized_pnl
+            else {"status": "unstuck_disabled"}
+        )
         side_payload: dict[str, Any] = {
             "status": info.get("status"),
-            "allowance_live": float(allowances_live.get(pside, 0.0) or 0.0),
+            "allowance_live": (
+                float(allowances_live.get(pside, 0.0) or 0.0)
+                if allowances_live is not None
+                else None
+            ),
             "configured_loss_allowance_pct": float(
                 self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0
             ),
@@ -1764,9 +1847,14 @@ async def _monitor_flush_snapshot(self, *, force: bool = False, ts: Optional[int
     publisher = getattr(self, "monitor_publisher", None)
     if publisher is None:
         return False
-    try:
-        snapshot = await self._build_monitor_snapshot(now_ms=ts)
-        return publisher.write_snapshot(snapshot, ts=ts, force=force)
-    except Exception as exc:
-        logging.error("[monitor] failed building monitor snapshot: %s", exc)
-        return False
+    lock = getattr(self, "_monitor_snapshot_flush_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        self._monitor_snapshot_flush_lock = lock
+    async with lock:
+        try:
+            snapshot = await self._build_monitor_snapshot(now_ms=ts)
+            return publisher.write_snapshot(snapshot, ts=ts, force=force)
+        except Exception as exc:
+            logging.error("[monitor] failed building monitor snapshot: %s", exc)
+            return False

@@ -2,31 +2,66 @@
 
 ## Purpose
 
-This backlog captures high-value improvement areas noticed while running the
-reviewed PR loop, repeatedly restarting VPS5 bots, and using the new live event
-pipeline to diagnose behavior. It is intentionally higher level than the active
-logging-overhaul plan. Each item below should become its own small reviewed
-slice before implementation.
+This backlog captures high-value live-operations and trading-system improvement
+areas discovered through production evidence. It is intentionally separate from
+the finite live-logging migration. An item may use structured events without
+becoming logging-overhaul scope.
 
 The logging overhaul remains the foundation: a centralized event stream should
 make the items below easier to prove, test, and operate.
 
-This backlog feeds the logging-overhaul loop selectively. Items are in-scope for
-that loop when they improve diagnostics, smoke evidence, incident reconstruction,
-or operator workflow needed to complete the logging work. Trading-behavior bugs
-found through better observability should remain visible here, but should become
-separate focused trading-path PRs unless they block observability validation.
+This backlog does not feed the logging-overhaul loop by default. Promote an item
+back into that plan only when current evidence identifies a defect in the shared
+event contract, routing, boundedness, redaction, retention, sink isolation, or a
+specific unmet completion criterion. A desire for another report, selector,
+smoke verdict, debug profile, restart check, or operator convenience is not
+enough.
+
+## Triage Before Implementation
+
+Classify proposed work into one primary lane:
+
+1. **Trading behavior or safety:** strategy, reconciliation, readiness,
+   exchange state, fills/PnL, HSL, order construction, or execution policy.
+   Use a focused production PR and trading-contract validation.
+2. **Performance or reliability:** startup, shutdown, cache, replay, remote
+   calls, resource pressure, or connector throughput. Require a measured
+   bottleneck and an explicit target.
+3. **Operations:** restart/deploy/process control, configuration preflight,
+   incident workflow, or repository preparation. Keep authority and
+   state-changing actions explicit.
+4. **Observability defect:** incorrect/missing evidence, unsafe payloads,
+   duplicate ownership, event loss, broken correlation, or unbounded sinks.
+5. **Observability consolidation:** two or more existing readers or reports can
+   share one bounded implementation with a demonstrated net reduction in code.
+   This may reopen the logging overhaul under resume reason 4 in
+   `live_logging_overhaul_current_status.md`.
+6. **Convenience:** another projection, filter, export, dashboard, or summary.
+   Defer unless repeated operator use demonstrates value greater than its
+   maintenance cost.
+
+Only the observability-defect and observability-consolidation lanes may reopen
+the logging-overhaul plan.
+
+Before accepting a PR, record the observed problem, affected scope, simplest
+credible fix, validation, and stopping condition. Prefer removing or
+consolidating existing machinery over adding another parallel path.
 
 Update policy:
 
-- Keep open work in `High-Value Follow-Ups` with checkboxes and short status
-  notes.
+- Keep open work in `High-Value Follow-Ups` with checkboxes, one primary lane,
+  and short current status notes.
+- Existing entries without a recorded primary lane are unclassified and cannot
+  be selected for implementation or used to reopen the logging overhaul. Add
+  the lane, evidence, simplest credible fix, validation, and stopping condition
+  before selecting one.
 - When a PR completes all or a meaningful first slice of an item, update the
-  item status and add an entry to `Merged Work Log`.
+  item status. Add a `Merged Work Log` entry only for a material milestone, not
+  every incremental PR or deployment.
 - Leave follow-up refinements attached to the item instead of hiding them in the
   completed log.
-- Add newly discovered operations gaps here before spawning or accepting a PR for
-  them.
+- Add newly discovered gaps only when backed by concrete evidence. Do not turn
+  every edge case or possible refinement into queued implementation work.
 
 Related detailed plans:
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from ccxt.base.errors import BadRequest, RateLimitExceeded
+from ccxt.base.errors import BadRequest, MarginModeAlreadySet, RateLimitExceeded
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
 
@@ -70,6 +70,34 @@ def make_kucoin_config_bot():
 
 
 @pytest.mark.asyncio
+async def test_binance_already_set_margin_mode_is_successful_noop(caplog):
+    from exchanges.binance import BinanceBot
+
+    symbol = "BTC/USDT:USDT"
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.cca = SimpleNamespace(
+        set_margin_mode=AsyncMock(
+            side_effect=MarginModeAlreadySet("No need to change margin type")
+        ),
+        set_leverage=AsyncMock(return_value={"leverage": 5}),
+    )
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+    bot._calc_leverage_for_symbol = lambda _symbol: 5
+
+    with caplog.at_level(logging.DEBUG):
+        await bot.update_exchange_config_by_symbols([symbol])
+
+    bot.cca.set_margin_mode.assert_awaited_once_with("cross", symbol=symbol)
+    bot.cca.set_leverage.assert_awaited_once_with(5, symbol=symbol)
+    assert "margin mode unchanged" in caplog.text
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and "margin" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
 async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch, caplog):
     import passivbot as pb_mod
 
@@ -124,6 +152,13 @@ def test_format_exchange_config_error_is_bounded_and_value_safe():
     assert (
         pb_mod.Passivbot._format_exchange_config_error(unsafe_type("SECRET"))
         == "error_type=Exception"
+    )
+    structured = RuntimeError(
+        'gate {"label":"RISK_LIMIT_EXCEEDED","message":"position risk limit is zero"}'
+    )
+    assert pb_mod.Passivbot._format_exchange_config_error(structured) == (
+        "error_type=RuntimeError error_label=RISK_LIMIT_EXCEEDED "
+        "error_reason=position risk limit is zero"
     )
 
 
@@ -615,7 +650,7 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
+async def test_execute_to_exchange_stops_after_exchange_config_shutdown(monkeypatch):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -669,6 +704,15 @@ async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
+
+    async def keep_creations(_bot, orders):
+        return orders
+
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_filter_fresh_market_snapshot_creations",
+        keep_creations,
+    )
     result = await pb_mod.Passivbot.execute_to_exchange(bot)
 
     assert result is None
@@ -690,6 +734,7 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
             pb_mod.Passivbot._emit_execution_create_filter_event
         )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
@@ -786,6 +831,7 @@ async def test_low_balance_create_skip_uses_event_console_when_available(caplog)
             pb_mod.Passivbot._emit_execution_create_filter_event
         )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
@@ -1563,6 +1609,7 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
             )
             self.config_symbols = None
             self.created_orders = None
+            self.restart_budget_calls = 0
             self._current_planning_snapshot = FreshPlanningSnapshot()
             self.market_snapshot_provider = FreshMarketSnapshotProvider()
 
@@ -1585,6 +1632,15 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
                     "price": 1.0,
                     "qty": 1.0,
                 },
+                {
+                    "symbol": "PENDING/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "price": 1.1,
+                    "qty": 1.0,
+                    "reduce_only": True,
+                    "pb_order_type": "close_grid_long",
+                },
             ]
 
         async def execute_cancellations_parent(self, orders):
@@ -1593,6 +1649,15 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         async def update_exchange_configs(self, symbols=None):
             self.config_symbols = symbols
             return {"READY/USDT:USDT"}
+
+        def _order_requires_exchange_config_before_create(self, order):
+            return order.get("reduce_only") is not True
+
+        def _pending_exchange_config_consumes_error_budget(self, blocked_orders):
+            return bool(blocked_orders)
+
+        async def restart_bot_on_too_many_errors(self):
+            self.restart_budget_calls += 1
 
         def get_raw_balance(self):
             return 1.0
@@ -1638,7 +1703,12 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot.config_symbols == ["PENDING/USDT:USDT", "READY/USDT:USDT"]
-    assert [order["symbol"] for order in bot.created_orders] == ["READY/USDT:USDT"]
+    assert [order["symbol"] for order in bot.created_orders] == [
+        "READY/USDT:USDT",
+        "PENDING/USDT:USDT",
+    ]
+    assert bot.created_orders[1]["reduce_only"] is True
+    assert bot.restart_budget_calls == 1
     skipped_events = [
         event
         for event in bot._live_event_sink.events
@@ -1650,5 +1720,6 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
     assert skipped_events[0].reason_code == ReasonCodes.PENDING_EXCHANGE_CONFIG
     assert skipped_events[0].data["order_count"] == 1
     assert skipped_events[0].data["symbols"] == ["PENDING/USDT:USDT"]
+    assert skipped_events[0].data["protective_allowed_count"] == 1
     assert skipped_events[0].data["pending_symbols_count"] == 1
     assert bot._live_event_pipeline.close(timeout=2.0) is True

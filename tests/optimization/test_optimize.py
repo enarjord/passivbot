@@ -34,10 +34,12 @@ from optimize import (
     _record_individual_result,
     _register_exchange_data,
     _resolve_cli_limits_override,
+    _validate_starting_config_selection_args,
     _set_candidate_metrics,
     _terminate_optimizer_pool,
     _suite_config_implies_suite_mode,
     _format_objectives,
+    add_starting_config_selection_options,
     ea_mu_plus_lambda_stream,
     individual_to_config,
     config_to_individual,
@@ -53,6 +55,7 @@ from optimize import (
     ConstraintAwareFitness,
     ResultRecorder,
     install_anchored_fine_tune_plan,
+    preselect_starting_configs,
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
@@ -674,6 +677,261 @@ class TestResolveCliLimitsOverride:
         ]
 
 
+class TestStartingConfigSelectionArgs:
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"filter_starting_configs": True, "starting_configs_max": None},
+            {"filter_starting_configs": False, "starting_configs_max": 60},
+        ],
+    )
+    def test_selection_requires_starting_configs(self, kwargs):
+        parser = argparse.ArgumentParser()
+        args = argparse.Namespace(starting_configs=None, resume=None, **kwargs)
+
+        with pytest.raises(SystemExit):
+            _validate_starting_config_selection_args(parser, args)
+
+    def test_selection_is_incompatible_with_resume(self):
+        parser = argparse.ArgumentParser()
+        args = argparse.Namespace(
+            starting_configs="pareto",
+            resume="optimize_results/run",
+            filter_starting_configs=True,
+            starting_configs_max=None,
+        )
+
+        with pytest.raises(SystemExit):
+            _validate_starting_config_selection_args(parser, args)
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_starting_configs_max_must_be_positive(self, value):
+        parser = argparse.ArgumentParser()
+        args = argparse.Namespace(
+            starting_configs="pareto",
+            resume=None,
+            filter_starting_configs=False,
+            starting_configs_max=value,
+        )
+
+        with pytest.raises(SystemExit):
+            _validate_starting_config_selection_args(parser, args)
+
+    def test_valid_selection_arguments_are_accepted(self):
+        parser = argparse.ArgumentParser()
+        args = argparse.Namespace(
+            starting_configs="pareto",
+            resume=None,
+            filter_starting_configs=True,
+            starting_configs_max=60,
+        )
+
+        _validate_starting_config_selection_args(parser, args)
+
+
+def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
+    config = get_template_config()
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+    config["optimize"]["limits"] = [
+        {
+            "metric": "adg_strategy_eq",
+            "penalize_if": "less_than_or_equal",
+            "value": 0.0015,
+        }
+    ]
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    for idx, adg in enumerate((0.001, 0.002)):
+        artifact = deepcopy(config)
+        artifact["metrics"] = {
+            "objectives": {
+                "adg_strategy_eq": adg,
+                "drawdown_worst_strategy_eq": 0.3 - idx * 0.1,
+            },
+            "stats": {
+                "adg_strategy_eq": {
+                    "mean": adg,
+                    "min": adg,
+                    "max": adg,
+                    "std": 0.0,
+                    "median": adg,
+                },
+                "drawdown_worst_strategy_eq": {
+                    "mean": 0.3 - idx * 0.1,
+                    "min": 0.3 - idx * 0.1,
+                    "max": 0.3 - idx * 0.1,
+                    "std": 0.0,
+                    "median": 0.3 - idx * 0.1,
+                },
+            },
+        }
+        artifact["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0 + adg
+        (pareto_dir / f"candidate_{idx}.json").write_text(
+            json.dumps(artifact),
+            encoding="utf-8",
+        )
+
+    selected = preselect_starting_configs(
+        str(pareto_dir),
+        config,
+        filter_by_limits=True,
+        max_count=None,
+        aggregate_cfg=config["backtest"]["aggregate"],
+    )
+
+    assert len(selected) == 1
+    assert selected[0]["_starting_config_source"].endswith("candidate_1.json")
+    assert selected[0]["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == pytest.approx(
+        1.002
+    )
+
+
+def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
+    config = get_template_config()
+    config["backtest"]["aggregate"] = {"default": "max"}
+    config["optimize"]["scoring"] = [
+        {"metric": "adg_strategy_eq", "goal": "max"},
+        {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
+    ]
+    config["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "value": 0.5,
+        }
+    ]
+    artifact = deepcopy(config)
+    artifact["metrics"] = {
+        "objectives": {
+            "adg_strategy_eq": 0.002,
+            "drawdown_worst_strategy_eq": 0.8,
+        },
+        "stats": {
+            "adg_strategy_eq": {
+                "mean": 0.002,
+                "min": 0.002,
+                "max": 0.002,
+                "std": 0.0,
+                "median": 0.002,
+            },
+            "drawdown_worst_strategy_eq": {
+                "mean": 0.2,
+                "min": 0.2,
+                "max": 0.8,
+                "std": 0.3,
+                "median": 0.2,
+            },
+        },
+    }
+    artifact["suite_metrics"] = {
+        "metrics": {
+            "adg_strategy_eq": {
+                "aggregated": 0.002,
+                "stats": artifact["metrics"]["stats"]["adg_strategy_eq"],
+            },
+            "drawdown_worst_strategy_eq": {
+                "aggregated": 0.8,
+                "stats": artifact["metrics"]["stats"]["drawdown_worst_strategy_eq"],
+            },
+        }
+    }
+    artifact_path = tmp_path / "candidate.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    selected = preselect_starting_configs(
+        str(artifact_path),
+        config,
+        filter_by_limits=True,
+        max_count=None,
+        aggregate_cfg={"default": "mean"},
+    )
+
+    assert len(selected) == 1
+    assert selected[0]["_starting_config_source"].endswith("candidate.json")
+
+    selected_non_suite = preselect_starting_configs(
+        str(artifact_path),
+        config,
+        filter_by_limits=True,
+        max_count=None,
+        aggregate_cfg=None,
+    )
+
+    assert len(selected_non_suite) == 1
+
+
+def test_active_suite_scenario_labels_use_canonical_fallbacks():
+    assert optimize._active_suite_scenario_labels(
+        {
+            "enabled": True,
+            "scenarios": [
+                {},
+                {"label": "named"},
+                {"label": ""},
+                {"label": None},
+            ],
+        }
+    ) == ["scenario_01", "named", "scenario_03", "scenario_04"]
+    assert optimize._active_suite_scenario_labels(
+        {"enabled": False, "scenarios": [{}]}
+    ) is None
+
+
+def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
+    config = optimize.get_template_config()
+    config["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "base",
+            "value": 0.50,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="scenario-specific optimizer limit.*requires suite mode",
+    ):
+        optimize._validate_optimizer_limit_suite_mode(
+            config,
+            suite_enabled=False,
+        )
+
+    optimize._validate_optimizer_limit_suite_mode(config, suite_enabled=True)
+
+    config["optimize"]["limits"][0]["enabled"] = False
+    optimize._validate_optimizer_limit_suite_mode(config, suite_enabled=False)
+
+    config["optimize"]["limits"][0]["enabled"] = True
+    config["optimize"]["limits"][0]["scenario"] = None
+    optimize._validate_optimizer_limit_suite_mode(config, suite_enabled=False)
+
+
+def test_validate_optimizer_limit_suite_mode_rejects_unknown_scenario_early():
+    config = optimize.get_template_config()
+    config["optimize"]["limits"] = [
+        {
+            "metric": "drawdown_worst_strategy_eq",
+            "penalize_if": "greater_than",
+            "scenario": "stres",
+            "value": 0.50,
+        }
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="selects unknown scenario 'stres'.*base, stress",
+    ):
+        optimize._validate_optimizer_limit_suite_mode(
+            config,
+            suite_enabled=True,
+            scenario_labels=["base", "stress"],
+        )
+
+
 def test_optimize_parser_accepts_short_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",
@@ -724,6 +982,20 @@ def test_optimize_parser_accepts_short_limit_alias():
     args = parser.parse_args(["-l", "adg_strategy_pnl_rebased > 0.0"])
 
     assert args.limit_entries == ["adg_strategy_pnl_rebased > 0.0"]
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--compress-starting-configs", "--starting-configs-max"],
+)
+def test_optimize_parser_accepts_starting_config_preselection_options(flag):
+    parser = argparse.ArgumentParser()
+    add_starting_config_selection_options(parser)
+
+    args = parser.parse_args(["--filter-starting-configs", flag, "60"])
+
+    assert args.filter_starting_configs is True
+    assert args.starting_configs_max == 60
 
 
 def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
@@ -842,6 +1114,14 @@ def test_optimize_parser_accepts_polish_bounds_mode():
 
     assert args.polish_bounds_pct == 0.2
     assert args.polish_bounds_mode == "override-all"
+
+
+def test_starting_configs_option_is_visible_in_default_help():
+    parser = argparse.ArgumentParser()
+    optimize.add_extra_options(parser, help_all=False)
+
+    assert "-t STARTING_CONFIGS" in parser.format_help()
+    assert "--start STARTING_CONFIGS" in parser.format_help()
 
 
 class TestFormatObjectives:
@@ -3741,9 +4021,151 @@ class TestEvaluator:
 
         with pytest.raises(
             ValueError,
-            match="optimize.objective_scenario 'base' is not present",
+            match="selects scenario 'base'.*not present",
         ):
             SuiteEvaluator(base, [], {"default": "mean"})
+
+    def test_suite_limit_scenario_must_match_context_label(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "scenario": "base",
+                "value": 0.5,
+            }
+        ]
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="optimizer limit.*selects scenario 'base'.*not present",
+        ):
+            SuiteEvaluator(base, [], {"default": "mean"})
+
+    def test_suite_scoring_resolves_mixed_scenario_and_aggregate_bases(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["objective_scenario"] = "base"
+        mock_config["optimize"]["scoring"] = [
+            {"metric": "adg_strategy_eq", "goal": "max"},
+            {
+                "metric": "strategy_eq_underwater_pct_mean",
+                "goal": "min",
+                "scenario": None,
+            },
+            {
+                "metric": "strategy_eq_recovery_days_max",
+                "goal": "min",
+                "scenario": None,
+                "aggregate": "max",
+            },
+            {
+                "metric": "position_held_days_max",
+                "goal": "min",
+                "scenario": "stress",
+            },
+        ]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        def make_context(label):
+            return ScenarioEvalContext(
+                label=label,
+                config=deepcopy(mock_config),
+                exchanges=["binance"],
+                hlcvs_specs={},
+                btc_usd_specs={},
+                msss={"binance": {}},
+                timestamps={"binance": None},
+                shared_hlcvs_np={"binance": np.zeros((1, 1, 5))},
+                shared_btc_np={},
+                attachments={"hlcvs": {}, "btc": {}},
+                coin_indices={"binance": None},
+                overrides={},
+            )
+
+        evaluator = SuiteEvaluator(
+            base,
+            [make_context("base"), make_context("stress")],
+            {"default": "mean"},
+        )
+        individual = DummyIndividual(
+            config_to_individual(mock_config, base.bounds, base.sig_digits)
+        )
+
+        def metric_stats(value):
+            return {
+                "mean": value,
+                "min": value,
+                "max": value,
+                "std": 0.0,
+                "median": value,
+            }
+
+        scenario_metric_payloads = [
+            {
+                "stats": {
+                    "adg_strategy_eq": metric_stats(0.01),
+                    "strategy_eq_underwater_pct_mean": metric_stats(0.1),
+                    "strategy_eq_recovery_days_max": metric_stats(10.0),
+                    "position_held_days_max": metric_stats(5.0),
+                }
+            },
+            {
+                "stats": {
+                    "adg_strategy_eq": metric_stats(0.002),
+                    "strategy_eq_underwater_pct_mean": metric_stats(0.5),
+                    "strategy_eq_recovery_days_max": metric_stats(50.0),
+                    "position_held_days_max": metric_stats(20.0),
+                }
+            },
+        ]
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            side_effect=scenario_metric_payloads,
+        ):
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
+
+        assert objectives == pytest.approx((-0.01, 0.3, 50.0, 20.0))
+        assert penalty == 0.0
+        assert metrics["objectives"] == pytest.approx(
+            {"w_0": -0.01, "w_1": 0.3, "w_2": 50.0, "w_3": 20.0}
+        )
+        assert metrics["suite_metrics"]["metrics"]["adg_strategy_eq"]["scenarios"] == {
+            "base": 0.01,
+            "stress": 0.002,
+        }
 
     def test_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY

@@ -177,7 +177,6 @@ class EventTypes:
     OPEN_ORDERS_SNAPSHOT_DELTA = "open_orders.snapshot_delta"
     PLANNING_UNAVAILABLE = "planning.unavailable"
     PLANNING_DEFER_SUMMARY = "planning.defer_summary"
-    PLANNING_SYMBOL_STATE = "planning.symbol_state"
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
     FORAGER_ELIGIBILITY_CHANGED = "forager.eligibility_changed"
@@ -235,6 +234,10 @@ class EventTypes:
     FILLS_REFRESH_SUMMARY = "fills.refresh_summary"
     FILL_INGESTED = "fill.ingested"
     FILLS_INGESTED_SUMMARY = "fills.ingested_summary"
+    FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED = (
+        "fill.position_open_boundary_recovery_used"
+    )
+    FILL_POSITION_PRICE_TOLERANCE_USED = "fill.position_price_tolerance_used"
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
     RISK_MODE_CHANGED = "risk.mode_changed"
@@ -338,12 +341,6 @@ class ReasonCodes:
     ORDER_CHURN_ACTION_ATTEMPT = "order_churn_action_attempt"
     ORDER_CHURN_ALLOWANCE_EXHAUSTED = "order_churn_allowance_exhausted"
     ORDER_CHURN_MARKET_DATA_UNAVAILABLE = "order_churn_market_data_unavailable"
-    ORDER_CHURN_ACTION_HEADROOM_UNAVAILABLE = (
-        "order_churn_action_headroom_unavailable"
-    )
-    ORDER_CHURN_ACTION_HEADROOM_EXHAUSTED = (
-        "order_churn_action_headroom_exhausted"
-    )
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"
@@ -405,7 +402,6 @@ class ReasonCodes:
     HSL_TIMELINE_REPLAY_STARTED = "hsl_timeline_replay_started"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
     SINK_PIPELINE_CLOSING = "pipeline_closing"
-    SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
     STARTUP_PHASE_READY = "startup_phase_ready"
     STAGED_REFRESH_PROGRESS = "staged_refresh_progress"
     STAGED_REFRESH_TIMING = "staged_refresh_timing"
@@ -526,7 +522,6 @@ PHASE1_EVENT_TYPES = {
     EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA,
     EventTypes.PLANNING_UNAVAILABLE,
     EventTypes.PLANNING_DEFER_SUMMARY,
-    EventTypes.PLANNING_SYMBOL_STATE,
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
     EventTypes.FORAGER_ELIGIBILITY_CHANGED,
@@ -578,6 +573,8 @@ PHASE1_EVENT_TYPES = {
     EventTypes.FILLS_REFRESH_SUMMARY,
     EventTypes.FILL_INGESTED,
     EventTypes.FILLS_INGESTED_SUMMARY,
+    EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
+    EventTypes.FILL_POSITION_PRICE_TOLERANCE_USED,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
     EventTypes.RISK_MODE_CHANGED,
@@ -1330,7 +1327,6 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=60_000
     ),
     EventTypes.PLANNING_DEFER_SUMMARY: EventRoute(console=False, text=False),
-    EventTypes.PLANNING_SYMBOL_STATE: EventRoute(console=False, text=False),
     EventTypes.FORAGER_SELECTION: EventRoute(
         console=True, text=True, throttle_interval_ms=5 * 60 * 1000
     ),
@@ -1395,6 +1391,12 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.FILLS_REFRESH_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.FILL_INGESTED: EventRoute(console=True, text=True),
     EventTypes.FILLS_INGESTED_SUMMARY: EventRoute(console=True, text=True),
+    EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED: EventRoute(
+        console=True, text=True
+    ),
+    EventTypes.FILL_POSITION_PRICE_TOLERANCE_USED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),
@@ -1667,6 +1669,12 @@ def _console_order_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
+    for key in ("error_status", "error_code", "error_label", "error_reason"):
+        value = _data_str(data, key)
+        if value:
+            if key == "error_reason" and len(value) > 96:
+                value = f"{value[:93]}..."
+            parts.append(f"{key.removeprefix('error_')}={value}")
     return parts
 
 

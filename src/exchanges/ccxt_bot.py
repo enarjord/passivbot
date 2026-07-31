@@ -144,6 +144,102 @@ class CCXTBot(Passivbot):
         order["qty"] = order["amount"]
         return order
 
+    @staticmethod
+    def _ws_order_update_has_fill_progress(order: dict) -> bool:
+        """Return whether an order update proves that some quantity filled."""
+
+        def _number(key: str) -> float | None:
+            for source in (order, order.get("info", {})):
+                if not isinstance(source, dict) or source.get(key) in (None, ""):
+                    continue
+                try:
+                    value = float(source[key])
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                return value if math.isfinite(value) and value >= 0.0 else None
+            return None
+
+        filled = _number("filled")
+        if filled is not None and filled > 0.0:
+            return True
+        amount = _number("amount")
+        remaining = _number("remaining")
+        if amount is None or remaining is None:
+            return False
+        tolerance = max(1e-12, amount * 1e-12)
+        return remaining < amount - tolerance
+
+    def _sparse_ws_order_has_emitted_identity(self, order: dict) -> bool:
+        """Return whether a sparse WS row identifies an order emitted by this process.
+
+        Every supplied exchange/client identity alias must agree with the same
+        emitted record. A Passivbot type marker or an order-shape fingerprint
+        is not ownership evidence because another bot process on the same
+        account may emit the same type and shape.
+        """
+        if not isinstance(order, dict):
+            return False
+        try:
+            now_ts = int(self.get_exchange_time())
+            self._prune_emitted_order_custom_ids(now_ts)
+            exchange_ids = self._sparse_ws_order_identity_aliases(
+                order,
+                ("id", "order_id", "orderId", "orderID", "ordId"),
+            )
+            custom_ids = {
+                self._canonical_passivbot_custom_id(value)
+                for value in self._sparse_ws_order_identity_aliases(
+                    order,
+                    (
+                        "custom_id",
+                        "customId",
+                        "client_order_id",
+                        "clientOrderId",
+                        "client_oid",
+                        "clientOid",
+                        "order_link_id",
+                        "orderLinkId",
+                        "clOrdId",
+                        "cloid",
+                        "text",
+                    ),
+                )
+            }
+            custom_ids.discard("")
+            if not exchange_ids and not custom_ids:
+                return False
+            for record in self._emitted_order_records():
+                record_exchange_id = str(record.get("exchange_id") or "")
+                record_custom_id = str(record.get("canonical_custom_id") or "")
+                exchange_ids_match = not exchange_ids or bool(
+                    record_exchange_id
+                    and exchange_ids == {record_exchange_id}
+                )
+                custom_ids_match = not custom_ids or bool(
+                    record_custom_id
+                    and custom_ids == {record_custom_id}
+                )
+                if exchange_ids_match and custom_ids_match:
+                    return True
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+        return False
+
+    @staticmethod
+    def _sparse_ws_order_identity_aliases(
+        order: dict, candidates: tuple[str, ...]
+    ) -> set[str]:
+        """Collect every nonempty identity alias from unified and raw payloads."""
+        values: set[str] = set()
+        for source in (order, order.get("info", {})):
+            if not isinstance(source, dict):
+                continue
+            for key in candidates:
+                value = source.get(key)
+                if value not in (None, ""):
+                    values.add(str(value))
+        return values
+
     def _get_position_side_for_order(self, order: dict) -> str:
         """Hook: Derive position_side from order data.
 
@@ -580,8 +676,44 @@ class CCXTBot(Passivbot):
                     break
                 raw_orders = await self._do_watch_orders()
                 consecutive_failures = 0
-                normalized = [self._normalize_order_update(o) for o in raw_orders]
-                self.handle_order_update(normalized)
+                normalized = []
+                untrusted = []
+                for order in raw_orders:
+                    try:
+                        normalized.append(self._normalize_order_update(order))
+                    except (KeyError, TypeError, ValueError) as exc:
+                        untrusted.append((order, exc))
+                if untrusted:
+                    symbols = {
+                        str(order.get("symbol") or "")
+                        for order, _exc in untrusted
+                        if isinstance(order, dict) and order.get("symbol")
+                    }
+                    now_monotonic = time.monotonic()
+                    last_warning = float(
+                        getattr(
+                            self,
+                            "_untrusted_order_ws_last_warning_monotonic",
+                            float("-inf"),
+                        )
+                    )
+                    if now_monotonic - last_warning >= 60.0:
+                        logging.warning(
+                            "[ws] %s order updates lacked authoritative order semantics; "
+                            "discarding %d rows and requesting account-state refresh | symbols=%s",
+                            self.exchange,
+                            len(untrusted),
+                            self._log_symbols(sorted(symbols), limit=8),
+                        )
+                        self._untrusted_order_ws_last_warning_monotonic = now_monotonic
+                    self._mark_account_critical_state_dirty(
+                        reason="order_ws_semantics_unavailable",
+                        symbols=symbols,
+                        source=f"{self.exchange}_order_ws",
+                        level=logging.DEBUG,
+                    )
+                if normalized:
+                    self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
             except Exception as e:

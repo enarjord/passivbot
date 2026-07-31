@@ -102,18 +102,20 @@ class BitgetBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Bitget provides posSide in info."""
-        if not bool(
-            getattr(self, "_config_hedge_mode", True)
-            and getattr(self, "hedge_mode", True)
-        ):
+        if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
-        position_side = str(
-            order.get("position_side")
-            or order.get("info", {}).get("posSide")
-            or ""
-        ).lower()
-        if position_side in {"long", "short"}:
-            return position_side
+        info = order.get("info") or {}
+        supplied = {
+            str(value).lower()
+            for value in (
+                order.get("position_side"),
+                info.get("posSide"),
+                info.get("holdSide"),
+            )
+            if value not in (None, "")
+        }
+        if len(supplied) == 1 and next(iter(supplied)) in {"long", "short"}:
+            return next(iter(supplied))
         raise ValueError("bitget order missing authoritative position-side semantics")
 
     def _canonical_open_order_reduce_only(self, order: dict) -> bool | None:
@@ -171,6 +173,8 @@ class BitgetBot(CCXTBot):
         order["side"] = self._determine_side(order)
         order["position_side"] = self._get_position_side_for_order(order)
         order["qty"] = order["amount"]
+        if self._ws_order_update_has_fill_progress(order):
+            order["_pb_order_update_requires_authoritative_refresh"] = True
         return order
 
     def _determine_side(self, order: dict) -> str:
@@ -182,7 +186,7 @@ class BitgetBot(CCXTBot):
             side = str(order.get("side") or info.get("side") or "").lower()
             if side in ("buy", "sell"):
                 return side
-            raise Exception(f"failed to determine UTA side {order}")
+            raise ValueError("bitget UTA order missing explicit buy/sell side")
         if "info" in order:
             if all([x in order["info"] for x in ["tradeSide", "reduceOnly", "posSide"]]):
                 if order["info"]["tradeSide"] == "close":
@@ -198,7 +202,7 @@ class BitgetBot(CCXTBot):
         side = str(order.get("side") or (order.get("info") or {}).get("side") or "").lower()
         if side in {"buy", "sell"}:
             return side
-        raise Exception(f"failed to determine side {order}")
+        raise ValueError("bitget order missing authoritative side")
 
     def _normalize_open_orders(self, fetched: list) -> list:
         """Bitget override: derive side from tradeSide/posSide."""

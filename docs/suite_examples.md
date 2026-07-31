@@ -185,6 +185,54 @@ Interpretation:
 - use `mean` for general performance metrics
 - use `max` for risk and recovery metrics where the worst scenario matters more than the average
 
+`optimize.objective_scenario` sets the default source for scoring objectives. Individual scoring
+entries may select a named `scenario`, set `scenario` explicitly to `null` to use suite
+aggregation, and optionally set an objective-only `aggregate` reducer. For example:
+
+```json
+{
+  "optimize": {
+    "objective_scenario": "base",
+    "scoring": [
+      {"metric": "adg_strategy_eq", "goal": "max"},
+      {
+        "metric": "strategy_eq_underwater_pct_mean",
+        "goal": "min",
+        "scenario": null
+      }
+    ]
+  }
+}
+```
+
+Here ADG uses `base`, while underwater percentage uses the configured suite aggregate.
+
+Limits choose their basis independently. This example applies a tighter drawdown threshold to the
+base scenario and a looser worst-scenario threshold across the whole suite:
+
+```json
+{
+  "optimize": {
+    "limits": [
+      {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "scenario": "base",
+        "value": 0.5
+      },
+      {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "stat": "max",
+        "value": 0.7
+      }
+    ]
+  }
+}
+```
+
+The two limits are independent and both penalties apply when both thresholds are exceeded.
+
 ## Recommended Workflow
 
 1. Start with a single backtest or optimize run.

@@ -69,6 +69,28 @@ def test_auto_penalize_if_respects_scoring_weight_sign():
     assert violation == (0.0005 - 0.0001) * 3
 
 
+def test_auto_limit_without_scoring_weight_is_ignored_after_validation():
+    entry = {"metric": "adg", "penalize_if": "auto", "value": 0.0005}
+    assert expand_limit_checks([entry], {}, penalty_weight=1000.0) == []
+
+
+def test_unknown_auto_limit_metric_raises_before_weight_lookup():
+    entry = {"metric": "adgg", "penalize_if": "auto", "value": 0.0005}
+
+    with pytest.raises(ValueError, match="unknown optimizer limit metric 'adgg'"):
+        expand_limit_checks([entry], {}, penalty_weight=1000.0)
+
+
+def test_disabled_unknown_auto_limit_is_skipped():
+    entry = {
+        "metric": "adgg",
+        "penalize_if": "auto",
+        "value": 0.0005,
+        "enabled": False,
+    }
+    assert expand_limit_checks([entry], {}, penalty_weight=1000.0) == []
+
+
 def test_disabled_limit_entry_is_skipped():
     entry = {
         "metric": "drawdown_worst",
@@ -148,3 +170,42 @@ def test_explicit_stat_overrides_aggregate_config():
     )
     assert checks[0]["stat"] == "min"
     assert checks[0]["metric_key"] == "adg_min"
+
+
+def test_named_scenario_limit_uses_scenario_mean():
+    entry = {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "scenario": "base",
+        "value": 0.5,
+    }
+    checks = expand_limit_checks(
+        [entry],
+        {},
+        penalty_weight=1000.0,
+        aggregate_cfg={"default": "max"},
+    )
+
+    assert checks[0]["scenario"] == "base"
+    assert checks[0]["stat"] == "mean"
+    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
+
+
+def test_explicit_null_scenario_uses_suite_stat():
+    entry = {
+        "metric": "drawdown_worst_strategy_eq",
+        "penalize_if": "greater_than",
+        "scenario": None,
+        "stat": "max",
+        "value": 0.7,
+    }
+    checks = expand_limit_checks(
+        [entry],
+        {},
+        penalty_weight=1000.0,
+        aggregate_cfg={"default": "mean"},
+    )
+
+    assert checks[0]["scenario"] is None
+    assert checks[0]["stat"] == "max"
+    assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"

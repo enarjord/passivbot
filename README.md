@@ -1,6 +1,6 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, GateIO, Binance, Kucoin, Hyperliquid and WEEX
+# Trading bot running on Bybit, OKX, Bitget, Bitunix, GateIO, Binance, Kucoin, Hyperliquid and WEEX
 
 :warning: **Used at one's own risk** :warning:
 
@@ -42,7 +42,8 @@ Passivbot manages underperforming, or "stuck", positions by realizing small loss
 
 To install Passivbot and its dependencies, follow the steps below.
 
-Passivbot requires **Python 3.12**. Earlier versions are not supported.
+Passivbot supports **Python 3.12 and Python 3.14**. Python 3.13 is not supported by the pinned
+dependency set.
 
 ### Upgrading a v7 config
 
@@ -88,7 +89,10 @@ Create a virtual environment to manage dependencies:
 
  **Linux/macOS:**
 ```sh
-python3 -m venv venv
+# Replace python3.14 with the installed supported executable (python3.12 or python3.14).
+PYTHON_BIN=python3.14
+"$PYTHON_BIN" --version
+"$PYTHON_BIN" -m venv venv
 ```
 
  **Windows (Command Prompt or PowerShell):**
@@ -248,6 +252,7 @@ https://partner.bitget.com/bg/Y8FU1W
 https://www.okx.com/join/PASSIVBOT  
 https://app.hyperliquid.xyz/join/PASSIVBOT  
 https://www.kucoin.com/r/broker/CX8QZQJX  
+https://www.weex.com/en/register?vipCode=ppc8
 
 **Note on Binance**  
 To support continued Passivbot development, please use a Binance account which  

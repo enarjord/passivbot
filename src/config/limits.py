@@ -3,6 +3,7 @@ import json
 import re
 import shlex
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import hjson
@@ -10,7 +11,14 @@ import hjson
 from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name
 
 
-SUPPORTED_LIMIT_STATS = {"min", "max", "mean", "std", "median"}
+SUPPORTED_AGGREGATE_MODES = {"min", "max", "mean", "std", "median"}
+SUPPORTED_LIMIT_STATS = SUPPORTED_AGGREGATE_MODES
+
+
+@dataclass(frozen=True)
+class LimitBasis:
+    scenario: Optional[str]
+    stat: str
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -86,7 +94,7 @@ _INLINE_LIMIT_OP_RE = re.compile(
 
 def _tokenize_cli_limit_entry(raw_entry: str) -> List[str]:
     tokens = shlex.split(raw_entry)
-    if len(tokens) >= 3:
+    if len(tokens) >= 3 and not _INLINE_LIMIT_OP_RE.match(tokens[0]):
         return tokens
 
     match = _INLINE_LIMIT_OP_RE.match(raw_entry)
@@ -160,11 +168,14 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         value = value.strip()
         if key == "stat":
             entry["stat"] = value
+        elif key == "scenario":
+            entry["scenario"] = None if value.lower() == "null" else value
         elif key == "enabled":
             entry["enabled"] = _parse_cli_bool(value)
         else:
             raise ValueError(
-                f"Unsupported CLI --limit option {key!r}; supported extras are stat=... and enabled=..."
+                f"Unsupported CLI --limit option {key!r}; supported extras are "
+                "scenario=..., stat=..., and enabled=..."
             )
 
     return _normalize_limit_entry_preserve_extras(entry)
@@ -290,13 +301,31 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
     stat = payload.get("stat") or payload.get("field")
     normalized_stat: Optional[str] = None
     if stat is not None:
-        stat = str(stat).lower()
+        stat = str(stat).strip().lower()
         if stat not in SUPPORTED_LIMIT_STATS:
             raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
         normalized_stat = stat
+    scenario_present = "scenario" in payload
+    scenario = payload.get("scenario")
+    if scenario is not None:
+        if not isinstance(scenario, str):
+            raise ValueError(
+                f"Limit scenario for {metric} must be a scenario label string or null."
+            )
+        scenario = scenario.strip()
+        if not scenario:
+            raise ValueError(
+                f"Limit scenario for {metric} must be a non-empty scenario label or null."
+            )
+    if scenario is not None and normalized_stat is not None:
+        raise ValueError(
+            f"Limit on {metric} cannot set both a named scenario and stat."
+        )
     result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
     if normalized_stat:
         result["stat"] = normalized_stat
+    if scenario_present:
+        result["scenario"] = scenario
     if penalize_if in {
         "greater_than",
         "greater_than_or_equal",
@@ -472,6 +501,28 @@ def resolve_limit_stat(
             )
         return resolved
     return resolve_aggregate_mode(metric, aggregate_cfg)
+
+
+def resolve_limit_basis(
+    entry: Dict[str, Any],
+    aggregate_cfg: Optional[Dict[str, Any]] = None,
+) -> LimitBasis:
+    metric = canonical_metric_name(str(entry.get("metric", "") or ""))
+    scenario = entry.get("scenario")
+    if scenario is not None:
+        if not isinstance(scenario, str) or not scenario.strip():
+            raise ValueError(
+                f"Limit scenario for {metric} must be a non-empty scenario label or null."
+            )
+        if entry.get("stat") is not None:
+            raise ValueError(
+                f"Limit on {metric} cannot set both a named scenario and stat."
+            )
+        return LimitBasis(scenario=scenario.strip(), stat="mean")
+    return LimitBasis(
+        scenario=None,
+        stat=resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg),
+    )
 
 
 def _resolve_optimize_limits_for_load(

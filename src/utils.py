@@ -19,6 +19,7 @@ import portalocker  # type: ignore
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
+    resolve_custom_endpoint_override_with_aliases,
 )
 
 warnings.filterwarnings(
@@ -488,12 +489,12 @@ async def load_markets(
     quote=None,
 ) -> dict:
     """
-    Standalone helper to load and cache CCXT markets for a given exchange.
+    Standalone helper to load and cache markets for a given exchange.
 
     - Reads from caches/{exchange}/markets.json if fresh
-    - Otherwise fetches via ccxt, writes cache, and returns the markets dict
+    - Otherwise fetches through the exchange client, writes cache, and returns the markets dict
 
-    Returns a markets dictionary as provided by ccxt.
+    Returns a CCXT-compatible markets dictionary.
 
     Note: Uses the exchange name as-is (e.g., "binance" not "binanceusdm") for
     consistency with other cache paths (pnls, ohlcv, fill_events).
@@ -516,10 +517,29 @@ async def load_markets(
     except Exception as e:
         logging.error("Error loading %s: %s", markets_path, e)
 
-    # Fetch from exchange via ccxt
+    # Fetch from the exchange client.
     owned_cc = cc is None
     if owned_cc:
-        cc = load_ccxt_instance(ex, enable_rate_limit=True)
+        if ex == "bitunix":
+            # Bitunix is intentionally native because it is absent from CCXT.
+            # Standalone market preloads must use the same public REST client as
+            # the live bot so a cold cache cannot fall through to CCXT.
+            from exchanges.bitunix import (
+                BitunixClient,
+                apply_bitunix_endpoint_override,
+            )
+
+            client_config = apply_bitunix_endpoint_override(
+                {
+                    "enableRateLimit": True,
+                    "timeout": 60_000,
+                    "wsEnabled": False,
+                },
+                resolve_custom_endpoint_override(ex),
+            )
+            cc = BitunixClient(client_config)
+        else:
+            cc = load_ccxt_instance(ex, enable_rate_limit=True)
     try:
         markets = await cc.load_markets(True)
     except Exception as e:
@@ -598,6 +618,12 @@ def to_standard_exchange_name(exchange: str) -> str:
     """
     ex = (exchange or "").lower()
 
+    # CCXT 4.5.66 renamed its Gate.io client from ``gateio`` to ``gate``.
+    # Passivbot retains ``gateio`` as the canonical identity for connector
+    # routing, caches, broker attribution, events, and persisted state.
+    if ex == "gate":
+        return "gateio"
+
     # Remove known futures suffixes
     for suffix in ("usdm", "futures"):
         if ex.endswith(suffix):
@@ -638,21 +664,24 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
     The returned instance should be closed by the caller with: await cc.close()
     """
     ex = to_ccxt_exchange_id(exchange_id)
+    client_id = to_ccxt_client_id(ex)
     try:
-        cc = getattr(ccxt, ex)(
+        cc = getattr(ccxt, client_id)(
             {
                 "enableRateLimit": bool(enable_rate_limit),
                 # Default ccxt timeout can be too low for long lookbacks; raise to be tolerant.
                 "timeout": int(timeout_ms),
             }
         )
-    except Exception:
-        raise RuntimeError(f"ccxt exchange '{ex}' not available")
+    except Exception as exc:
+        raise RuntimeError(
+            f"ccxt exchange client {client_id!r} not available for canonical exchange {ex!r}"
+        ) from exc
     try:
         cc.options["defaultType"] = "swap"
-        if ex == "okx":
+        if client_id == "okx":
             cc.options["fetchMarkets"] = {"types": ["swap"]}
-        if ex == "hyperliquid":
+        if client_id == "hyperliquid":
             # Include HIP-3 stock perps from TradeXYZ
             cc.options["fetchMarkets"] = {
                 "types": ["swap", "hip3"],
@@ -662,7 +691,11 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
             }
     except Exception:
         pass
-    override = resolve_custom_endpoint_override(ex)
+    override = (
+        resolve_custom_endpoint_override_with_aliases(ex, (client_id,))
+        if client_id != ex
+        else resolve_custom_endpoint_override(ex)
+    )
     apply_rest_overrides_to_ccxt(cc, override)
     return cc
 

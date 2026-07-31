@@ -21,6 +21,9 @@ from outcome.order_ownership import (
 )
 
 
+_MAX_MANAGED_ORDER_CLEANUP_PASSES = 3
+
+
 @dataclass(frozen=True)
 class OutcomeOrderCreate:
     intent: OutcomeLiveOrderIntent
@@ -80,41 +83,51 @@ async def _cancel_all_managed_orders(
 
     if authoritative is None:
         authoritative = await client.fetch_account_snapshot((market,))
-    managed = tuple(
-        order
-        for order in authoritative.open_orders
-        if order.market_id == market.market_id
-        and is_managed_outcome_client_order_id(order.client_order_id, market.market_id)
-    )
     cleanup_errors: list[Exception] = []
     cancelled = []
-    for order in managed:
-        try:
-            cancelled.append(
-                await client.cancel_order(
-                    market,
-                    outcome=order.outcome,
-                    order_id=int(order.order_id),
-                    expected_client_order_id=order.client_order_id,
-                )
+    verified = authoritative
+    remaining: list[str] = []
+    for _ in range(_MAX_MANAGED_ORDER_CLEANUP_PASSES):
+        managed = tuple(
+            order
+            for order in verified.open_orders
+            if order.market_id == market.market_id
+            and is_managed_outcome_client_order_id(
+                order.client_order_id,
+                market.market_id,
             )
-        except Exception as exc:
-            cleanup_errors.append(exc)
-    verified = await client.fetch_account_snapshot((market,))
-    remaining = sorted(
-        order.order_id
-        for order in verified.open_orders
-        if order.market_id == market.market_id
-        and is_managed_outcome_client_order_id(order.client_order_id, market.market_id)
-    )
-    if remaining:
-        error = RuntimeError(
-            f"HIP-4 managed-order cleanup is not authoritative: {remaining}"
         )
-        if cleanup_errors:
-            raise error from cleanup_errors[0]
-        raise error
-    return tuple(cancelled), verified
+        for order in managed:
+            try:
+                cancelled.append(
+                    await client.cancel_order(
+                        market,
+                        outcome=order.outcome,
+                        order_id=int(order.order_id),
+                        expected_client_order_id=order.client_order_id,
+                    )
+                )
+            except Exception as exc:
+                cleanup_errors.append(exc)
+        verified = await client.fetch_account_snapshot((market,))
+        remaining = sorted(
+            order.order_id
+            for order in verified.open_orders
+            if order.market_id == market.market_id
+            and is_managed_outcome_client_order_id(
+                order.client_order_id,
+                market.market_id,
+            )
+        )
+        if not remaining:
+            return tuple(cancelled), verified
+    error = RuntimeError(
+        "HIP-4 managed-order cleanup is not authoritative after "
+        f"{_MAX_MANAGED_ORDER_CLEANUP_PASSES} passes: {remaining}"
+    )
+    if cleanup_errors:
+        raise error from cleanup_errors[0]
+    raise error
 
 
 def _order_matches_intent(

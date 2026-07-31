@@ -2073,6 +2073,26 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
             "not-a-number",
             "config\\.live\\.max_forager_candle_refresh_seconds must be numeric",
         ),
+        (
+            "forager_ws_candle_rest_audit_minutes",
+            0,
+            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be finite",
+        ),
+        (
+            "forager_ws_candle_rest_audit_minutes",
+            61,
+            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be finite",
+        ),
+        (
+            "forager_ws_candle_rest_audit_minutes",
+            "not-a-number",
+            "config\\.live\\.forager_ws_candle_rest_audit_minutes must be numeric",
+        ),
+        (
+            "enable_forager_ws_candles",
+            "false",
+            "config\\.live\\.enable_forager_ws_candles must be a boolean",
+        ),
     ],
 )
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):

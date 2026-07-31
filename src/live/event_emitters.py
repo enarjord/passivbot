@@ -20,12 +20,25 @@ from live.event_bus import (
     utc_ms,
 )
 from live.balance_composition import public_balance_composition
-from live.diagnostic_safety import bounded_exception_type as _bounded_exception_type
+from live.diagnostic_safety import (
+    bounded_exception_type as _bounded_exception_type,
+    bounded_exchange_error_context as _bounded_exchange_error_context,
+    bounded_exchange_error_context_from_mapping,
+)
 from candlestick_manager import sanitize_remote_fetch_diagnostic
+
+_bounded_exchange_error_context_from_mapping = (
+    bounded_exchange_error_context_from_mapping
+)
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
     return getattr(bot, "_live_event_current_cycle_id", None)
+
+
+def _freshness_epoch(bot: Any) -> int:
+    """Return the ledger epoch for diagnostics without creating trading state."""
+    return int(getattr(getattr(bot, "freshness_ledger", None), "epoch", 0) or 0)
 
 
 def set_live_event_context_ids(bot: Any, **kwargs: str | None) -> None:
@@ -281,7 +294,12 @@ def _sanitize_cycle_degraded_payload(value: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if "timings_ms" in value:
         out["timings_ms"] = _cycle_degraded_int_map(value.get("timings_ms"))
-    for key in ("retry_count", "failed_count"):
+    for key in (
+        "retry_count",
+        "failed_count",
+        "pending_pnl_count",
+        "degraded_pnl_count",
+    ):
         parsed = _cycle_degraded_non_negative_int(value.get(key))
         if parsed is not None:
             out[key] = parsed
@@ -712,7 +730,7 @@ def _emit_authoritative_remote_call_event_unchecked(
     stage = str(stage or "").lower()
     surface = str(surface or "unknown")
     cycle_id = current_live_event_cycle_id(bot)
-    authoritative_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    authoritative_epoch = _freshness_epoch(bot)
     remote_call_group_id = (
         f"{cycle_id}:authoritative" if cycle_id else f"auth_{authoritative_epoch}:authoritative"
     )
@@ -1005,9 +1023,7 @@ def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
         status="started",
         data={
             "loop_start_ms": int(loop_start_ms),
-            "authoritative_epoch": int(
-                getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-            ),
+            "authoritative_epoch": _freshness_epoch(bot),
         },
     )
     return cycle_id
@@ -1033,9 +1049,7 @@ def emit_live_cycle_completed(
         data={
             "elapsed_ms": elapsed_ms,
             "timings_ms": dict(timings_ms or {}),
-            "authoritative_epoch": int(
-                getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-            ),
+            "authoritative_epoch": _freshness_epoch(bot),
             "orders_changed": bool(getattr(bot, "execution_scheduled", False)),
         },
     )
@@ -1055,9 +1069,7 @@ def emit_live_cycle_degraded(
     if not cycle_id:
         return
     payload = _sanitize_cycle_degraded_payload(dict(data or {}))
-    payload["authoritative_epoch"] = int(
-        getattr(bot, "_authoritative_refresh_epoch", 0) or 0
-    )
+    payload["authoritative_epoch"] = _freshness_epoch(bot)
     bot._emit_live_event(
         EventTypes.CYCLE_DEGRADED,
         level=level,
@@ -1180,93 +1192,6 @@ def emit_planning_defer_summary_event(
     except Exception as exc:
         logging.debug(
             "[event] failed to emit planning defer summary event: %s",
-            _bounded_exception_type(exc),
-        )
-
-
-def emit_planning_symbol_state_event(
-    bot: Any,
-    availability: Any,
-    *,
-    context: str,
-    sample_limit: int = 32,
-) -> None:
-    try:
-        records = tuple(getattr(availability, "records", ()) or ())
-        summary = dict(availability.summary())
-        unavailable = [
-            record
-            for record in records
-            if str(getattr(record, "status", "")) == "unavailable"
-        ]
-        reason_counts = Counter(
-            str(getattr(record, "reason_code", "") or "unknown")
-            for record in unavailable
-        )
-        order_class_counts = Counter(
-            str(getattr(record, "order_class", "") or "unknown")
-            for record in unavailable
-        )
-        surface_counts: Counter[str] = Counter()
-        for record in unavailable:
-            surface_counts.update(
-                str(surface)
-                for surface in getattr(record, "unavailable_surfaces", ()) or ()
-            )
-        symbols = sorted(
-            {
-                str(getattr(record, "symbol", ""))
-                for record in unavailable
-                if getattr(record, "symbol", None)
-            }
-        )
-
-        samples = []
-        for record in unavailable[: max(0, int(sample_limit))]:
-            samples.append(
-                {
-                    "symbol": str(getattr(record, "symbol", "")),
-                    "pside": str(getattr(record, "position_side", "")),
-                    "order_class": str(getattr(record, "order_class", "")),
-                    "reason_code": str(getattr(record, "reason_code", "") or "unknown"),
-                    "unavailable_surfaces": [
-                        str(surface)
-                        for surface in getattr(record, "unavailable_surfaces", ()) or ()
-                    ],
-                    "required_surfaces": [
-                        str(surface)
-                        for surface in getattr(record, "required_surfaces", ()) or ()
-                    ],
-                }
-            )
-
-        bot._emit_live_event(
-            EventTypes.PLANNING_SYMBOL_STATE,
-            level="debug",
-            component="planning_availability",
-            tags=(EventTags.PLANNING, EventTags.SNAPSHOT, EventTags.AVAILABILITY),
-            cycle_id=current_live_event_cycle_id(bot),
-            snapshot_id=str(getattr(availability, "snapshot_id", "") or ""),
-            status="succeeded",
-            reason_code=ReasonCodes.SNAPSHOT_SYMBOL_STATE,
-            data={
-                "context": str(context),
-                "summary": summary,
-                "unavailable_count": len(unavailable),
-                "unavailable_by_reason": dict(sorted(reason_counts.items())),
-                "unavailable_by_order_class": dict(sorted(order_class_counts.items())),
-                "unavailable_by_surface": dict(sorted(surface_counts.items())),
-                "unavailable_symbols": symbols[:32],
-                "unavailable_symbols_count": len(symbols),
-                "unavailable_symbols_truncated": len(symbols) > 32,
-                "records_sample": samples,
-                "records_sample_count": len(samples),
-                "records_truncated": len(unavailable) > len(samples),
-            },
-        )
-    except Exception as exc:
-        logging.debug(
-            "[event] failed to emit planning symbol state event: %s",
             _bounded_exception_type(exc),
         )
 
@@ -3159,6 +3084,8 @@ def _emit_candle_tail_projected_event_unchecked(
     symbol: str,
     context: dict[str, Any] | None,
     reason_code: str = ReasonCodes.OPEN_TAIL_PROJECTION,
+    pside: str | None = None,
+    status: str = "recovered",
 ) -> None:
     ctx = dict(context or {})
     data: dict[str, Any] = {"timeframe": str(ctx.get("timeframe") or "1m")}
@@ -3169,10 +3096,14 @@ def _emit_candle_tail_projected_event_unchecked(
         "tail_gap_candles",
         "missing_candles",
         "max_tail_gap_ms",
+        "consecutive_uses",
     ):
         value = _safe_int(ctx.get(key))
         if value is not None:
             data[key] = value
+    consumer = ctx.get("consumer")
+    if consumer is not None:
+        data["consumer"] = str(consumer)
     reason = ctx.get("reason")
     if reason is not None:
         data["projection_reason"] = str(reason)
@@ -3184,10 +3115,15 @@ def _emit_candle_tail_projected_event_unchecked(
         EventTypes.CANDLE_TAIL_PROJECTED,
         level="debug",
         component="candle.tail_projection",
-        tags=(EventTags.CANDLE, EventTags.TAIL, EventTags.EMA),
+        tags=(
+            (EventTags.CANDLE, EventTags.TAIL, EventTags.TRAILING)
+            if data.get("consumer") == "trailing_extrema"
+            else (EventTags.CANDLE, EventTags.TAIL, EventTags.EMA)
+        ),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol),
-        status="recovered",
+        pside=str(pside) if pside is not None else None,
+        status=str(status),
         reason_code=str(reason_code),
         data=data,
     )
@@ -3996,7 +3932,6 @@ def emit_order_churn_admission_event(
     rolling_count: int,
     activation_count: int,
     market_distance_threshold: float,
-    action_headroom: float | int | None,
     wave: dict | None = None,
 ) -> bool:
     """Emit one bounded summary after final churn admission and priority slicing."""
@@ -4028,8 +3963,6 @@ def emit_order_churn_admission_event(
                 float(distance) * 100.0 for distance in sorted(distances)[:8]
             ],
         }
-        if action_headroom is not None and math.isfinite(float(action_headroom)):
-            data["action_headroom"] = max(0, int(action_headroom))
         emitted = bot._emit_live_event(
             EventTypes.ORDER_CHURN_ADMISSION,
             level="debug",
@@ -4440,10 +4373,13 @@ def emit_execution_order_event(
                     ),
                 }
             )
+            if status in {"failed", "degraded"}:
+                data.update(_bounded_exchange_error_context_from_mapping(result))
         elif isinstance(result, BaseException):
             error = result
         if error is not None:
             data["error_type"] = _bounded_exception_type(error)
+            data.update(_bounded_exchange_error_context(error))
         if extra:
             data.update(extra)
         _add_execution_debug_profile(
@@ -4500,7 +4436,7 @@ def emit_execution_confirmation_requested_event(
         data = {
             "surfaces": sorted(str(surface) for surface in surfaces),
             "target_epoch": int(target_epoch),
-            "current_epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
+            "current_epoch": _freshness_epoch(bot),
             "min_epoch": int(min_epoch) if min_epoch is not None else None,
         }
         _add_execution_debug_profile(
@@ -5151,12 +5087,14 @@ def _fill_refresh_debug_payload(
     new_count: int | None = None,
     enriched_count: int | None = None,
     pending_pnl_count: int | None = None,
+    degraded_pnl_count: int | None = None,
 ) -> dict[str, Any]:
     before_count = _safe_int(event_count_before)
     after_count = _safe_int(event_count_after)
     new_value = _safe_int(new_count)
     enriched_value = _safe_int(enriched_count)
     pending_value = _safe_int(pending_pnl_count)
+    degraded_value = _safe_int(degraded_pnl_count)
     data: dict[str, Any] = {
         "coverage_before_keys": _mapping_key_sample(coverage_before),
         "coverage_after_keys": _mapping_key_sample(coverage_after),
@@ -5165,6 +5103,7 @@ def _fill_refresh_debug_payload(
         "new_count": new_value,
         "enriched_count": enriched_value,
         "pending_pnl_count": pending_value,
+        "degraded_pnl_count": degraded_value,
     }
     if before_count is not None and after_count is not None:
         data["event_count_delta"] = int(after_count) - int(before_count)
@@ -5247,6 +5186,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     new_count: int | None = None,
     enriched_count: int | None = None,
     pending_pnl_count: int | None = None,
+    degraded_pnl_count: int | None = None,
     coverage_before: dict[str, Any] | None = None,
     coverage_after: dict[str, Any] | None = None,
     overlap_minutes: float | None = None,
@@ -5279,6 +5219,7 @@ def _emit_fills_refresh_summary_event_unchecked(
         "new_count": _safe_int(new_count),
         "enriched_count": _safe_int(enriched_count),
         "pending_pnl_count": _safe_int(pending_pnl_count),
+        "degraded_pnl_count": _safe_int(degraded_pnl_count),
     }
     if coverage_before_summary:
         data["coverage_before"] = coverage_before_summary
@@ -5339,6 +5280,7 @@ def _emit_fills_refresh_summary_event_unchecked(
             new_count=new_count,
             enriched_count=enriched_count,
             pending_pnl_count=pending_pnl_count,
+            degraded_pnl_count=degraded_pnl_count,
         )
         if debug:
             data["debug_profile"] = "fills"

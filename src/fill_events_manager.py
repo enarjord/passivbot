@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 import passivbot_rust as pbr
-from ccxt.base.errors import RateLimitExceeded
+from ccxt.base.errors import OrderNotFound, RateLimitExceeded
 from bitget_normalization import (
     deduce_side_pside,
     deduce_uta_side_pside as _deduce_uta_side_pside,
@@ -925,60 +925,27 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
     """
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
     for ev in events:
-        candidates: List[Tuple[float, float, float, bool]] = []
-        for item in _normalize_raw_field(ev.get("raw")):
-            if not isinstance(item, dict):
-                continue
-            data = item.get("data")
-            if not isinstance(data, dict):
-                continue
-            info = data.get("info")
-            if not isinstance(info, dict) or "startPosition" not in info:
-                continue
-            try:
-                start_position = abs(float(info.get("startPosition") or 0.0))
-                qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
-                price = float(data.get("price") or info.get("px") or 0.0)
-                pnl = float(data.get("pnl") or info.get("closedPnl") or 0.0)
-            except (TypeError, ValueError):
-                continue
-            if qty <= 0.0:
-                continue
-
-            side = str(
-                data.get("side") or info.get("side") or ev.get("side") or ""
-            ).lower()
-            position_side = str(
-                ev.get("position_side") or ev.get("pside") or ""
-            ).lower()
-            if not position_side:
-                direction = str(info.get("dir") or "").lower()
-                if "short" in direction:
-                    position_side = "short"
-                elif "long" in direction:
-                    position_side = "long"
-            if position_side == "short":
-                reducing = side == "buy"
-            elif position_side == "long":
-                reducing = side == "sell"
-            else:
-                continue
-
-            after_size = (
-                max(0.0, start_position - qty) if reducing else start_position + qty
-            )
-            entry_price = 0.0
-            if reducing and qty > 0.0 and price > 0.0:
-                if position_side == "short":
-                    entry_price = price + (pnl / qty)
-                else:
-                    entry_price = price - (pnl / qty)
-            elif not reducing and start_position <= 1e-12:
-                entry_price = price
-            candidates.append((after_size, qty, entry_price, reducing))
+        components = _hyperliquid_raw_position_components(ev)
+        candidates = [
+            (after_size, qty, entry_price, reducing)
+            for (
+                _before_size,
+                after_size,
+                qty,
+                _price,
+                entry_price,
+                reducing,
+            ) in components
+        ]
 
         if not candidates:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            recovered_state.pop(key, None)
             continue
 
         reducing_candidates = [item for item in candidates if item[3]]
@@ -987,33 +954,470 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             if after_size <= 1e-12:
                 ev["psize"] = 0.0
                 ev["pprice"] = 0.0
-                continue
-            weighted_qty = sum(
-                item[1] for item in reducing_candidates if item[2] > 0.0
-            )
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(
-                        item[1] * item[2]
-                        for item in reducing_candidates
-                        if item[2] > 0.0
-                    )
-                    / weighted_qty
+            else:
+                weighted_qty = sum(
+                    item[1] for item in reducing_candidates if item[2] > 0.0
                 )
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in reducing_candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+                ev["psize"] = round(after_size, 12)
+        else:
+            after_size = max(item[0] for item in candidates)
             ev["psize"] = round(after_size, 12)
+            if after_size <= 1e-12:
+                ev["pprice"] = 0.0
+            elif all(item[0] - item[1] <= 1e-12 for item in candidates):
+                weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
+                if weighted_qty > 0.0:
+                    ev["pprice"] = (
+                        sum(
+                            item[1] * item[2]
+                            for item in candidates
+                            if item[2] > 0.0
+                        )
+                        / weighted_qty
+                    )
+
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+        )
+        component_order = _unique_position_chain_order(
+            [(component[0], component[1]) for component in components]
+        )
+        if component_order is None:
+            recovered_state.pop(key, None)
             continue
 
-        after_size = max(item[0] for item in candidates)
-        ev["psize"] = round(after_size, 12)
-        if after_size <= 1e-12:
+        ordered_components = [components[index] for index in component_order]
+        first_before = ordered_components[0][0]
+        previous = recovered_state.get(key)
+        event_timestamp = int(ev.get("timestamp") or 0)
+        basis: Optional[float] = None
+        if (
+            previous is not None
+            and event_timestamp > 0
+            and previous[2] == event_timestamp
+            and _is_same_position_size(previous[0], first_before)
+        ):
+            basis = previous[1]
+        position_size = first_before
+        for (
+            before_size,
+            after_size,
+            qty,
+            price,
+            entry_price,
+            reducing,
+        ) in ordered_components:
+            if not _is_same_position_size(position_size, before_size):
+                basis = None
+            if reducing:
+                if entry_price > 0.0:
+                    basis = entry_price
+                position_size = after_size
+                if position_size <= 1e-12:
+                    position_size = 0.0
+                    basis = 0.0
+            else:
+                if before_size <= 1e-12:
+                    basis = price if price > 0.0 else None
+                elif basis is not None and basis > 0.0 and after_size > 0.0:
+                    basis = ((before_size * basis) + (qty * price)) / after_size
+                else:
+                    basis = None
+                position_size = after_size
+
+        ev["psize"] = round(position_size, 12)
+        if position_size <= 1e-12:
             ev["pprice"] = 0.0
-        elif all(item[0] - item[1] <= 1e-12 for item in candidates):
-            weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
-            if weighted_qty > 0.0:
-                ev["pprice"] = (
-                    sum(item[1] * item[2] for item in candidates if item[2] > 0.0)
-                    / weighted_qty
-                )
+        elif basis is not None and basis > 0.0:
+            ev["pprice"] = basis
+        recovered_state[key] = (position_size, basis, event_timestamp)
+
+
+def _is_same_position_size(lhs: float, rhs: float) -> bool:
+    if lhs == rhs:
+        return True
+    if not math.isfinite(lhs) or not math.isfinite(rhs):
+        return False
+    scale = max(1.0, abs(lhs), abs(rhs))
+    return abs(lhs - rhs) <= max(1e-12, 16.0 * math.ulp(scale))
+
+
+def _unique_position_chain_order(
+    chains: Sequence[Tuple[float, float]],
+) -> Optional[List[int]]:
+    if not chains:
+        return None
+    if len(chains) == 1:
+        return [0]
+    heads = [
+        index
+        for index, chain in enumerate(chains)
+        if not any(
+            other_index != index and _is_same_position_size(chain[0], other[1])
+            for other_index, other in enumerate(chains)
+        )
+    ]
+    if len(heads) != 1:
+        return None
+    ordered = [heads[0]]
+    while len(ordered) < len(chains):
+        current_end = chains[ordered[-1]][1]
+        successors = [
+            index
+            for index, chain in enumerate(chains)
+            if index not in ordered and _is_same_position_size(chain[0], current_end)
+        ]
+        if len(successors) != 1:
+            return None
+        ordered.append(successors[0])
+    return ordered
+
+
+def _hyperliquid_raw_position_components(
+    ev: Dict[str, object],
+) -> List[Tuple[float, float, float, float, float, bool]]:
+    """Return raw Hyperliquid (before, after, qty, price, basis, reducing) rows."""
+    components: List[Tuple[float, float, float, float, float, bool]] = []
+    raw_items = _normalize_raw_field(ev.get("raw"))
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        if not isinstance(info, dict) or "startPosition" not in info:
+            continue
+        try:
+            start_position = abs(float(info.get("startPosition") or 0.0))
+            qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
+            price = float(data.get("price") or info.get("px") or 0.0)
+            explicit_pnl = False
+            if "pnl" in data and data["pnl"] not in (None, ""):
+                pnl_value = data["pnl"]
+                explicit_pnl = True
+            elif "closedPnl" in info and info["closedPnl"] not in (None, ""):
+                pnl_value = info["closedPnl"]
+                explicit_pnl = True
+            else:
+                pnl_value = 0.0
+            pnl = float(pnl_value)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0.0:
+            continue
+        side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
+        position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
+        if not position_side:
+            direction = str(info.get("dir") or "").lower()
+            if "short" in direction:
+                position_side = "short"
+            elif "long" in direction:
+                position_side = "long"
+        if position_side == "short":
+            reducing = side == "buy"
+        elif position_side == "long":
+            reducing = side == "sell"
+        else:
+            continue
+        after_size = (
+            max(0.0, start_position - qty) if reducing else start_position + qty
+        )
+        entry_price = 0.0
+        if reducing and price > 0.0 and explicit_pnl:
+            entry_price = (
+                price + (pnl / qty)
+                if position_side == "short"
+                else price - (pnl / qty)
+            )
+        elif start_position <= 1e-12:
+            entry_price = price
+        components.append(
+            (start_position, after_size, qty, price, entry_price, reducing)
+        )
+    return components
+
+
+def _hyperliquid_fill_position_chain(
+    ev: Dict[str, object]
+) -> Optional[Tuple[float, float]]:
+    """Return (before, after) position magnitudes from raw Hyperliquid fills.
+
+    Hyperliquid reports the position size preceding every component fill, which
+    is the only ordering evidence available for fills sharing a millisecond.
+    """
+    components = _hyperliquid_raw_position_components(ev)
+    component_order = _unique_position_chain_order(
+        [(component[0], component[1]) for component in components]
+    )
+    if component_order is None:
+        return None
+    ordered = [components[index] for index in component_order]
+    return ordered[0][0], ordered[-1][1]
+
+
+def _hyperliquid_signed_effective_qty(
+    payload: Dict[str, object],
+) -> Optional[float]:
+    side = str(payload.get("side") or "").lower()
+    if side not in {"buy", "sell"}:
+        return None
+    try:
+        qty = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
+        qty *= _payload_contract_multiplier(payload)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(qty):
+        return None
+    return qty if side == "buy" else -qty
+
+
+def _hyperliquid_component_validation_failure(
+    event: Dict[str, object],
+    child: Dict[str, object],
+) -> Optional[str]:
+    """Return why a normalized legacy aggregate component is unsafe."""
+    try:
+        parent_timestamp = int(event.get("timestamp") or 0)
+        child_timestamp = int(child.get("timestamp") or 0)
+        qty = float(child["qty"])
+        price = float(child["price"])
+        pnl = float(child["pnl"])
+        parent_c_mult = float(event.get("c_mult", 1.0))
+        child_c_mult = float(child.get("c_mult", 1.0))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "component_fields"
+
+    if child_timestamp <= 0 or child_timestamp != parent_timestamp:
+        return "component_timestamp"
+    child_symbol = str(child.get("symbol") or "")
+    if not child_symbol or child_symbol != str(event.get("symbol") or ""):
+        return "component_symbol"
+    child_side = str(child.get("side") or "").lower()
+    if child_side not in {"buy", "sell"} or child_side != str(
+        event.get("side") or ""
+    ).lower():
+        return "component_side"
+    child_position_side = str(child.get("position_side") or "").lower()
+    if child_position_side not in {"long", "short"} or child_position_side != str(
+        event.get("position_side") or event.get("pside") or ""
+    ).lower():
+        return "component_position_side"
+    if not math.isfinite(qty) or qty <= 0.0:
+        return "component_qty"
+    if not math.isfinite(price) or price <= 0.0:
+        return "component_price"
+    if not math.isfinite(pnl):
+        return "component_pnl"
+    if (
+        not math.isfinite(parent_c_mult)
+        or parent_c_mult <= 0.0
+        or not math.isfinite(child_c_mult)
+        or child_c_mult <= 0.0
+        or not math.isclose(parent_c_mult, child_c_mult, rel_tol=1e-12, abs_tol=1e-12)
+    ):
+        return "component_c_mult"
+
+    position_components = _hyperliquid_raw_position_components(child)
+    if len(position_components) != 1:
+        return "component_position_chain"
+    before_size, after_size, raw_qty, raw_price, entry_price, _reducing = (
+        position_components[0]
+    )
+    if not all(
+        math.isfinite(value)
+        for value in (before_size, after_size, raw_qty, raw_price, entry_price)
+    ):
+        return "component_position_chain"
+    if not math.isclose(raw_qty, qty, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_qty"
+    if not math.isclose(raw_price, price, rel_tol=1e-12, abs_tol=1e-12):
+        return "component_price"
+    return None
+
+
+def _hyperliquid_coalesced_reconciliation_failure(
+    event: Dict[str, object],
+    children: Sequence[Dict[str, object]],
+) -> Optional[str]:
+    """Return the aggregate field that prevents safe component expansion."""
+    parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+    child_ids = [str(child.get("id") or "") for child in children]
+    if (
+        len(parent_ids) != len(children)
+        or len(set(parent_ids)) != len(parent_ids)
+        or set(parent_ids) != set(child_ids)
+    ):
+        return "component_ids"
+    source_ids = [str(value) for value in event.get("source_ids") or [] if value]
+    if source_ids and (
+        len(source_ids) != len(children)
+        or len(set(source_ids)) != len(source_ids)
+        or set(source_ids) != set(child_ids)
+    ):
+        return "source_ids"
+
+    for child in children:
+        failure = _hyperliquid_component_validation_failure(event, child)
+        if failure is not None:
+            return failure
+
+    parent_qty = _hyperliquid_signed_effective_qty(event)
+    child_qtys = [_hyperliquid_signed_effective_qty(child) for child in children]
+    if parent_qty is None or any(qty is None for qty in child_qtys):
+        return "signed_qty"
+
+    try:
+        parent_pnl = float(event.get("pnl") or 0.0)
+        child_pnl = sum(float(child.get("pnl") or 0.0) for child in children)
+        parent_fee = signed_fee_paid_from_payload(event)
+        child_fee = sum(signed_fee_paid_from_payload(child) for child in children)
+    except (TypeError, ValueError, OverflowError):
+        return "accounting"
+    values = (parent_qty, *child_qtys, parent_pnl, child_pnl, parent_fee, child_fee)
+    if not all(math.isfinite(float(value)) for value in values):
+        return "accounting"
+
+    def _reconciles(lhs: float, rhs: float) -> bool:
+        return math.isclose(lhs, rhs, rel_tol=1e-12, abs_tol=1e-12)
+
+    if not _reconciles(parent_qty, sum(qty for qty in child_qtys if qty is not None)):
+        return "signed_qty"
+    try:
+        parent_price = float(event["price"])
+        child_prices = [float(child["price"]) for child in children]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return "price_notional"
+    if (
+        not math.isfinite(parent_price)
+        or parent_price <= 0.0
+        or not _reconciles(
+            abs(parent_qty) * parent_price,
+            sum(
+                abs(qty) * price
+                for qty, price in zip(child_qtys, child_prices)
+                if qty is not None
+            ),
+        )
+    ):
+        return "price_notional"
+    if not _reconciles(parent_pnl, child_pnl):
+        return "pnl"
+    if not _reconciles(parent_fee, child_fee):
+        return "fees"
+    return None
+
+
+def _expand_hyperliquid_coalesced_events(
+    events: List[Dict[str, object]],
+) -> List[Dict[str, object]]:
+    """Restore per-execution events from older Hyperliquid cache rows."""
+    expanded: List[Dict[str, object]] = []
+    for event in events:
+        parent_ids = [part for part in str(event.get("id") or "").split("+") if part]
+        source_ids = {str(value) for value in event.get("source_ids") or [] if value}
+        is_legacy_aggregate = len(parent_ids) > 1 or len(source_ids) > 1
+        raw_trades = [
+            item.get("data")
+            for item in _normalize_raw_field(event.get("raw"))
+            if isinstance(item, dict)
+            and item.get("source") == "fetch_my_trades"
+            and isinstance(item.get("data"), dict)
+        ]
+        unique_trades: List[Tuple[str, Dict[str, object]]] = []
+        seen_ids: set[str] = set()
+        for trade in raw_trades:
+            info = trade.get("info")
+            if not isinstance(info, dict):
+                info = {}
+            trade_id = str(
+                trade.get("id")
+                or info.get("tid")
+                or info.get("hash")
+                or ""
+            )
+            if not trade_id or trade_id in seen_ids:
+                continue
+            seen_ids.add(trade_id)
+            unique_trades.append((trade_id, trade))
+        if len(unique_trades) <= 1 and not is_legacy_aggregate:
+            expanded.append(event)
+            continue
+
+        children: List[Dict[str, object]] = []
+        for trade_id, trade in unique_trades:
+            try:
+                child = HyperliquidFetcher._normalize_trade(trade)
+            except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                raise FillEventCacheContractError(
+                    "malformed Hyperliquid cache aggregate component cannot be "
+                    "normalized; "
+                    f"id={str(event.get('id') or '')!r} component_id={trade_id!r} "
+                    f"reason=malformed_component "
+                    f"error_type={bounded_exception_type(exc)}"
+                ) from exc
+            client_order_id = str(child.get("client_order_id") or "")
+            child["pb_order_type"] = (
+                custom_id_to_snake(client_order_id)
+                if client_order_id
+                else str(event.get("pb_order_type") or "unknown")
+            )
+            if not child["pb_order_type"]:
+                child["pb_order_type"] = "unknown"
+            if event.get("provenance"):
+                child["provenance"] = deepcopy(event["provenance"])
+            children.append(child)
+        failure = _hyperliquid_coalesced_reconciliation_failure(event, children)
+        if failure is not None:
+            raise FillEventCacheContractError(
+                "unreconciled Hyperliquid cache aggregate cannot be mixed with "
+                "individually fetched components; quarantine and rebuild the cache "
+                f"from exchange fills; id={str(event.get('id') or '')!r} "
+                f"components={len(children)} reason={failure}"
+            )
+        expanded.extend(children)
+    return expanded
+
+
+def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
+    """Order fills sharing a millisecond by the exchange's position chain.
+
+    Position reconstruction replays fills in list order, but exchange responses
+    and caches keep no intra-millisecond ordering.  When the exchange reports
+    the position size preceding each fill, the cohort forms a chain whose order
+    is unambiguous; ambiguous cohorts are left untouched.
+    """
+    grouped: Dict[Tuple[str, str, int], List[int]] = defaultdict(list)
+    for index, ev in enumerate(events):
+        key = (
+            str(ev.get("symbol") or ""),
+            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            int(ev.get("timestamp") or 0),
+        )
+        grouped[key].append(index)
+
+    for indexes in grouped.values():
+        if len(indexes) < 2:
+            continue
+        chains = [_hyperliquid_fill_position_chain(events[index]) for index in indexes]
+        if any(chain is None for chain in chains):
+            continue
+        chain_order = _unique_position_chain_order(chains)
+        if chain_order is None:
+            continue
+        reordered = [events[indexes[chain_index]] for chain_index in chain_order]
+        for slot, ev in zip(indexes, reordered):
+            events[slot] = ev
 
 
 def annotate_positions_inplace(
@@ -1503,6 +1907,8 @@ GAP_REASON_CONFIRMED = "confirmed_legitimate"
 GAP_REASON_MANUAL = "manual"
 PENDING_PNL_REFRESH_MARGIN_MS = 5 * 60 * 1000
 KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS = 10 * 60 * 1000
+DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE = 4
+DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS = 24 * 60 * 60 * 1000
 
 
 class KnownGap(TypedDict, total=False):
@@ -1806,8 +2212,18 @@ class FillEventCache:
                 ) from exc
             raise
 
-    def update_metadata_from_events(self, events: Sequence[FillEvent]) -> None:
-        """Update metadata timestamps based on events."""
+    def update_metadata_from_events(
+        self,
+        events: Sequence[FillEvent],
+        *,
+        mark_refreshed: bool = True,
+    ) -> None:
+        """Update cached event bounds and optionally record a remote refresh.
+
+        Loading and normalizing local cache files is not an exchange refresh.
+        Callers doing local-only maintenance must leave ``last_refresh_ms``
+        unchanged so the next incremental fetch still covers bot downtime.
+        """
         if not events:
             return
 
@@ -1824,13 +2240,19 @@ class FillEventCache:
         if newest > current_newest:
             metadata["newest_event_ts"] = newest
 
-        metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        if mark_refreshed:
+            metadata["last_refresh_ms"] = int(
+                datetime.now(tz=timezone.utc).timestamp() * 1000
+            )
         metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
-    def mark_refreshed(self) -> None:
+    def mark_refreshed(self, *, reset_event_bounds: bool = False) -> None:
         """Persist a successful refresh timestamp even if no events exist."""
         metadata = self.load_metadata()
+        if reset_event_bounds:
+            metadata["oldest_event_ts"] = 0
+            metadata["newest_event_ts"] = 0
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
@@ -3239,6 +3661,9 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._degraded_pnl_repair_attempted_keys: set[str] = set()
+        self._degraded_pnl_repair_aux_cursor_ms: dict[str, int] = {}
+        self._degraded_pnl_repair_aux_completed_keys: set[str] = set()
 
     def _apply_fee_policy(
         self,
@@ -3463,9 +3888,12 @@ class FillEventsManager:
             # operate on the original files.
             if self._events and not allow_legacy_contract:
                 payload = [ev.to_dict() for ev in self._events]
+                if self.exchange.lower() == "hyperliquid":
+                    payload = _expand_hyperliquid_coalesced_events(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
+                order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
                 apply_hyperliquid_raw_psize_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
@@ -3474,7 +3902,9 @@ class FillEventsManager:
                 if normalized_days:
                     self.cache.save_days(self._events_for_days(self._events, normalized_days))
                 if synthesized_days or normalized_days:
-                    self.cache.update_metadata_from_events(self._events)
+                    self.cache.update_metadata_from_events(
+                        self._events, mark_refreshed=False
+                    )
 
             logger.debug(
                 "[fills] ensure_loaded: %d cached events (dropped %d without raw)",
@@ -3668,13 +4098,19 @@ class FillEventsManager:
         self,
         lifecycle: Dict[str, object],
         observation: PnlObservation,
-    ) -> Tuple[set[str], float, int]:
+    ) -> Tuple[set[str], float, int, bool]:
         close_fills = list(lifecycle["close_fills"])
         lifecycle_events = list(lifecycle.get("events") or [])
         lifecycle_fee_paid = sum(signed_fee_paid_from_payload(ev) for ev in lifecycle_events)
         gross_target = float(observation.realized_pnl) - lifecycle_fee_paid
         synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
         delta = gross_target - synthetic_total
+        pnl_changed = not math.isclose(
+            delta,
+            0.0,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
         weights = []
         for close in close_fills:
             signed_qty = _payload_signed_effective_qty(close)
@@ -3688,17 +4124,31 @@ class FillEventsManager:
             weights = [1.0 for _ in close_fills]
             total_weight = float(len(close_fills))
         for close, weight in zip(close_fills, weights):
-            close["pnl"] = float(close.get("pnl") or 0.0) + delta * (weight / total_weight)
+            if pnl_changed:
+                close["pnl"] = float(close.get("pnl") or 0.0) + delta * (
+                    weight / total_weight
+                )
         days_touched: set[str] = set()
+        metadata_changed = False
         for close in close_fills:
+            close_metadata_changed = bool(
+                close.get("pnl_status") != "complete"
+                or close.get("pnl_source")
+                != PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+                or close.get("pnl_synthetic_reason")
+            )
+            if close_metadata_changed:
+                metadata_changed = True
             close["pnl_status"] = "complete"
             close["pnl_source"] = PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
             close["pnl_synthetic_reason"] = ""
-            try:
-                days_touched.add(_day_key(int(close["timestamp"])))
-            except (KeyError, TypeError, ValueError, OverflowError):
-                pass
-        return days_touched, delta, len(close_fills)
+            if pnl_changed or close_metadata_changed:
+                try:
+                    days_touched.add(_day_key(int(close["timestamp"])))
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    pass
+        changed = pnl_changed or metadata_changed
+        return days_touched, delta if pnl_changed else 0.0, len(close_fills), changed
 
     def _reconcile_pnl_observations(
         self,
@@ -3744,10 +4194,14 @@ class FillEventsManager:
             if len(candidates) != 1:
                 continue
             lifecycle = candidates[0]
-            touched, delta, fill_count = self._apply_cycle_observation(lifecycle, obs)
-            days_touched.update(touched)
+            touched, delta, fill_count, changed = self._apply_cycle_observation(
+                lifecycle, obs
+            )
             used_lifecycle_ids.add(id(lifecycle))
             matched_observation_ids.add(id(obs))
+            if not changed:
+                continue
+            days_touched.update(touched)
             reconciled_cycles += 1
             reconciled_fills += fill_count
             total_delta += delta
@@ -4112,7 +4566,35 @@ class FillEventsManager:
         legacy_contract = metadata_legacy or record_legacy
         report["legacy_contract"] = legacy_contract
         if metadata_legacy and not record_legacy and auto_repair:
-            self.cache.update_metadata_from_events(self._events)
+            self.cache.update_metadata_from_events(
+                self._events, mark_refreshed=False
+            )
+            self._loaded = False
+            self._events = []
+            try:
+                await self.ensure_loaded()
+            except FillEventCacheContractError as exc:
+                self._loaded = False
+                self._events = []
+                report.update(
+                    {
+                        "action": "rebuild_cache",
+                        "message": (
+                            "fill cache metadata was repaired, but current-contract "
+                            "normalization failed; quarantine and rebuild the cache"
+                        ),
+                        "normalization_error_type": bounded_exception_type(exc),
+                        "anomaly_events_after": max(1, len(self.cache._data_files())),
+                    }
+                )
+                logger.warning(
+                    "[fills-doctor] metadata repair exposed a cache normalization "
+                    "failure; rebuild required | exchange=%s user=%s error_type=%s",
+                    self.exchange,
+                    self.user,
+                    report["normalization_error_type"],
+                )
+                return report
             report["repaired"] = True
             report["anomaly_events_after"] = 0
             report["anomaly_examples_after"] = []
@@ -4188,7 +4670,9 @@ class FillEventsManager:
         report["anomaly_examples"] = anomalies[:5]
         if not anomalies or not auto_repair:
             if legacy_contract and auto_repair and not record_legacy:
-                self.cache.update_metadata_from_events(self._events)
+                self.cache.update_metadata_from_events(
+                    self._events, mark_refreshed=False
+                )
                 report["repaired"] = True
                 report["anomaly_events_after"] = 0
                 report["anomaly_examples_after"] = []
@@ -4244,11 +4728,14 @@ class FillEventsManager:
         for ev in payload:
             ev["pnl_contract"] = PNL_CONTRACT_CURRENT
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         compute_psize_pprice(payload)
         apply_hyperliquid_raw_psize_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
         self.cache.save(self._events)
-        self.cache.update_metadata_from_events(self._events)
+        self.cache.update_metadata_from_events(
+            self._events, mark_refreshed=False
+        )
 
         remaining = self._scan_bybit_qty_inflation(self._events)
         report["anomaly_events_after"] = len(remaining)
@@ -4390,11 +4877,14 @@ class FillEventsManager:
         backup_path = self._backup_cache_for_repair()
         payload = [ev.to_dict() for ev in self._events]
         ensure_qty_signage(payload)
+        order_same_timestamp_fills(payload)
         repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
         compute_psize_pprice(repaired_payload)
         self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
         self.cache.save(self._events)
-        self.cache.update_metadata_from_events(self._events)
+        self.cache.update_metadata_from_events(
+            self._events, mark_refreshed=False
+        )
         report["backup_path"] = backup_path
         report["degraded_events_after"] = degraded_count
         report["anomaly_events_after"] = degraded_count
@@ -4414,6 +4904,8 @@ class FillEventsManager:
         *,
         start_ms: Optional[int] = None,
         end_ms: Optional[int] = None,
+        mark_refreshed: bool = True,
+        degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
     ) -> None:
         await self.ensure_loaded()
         logger.debug(
@@ -4505,7 +4997,11 @@ class FillEventsManager:
                     prev is not None
                     and event.pnl_pending
                     and not prev.pnl_pending
-                    and _is_synthetic_pnl_source(prev.pnl_source)
+                    and (
+                        _is_synthetic_pnl_source(prev.pnl_source)
+                        or prev.pnl_source
+                        == PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+                    )
                 ):
                     merged = event.to_dict()
                     merged["pnl"] = prev.pnl
@@ -4578,9 +5074,22 @@ class FillEventsManager:
                     fetched_batches.append(bounded)
 
         try:
-            fetched_events = await self.fetcher.fetch(
-                start_ms, end_ms, detail_cache, on_batch=collect_batch
+            repair_fetch = getattr(
+                self.fetcher, "fetch_degraded_pnl_repair", None
             )
+            if degraded_pnl_aux_range is not None and callable(repair_fetch):
+                fetched_events = await repair_fetch(
+                    start_ms,
+                    end_ms,
+                    int(degraded_pnl_aux_range[0]),
+                    int(degraded_pnl_aux_range[1]),
+                    detail_cache,
+                    on_batch=collect_batch,
+                )
+            else:
+                fetched_events = await self.fetcher.fetch(
+                    start_ms, end_ms, detail_cache, on_batch=collect_batch
+                )
         except RateLimitExceeded:
             # Preserve bounded-range failures as known gaps so retry logic can
             # revisit them.  We still re-raise to fail loudly on critical input.
@@ -4632,6 +5141,7 @@ class FillEventsManager:
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
+            order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
             apply_hyperliquid_raw_psize_overrides(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
@@ -4649,9 +5159,14 @@ class FillEventsManager:
 
         # Update cache metadata with timestamps
         if self._events:
-            self.cache.update_metadata_from_events(self._events)
-        else:
-            self.cache.mark_refreshed()
+            self.cache.update_metadata_from_events(
+                self._events, mark_refreshed=mark_refreshed
+            )
+        elif mark_refreshed:
+            # A successful empty fetch proves that metadata-only event bounds
+            # are stale. Keeping them would leave coverage permanently blocked
+            # by a cache_metadata_event_mismatch verdict.
+            self.cache.mark_refreshed(reset_event_bounds=True)
         if fetched_bounded_range:
             # A successful bounded fetch proves the retried range even when the
             # exchange returns no new fills or only duplicates.
@@ -4680,20 +5195,45 @@ class FillEventsManager:
         overlap: int = 20,
         last_refresh_overlap_ms: Optional[int] = None,
     ) -> None:
-        """Fetch only the most recent fills, overlapping by `overlap` events."""
+        """Fetch recent fills, overlapping Hyperliquid by timestamp cohort."""
         await self.ensure_loaded()
         if not self._events:
             logger.debug("[fills] refresh_latest: cache empty, falling back to full refresh")
         start_ms = None
+        is_hyperliquid = self.exchange.lower() == "hyperliquid"
         if self._events:
-            idx = max(0, len(self._events) - overlap)
-            start_ms = self._events[idx].timestamp
+            overlap = max(1, int(overlap))
+            if is_hyperliquid:
+                # Hyperliquid may emit many executions in one millisecond. Count
+                # timestamp cohorts so retaining raw component boundaries does
+                # not shrink the effective recent-fill overlap.
+                cohort_count = 0
+                previous_timestamp = None
+                for event in reversed(self._events):
+                    timestamp = int(event.timestamp)
+                    if previous_timestamp is None or timestamp != previous_timestamp:
+                        cohort_count += 1
+                        previous_timestamp = timestamp
+                    start_ms = timestamp
+                    if cohort_count >= overlap:
+                        break
+            else:
+                idx = max(0, len(self._events) - overlap)
+                start_ms = self._events[idx].timestamp
         if last_refresh_overlap_ms is not None:
             metadata = self.cache.load_metadata()
             last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
-                start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
+                if start_ms is None:
+                    start_ms = metadata_start_ms
+                elif is_hyperliquid:
+                    # Preserve both overlap guarantees. Clamping the cohort
+                    # anchor forward can permanently strand a late-arriving
+                    # execution from an older same-millisecond cohort.
+                    start_ms = min(start_ms, metadata_start_ms)
+                else:
+                    start_ms = max(start_ms, metadata_start_ms)
         pending_pnl_events = self.pending_pnl_events(self._events)
         synthetic_pnl_events = self.synthetic_pnl_events(self._events)
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -4733,6 +5273,175 @@ class FillEventsManager:
             )
         await self.refresh(start_ms=start_ms, end_ms=None)
 
+    async def refresh_degraded_pnl_events(
+        self,
+        *,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Refetch bounded windows around risk-blocking synthetic PnL events.
+
+        A cache may already prove the configured history lookback while still
+        containing an old degraded PnL reconstruction.  Ordinary recent-fill
+        overlap intentionally excludes old synthetic rows, so those events
+        need a separate targeted path to acquire authoritative exchange data.
+        """
+        await self.ensure_loaded()
+        lower_bound = max(0, int(start_ms or 0))
+        upper_bound = int(
+            end_ms
+            if end_ms is not None
+            else datetime.now(tz=timezone.utc).timestamp() * 1000
+        )
+        degraded_before = [
+            ev
+            for ev in self.degraded_pnl_events(self._events)
+            if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
+        ]
+        if not degraded_before:
+            self._degraded_pnl_repair_attempted_keys = set()
+            self._degraded_pnl_repair_aux_cursor_ms = {}
+            self._degraded_pnl_repair_aux_completed_keys = set()
+            return {
+                "attempted": False,
+                "before_count": 0,
+                "repaired_count": 0,
+                "remaining_count": 0,
+                "range_count": 0,
+                "total_range_count": 0,
+                "deferred_range_count": 0,
+            }
+
+        def repair_key(event: FillEvent) -> str:
+            source_ids = sorted(
+                str(value)
+                for value in getattr(event, "source_ids", None) or ()
+                if value
+            )
+            if source_ids:
+                return f"source:{source_ids[0]}"
+            event_id = str(getattr(event, "id", "") or "")
+            if event_id:
+                return f"id:{event_id}"
+            return (
+                f"event:{getattr(event, 'symbol', '')}:"
+                f"{getattr(event, 'position_side', '')}:{int(event.timestamp)}:"
+                f"{getattr(event, 'side', '')}:{getattr(event, 'qty', '')}"
+            )
+
+        keyed_events = [(repair_key(event), event) for event in degraded_before]
+        current_keys = {key for key, _event in keyed_events}
+        attempted_keys = set(self._degraded_pnl_repair_attempted_keys)
+        attempted_keys.intersection_update(current_keys)
+        self._degraded_pnl_repair_aux_cursor_ms = {
+            key: cursor
+            for key, cursor in self._degraded_pnl_repair_aux_cursor_ms.items()
+            if key in current_keys
+        }
+        self._degraded_pnl_repair_aux_completed_keys.intersection_update(
+            current_keys
+        )
+        unattempted_events = [
+            (key, event)
+            for key, event in keyed_events
+            if key not in attempted_keys
+        ]
+        if not unattempted_events:
+            attempted_keys.clear()
+            unattempted_events = list(keyed_events)
+        selected_count = min(
+            len(unattempted_events),
+            DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE,
+        )
+        selected_events = unattempted_events[:selected_count]
+        logger.info(
+            "[fills] refetching authoritative PnL for degraded cached fills | "
+            "exchange=%s user=%s events=%d ranges=%d/%d oldest=%s newest=%s",
+            self.exchange,
+            self.user,
+            len(degraded_before),
+            len(selected_events),
+            len(keyed_events),
+            _format_ms(min(ev.timestamp for ev in degraded_before)),
+            _format_ms(max(ev.timestamp for ev in degraded_before)),
+        )
+        repair_fetch = getattr(self.fetcher, "fetch_degraded_pnl_repair", None)
+        for key, event in selected_events:
+            event_timestamp = int(event.timestamp)
+            interval_start = max(
+                lower_bound,
+                event_timestamp - PENDING_PNL_REFRESH_MARGIN_MS,
+            )
+            interval_end = min(
+                upper_bound,
+                event_timestamp + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+            )
+            aux_range = None
+            if callable(repair_fetch):
+                cursor = max(
+                    interval_start,
+                    int(
+                        self._degraded_pnl_repair_aux_cursor_ms.get(
+                            key, interval_start
+                        )
+                    ),
+                )
+                if key in self._degraded_pnl_repair_aux_completed_keys:
+                    # The prior scan reached the moving upper bound. Start a
+                    # fresh bounded pass so an eventually consistent record
+                    # cannot remain stranded in an already visited window.
+                    cursor = interval_start
+                    self._degraded_pnl_repair_aux_completed_keys.discard(key)
+                aux_end = min(
+                    upper_bound,
+                    cursor + DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS,
+                )
+                aux_range = (cursor, aux_end)
+            attempted_keys.add(key)
+            self._degraded_pnl_repair_attempted_keys = attempted_keys
+            await self.refresh(
+                start_ms=interval_start,
+                end_ms=interval_end,
+                mark_refreshed=False,
+                degraded_pnl_aux_range=aux_range,
+            )
+            if aux_range is not None:
+                self._degraded_pnl_repair_aux_cursor_ms[key] = aux_range[1]
+                if aux_range[1] >= upper_bound:
+                    self._degraded_pnl_repair_aux_completed_keys.add(key)
+
+        degraded_after = [
+            ev
+            for ev in self.degraded_pnl_events(self._events)
+            if int(ev.timestamp) >= lower_bound and int(ev.timestamp) <= upper_bound
+        ]
+        repaired_count = max(0, len(degraded_before) - len(degraded_after))
+        if degraded_after:
+            logger.warning(
+                "[fills] authoritative PnL remains unavailable after bounded repair | "
+                "exchange=%s user=%s repaired=%d remaining=%d action=defer_risk_planning",
+                self.exchange,
+                self.user,
+                repaired_count,
+                len(degraded_after),
+            )
+        else:
+            logger.info(
+                "[fills] authoritative PnL repair complete | exchange=%s user=%s repaired=%d",
+                self.exchange,
+                self.user,
+                repaired_count,
+            )
+        return {
+            "attempted": True,
+            "before_count": len(degraded_before),
+            "repaired_count": repaired_count,
+            "remaining_count": len(degraded_after),
+            "range_count": len(selected_events),
+            "total_range_count": len(keyed_events),
+            "deferred_range_count": len(unattempted_events) - len(selected_events),
+        }
+
     async def refresh_for_lookback(
         self,
         start_ms: int,
@@ -4764,43 +5473,14 @@ class FillEventsManager:
 
         coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
-        def gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
-            try:
-                gap_start = int(gap["start_ts"])
-                gap_end = int(gap["end_ts"])
-            except (KeyError, TypeError, ValueError):
-                return None
-            if gap_end <= gap_start:
-                return None
-            return gap_start, gap_end
-
-        def gap_confirmed_legitimate(gap: KnownGap) -> bool:
-            reason = str(gap.get("reason", "") or "").lower()
-            try:
-                confidence = float(gap.get("confidence", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                confidence = 0.0
-            return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
-
-        def blocking_known_gaps() -> List[KnownGap]:
-            gaps: List[KnownGap] = []
-            for gap in self.cache.get_known_gaps():
-                if gap_confirmed_legitimate(gap):
-                    continue
-                bounds = gap_bounds(gap)
-                if bounds is None:
-                    gaps.append(gap)
-                    continue
-                gap_start, gap_end = bounds
-                if gap_start < coverage_end_ms and gap_end > start_ms:
-                    gaps.append(gap)
-            return gaps
-
-        blocking_gaps = blocking_known_gaps()
+        blocking_gaps = self._blocking_known_gaps(
+            start_ms=start_ms,
+            end_ms=coverage_end_ms,
+        )
         if blocking_gaps:
             retried_ranges: List[Tuple[int, int]] = []
             for gap in blocking_gaps:
-                bounds = gap_bounds(gap)
+                bounds = self._known_gap_bounds(gap)
                 if bounds is None:
                     continue
                 if not force_refetch_gaps and not self.cache.should_retry_gap(gap):
@@ -4819,7 +5499,10 @@ class FillEventsManager:
                 await self.refresh(start_ms=retry_start, end_ms=retry_end)
             if retried_ranges:
                 await self.refresh_latest(overlap=overlap)
-                blocking_gaps = blocking_known_gaps()
+                blocking_gaps = self._blocking_known_gaps(
+                    start_ms=start_ms,
+                    end_ms=coverage_end_ms,
+                )
             if blocking_gaps:
                 if not retried_ranges:
                     # Historical coverage may remain blocked after its bounded
@@ -4828,45 +5511,30 @@ class FillEventsManager:
                     # cache current without weakening the PnL coverage gate.
                     await self.refresh_latest(overlap=overlap)
                 gap = blocking_gaps[0]
-                bounds = gap_bounds(gap)
+                bounds = self._known_gap_bounds(gap)
                 range_label = (
                     f"{_format_ms(bounds[0])}..{_format_ms(bounds[1])}"
                     if bounds is not None
                     else "unknown"
                 )
+                gap_info = gap if isinstance(gap, dict) else {}
                 logger.warning(
                     "[fills] lookback coverage remains unproven because known gap overlaps requested window | start=%s gap=%s reason=%s retry_count=%s confidence=%s",
                     _format_ms(start_ms),
                     range_label,
-                    str(gap.get("reason", "unknown")),
-                    str(gap.get("retry_count", "unknown")),
-                    str(gap.get("confidence", "unknown")),
+                    str(gap_info.get("reason", "malformed")),
+                    str(gap_info.get("retry_count", "unknown")),
+                    str(gap_info.get("confidence", "unknown")),
                 )
                 return True
 
-        metadata = self.cache.load_metadata()
-        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        coverage_status = self.get_coverage_status(
+            start_ms=start_ms,
+            end_ms=coverage_end_ms,
+        )
         oldest_event_ts = int(self._events[0].timestamp) if self._events else 0
-        metadata_oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
-        metadata_newest_event_ts = int(metadata.get("newest_event_ts", 0) or 0)
-        metadata_indicates_no_cached_fills = (
-            metadata_oldest_event_ts <= 0 and metadata_newest_event_ts <= 0
-        )
-        metadata_claims_history_without_events = (
-            not self._events
-            and (metadata_oldest_event_ts > 0 or metadata_newest_event_ts > 0)
-            and covered_start_ms > 0
-            and covered_start_ms <= start_ms
-        )
-        lookback_covered = (
-            covered_start_ms > 0 and covered_start_ms <= start_ms and bool(self._events)
-        ) or (
-            covered_start_ms > 0
-            and covered_start_ms <= start_ms
-            and metadata_indicates_no_cached_fills
-        )
-
-        if lookback_covered:
+        covered_start_ms = int(coverage_status.get("covered_start_ms", 0) or 0)
+        if bool(coverage_status.get("ready", False)):
             logger.debug(
                 "[fills] lookback already covered from %s (covered_start=%s oldest_event=%s); refreshing latest",
                 _format_ms(start_ms),
@@ -4876,7 +5544,7 @@ class FillEventsManager:
             await self.refresh_latest(overlap=overlap)
             return True
 
-        if metadata_claims_history_without_events:
+        if coverage_status.get("reason") == "cache_metadata_event_mismatch":
             logger.warning(
                 "[fills] cache metadata claims lookback coverage from %s, but no cached events were loaded; rebuilding from requested lookback",
                 _format_ms(covered_start_ms),
@@ -4909,6 +5577,124 @@ class FillEventsManager:
 
         self.cache.mark_covered_start(start_ms)
         return True
+
+    @staticmethod
+    def _known_gap_bounds(gap: object) -> Optional[Tuple[int, int]]:
+        if not isinstance(gap, dict):
+            return None
+        try:
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if gap_end <= gap_start:
+            return None
+        return gap_start, gap_end
+
+    @staticmethod
+    def _known_gap_confirmed_legitimate(gap: object) -> bool:
+        if not isinstance(gap, dict):
+            return False
+        reason = str(gap.get("reason", "") or "").lower()
+        try:
+            confidence = float(gap.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+    def _blocking_known_gaps(
+        self,
+        *,
+        start_ms: Optional[int],
+        end_ms: Optional[int],
+    ) -> List[object]:
+        window_start = 0 if start_ms is None else int(start_ms)
+        window_end = (2**63 - 1) if end_ms is None else int(end_ms)
+        known_gaps = self.cache.get_known_gaps()
+        if not isinstance(known_gaps, list):
+            return [None]
+        blocking: List[object] = []
+        for gap in known_gaps:
+            bounds = FillEventsManager._known_gap_bounds(gap)
+            if bounds is None:
+                blocking.append(gap)
+                continue
+            if FillEventsManager._known_gap_confirmed_legitimate(gap):
+                continue
+            gap_start, gap_end = bounds
+            if gap_start < window_end and gap_end > window_start:
+                blocking.append(gap)
+        return blocking
+
+    def get_coverage_status(
+        self,
+        *,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+    ) -> Dict[str, object]:
+        """Return the canonical fill-history coverage verdict.
+
+        Callers must load the manager before asking it to judge coverage.
+        """
+        metadata = self.cache.load_metadata()
+        history_scope = self.get_history_scope()
+        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
+        metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
+        status: Dict[str, object] = {
+            "ready": False,
+            "reason": "cache_not_loaded",
+            "history_scope": history_scope,
+            "covered_start_ms": covered_start_ms,
+            "oldest_event_ts": metadata_oldest,
+        }
+        if getattr(self, "_loaded", True) is False:
+            return status
+
+        blocking_gaps = FillEventsManager._blocking_known_gaps(
+            self,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            bounds = FillEventsManager._known_gap_bounds(gap)
+            status.update(
+                {
+                    "reason": (
+                        "malformed_known_gap"
+                        if bounds is None
+                        else "known_gap_overlaps_lookback"
+                    ),
+                    "gap_start_ts": bounds[0] if bounds is not None else 0,
+                    "gap_end_ts": bounds[1] if bounds is not None else 0,
+                    "gap_reason": (
+                        str(gap.get("reason", "unknown"))
+                        if isinstance(gap, dict)
+                        else "malformed"
+                    ),
+                }
+            )
+            return status
+
+        if not self._events and (metadata_oldest > 0 or metadata_newest > 0):
+            status["reason"] = "cache_metadata_event_mismatch"
+            return status
+
+        if history_scope == "all":
+            status.update({"ready": True, "reason": "full_history"})
+            return status
+
+        if start_ms is None:
+            status["reason"] = "full_history_scope_not_proven"
+            return status
+
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
+            status.update({"ready": True, "reason": "window_covered"})
+            return status
+
+        status["reason"] = "window_coverage_not_proven"
+        return status
 
     async def refresh_range(
         self,
@@ -5037,7 +5823,20 @@ class FillEventsManager:
 
     @staticmethod
     def synthetic_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
-        return [ev for ev in events if _is_synthetic_pnl_source(ev.pnl_source)]
+        return [
+            ev
+            for ev in events
+            if _is_synthetic_pnl_source(getattr(ev, "pnl_source", ""))
+        ]
+
+    @staticmethod
+    def degraded_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
+        return [
+            ev
+            for ev in events
+            if str(getattr(ev, "pnl_source", "") or "").lower()
+            == PNL_SOURCE_SYNTHETIC_DEGRADED
+        ]
 
     @staticmethod
     def assert_no_pending_pnl(events: Iterable[FillEvent], *, context: str) -> None:
@@ -5188,16 +5987,53 @@ class BybitFetcher(BaseFetcher):
     ) -> List[Dict[str, object]]:
         end_ms = until_ms or (self._now_ms() + 60 * 60 * 1000)
         start_ms = since_ms or max(0, end_ms - self._default_span_ms)
+        return await self._fetch_ranges(
+            trade_start_ms=start_ms,
+            trade_end_ms=end_ms,
+            pnl_start_ms=start_ms,
+            pnl_end_ms=end_ms,
+            detail_cache=detail_cache,
+            on_batch=on_batch,
+        )
 
-        trades = await self._fetch_my_trades(start_ms, end_ms)
-        positions = await self._fetch_positions_history(start_ms, end_ms)
+    async def fetch_degraded_pnl_repair(
+        self,
+        trade_start_ms: int,
+        trade_end_ms: int,
+        pnl_start_ms: int,
+        pnl_end_ms: int,
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        """Refetch executions while independently searching closed-PnL update time."""
+        return await self._fetch_ranges(
+            trade_start_ms=int(trade_start_ms),
+            trade_end_ms=int(trade_end_ms),
+            pnl_start_ms=int(pnl_start_ms),
+            pnl_end_ms=int(pnl_end_ms),
+            detail_cache=detail_cache,
+            on_batch=on_batch,
+        )
+
+    async def _fetch_ranges(
+        self,
+        *,
+        trade_start_ms: int,
+        trade_end_ms: int,
+        pnl_start_ms: int,
+        pnl_end_ms: int,
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        trades = await self._fetch_my_trades(trade_start_ms, trade_end_ms)
+        positions = await self._fetch_positions_history(pnl_start_ms, pnl_end_ms)
 
         events = self._combine(trades, positions, detail_cache)
         events = [
             ev
             for ev in events
-            if (since_ms is None or ev["timestamp"] >= since_ms)
-            and (until_ms is None or ev["timestamp"] <= until_ms)
+            if ev["timestamp"] >= trade_start_ms
+            and ev["timestamp"] <= trade_end_ms
         ]
         events.sort(key=lambda ev: ev["timestamp"])
         events = _coalesce_events(events)
@@ -5210,10 +6046,15 @@ class BybitFetcher(BaseFetcher):
                 on_batch(day_map[day])
 
         logger.debug(
-            "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d)",
+            "BybitFetcher.fetch: done (events=%d, trades=%d, positions=%d, "
+            "trade_range=%s..%s, pnl_range=%s..%s)",
             len(events),
             len(trades),
             len(positions),
+            _format_ms(trade_start_ms),
+            _format_ms(trade_end_ms),
+            _format_ms(pnl_start_ms),
+            _format_ms(pnl_end_ms),
         )
         return events
 
@@ -5247,7 +6088,12 @@ class BybitFetcher(BaseFetcher):
                     len(batch) if batch else 0,
                 )
             if not batch:
-                break
+                if params["endTime"] - start_ms < self._max_span_ms:
+                    break
+                params["endTime"] = max(
+                    start_ms, params["endTime"] - self._max_span_ms
+                )
+                continue
             batch.sort(key=lambda x: x["timestamp"])
             results.extend(batch)
             if len(batch) < self.trade_limit:
@@ -5289,107 +6135,57 @@ class BybitFetcher(BaseFetcher):
         return deduped
 
     async def _fetch_positions_history(self, start_ms: int, end_ms: int) -> List[Dict[str, object]]:
-        """Fetch closed-pnl records using Bybit's raw API with hybrid pagination.
+        """Fetch closed-PnL records in explicit contiguous time windows.
 
-        Uses a two-phase approach:
-        1. Cursor pagination for recent records (more efficient, no missed records)
-        2. Time-based sliding window for older records (cursor doesn't go back far enough)
-
-        This is necessary because:
-        - CCXT's fetch_positions_history uses time-based pagination which can miss records
-        - Bybit's cursor pagination only covers ~7 days of recent data
+        Bybit implicitly searches only ``endTime - 7 days`` when ``endTime`` is
+        supplied without ``startTime``.  Each explicit window is therefore
+        bounded below the seven-day limit and fully cursor-paginated before the
+        next older window begins.
         """
         results: Dict[str, Dict[str, object]] = {}  # Dedupe by orderId
         max_fetches = 500
         fetch_count = 0
-
-        # Phase 1: Use cursor pagination for recent records
-        params: Dict[str, object] = {
-            "category": "linear",
-            "limit": self.position_limit,
-            "endTime": int(end_ms),
-        }
-
-        cursor_oldest_ts = end_ms
-
-        while True:
-            fetch_count += 1
-            if fetch_count > max_fetches:
-                logger.warning(
-                    "BybitFetcher._fetch_positions_history: max fetches reached (%d)", max_fetches
-                )
-                break
-
-            try:
-                response = await self.api.private_get_v5_position_closed_pnl(params)
-            except Exception as exc:
-                logger.warning(
-                    "BybitFetcher._fetch_positions_history: API error_type=%s",
-                    bounded_exception_type(exc),
-                )
-                break
-
-            batch = response.get("result", {}).get("list", [])
-            if not batch:
-                break
-
-            self._process_closed_pnl_batch(batch, start_ms, results)
-
-            oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
-            cursor_oldest_ts = oldest_ts
-
-            if oldest_ts <= start_ms:
-                break
-
-            cursor = response.get("result", {}).get("nextPageCursor")
-            if not cursor:
-                # Cursor exhausted - switch to time-based sliding window
-                break
-            params["cursor"] = cursor
-
-        # Phase 2: Time-based sliding window for older records (if cursor didn't reach start)
-        if cursor_oldest_ts > start_ms:
-            logger.debug(
-                "BybitFetcher._fetch_positions_history: cursor exhausted at %s, switching to time-based",
-                _format_ms(cursor_oldest_ts),
-            )
-            # Remove cursor and continue with time-based pagination
-            current_end = cursor_oldest_ts
-
-            while current_end > start_ms and fetch_count < max_fetches:
-                fetch_count += 1
-                params = {
+        current_end = int(end_ms)
+        while current_end >= start_ms:
+            window_start = max(int(start_ms), current_end - self._max_span_ms)
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            while True:
+                if fetch_count >= max_fetches:
+                    raise RuntimeError(
+                        "BybitFetcher._fetch_positions_history: "
+                        f"max fetches reached ({max_fetches})"
+                    )
+                params: Dict[str, object] = {
                     "category": "linear",
                     "limit": self.position_limit,
+                    "startTime": int(window_start),
                     "endTime": int(current_end),
                 }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                fetch_count += 1
+                response = await self.api.private_get_v5_position_closed_pnl(params)
+                result = response.get("result", {})
+                batch = result.get("list", [])
+                if batch:
+                    self._process_closed_pnl_batch(batch, start_ms, results)
 
-                try:
-                    response = await self.api.private_get_v5_position_closed_pnl(params)
-                except Exception as exc:
-                    logger.warning(
-                        "BybitFetcher._fetch_positions_history: API error_type=%s",
-                        bounded_exception_type(exc),
+                next_cursor = str(result.get("nextPageCursor") or "")
+                if not next_cursor:
+                    break
+                if next_cursor in seen_cursors:
+                    raise RuntimeError(
+                        "BybitFetcher._fetch_positions_history: "
+                        f"repeated cursor in window {_format_ms(window_start)}.."
+                        f"{_format_ms(current_end)}"
                     )
-                    break
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
 
-                batch = response.get("result", {}).get("list", [])
-                if not batch:
-                    # No more records, slide window back
-                    current_end = max(start_ms, current_end - self._max_span_ms)
-                    continue
-
-                self._process_closed_pnl_batch(batch, start_ms, results)
-
-                oldest_ts = int(batch[-1].get("updatedTime", 0)) if batch else 0
-                if oldest_ts <= start_ms:
-                    break
-
-                # Slide window: if batch was full, use oldest ts; otherwise jump back
-                if len(batch) >= self.position_limit:
-                    current_end = oldest_ts
-                else:
-                    current_end = max(start_ms, oldest_ts - self._max_span_ms)
+            if window_start <= start_ms:
+                break
+            current_end = window_start - 1
 
         logger.debug(
             "BybitFetcher._fetch_positions_history: fetched %d records in %d requests",
@@ -5716,8 +6512,10 @@ class HyperliquidFetcher(BaseFetcher):
                 )
                 break
 
+        # Hyperliquid's startPosition is per execution. Preserve those component
+        # boundaries: coalescing same-side fills can merge disjoint links from an
+        # alternating same-millisecond position chain.
         events = sorted(collected.values(), key=lambda ev: ev["timestamp"])
-        events = _coalesce_events(events)
         # Note: psize/pprice annotation is done centrally in FillEventsManager.refresh()
 
         for event in events:
@@ -5778,6 +6576,148 @@ class HyperliquidFetcher(BaseFetcher):
             "client_order_id": str(client_order_id or ""),
             "raw": [{"source": "fetch_my_trades", "data": trade}],
             "c_mult": float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
+        }
+
+
+class BitunixFetcher(BaseFetcher):
+    """Fetch canonical Bitunix futures fills from its native trade history."""
+
+    def __init__(self, api, *, trade_limit: int = 100) -> None:
+        self.api = api
+        self.trade_limit = max(1, min(100, int(trade_limit)))
+
+    async def fetch(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        params = {}
+        if until_ms is not None:
+            params["until"] = int(until_ms)
+        trades = await self.api.fetch_my_trades(
+            symbol=None,
+            since=int(since_ms) if since_ms is not None else None,
+            limit=self.trade_limit,
+            params=params,
+        )
+        events = [self._normalize_trade(trade) for trade in trades]
+        events.sort(key=lambda event: event["timestamp"])
+        await self._enrich_client_order_ids(events, detail_cache)
+        if on_batch and events:
+            on_batch(events)
+        for event in events:
+            detail_cache[str(event["id"])] = (
+                str(event.get("client_order_id") or ""),
+                str(event.get("pb_order_type") or "unknown"),
+            )
+        return events
+
+    async def _enrich_client_order_ids(
+        self,
+        events: List[Dict[str, object]],
+        detail_cache: Dict[str, Tuple[str, str]],
+    ) -> None:
+        missing_by_order: Dict[
+            Tuple[str, str], List[Dict[str, object]]
+        ] = defaultdict(list)
+        for event in events:
+            cached = detail_cache.get(str(event["id"]))
+            if cached:
+                event["client_order_id"], event["pb_order_type"] = cached
+            elif not event.get("client_order_id"):
+                missing_by_order[
+                    (str(event["order_id"]), str(event["symbol"]))
+                ].append(event)
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(key: Tuple[str, str]):
+            order_id, symbol = key
+            try:
+                async with semaphore:
+                    order = await self.api.fetch_order(order_id, symbol)
+            except OrderNotFound:
+                return key, ""
+            info = order.get("info") if isinstance(order, dict) else {}
+            client_order_id = (
+                str(order.get("clientOrderId") or "")
+                if isinstance(order, dict)
+                else ""
+            )
+            if not client_order_id and isinstance(info, dict):
+                client_order_id = str(info.get("clientId") or "")
+            return key, client_order_id
+
+        if missing_by_order:
+            results = await asyncio.gather(
+                *(fetch_detail(key) for key in missing_by_order)
+            )
+            for key, client_order_id in results:
+                pb_order_type = (
+                    custom_id_to_snake(client_order_id)
+                    if client_order_id
+                    else "unknown"
+                )
+                for event in missing_by_order[key]:
+                    event["client_order_id"] = client_order_id
+                    event["pb_order_type"] = pb_order_type
+
+        for event in events:
+            if not event.get("pb_order_type"):
+                event["pb_order_type"] = "unknown"
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        info = trade.get("info") or {}
+        trade_id = str(trade.get("id") or info.get("tradeId") or "")
+        order_id = str(trade.get("order") or info.get("orderId") or "")
+        timestamp = int(trade.get("timestamp") or info.get("ctime") or 0)
+        symbol = str(trade.get("symbol") or "")
+        side = str(trade.get("side") or "").lower()
+        position_side = str(info.get("positionSide") or "").lower()
+        if not trade_id or not order_id or timestamp <= 0 or not symbol:
+            raise ValueError(
+                "Bitunix fill is missing id, order id, timestamp, or symbol"
+            )
+        if side not in {"buy", "sell"}:
+            raise ValueError(f"Bitunix fill has invalid side: {side!r}")
+        if position_side not in {"long", "short"}:
+            raise ValueError(
+                f"Bitunix fill has invalid positionSide: {position_side!r}"
+            )
+        qty = abs(float(trade.get("amount") or info.get("qty") or 0.0))
+        price = float(trade.get("price") or info.get("price") or 0.0)
+        if "realizedPNL" not in info:
+            raise ValueError("Bitunix fill is missing realizedPNL")
+        pnl = float(info["realizedPNL"])
+        if not all(math.isfinite(value) for value in (qty, price, pnl)):
+            raise ValueError("Bitunix fill has non-finite qty, price, or realizedPNL")
+        if qty <= 0.0 or price <= 0.0:
+            raise ValueError("Bitunix fill has non-positive qty or price")
+        client_order_id = str(
+            trade.get("clientOrderId") or info.get("clientId") or ""
+        )
+        pb_order_type = (
+            custom_id_to_snake(client_order_id) if client_order_id else "unknown"
+        )
+        return {
+            "id": trade_id,
+            "order_id": order_id,
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": pnl,
+            "fees": trade.get("fees") or trade.get("fee"),
+            "pb_order_type": pb_order_type,
+            "position_side": position_side,
+            "client_order_id": client_order_id,
+            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
+            "c_mult": 1.0,
         }
 
 
@@ -7358,6 +8298,7 @@ def normalize_uta_fill_payload(
 EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "binance": ("exchanges.binance", "BinanceBot"),
     "bitget": ("exchanges.bitget", "BitgetBot"),
+    "bitunix": ("exchanges.bitunix", "BitunixBot"),
     "bybit": ("exchanges.bybit", "BybitBot"),
     "fake": ("exchanges.fake", "FakeBot"),
     "hyperliquid": ("exchanges.hyperliquid", "HyperliquidBot"),
@@ -7507,6 +8448,8 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
             api=bot.cca,
             symbol_resolver=lambda value: resolver(value),
         )
+    if exchange == "bitunix":
+        return BitunixFetcher(api=bot.cca)
     if exchange == "bybit":
         return BybitFetcher(api=bot.cca)
     if exchange == "fake":
@@ -7526,7 +8469,9 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return OkxFetcher(api=bot.cca)
     if exchange == "weex":
         return WeexFetcher(api=bot.cca)
-    supported = "binance, bitget, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
+    supported = (
+        "binance, bitget, bitunix, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
+    )
     raise ValueError(
         f"Unsupported exchange '{exchange}' for live fill events; realized PnL, "
         f"unstuck accounting, and HSL replay require an exchange-specific fetcher. "

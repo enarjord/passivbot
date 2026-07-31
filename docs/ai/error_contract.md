@@ -55,7 +55,14 @@ block protective management of held symbols.
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when
 the previous close is known, overlap repair is scheduled, and the gap is within policy. Unknown
-stale tails must not be converted to zero volume or zero range.
+stale tails must not be persisted or treated as verified zero-volume or zero-range history. Within
+the configured active-tail bound, an explicitly supported provisional in-memory projection may use
+flat zero-volume rows for active strategy inputs while authoritative overlap repair continues.
+Trailing-extrema reconstruction may use the same projection only for a still-open tail after dense
+post-fill coverage; it must not bridge a missing reset boundary or internal minute, and the
+projected rows must be discarded after that read so delayed authoritative highs and lows replace
+them immediately. Forager ranking quote-volume and log-range inputs retain their narrower
+carry-forward contract.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
@@ -66,6 +73,9 @@ Flat-symbol forager candidates may remain rankable within
 `live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
 projection. Quote-volume and log-range ranking inputs carry forward their latest known EMA with
 age/source metadata; they do not receive invented zero tails.
+When the forager setting is unset, its budget-derived acceptable age must not be shorter than
+`live.max_active_candle_tail_gap_minutes`; the refresh budget must not silently reduce the active
+tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
 unavailable for new entries. Do not silently rank only the subset that happened to refresh first.
@@ -76,9 +86,16 @@ held coin is handled as graceful stop.
 
 ## Fill And PnL Inputs
 
-Risk consumers may use a fill/PnL lookback only when the cache proves `history_scope=all` or a
+Structural fill history and realized-PnL quality are separate readiness facts. Fill-dependent
+planning may use the configured lookback only when the cache proves `history_scope=all` or a
 `covered_start_ms` at or before the configured lookback start. Unknown coverage triggers observable
-refresh or deferral, never neutral PnL.
+refresh or deferral, never a neutral history.
+
+Pending or degraded realized PnL blocks only enabled consumers that require authoritative PnL, such
+as HSL, operational auto-unstuck with positive total exposure, or the realized-loss gate. When
+every such consumer is disabled, proven fill history may remain ready for structural consumers
+such as fill timestamps; PnL defects remain observable and repairable but do not globally defer
+planning. Enabling a PnL consumer restores the strict requirement without a neutral PnL fallback.
 
 Corrupt or unavailable fills use bounded repair/retry and explicit degraded decisions. Valid
 manual or external exchange fills without Passivbot client IDs are exchange truth unless they

@@ -761,7 +761,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.WEBSOCKET_RECONNECT,
         EventTypes.FILLS_REFRESH_SUMMARY,
         EventTypes.PLANNING_DEFER_SUMMARY,
-        EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.HSL_RAW_RED_PENDING,
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
@@ -2840,6 +2839,51 @@ def test_console_format_summarizes_order_write_without_raw_payload():
     )
 
 
+def test_console_format_includes_bounded_exchange_rejection_context():
+    event = LiveEvent(
+        EventTypes.EXECUTION_AMBIGUOUS,
+        status="degraded",
+        cycle_id="cy_3",
+        order_wave_id="ow_2",
+        symbol="DOGE/USDT:USDT",
+        pside="long",
+        side="buy",
+        reason_code="result_exception",
+        data={
+            "order_type": "entry_initial_normal_long",
+            "qty": 66.0,
+            "price": 0.07111,
+            "error_type": "ExchangeError",
+            "error_status": "400",
+            "error_code": "10001",
+            "error_label": "INVALID_PARAM_VALUE",
+            "error_reason": "invalid argument: size",
+        },
+    )
+
+    rendered = format_console_event(event)
+
+    assert "error_type=ExchangeError" in rendered
+    assert "status=400" in rendered
+    assert "code=10001" in rendered
+    assert "label=INVALID_PARAM_VALUE" in rendered
+    assert "reason=invalid argument: size" in rendered
+
+
+def test_console_format_bounds_exchange_rejection_reason_length():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_REJECTED,
+        status="failed",
+        symbol="DOGE/USDT:USDT",
+        data={"error_reason": "x" * 160},
+    )
+
+    rendered = format_console_event(event)
+
+    assert "reason=" + ("x" * 93) + "..." in rendered
+    assert "x" * 97 not in rendered
+
+
 def test_console_format_marks_ambiguous_cancel_as_requiring_full_account_confirmation():
     event = LiveEvent(
         EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
@@ -2998,7 +3042,6 @@ def test_order_churn_emitters_use_valid_live_event_statuses():
         rolling_count=1,
         activation_count=10,
         market_distance_threshold=0.005,
-        action_headroom=None,
     )
     assert live_event_emitters.emit_order_churn_actions_accounted_event(
         bot,

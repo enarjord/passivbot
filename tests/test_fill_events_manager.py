@@ -4,10 +4,11 @@ import json
 import logging
 import sys
 import types
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -38,6 +39,7 @@ from src.fill_events_manager import (
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
+    order_same_timestamp_fills,
 )
 
 # ---------------------------------------------------------------------------
@@ -2056,8 +2058,8 @@ async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path
     cache_dir.mkdir()
     stale_payload = [
         {
-            "id": "tid-a+tid-b",
-            "source_ids": ["tid-a", "tid-b"],
+            "id": "tid-a",
+            "source_ids": ["tid-a"],
             "timestamp": 1_700_000_000_000,
             "datetime": "",
             "symbol": "SUI/USDC:USDC",
@@ -2149,6 +2151,91 @@ async def test_doctor_repairs_metadata_only_legacy_cache_for_any_exchange(tmp_pa
     assert report["repaired"] is True
     assert FillEventCache(cache_dir).load_metadata()["pnl_contract"] == fem.PNL_CONTRACT_CURRENT
     assert [ev.id for ev in FillEventCache(cache_dir).load()] == ["current-row"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete_aggregate", [False, True])
+async def test_hyperliquid_metadata_repair_reloads_current_contract_cache(
+    tmp_path: Path,
+    incomplete_aggregate: bool,
+):
+    late_add, close = _hyperliquid_same_millisecond_events()
+    early_add = deepcopy(late_add)
+    early_add["id"] = "early-add"
+    early_add["qty"] = 2.0
+    early_add["price"] = 53.0
+    early_raw = early_add["raw"][0]["data"]
+    early_raw.update({"id": "early-add", "amount": 2.0, "price": 53.0})
+    early_raw["info"].update(
+        {
+            "tid": "early-add",
+            "sz": "2.0",
+            "px": "53.0",
+            "startPosition": "651.21",
+        }
+    )
+    components = [early_add, close, late_add]
+    for event in components:
+        event.update(
+            {
+                "source_ids": [event["id"]],
+                "datetime": "",
+                "fee_paid": -0.01,
+                "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+                "fee_source": fem.FEE_SOURCE_REPORTED_QUOTE,
+                "fee_quality": fem.FEE_QUALITY_EXACT,
+                "fee_currency": "USDC",
+                "fee_conversion_source": "same_currency",
+                "fee_notional": abs(event["qty"]) * event["price"],
+                "fee_ratio": -0.01 / (abs(event["qty"]) * event["price"]),
+                "pnl_status": "complete",
+                "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+                "fees": {"currency": "USDC", "cost": 0.01},
+                "pb_order_type": "unknown",
+                "client_order_id": "",
+                "c_mult": 1.0,
+            }
+        )
+        raw_trade = event["raw"][0]["data"]
+        raw_trade.update(
+            {
+                "timestamp": event["timestamp"],
+                "symbol": event["symbol"],
+                "fee": {"currency": "USDC", "cost": 0.01},
+            }
+        )
+    cache_dir = tmp_path / "metadata_only_hyperliquid_aggregate"
+    cache_dir.mkdir()
+    legacy_coalesced = fem._coalesce_events(components)
+    if incomplete_aggregate:
+        legacy_coalesced[0]["raw"] = legacy_coalesced[0]["raw"][:1]
+    (cache_dir / f"{fem._day_key(components[0]['timestamp'])}.json").write_text(
+        json.dumps(legacy_coalesced),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    if incomplete_aggregate:
+        assert report["repaired"] is False
+        assert report["action"] == "rebuild_cache"
+        assert report["normalization_error_type"] == "RuntimeError"
+        assert manager.get_events() == []
+        return
+
+    assert report["repaired"] is True
+    expected_ids = ["early-add", close["id"], late_add["id"]]
+    assert [event.id for event in manager.get_events()] == expected_ids
+    assert [event.id for event in FillEventCache(cache_dir).load()] == expected_ids
+    assert manager.get_events()[-1].psize == pytest.approx(655.06)
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert manager.get_events()[-1].pprice == pytest.approx(expected_pprice)
 
 
 def test_fill_event_cache_quarantine_for_rebuild_moves_legacy_payload(tmp_path: Path):
@@ -2947,6 +3034,162 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
     assert event["client_order_id"] == "0xabc"
     assert event["symbol"] == "BTC/USDT"
     assert batches and batches[0][0]["id"] == "trade-1"
+
+
+@pytest.mark.asyncio
+async def test_bybit_trade_fetch_traverses_empty_recent_windows():
+    day_ms = 24 * 60 * 60 * 1000
+    end_ms = 2_000_000_000_000
+    start_ms = end_ms - 14 * day_ms
+    older_trade = {
+        "id": "old-sparse",
+        "timestamp": start_ms + 2 * day_ms,
+        "amount": 0.1,
+        "price": 100.0,
+        "side": "buy",
+        "symbol": "BTC/USDT",
+        "info": {},
+    }
+    api = _FakeBybitAPI(
+        trades_batches=[[], [older_trade], []],
+        positions_batches=[],
+    )
+    fetcher = BybitFetcher(api, max_span_days=6.5)
+
+    trades = await fetcher._fetch_my_trades(start_ms, end_ms)
+
+    assert [trade["id"] for trade in trades] == ["old-sparse"]
+    assert len(api.trade_calls) == 3
+    assert api.trade_calls[1]["endTime"] == end_ms - fetcher._max_span_ms
+    assert api.trade_calls[2]["endTime"] == (
+        end_ms - 2 * fetcher._max_span_ms
+    )
+
+
+@pytest.mark.asyncio
+async def test_bybit_closed_pnl_uses_contiguous_cursor_paginated_windows():
+    day_ms = 24 * 60 * 60 * 1000
+    end_ms = 2_000_000_000_000
+    start_ms = end_ms - 14 * day_ms
+
+    def record(order_id: str, timestamp: int) -> Dict[str, object]:
+        return {
+            "symbol": "XMRUSDT",
+            "orderId": order_id,
+            "side": "Sell",
+            "closedPnl": "1.0",
+            "closedSize": "0.1",
+            "avgEntryPrice": "300.0",
+            "avgExitPrice": "310.0",
+            "updatedTime": str(timestamp),
+            "createdTime": str(timestamp),
+            "leverage": "1",
+        }
+
+    class _WindowedBybitAPI:
+        markets = {}
+
+        def __init__(self):
+            self.calls: List[Dict[str, object]] = []
+            self.responses = [
+                {
+                    "result": {
+                        "list": [record("recent-1", end_ms - day_ms)],
+                        "nextPageCursor": "recent-page-2",
+                    }
+                },
+                {
+                    "result": {
+                        "list": [record("recent-2", end_ms - 2 * day_ms)],
+                        "nextPageCursor": "",
+                    }
+                },
+                {"result": {"list": [], "nextPageCursor": ""}},
+                {
+                    "result": {
+                        "list": [record("old-sparse", start_ms + day_ms)],
+                        "nextPageCursor": "",
+                    }
+                },
+            ]
+
+        async def private_get_v5_position_closed_pnl(self, params):
+            self.calls.append(dict(params))
+            return self.responses.pop(0)
+
+    api = _WindowedBybitAPI()
+    fetcher = BybitFetcher(api, max_span_days=6.5)
+
+    positions = await fetcher._fetch_positions_history(start_ms, end_ms)
+
+    assert {row["info"]["orderId"] for row in positions} == {
+        "recent-1",
+        "recent-2",
+        "old-sparse",
+    }
+    assert len(api.calls) == 4
+    assert api.calls[1]["cursor"] == "recent-page-2"
+    assert api.calls[1]["startTime"] == api.calls[0]["startTime"]
+    assert api.calls[1]["endTime"] == api.calls[0]["endTime"]
+    window_calls = [api.calls[0], api.calls[2], api.calls[3]]
+    assert window_calls[1]["endTime"] == window_calls[0]["startTime"] - 1
+    assert window_calls[2]["endTime"] == window_calls[1]["startTime"] - 1
+    assert window_calls[-1]["startTime"] == start_ms
+    assert all(
+        call["endTime"] - call["startTime"] <= fetcher._max_span_ms
+        for call in window_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_bybit_closed_pnl_fetch_propagates_api_error():
+    api = types.SimpleNamespace(
+        markets={},
+        private_get_v5_position_closed_pnl=AsyncMock(
+            side_effect=RuntimeError("closed-pnl unavailable")
+        ),
+    )
+    fetcher = BybitFetcher(api)
+
+    with pytest.raises(RuntimeError, match="closed-pnl unavailable"):
+        await fetcher._fetch_positions_history(1_900_000_000_000, 1_900_000_060_000)
+
+
+@pytest.mark.asyncio
+async def test_bybit_degraded_repair_uses_independent_trade_and_pnl_ranges():
+    fetcher = BybitFetcher(api=object())
+    trade_start_ms = 1_700_000_000_000
+    trade_end_ms = trade_start_ms + 15 * 60_000
+    pnl_start_ms = trade_start_ms + 3 * 86_400_000
+    pnl_end_ms = pnl_start_ms + 86_400_000
+    trade = {"id": "trade-1"}
+    position = {"id": "position-1"}
+    event = {
+        "id": "trade-1",
+        "timestamp": trade_start_ms + 60_000,
+    }
+    fetcher._fetch_my_trades = AsyncMock(return_value=[trade])
+    fetcher._fetch_positions_history = AsyncMock(return_value=[position])
+    fetcher._combine = MagicMock(return_value=[event])
+
+    out = await fetcher.fetch_degraded_pnl_repair(
+        trade_start_ms,
+        trade_end_ms,
+        pnl_start_ms,
+        pnl_end_ms,
+        detail_cache={},
+    )
+
+    assert len(out) == 1
+    assert out[0]["id"] == event["id"]
+    assert out[0]["timestamp"] == event["timestamp"]
+    fetcher._fetch_my_trades.assert_awaited_once_with(
+        trade_start_ms, trade_end_ms
+    )
+    fetcher._fetch_positions_history.assert_awaited_once_with(
+        pnl_start_ms, pnl_end_ms
+    )
+    fetcher._combine.assert_called_once_with([trade], [position], {})
 
 
 @pytest.mark.asyncio
@@ -3867,15 +4110,12 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
         until_ms=base_ts + 10,
         detail_cache={},
     )
-    assert len(events) == 1
-    event = events[0]
-    assert event["id"] == "tid-hl-1+tid-hl-1b"
-    assert event["pb_order_type"] == "unknown"
-    assert event["pnl"] == pytest.approx(2.0)
-    assert event["qty"] == pytest.approx(0.30000000000000004)
-    assert event["client_order_id"] == "0xabc"
-    assert isinstance(event["fees"], dict)
-    assert event["fees"]["cost"] == pytest.approx(0.7)
+    assert [event["id"] for event in events] == ["tid-hl-1", "tid-hl-1b"]
+    assert [event["pb_order_type"] for event in events] == ["unknown", "unknown"]
+    assert [event["pnl"] for event in events] == pytest.approx([1.5, 0.5])
+    assert [event["qty"] for event in events] == pytest.approx([0.1, 0.2])
+    assert [event["client_order_id"] for event in events] == ["0xabc", "0xabc"]
+    assert [float(event["fees"]["cost"]) for event in events] == pytest.approx([0.5, 0.2])
     assert api.calls[0]["since"] == base_ts - 1
     assert api.calls[0]["limit"] == fetcher.trade_limit
     assert api.calls[0]["params"] == {}
@@ -4120,6 +4360,70 @@ async def test_manager_refresh_latest_uses_overlap(tmp_path: Path, sample_events
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_refresh_latest_counts_timestamp_cohorts_for_overlap(
+    tmp_path: Path, sample_events
+):
+    base_timestamp = int(sample_events[0]["timestamp"])
+    burst_timestamp = base_timestamp + 1_000
+
+    def _event(event_id: str, timestamp: int) -> Dict[str, object]:
+        return {
+            "id": event_id,
+            "timestamp": timestamp,
+            "datetime": "",
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "qty": 0.01,
+            "price": 10.0,
+            "pnl": 0.0,
+            "pb_order_type": "entry",
+            "position_side": "long",
+            "client_order_id": f"cid-{event_id}",
+        }
+
+    anchor = _event("anchor", base_timestamp)
+    burst = [_event(f"burst-{index}", burst_timestamp) for index in range(25)]
+    late_fill = _event("late-fill", base_timestamp)
+    class _SinceFilteringSequencedFetcher(_SequencedFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [
+                dict(event)
+                for event in (self.batches.pop(0) if self.batches else [])
+                if since_ms is None or int(event["timestamp"]) >= since_ms
+            ]
+            self.pnl_observations = (
+                self.observations.pop(0) if self.observations else []
+            )
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _SinceFilteringSequencedFetcher(
+        [[anchor, *burst], [anchor, late_fill, *burst]]
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "hyperliquid_cohort_overlap",
+    )
+
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = base_timestamp + 30 * 60_000
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60_000,
+    )
+
+    assert fetcher.calls[1][0] == base_timestamp
+    assert "late-fill" in {event.id for event in manager.get_events()}
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_latest_can_bound_start_from_last_successful_refresh(
     tmp_path: Path, sample_events
 ):
@@ -4236,6 +4540,7 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
 @pytest.mark.asyncio
 async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
     tmp_path: Path,
+    caplog,
 ):
     cache_dir = tmp_path / "fills_cycle_reconciled"
     entry_ts = 1_700_000_000_000
@@ -4305,7 +4610,8 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
         fee_pct_fallback=0.0,
     )
 
-    await manager.refresh()
+    with caplog.at_level(logging.WARNING):
+        await manager.refresh()
 
     events = manager.get_events(symbol="TON/USDT:USDT")
     by_id = {ev.id: ev for ev in events}
@@ -4322,6 +4628,10 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
     assert sum(ev.pnl for ev in refreshed_events if "close" in ev.pb_order_type) == pytest.approx(
         5.0
     )
+    assert sum(
+        "reconciled aggregate realized PnL to fill lifecycle" in record.message
+        for record in caplog.records
+    ) == 1
 
     reloaded = FillEventsManager(
         exchange="kucoin",
@@ -4645,6 +4955,233 @@ async def test_manager_refresh_latest_skips_old_synthetic_pnl_repair_window(
 
 
 @pytest.mark.asyncio
+async def test_manager_targeted_repair_heals_old_degraded_pnl(tmp_path: Path):
+    cache_dir = tmp_path / "fills_old_degraded_targeted_repair"
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    entry_ts = now_ms - 28 * 24 * 60 * 60 * 1000
+    close_ts = entry_ts + 60_000
+    entry = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="buy",
+        qty=5.0,
+        price=100.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
+    pending_close = dict(
+        id="close",
+        timestamp=close_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="sell",
+        qty=-6.0,
+        price=103.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-close",
+    )
+    authoritative_close = dict(pending_close)
+    authoritative_close["pnl"] = 12.0
+    authoritative_close["pnl_status"] = "complete"
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+            self.batches = [[entry, pending_close], [authoritative_close], []]
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [dict(event) for event in self.batches.pop(0)]
+            if since_ms is not None:
+                batch = [event for event in batch if event["timestamp"] >= since_ms]
+            if until_ms is not None:
+                batch = [event for event in batch if event["timestamp"] <= until_ms]
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _RecordingFetcher()
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+        fee_pct_fallback=0.0,
+    )
+
+    await manager.refresh()
+    close = next(event for event in manager.get_events() if event.id == "close")
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED
+    assert close.pnl_synthetic_reason == "close_exceeds_known_position"
+    previous_refresh_ms = close_ts + 2 * 60 * 60 * 1000
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = previous_refresh_ms
+    manager.cache.save_metadata(metadata)
+
+    report = await manager.refresh_degraded_pnl_events(
+        start_ms=entry_ts - 60_000,
+        end_ms=now_ms,
+    )
+
+    assert fetcher.calls[1] == (
+        max(entry_ts - 60_000, close_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS),
+        close_ts + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+    )
+    assert report == {
+        "attempted": True,
+        "before_count": 1,
+        "repaired_count": 1,
+        "remaining_count": 0,
+        "range_count": 1,
+        "total_range_count": 1,
+        "deferred_range_count": 0,
+    }
+    assert manager.cache.load_metadata()["last_refresh_ms"] == previous_refresh_ms
+    close = next(event for event in manager.get_events() if event.id == "close")
+    assert close.pnl == pytest.approx(12.0)
+    assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
+    assert not FillEventsManager.degraded_pnl_events(manager.get_events())
+
+    overlap_ms = 60_000
+    await manager.refresh_latest(
+        overlap=20,
+        last_refresh_overlap_ms=overlap_ms,
+    )
+    assert fetcher.calls[2] == (previous_refresh_ms - overlap_ms, None)
+
+
+@pytest.mark.asyncio
+async def test_manager_degraded_pnl_repair_caps_and_rotates_ranges(tmp_path: Path):
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=BaseFetcher(),
+        cache_path=tmp_path / "fills_degraded_repair_cap",
+    )
+    start_ms = 1_700_000_000_000
+    interval_spacing_ms = 60_000
+    manager._events = [
+        types.SimpleNamespace(
+            timestamp=start_ms + index * interval_spacing_ms,
+            pnl_source=fem.PNL_SOURCE_SYNTHETIC_DEGRADED,
+        )
+        for index in range(6)
+    ]
+    manager._loaded = True
+    manager.refresh = AsyncMock()
+
+    first = await manager.refresh_degraded_pnl_events(
+        start_ms=start_ms - 10 * 60_000,
+        end_ms=start_ms + 20 * 60_000,
+    )
+    first_calls = list(manager.refresh.await_args_list)
+
+    assert first["range_count"] == fem.DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE
+    assert first["total_range_count"] == 6
+    assert first["deferred_range_count"] == 2
+    assert len(first_calls) == 4
+    assert all(call.kwargs["mark_refreshed"] is False for call in first_calls)
+    assert all(
+        call.kwargs["end_ms"] - call.kwargs["start_ms"]
+        <= fem.PENDING_PNL_REFRESH_MARGIN_MS
+        + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
+        for call in first_calls
+    )
+
+    manager.refresh.reset_mock()
+    second = await manager.refresh_degraded_pnl_events(
+        start_ms=start_ms - 10 * 60_000,
+        end_ms=start_ms + 20 * 60_000,
+    )
+    second_calls = list(manager.refresh.await_args_list)
+
+    assert second["range_count"] == 2
+    assert second["total_range_count"] == 6
+    assert second["deferred_range_count"] == 0
+    assert len(second_calls) == 2
+    assert {
+        (
+            call.kwargs["start_ms"],
+            call.kwargs["end_ms"],
+        )
+        for call in first_calls
+    }.isdisjoint(
+        {
+            (
+                call.kwargs["start_ms"],
+                call.kwargs["end_ms"],
+            )
+            for call in second_calls
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_degraded_pnl_repair_advances_bounded_auxiliary_windows(
+    tmp_path: Path,
+):
+    class _DelayedPnlFetcher(BaseFetcher):
+        async def fetch_degraded_pnl_repair(self, *args, **kwargs):
+            return []
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_DelayedPnlFetcher(),
+        cache_path=tmp_path / "fills_degraded_delayed_aux",
+    )
+    event_ts = 1_700_000_000_000
+    upper_bound = event_ts + 3 * fem.DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS
+    manager._events = [
+        types.SimpleNamespace(
+            id="close-1",
+            source_ids=["trade-1"],
+            timestamp=event_ts,
+            pnl_source=fem.PNL_SOURCE_SYNTHETIC_DEGRADED,
+        )
+    ]
+    manager._loaded = True
+    manager.refresh = AsyncMock()
+
+    await manager.refresh_degraded_pnl_events(
+        start_ms=event_ts - 10 * 60_000,
+        end_ms=upper_bound,
+    )
+    first_aux_range = manager.refresh.await_args.kwargs[
+        "degraded_pnl_aux_range"
+    ]
+
+    manager.refresh.reset_mock()
+    await manager.refresh_degraded_pnl_events(
+        start_ms=event_ts - 10 * 60_000,
+        end_ms=upper_bound,
+    )
+    second_aux_range = manager.refresh.await_args.kwargs[
+        "degraded_pnl_aux_range"
+    ]
+
+    assert first_aux_range[1] - first_aux_range[0] <= (
+        fem.DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS
+    )
+    assert second_aux_range[0] == first_aux_range[1]
+    assert second_aux_range[1] > first_aux_range[1]
+    assert manager.refresh.await_args.kwargs["start_ms"] == (
+        event_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS
+    )
+    assert manager.refresh.await_args.kwargs["end_ms"] == (
+        event_ts + fem.KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
+    )
+
+
+@pytest.mark.asyncio
 async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
     tmp_path: Path, caplog
 ):
@@ -4822,6 +5359,39 @@ async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
     assert fetcher.calls == [(None, None)]
     assert metadata["last_refresh_ms"] > 0
     assert manager.get_events() == []
+
+
+@pytest.mark.asyncio
+async def test_manager_cache_load_does_not_advance_last_exchange_refresh(
+    tmp_path: Path, sample_events
+):
+    cache_dir = tmp_path / "fills_local_load_preserves_refresh"
+    cached = [FillEvent.from_dict(dict(event)) for event in sample_events]
+    cache = FillEventCache(cache_dir)
+    cache.save(cached)
+    previous_refresh_ms = sample_events[-1]["timestamp"] + 60_000
+    cache.save_metadata(
+        {
+            "last_refresh_ms": previous_refresh_ms,
+            "oldest_event_ts": sample_events[0]["timestamp"],
+            "newest_event_ts": sample_events[-1]["timestamp"],
+            "covered_start_ms": sample_events[0]["timestamp"],
+            "known_gaps": [],
+            "history_scope": "window",
+            "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+        }
+    )
+    fetcher = _StaticFetcher([])
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.ensure_loaded()
+
+    assert manager.cache.load_metadata()["last_refresh_ms"] == previous_refresh_ms
 
 
 @pytest.mark.asyncio
@@ -5078,6 +5648,174 @@ async def test_manager_refresh_for_lookback_rebuilds_when_metadata_claims_histor
     await manager.refresh_for_lookback(start_ms=start_ms)
 
     assert manager.fetcher.calls == [(start_ms, None)]
+    metadata = manager.cache.load_metadata()
+    assert metadata["oldest_event_ts"] == 0
+    assert metadata["newest_event_ts"] == 0
+    assert manager.get_coverage_status(start_ms=start_ms) == {
+        "ready": True,
+        "reason": "window_covered",
+        "history_scope": "unknown",
+        "covered_start_ms": start_ms,
+        "oldest_event_ts": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_rejects_metadata_claiming_missing_events(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_metadata_mismatch",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": start_ms + 60_000,
+            "newest_event_ts": start_ms + 120_000,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [],
+        }
+    )
+    await manager.ensure_loaded()
+    manager.get_events = MagicMock(side_effect=AssertionError("coverage copied events"))
+
+    assert manager.get_coverage_status(start_ms=start_ms) == {
+        "ready": False,
+        "reason": "cache_metadata_event_mismatch",
+        "history_scope": "window",
+        "covered_start_ms": start_ms,
+        "oldest_event_ts": start_ms + 60_000,
+    }
+    manager.get_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_accepts_proven_empty_window(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_empty_window",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [],
+        }
+    )
+    await manager.ensure_loaded()
+
+    assert manager.get_coverage_status(start_ms=start_ms)["reason"] == "window_covered"
+    assert manager.get_coverage_status(start_ms=start_ms)["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_rejects_malformed_known_gap(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_malformed_gap",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [
+                {
+                    "start_ts": start_ms + 120_000,
+                    "end_ts": start_ms + 60_000,
+                    "reason": "fetch_failed",
+                    "confidence": 0.0,
+                }
+            ],
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(
+        start_ms=start_ms,
+        end_ms=start_ms + 180_000,
+    )
+
+    assert status["ready"] is False
+    assert status["reason"] == "malformed_known_gap"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_gaps", [None, {"reason": "fetch_failed"}])
+async def test_manager_coverage_rejects_malformed_known_gap_container(
+    tmp_path: Path,
+    known_gaps: object,
+):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_malformed_gap_container",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": known_gaps,
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(start_ms=start_ms)
+
+    assert status["ready"] is False
+    assert status["reason"] == "malformed_known_gap"
+    assert status["gap_reason"] == "malformed"
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_allows_confirmed_legitimate_gap(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_confirmed_gap",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [
+                {
+                    "start_ts": start_ms + 60_000,
+                    "end_ts": start_ms + 120_000,
+                    "reason": "confirmed_legitimate",
+                    "confidence": 1.0,
+                }
+            ],
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(
+        start_ms=start_ms,
+        end_ms=start_ms + 180_000,
+    )
+
+    assert status["ready"] is True
+    assert status["reason"] == "window_covered"
 
 
 @pytest.mark.asyncio
@@ -7613,3 +8351,389 @@ async def test_refresh_does_not_reattribute_legacy_cached_fill(tmp_path: Path):
     data_files = [path for path in tmp_path.glob("*.json") if path.name != "metadata.json"]
     persisted = json.loads(data_files[0].read_text())
     assert "provenance" not in persisted[0]
+
+
+def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
+    """Hyperliquid cohort sharing a millisecond, cached in reverse order."""
+
+    def _fill(trade_id: str, side: str, qty: float, price: float, start: str, direction: str):
+        event = {
+            "id": trade_id,
+            "symbol": "HYPE/USDC:USDC",
+            "position_side": "long",
+            "timestamp": 1_785_241_167_526,
+            "side": side,
+            "qty": qty,
+            "price": price,
+            "pnl": -0.343558 if side == "sell" else 0.0,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": trade_id,
+                        "symbol": "HYPE/USDC:USDC",
+                        "timestamp": 1_785_241_167_526,
+                        "side": side,
+                        "amount": qty,
+                        "price": price,
+                        "info": {
+                            "tid": trade_id,
+                            "side": side,
+                            "sz": str(qty),
+                            "px": str(price),
+                            "startPosition": start,
+                            "dir": direction,
+                        },
+                    },
+                }
+            ],
+        }
+        if side == "sell":
+            event["raw"][0]["data"]["pnl"] = event["pnl"]
+        return event
+
+    return [
+        _fill("1109260071634171", "buy", 2.04, 54.439, "653.02", "Open Long"),
+        _fill("952357507764053", "sell", 0.19, 54.438, "653.21", "Close Long"),
+    ]
+
+
+def test_order_same_timestamp_fills_follows_hyperliquid_position_chain():
+    events = _hyperliquid_same_millisecond_events()
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == [
+        "952357507764053",
+        "1109260071634171",
+    ]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events, {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)})
+
+    assert events[-1]["psize"] == pytest.approx(655.06)
+
+
+def test_order_same_timestamp_fills_accepts_tiny_head_at_large_position_size():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "tiny-head"
+    first["qty"] = 0.0005
+    first["raw"][0]["data"]["id"] = "tiny-head"
+    first["raw"][0]["data"]["amount"] = 0.0005
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "tiny-head",
+            "sz": "0.0005",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "large-successor"
+    second["qty"] = 1.0
+    second["raw"][0]["data"]["id"] = "large-successor"
+    second["raw"][0]["data"]["amount"] = 1.0
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "large-successor",
+            "sz": "1.0",
+            "startPosition": "1000000.0005",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == ["tiny-head", "large-successor"]
+
+
+def test_order_same_timestamp_fills_distinguishes_small_consecutive_links():
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "first-small-add"
+    first["qty"] = 0.0004
+    first["raw"][0]["data"]["id"] = "first-small-add"
+    first["raw"][0]["data"]["amount"] = 0.0004
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "first-small-add",
+            "sz": "0.0004",
+            "startPosition": "1000000",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "second-small-add"
+    second["raw"][0]["data"]["id"] = "second-small-add"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "second-small-add",
+            "startPosition": "1000000.0004",
+        }
+    )
+    events = [second, first]
+
+    order_same_timestamp_fills(events)
+
+    assert [event["id"] for event in events] == [
+        "first-small-add",
+        "second-small-add",
+    ]
+
+
+def test_hyperliquid_raw_basis_propagates_through_reordered_cohort():
+    events = _hyperliquid_same_millisecond_events()
+
+    ensure_qty_signage(events)
+    order_same_timestamp_fills(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["id"] == "1109260071634171"
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(expected_pprice)
+
+
+def test_hyperliquid_raw_basis_ignores_normalized_zero_when_close_pnl_is_absent():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"].pop("pnl")
+    close["raw"][0]["data"]["info"].pop("closedPnl", None)
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 56.2462)},
+    )
+    expected_pprices = [event["pprice"] for event in events]
+
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    assert [event["pprice"] for event in events] == pytest.approx(expected_pprices)
+
+
+def test_hyperliquid_raw_basis_accepts_explicit_zero_close_pnl():
+    add, close = _hyperliquid_same_millisecond_events()
+    close["raw"][0]["data"]["pnl"] = 0.0
+    close["pnl"] = 0.0
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (653.21, 60.0)},
+    )
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_pprice = ((653.02 * close["price"]) + (2.04 * add["price"])) / 655.06
+    assert events[0]["pprice"] == pytest.approx(close["price"])
+    assert events[1]["pprice"] == pytest.approx(expected_pprice)
+
+
+def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
+    add, close = _hyperliquid_same_millisecond_events()
+    # A missing close-and-reopen round trip can return to the same size with a
+    # different basis, so size continuity alone is insufficient across time.
+    add["timestamp"] = close["timestamp"] + 1
+    events = [close, add]
+
+    ensure_qty_signage(events)
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    expected_stale_pprice = ((653.02 * 56.2462) + (2.04 * 54.439)) / 655.06
+    assert events[-1]["psize"] == pytest.approx(655.06)
+    assert events[-1]["pprice"] == pytest.approx(54.439)
+    assert events[-1]["pprice"] != pytest.approx(expected_stale_pprice)
+
+
+def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
+    buy_1, sell_1 = _hyperliquid_same_millisecond_events()
+    buy_1["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["id"] = "buy-1"
+    buy_1["raw"][0]["data"]["info"]["tid"] = "buy-1"
+    buy_1["qty"] = 1.0
+    buy_1["raw"][0]["data"]["amount"] = 1.0
+    buy_1["raw"][0]["data"]["info"]["sz"] = "1.0"
+    buy_1["raw"][0]["data"]["info"]["startPosition"] = "0.0"
+    buy_2 = deepcopy(buy_1)
+    buy_2["id"] = "buy-2"
+    buy_2["price"] = 102.0
+    buy_2["raw"][0]["data"]["id"] = "buy-2"
+    buy_2["raw"][0]["data"]["price"] = 102.0
+    buy_2["raw"][0]["data"]["info"]["tid"] = "buy-2"
+    buy_2["raw"][0]["data"]["info"]["px"] = "102.0"
+    sell_1["id"] = "sell-1"
+    sell_1["qty"] = 1.0
+    sell_1["price"] = 101.0
+    sell_1["raw"][0]["data"]["id"] = "sell-1"
+    sell_1["raw"][0]["data"]["amount"] = 1.0
+    sell_1["raw"][0]["data"]["price"] = 101.0
+    sell_1["raw"][0]["data"]["info"].update(
+        {
+            "tid": "sell-1",
+            "sz": "1.0",
+            "px": "101.0",
+            "startPosition": "1.0",
+        }
+    )
+    coalesced = fem._coalesce_events([buy_1, sell_1, buy_2])
+
+    expanded = fem._expand_hyperliquid_coalesced_events(coalesced)
+
+    assert [event["id"] for event in expanded] == ["buy-1", "buy-2", "sell-1"]
+    assert all(len(event["raw"]) == 1 for event in expanded)
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "component_ids",
+        "source_ids",
+        "signed_qty",
+        "pnl",
+        "fees",
+        "malformed_component",
+        "component_price",
+        "component_position_chain",
+        "component_symbol",
+        "component_timestamp",
+        "price_notional",
+    ],
+)
+def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
+    mismatch,
+):
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = "buy-1"
+    first["qty"] = 1.0
+    first["raw"][0]["data"]["id"] = "buy-1"
+    first["raw"][0]["data"]["amount"] = 1.0
+    first["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-1",
+            "sz": "1.0",
+            "startPosition": "0.0",
+        }
+    )
+    second = deepcopy(first)
+    second["id"] = "buy-2"
+    second["raw"][0]["data"]["id"] = "buy-2"
+    second["raw"][0]["data"]["info"].update(
+        {
+            "tid": "buy-2",
+            "startPosition": "1.0",
+        }
+    )
+    aggregate = fem._coalesce_events([first, second])[0]
+    if mismatch == "component_ids":
+        aggregate["id"] = "aggregate"
+    elif mismatch == "source_ids":
+        aggregate["source_ids"] = ["buy-1", "buy-2", "buy-3"]
+    elif mismatch == "signed_qty":
+        aggregate["qty"] = 3.0
+    elif mismatch == "pnl":
+        aggregate["pnl"] = 1.0
+    elif mismatch == "fees":
+        aggregate["fee_paid"] = -1.0
+    elif mismatch == "malformed_component":
+        aggregate["raw"][0]["data"]["amount"] = "invalid"
+    elif mismatch == "component_price":
+        aggregate["raw"][0]["data"]["price"] = "NaN"
+    elif mismatch == "component_position_chain":
+        aggregate["raw"][0]["data"]["info"]["startPosition"] = "NaN"
+    elif mismatch == "component_symbol":
+        aggregate["raw"][0]["data"]["symbol"] = "BTC/USDC:USDC"
+    elif mismatch == "component_timestamp":
+        aggregate["raw"][0]["data"]["timestamp"] += 1
+    elif mismatch == "price_notional":
+        aggregate["raw"][0]["data"]["price"] = 60.0
+        aggregate["raw"][0]["data"]["info"]["px"] = "60.0"
+
+    with pytest.raises(FillEventCacheContractError, match=mismatch) as exc_info:
+        fem._expand_hyperliquid_coalesced_events([aggregate])
+    if mismatch == "malformed_component":
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cached_component_ids",
+    [set(), {"1"}, {"1", "3"}],
+    ids=["no-components", "one-component", "multiple-components"],
+)
+async def test_unreconciled_hyperliquid_aggregate_is_quarantined_before_refresh(
+    tmp_path: Path,
+    cached_component_ids: set[str],
+):
+    def _component(event_id: str, start_position: float) -> Dict[str, object]:
+        event = deepcopy(_hyperliquid_same_millisecond_events()[0])
+        event["id"] = event_id
+        event["qty"] = 1.0
+        event["pb_order_type"] = "unknown"
+        event["client_order_id"] = ""
+        event["raw"][0]["data"]["id"] = event_id
+        event["raw"][0]["data"]["amount"] = 1.0
+        event["raw"][0]["data"]["info"].update(
+            {
+                "tid": event_id,
+                "sz": "1.0",
+                "startPosition": str(start_position),
+            }
+        )
+        return event
+
+    components = [
+        _component("1", 0.0),
+        _component("2", 1.0),
+        _component("3", 2.0),
+    ]
+    aggregate = fem._coalesce_events(components)[0]
+    aggregate["raw"] = [
+        raw
+        for raw in aggregate["raw"]
+        if str(raw["data"]["id"]) in cached_component_ids
+    ]
+    cache_path = tmp_path / (
+        f"unreconciled_hyperliquid_aggregate_{len(cached_component_ids)}"
+    )
+    FillEventCache(cache_path).save([FillEvent.from_dict(aggregate)])
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher(components),
+        cache_path=cache_path,
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild"):
+        await manager.ensure_loaded()
+
+    quarantine_path = manager.quarantine_cache_for_rebuild(
+        reason="unreconciled_hyperliquid_aggregate"
+    )
+    await manager.refresh(start_ms=components[0]["timestamp"], end_ms=None)
+
+    assert quarantine_path is not None
+    assert Path(quarantine_path).exists()
+    assert [event.id for event in manager.get_events()] == ["1", "2", "3"]
+    assert sum(abs(event.qty) for event in manager.get_events()) == pytest.approx(3.0)
+
+
+def test_order_same_timestamp_fills_ignores_cohorts_without_chain_evidence():
+    events = _hyperliquid_same_millisecond_events()
+    for ev in events:
+        ev["raw"][0]["data"]["info"].pop("startPosition")
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original
+
+
+def test_order_same_timestamp_fills_keeps_distinct_timestamps_untouched():
+    events = _hyperliquid_same_millisecond_events()
+    events[1]["timestamp"] = events[0]["timestamp"] + 1
+    original = [ev["id"] for ev in events]
+
+    order_same_timestamp_fills(events)
+
+    assert [ev["id"] for ev in events] == original

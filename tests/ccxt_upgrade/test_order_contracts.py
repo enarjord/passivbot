@@ -923,7 +923,305 @@ def test_gateio_order_params_use_client_order_id_for_ccxt_text_prefix():
     assert custom_id_to_snake(gateio_text) == "entry_grid_normal_long"
 
 
-def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
+def test_gateio_market_settings_capture_current_max_leverage():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": 1.0, "max": 75.0},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {"leverage_max": "75"},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {}
+
+    bot.set_market_specific_settings()
+
+    assert bot.max_leverage[symbol] == 75
+
+
+def test_gateio_market_settings_invalidate_configured_symbol_when_cap_changes():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": 1.0, "max": 50.0},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {"leverage_max": "50"},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot.max_leverage[symbol] == 50
+    assert symbol not in bot.already_updated_exchange_config_symbols
+
+
+def test_gateio_market_settings_keep_configured_symbol_when_cap_is_unchanged():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": 1.0, "max": 75.0},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {"leverage_max": "75"},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot.already_updated_exchange_config_symbols == {symbol}
+
+
+def test_gateio_missing_leverage_metadata_is_symbol_scoped():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.quote = "USDT"
+    bot.markets_dict = {
+        symbol: {
+            "id": "DOGE_USDT",
+            "limits": {
+                "amount": {"min": 1.0},
+                "cost": {"min": None},
+                "leverage": {"min": None, "max": None},
+            },
+            "precision": {"amount": 1.0, "price": 0.00001},
+            "contractSize": 10.0,
+            "info": {},
+        }
+    }
+    bot.eligible_symbols = {symbol}
+    bot.active_symbols = []
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.symbol_ids = {}
+    bot.symbol_ids_inv = {}
+    bot.min_costs = {}
+    bot.min_qtys = {}
+    bot.qty_steps = {}
+    bot.price_steps = {}
+    bot.c_mults = {}
+    bot.max_leverage = {symbol: 75}
+    bot.already_updated_exchange_config_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot._gate_leverage_metadata_unavailable_symbols == {symbol}
+    assert symbol not in bot.max_leverage
+    assert symbol not in bot.already_updated_exchange_config_symbols
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateio_missing_leverage_metadata_blocks_config_without_write():
+    symbol = "DOGE/USDT:USDT"
+    bot = GateIOBot.__new__(GateIOBot)
+    bot._gate_leverage_metadata_unavailable_symbols = {symbol}
+
+    with pytest.raises(ValueError, match="max leverage metadata unavailable"):
+        await bot.update_exchange_config_by_symbols([symbol])
+
+
+@pytest.mark.asyncio
+async def test_gateio_updates_cross_leverage_without_switching_to_isolated():
+    calls = []
+
+    async def set_leverage(leverage, symbol=None, params=None):
+        calls.append((leverage, symbol, params))
+        return {
+            "contract": "DOGE_USDT",
+            "leverage": "0",
+            "cross_leverage_limit": str(leverage),
+            "risk_limit": "1000000",
+        }
+
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.cca = SimpleNamespace(set_leverage=set_leverage)
+    bot._calc_leverage_for_symbol = lambda _symbol: 10
+    bot._get_margin_mode_for_symbol = lambda _symbol: "cross"
+
+    await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
+
+    assert calls == [
+        (10, "DOGE/USDT:USDT", {"marginMode": "cross"}),
+    ]
+
+
+def test_gateio_requires_config_only_for_entry_orders():
+    bot = GateIOBot.__new__(GateIOBot)
+
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+    assert bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": "DOGE/USDT:USDT"}]
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateio_retry_backoff_uses_precreate_eligibility_snapshot(
+    monkeypatch,
+):
+    symbol = "DOGE/USDT:USDT"
+    calls = []
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.already_updated_exchange_config_symbols = set()
+    bot._exchange_config_retry_attempts = {}
+    bot._exchange_config_retry_after_ms = {symbol: 1_001}
+    bot._shutdown_requested = lambda: False
+
+    async def update_symbol_config(symbols):
+        calls.append(list(symbols))
+
+    bot.update_exchange_config_by_symbols = update_symbol_config
+    monkeypatch.setattr("passivbot.utc_ms", lambda: 2_000)
+
+    configured = await bot.update_exchange_configs(
+        [symbol],
+        eligibility_now_ms=1_000,
+    )
+
+    assert configured == set()
+    assert calls == []
+
+
+def test_ccxt_gate_cross_leverage_maps_to_documented_request_tuple():
+    exchange = ccxt.gate({"options": {"defaultType": "swap"}})
+    exchange.set_markets(
+        [
+            {
+                "id": "DOGE_USDT",
+                "symbol": "DOGE/USDT:USDT",
+                "base": "DOGE",
+                "quote": "USDT",
+                "settle": "USDT",
+                "baseId": "DOGE",
+                "quoteId": "USDT",
+                "settleId": "USDT",
+                "type": "swap",
+                "spot": False,
+                "margin": False,
+                "swap": True,
+                "future": False,
+                "option": False,
+                "contract": True,
+                "linear": True,
+                "inverse": False,
+                "active": True,
+            }
+        ]
+    )
+    captured = {}
+    exchange.privateFuturesPostSettlePositionsContractLeverage = (
+        lambda request: captured.update(request) or request
+    )
+
+    exchange.set_leverage(
+        10,
+        "DOGE/USDT:USDT",
+        {"marginMode": "cross"},
+    )
+
+    assert captured["contract"] == "DOGE_USDT"
+    assert captured["leverage"] == "0"
+    assert captured["cross_leverage_limit"] == "10"
+
+
+@pytest.mark.asyncio
+async def test_gateio_updates_isolated_leverage_explicitly():
+    calls = []
+
+    async def set_leverage(leverage, symbol=None, params=None):
+        calls.append((leverage, symbol, params))
+        return {}
+
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.cca = SimpleNamespace(set_leverage=set_leverage)
+    bot._calc_leverage_for_symbol = lambda _symbol: 7
+    bot._get_margin_mode_for_symbol = lambda _symbol: "isolated"
+
+    await bot.update_exchange_config_by_symbols(["DOGE/USDT:USDT"])
+
+    assert calls == [
+        (7, "DOGE/USDT:USDT", {"marginMode": "isolated"}),
+    ]
+
+
+def test_gateio_get_balance_reconstructs_stable_multi_currency_margin_balance():
     bot = GateIOBot.__new__(GateIOBot)
     bot.exchange = "gateio"
     bot.quote = "USDT"
@@ -937,18 +1235,81 @@ def test_gateio_get_balance_uses_cross_available_for_multi_currency_margin():
             "USDT": {"total": 0.000000000035},
             "info": [
                 {
-                    "user": "16770081",
+                    "user": 16770081,
                     "margin_mode_name": "multi_currency",
                     "cross_available": "724.95615",
+                    "cross_initial_margin": "12.5",
+                    "cross_order_margin": "3.25",
+                    "cross_unrealised_pnl": "1.5",
                 }
             ],
         }
     )
 
-    assert balance == 724.95615
+    assert balance == pytest.approx(739.20615)
     assert bot.uid == "16770081"
     assert bot.cca.uid == "16770081"
     assert bot.ccp.uid == "16770081"
+
+
+def test_gateio_multi_currency_balance_is_stable_across_order_margin_reservation():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+
+    def payload(available, order_margin, unrealised_pnl=0.0):
+        return {
+            "USDT": {"total": 0.0},
+            "info": [
+                {
+                    "user": 16770081,
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": str(available),
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": str(order_margin),
+                    "cross_unrealised_pnl": str(unrealised_pnl),
+                }
+            ],
+        }
+
+    assert bot._get_balance(payload(677.0, 3.0)) == pytest.approx(690.0)
+    assert bot._get_balance(payload(670.0, 10.0)) == pytest.approx(690.0)
+    assert bot._get_balance(payload(672.5, 10.0, 2.5)) == pytest.approx(690.0)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("cross_available", "nan"),
+        ("cross_initial_margin", "inf"),
+        ("cross_order_margin", "-inf"),
+        ("cross_unrealised_pnl", "nan"),
+    ],
+)
+def test_gateio_multi_currency_balance_rejects_non_finite_components(field, value):
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+    primary = {
+        "user": 16770081,
+        "margin_mode_name": "multi_currency",
+        "cross_available": "680.0",
+        "cross_initial_margin": "10.0",
+        "cross_order_margin": "0.0",
+        "cross_unrealised_pnl": "0.0",
+    }
+    primary[field] = value
+
+    with pytest.raises(ValueError, match="non-finite multi-currency margin balance"):
+        bot._get_balance({"USDT": {"total": 0.0}, "info": [primary]})
 
 
 def test_gateio_get_balance_uses_total_for_classic_margin():
@@ -974,6 +1335,35 @@ def test_gateio_get_balance_uses_total_for_classic_margin():
     )
 
     assert balance == 543.21
+
+
+@pytest.mark.parametrize("raw_uid", [None, "", "   ", True, float("nan")])
+def test_gateio_get_balance_rejects_invalid_uid_before_caching(raw_uid):
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = None
+    bot.cca = SimpleNamespace()
+    bot.ccp = SimpleNamespace()
+    bot.log_once = lambda msg: None
+
+    with pytest.raises(ValueError, match=r"info\[0\]\.user"):
+        bot._get_balance(
+            {
+                "USDT": {"total": 543.21},
+                "info": [
+                    {
+                        "user": raw_uid,
+                        "margin_mode_name": "classic",
+                        "cross_available": "724.95615",
+                    }
+                ],
+            }
+        )
+
+    assert bot.uid is None
+    assert not hasattr(bot.cca, "uid")
+    assert not hasattr(bot.ccp, "uid")
 
 
 def test_okx_order_side_uses_info_pos_side():

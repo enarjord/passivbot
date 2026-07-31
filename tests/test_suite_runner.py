@@ -141,6 +141,14 @@ def test_build_scenarios_basic():
     assert scenarios[0].exchanges == ["binance"]
 
 
+def test_build_scenarios_normalizes_label_whitespace():
+    scenarios, _aggregate_cfg = build_scenarios(
+        {"scenarios": [{"label": " stress "}]}
+    )
+
+    assert scenarios[0].label == "stress"
+
+
 def test_build_scenarios_handles_exchanges_and_coin_sources():
     suite_cfg = {
         "scenarios": [

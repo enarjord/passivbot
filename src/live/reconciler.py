@@ -18,6 +18,7 @@ from live.order_churn_gate import (
     deterministic_one_to_one_matches,
     normalize_ideal_orders,
 )
+from passivbot_exceptions import FatalBotException
 from pure_funcs import determine_side_from_order_tuple, filter_orders, shorten_custom_id
 from utils import symbol_to_coin, ts_to_date, utc_ms as _utils_utc_ms
 
@@ -282,6 +283,7 @@ def extract_order_custom_id(order: dict) -> str:
         "order_link_id",
         "orderLinkId",
         "clOrdId",
+        "cloid",
         "text",
     )
     for source in (order, order.get("info", {})):
@@ -307,6 +309,48 @@ def extract_order_exchange_id(order: dict) -> str:
             if value not in (None, ""):
                 return str(value)
     return ""
+
+
+def ema_entry_cancellation_order_key(order: dict) -> Optional[tuple[str, str, str, str]]:
+    """Return a strong identity for an already-proven resting entry.
+
+    Degraded-mode cancellation is an exception to manual ownership, so price/qty
+    similarity is deliberately insufficient: an exchange or client order id must
+    prove that the cancellation still targets the same order.
+    """
+    if not isinstance(order, dict):
+        return None
+    symbol = str(order.get("symbol") or "")
+    pside = str(order.get("position_side") or order.get("positionSide") or "")
+    if not symbol or pside not in ("long", "short"):
+        return None
+    exchange_id = extract_order_exchange_id(order)
+    if exchange_id:
+        return (symbol, pside, "exchange_id", exchange_id)
+    custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    if custom_id:
+        return (symbol, pside, "client_id", custom_id)
+    return None
+
+
+def ema_entry_cancellation_order_keys(
+    order: dict,
+) -> set[tuple[str, str, str, str]]:
+    """Return every strong identity alias for an already-proven resting entry."""
+    if not isinstance(order, dict):
+        return set()
+    symbol = str(order.get("symbol") or "")
+    pside = str(order.get("position_side") or order.get("positionSide") or "")
+    if not symbol or pside not in ("long", "short"):
+        return set()
+    keys: set[tuple[str, str, str, str]] = set()
+    exchange_id = extract_order_exchange_id(order)
+    if exchange_id:
+        keys.add((symbol, pside, "exchange_id", exchange_id))
+    custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    if custom_id:
+        keys.add((symbol, pside, "client_id", custom_id))
+    return keys
 
 
 def canonical_passivbot_custom_id(custom_id: str) -> str:
@@ -528,22 +572,53 @@ def emitted_order_records(bot) -> list[dict]:
     return records
 
 
+def _emitted_record_matches_open_order(record: dict, order: dict) -> bool:
+    """Return whether overlapping durable identities agree for an open order."""
+    if not isinstance(record, dict) or not isinstance(order, dict):
+        return False
+    record_exchange_id = str(record.get("exchange_id") or "")
+    record_custom_id = str(record.get("canonical_custom_id") or "")
+    order_exchange_id = extract_order_exchange_id(order)
+    order_custom_id = canonical_passivbot_custom_id(extract_order_custom_id(order))
+    comparisons = []
+    if record_exchange_id and order_exchange_id:
+        comparisons.append(record_exchange_id == order_exchange_id)
+    if record_custom_id and order_custom_id:
+        comparisons.append(record_custom_id == order_custom_id)
+    return bool(comparisons) and all(comparisons)
+
+
 def prune_emitted_order_custom_ids(bot, now_ts: int) -> None:
-    """Drop emitted order records outside the foreign-writer lookback window."""
+    """Drop expired emitted records while retaining identities of open orders."""
     now_ts = int(now_ts)
     acknowledged_cutoff_ts = now_ts - _pb_const("FOREIGN_PASSIVBOT_LOOKBACK_MS")
     ambiguous_cutoff_ts = now_ts - _pb_const(
         "FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS"
     )
     short_lived_statuses = {"submitted", "create_error_ambiguous"}
+    open_orders_by_symbol = getattr(bot, "open_orders", {}) or {}
+    active_open_orders = []
+    if isinstance(open_orders_by_symbol, dict):
+        active_open_orders = [
+            order
+            for orders in open_orders_by_symbol.values()
+            if isinstance(orders, list)
+            for order in orders
+            if isinstance(order, dict)
+        ]
     kept = []
     for record in emitted_order_records(bot):
+        status = str(record.get("status") or "")
         cutoff_ts = (
             ambiguous_cutoff_ts
-            if record.get("status") in short_lived_statuses
+            if status in short_lived_statuses
             else acknowledged_cutoff_ts
         )
-        if int(record.get("timestamp", 0)) >= cutoff_ts:
+        still_open = status not in short_lived_statuses and any(
+            _emitted_record_matches_open_order(record, order)
+            for order in active_open_orders
+        )
+        if int(record.get("timestamp", 0)) >= cutoff_ts or still_open:
             kept.append(record)
     bot.orders_emitted_to_exchange = kept
 
@@ -813,94 +888,6 @@ async def detect_foreign_passivbot_orders(bot, open_orders: list[dict]) -> None:
         )
 
 
-def order_matches_known_self_emission(bot, order: dict, max_age_ms: int) -> bool:
-    """Return True when an open order is known to have been emitted by this process."""
-    if not isinstance(order, dict):
-        return False
-    if bot.order_matches_recent_execution(order, max_age_ms=max_age_ms):
-        return True
-    now_ts = (
-        int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
-    )
-    cutoff = now_ts - int(max_age_ms)
-    exchange_id = extract_order_exchange_id(order)
-    custom_id = extract_order_custom_id(order)
-    canonical_custom_id = canonical_passivbot_custom_id(custom_id)
-    pb_type = (
-        _pb_attr("custom_id_to_snake")(custom_id)
-        if custom_id
-        else bot._resolve_pb_order_type(order)
-    )
-    fingerprint = order_identity_fingerprint(order, pb_type)
-    for record in emitted_order_records(bot):
-        record_ts_raw = record.get("timestamp")
-        if record_ts_raw is None:
-            continue
-        try:
-            record_ts = int(record_ts_raw)
-        except (TypeError, ValueError):
-            continue
-        if record_ts < cutoff:
-            continue
-        record_exchange_id = str(record.get("exchange_id") or "")
-        if (
-            exchange_id
-            and record_exchange_id
-            and str(exchange_id) == record_exchange_id
-        ):
-            return True
-        record_custom_id = str(record.get("canonical_custom_id") or "")
-        if (
-            canonical_custom_id
-            and record_custom_id
-            and canonical_custom_id == record_custom_id
-        ):
-            return True
-        if (
-            fingerprint
-            and record.get("fingerprint")
-            and record.get("fingerprint") == fingerprint
-        ):
-            return True
-    return False
-
-
-def flag_disappeared_self_order_guardrail(bot, order: dict) -> None:
-    """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
-    symbol = str(order.get("symbol") or "")
-    if not symbol:
-        return
-    ledger = bot._ensure_freshness_ledger()
-    min_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0) + 1
-    details = {
-        "order_id": str(order.get("id") or ""),
-        "side": str(order.get("side") or ""),
-        "position_side": str(order.get("position_side") or ""),
-        "price": order.get("price"),
-        "qty": order.get("qty", order.get("amount")),
-    }
-    ledger.flag_symbol_block(
-        symbol,
-        reason="self_order_disappeared_position_may_be_stale",
-        required_surfaces=ACCOUNT_SURFACES,
-        min_epoch=min_epoch,
-        detected_ms=_utc_ms(),
-        details=details,
-    )
-    bot.execution_scheduled = True
-    if not hasattr(bot, "state_change_detected_by_symbol"):
-        bot.state_change_detected_by_symbol = set()
-    bot.state_change_detected_by_symbol.add(symbol)
-    bot._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
-    logging.debug(
-        "[state] freshness guardrail armed | symbol=%s | reason=self_order_disappeared_position_may_be_stale | required=%s | min_epoch=%s | order_id=%s",
-        _pb_attr("Passivbot")._log_symbol(symbol),
-        ",".join(sorted(ACCOUNT_SURFACES)),
-        min_epoch,
-        details["order_id"],
-    )
-
-
 def mark_account_critical_state_dirty(
     bot,
     *,
@@ -910,7 +897,7 @@ def mark_account_critical_state_dirty(
     level: int = logging.DEBUG,
 ) -> None:
     """Force a coherent account-state refresh before the next execution cycle."""
-    min_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0) + 1
+    min_epoch = int(bot._ensure_freshness_ledger().epoch) + 1
     bot._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
     bot.execution_scheduled = True
     normalized_symbols = sorted({str(symbol) for symbol in (symbols or []) if symbol})
@@ -962,28 +949,45 @@ async def calc_orders_to_cancel_and_create(bot):
         ideal_orders = await bot.calc_ideal_orders()
     except Exception:
         if connector_enabled:
+            reset = state.clear_history()
             _emit_order_churn_evidence_summary(
                 bot,
                 state=state,
                 generation=generation,
-                reset=False,
+                reset=reset,
                 decisions=[ChurnDecision(False, "planning_failed")],
                 symbols=getattr(bot, "active_symbols", []) or [],
                 snapshot_status="skipped",
             )
         raise
+    validate_rust_ideal_orders(ideal_orders)
     if connector_enabled:
-        churn_unavailable_symbols = prepare_order_churn_evidence(
-            bot, ideal_orders, generation=generation
-        )
+        prepare_order_churn_evidence(bot, ideal_orders, generation=generation)
     else:
-        state.history_by_symbol.clear()
-        churn_unavailable_symbols = set()
-    return await calc_orders_to_cancel_and_create_from_ideal(
-        bot,
-        ideal_orders,
-        order_churn_unavailable_symbols=churn_unavailable_symbols,
-    )
+        state.clear_history()
+    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+
+
+def validate_rust_ideal_orders(ideal_orders: object) -> None:
+    """Reject malformed Rust intent before reconciliation or exchange actions."""
+    if not isinstance(ideal_orders, dict):
+        raise FatalBotException("Rust ideal orders must be a symbol-to-orders mapping")
+    for symbol, orders in ideal_orders.items():
+        normalized_symbol = str(symbol)
+        if not normalized_symbol:
+            raise FatalBotException("Rust ideal orders contain an empty symbol")
+        if not isinstance(orders, list):
+            raise FatalBotException(
+                f"Rust ideal orders for {normalized_symbol} must be a list"
+            )
+        try:
+            normalize_ideal_orders(orders)
+            if any(str(order["symbol"]) != normalized_symbol for order in orders):
+                raise ValueError("ideal order symbol does not match its mapping key")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise FatalBotException(
+                f"Rust emitted malformed ideal orders for {normalized_symbol}"
+            ) from exc
 
 
 def order_churn_risk_active_pairs_from_rust_output(
@@ -1035,116 +1039,6 @@ def order_churn_risk_active_pairs_from_rust_output(
     return tuple(sorted(pairs))
 
 
-def _order_churn_account_epoch(bot) -> tuple:
-    positions = []
-    for symbol, sides in sorted((getattr(bot, "positions", {}) or {}).items()):
-        if not isinstance(sides, dict):
-            continue
-        for pside in ("long", "short"):
-            position = sides.get(pside) or {}
-            positions.append(
-                (
-                    str(symbol),
-                    pside,
-                    round(float(position.get("size", 0.0) or 0.0), 12),
-                    round(float(position.get("price", 0.0) or 0.0), 12),
-                )
-            )
-    pnl_stats = bot._get_realized_pnl_cumsum_stats()
-    authoritative_signatures = getattr(bot, "_authoritative_surface_signatures", {}) or {}
-    fill_signature = authoritative_signatures.get("fills")
-    if fill_signature is None:
-        events = (
-            bot._get_effective_pnl_events()
-            if getattr(bot, "_pnls_manager", None)
-            else []
-        )
-        fill_signature = bot._fill_events_signature(events) if events else ()
-    config_signature = json.dumps(
-        {
-            "live": (getattr(bot, "config", {}) or {}).get("live", {}),
-            "bot": (getattr(bot, "config", {}) or {}).get("bot", {}),
-            "coin_overrides": (getattr(bot, "config", {}) or {}).get(
-                "coin_overrides", {}
-            ),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return (
-        round(float(bot.get_hysteresis_snapped_balance()), 12),
-        tuple(positions),
-        fill_signature,
-        round(float(pnl_stats.get("max", 0.0) or 0.0), 12),
-        round(float(pnl_stats.get("last", 0.0) or 0.0), 12),
-        tuple(getattr(bot, "_order_churn_risk_active_pairs", ()) or ()),
-        config_signature,
-        bool(getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)),
-    )
-
-
-def _order_churn_symbol_compatibility_epochs(
-    bot, symbols: Iterable[str]
-) -> dict[str, tuple]:
-    markets = getattr(bot, "markets_dict", {}) or {}
-    pb_modes = getattr(bot, "PB_modes", {}) or {}
-    approved = getattr(bot, "approved_coins", {}) or {}
-    ignored = getattr(bot, "ignored_coins", {}) or {}
-    approved_minus_ignored = (
-        getattr(bot, "approved_coins_minus_ignored_coins", {}) or {}
-    )
-    approved_by_pside = {
-        pside: set((approved.get(pside, {}) or {})) for pside in ("long", "short")
-    }
-    ignored_by_pside = {
-        pside: set((ignored.get(pside, {}) or {})) for pside in ("long", "short")
-    }
-    eligible_by_pside = {
-        pside: set((approved_minus_ignored.get(pside, {}) or {}))
-        for pside in ("long", "short")
-    }
-    active_symbols = set(getattr(bot, "active_symbols", []) or [])
-    out: dict[str, tuple] = {}
-    for symbol in sorted({str(symbol) for symbol in symbols if symbol}):
-        market = markets.get(symbol, {}) if isinstance(markets, dict) else {}
-        if not isinstance(market, dict):
-            market = {}
-        out[symbol] = (
-            float((getattr(bot, "price_steps", {}) or {}).get(symbol, 0.0) or 0.0),
-            float((getattr(bot, "qty_steps", {}) or {}).get(symbol, 0.0) or 0.0),
-            float((getattr(bot, "min_qtys", {}) or {}).get(symbol, 0.0) or 0.0),
-            float((getattr(bot, "min_costs", {}) or {}).get(symbol, 0.0) or 0.0),
-            float((getattr(bot, "c_mults", {}) or {}).get(symbol, 1.0) or 1.0),
-            bool(market.get("active", True)),
-            tuple(
-                (
-                    pside,
-                    str((pb_modes.get(pside, {}) or {}).get(symbol)),
-                    symbol in approved_by_pside[pside],
-                    symbol in ignored_by_pside[pside],
-                    symbol in eligible_by_pside[pside],
-                )
-                for pside in ("long", "short")
-            ),
-            symbol in active_symbols,
-            json.dumps(
-                {
-                    "precision": market.get("precision", {}),
-                    "limits": market.get("limits", {}),
-                    "contractSize": market.get("contractSize"),
-                    "linear": market.get("linear"),
-                    "inverse": market.get("inverse"),
-                    "type": market.get("type"),
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            ),
-        )
-    return out
-
-
 def _emit_order_churn_evidence_summary(
     bot,
     *,
@@ -1181,63 +1075,34 @@ def _emit_order_churn_evidence_summary(
 
 def prepare_order_churn_evidence(
     bot, ideal_orders: dict, *, generation: int
-) -> set[str]:
-    """Annotate valid Rust ideals and return symbols unavailable to the gate."""
+) -> None:
+    """Annotate Rust ideals from recent behavior without gating reconciliation."""
     state = bot._order_churn_gate_state
     activation_count = int(bot.live_value("order_replacement_churn_gate_activation_count"))
-    epoch = _order_churn_account_epoch(bot)
-    initialized_empty = state.account_epoch is None
-    reset = state.reset_history_for_epoch(epoch)
-    if initialized_empty:
+    reset = False
+    if not state.history_started:
+        state.history_started = True
         reset = True
         logging.info(
             "[order] churn evidence history initialized empty | reason=process_start"
         )
-    elif reset:
-        should_log, suppressed = state.should_log_console_event(
-            "history_reset_account_epoch",
-            "account_epoch_changed",
-            now_monotonic=time.monotonic(),
-        )
-        log = logging.info if should_log else logging.debug
-        log(
-            "[order] churn evidence history reset | reason=account_epoch_changed "
-            "reset_count=%d suppressed_repeats=%d",
-            state.reset_count,
-            suppressed,
-        )
     current_universe = set(ideal_orders)
     current_universe.update(getattr(bot, "active_symbols", []) or [])
     current_universe.update((getattr(bot, "open_orders", {}) or {}).keys())
-    current_universe.update((getattr(bot, "positions", {}) or {}).keys())
+    current_universe.update(
+        symbol
+        for symbol in (getattr(bot, "positions", {}) or {})
+        if _symbol_position_state(bot, symbol) != "flat"
+    )
     history_symbols = state.symbols_with_history()
-    compatibility_universe = current_universe | history_symbols
+    if activation_count > 0:
+        for symbol in history_symbols - current_universe:
+            reset = state.clear_symbol_history(symbol) or reset
     complete_ideals = {
         str(symbol): list(ideal_orders.get(symbol, [])) for symbol in current_universe
     }
-    scoped_resets = state.reset_history_for_symbol_epochs(
-        _order_churn_symbol_compatibility_epochs(bot, compatibility_universe)
-    )
-    if scoped_resets:
-        reset = True
-        # Dynamic forager selection may change different symbol pairs on each
-        # cycle. Keep that detail in the message and structured event without
-        # turning every new pair into an unthrottled INFO signature.
-        should_log, suppressed = state.should_log_console_event(
-            "history_reset_symbol_compatibility",
-            "symbol_compatibility_changed",
-            now_monotonic=time.monotonic(),
-        )
-        log = logging.info if should_log else logging.debug
-        log(
-            "[order] churn evidence history reset | reason=symbol_compatibility_changed "
-            "symbols=%s reset_count=%d suppressed_repeats=%d",
-            _pb_attr("Passivbot")._log_symbols(sorted(scoped_resets), limit=8),
-            state.reset_count,
-            suppressed,
-        )
     if activation_count <= 0:
-        state.history_by_symbol.clear()
+        reset = state.clear_history() or reset
         for orders in complete_ideals.values():
             for order in orders:
                 order["_churn_evidence"] = False
@@ -1254,52 +1119,23 @@ def prepare_order_churn_evidence(
             ],
             symbols=complete_ideals,
         )
-        return set()
-    valid_ideals: dict[str, list[dict]] = {}
-    unavailable_symbols: set[str] = set()
-    unavailable_decisions: list[ChurnDecision] = []
-    for symbol, orders in complete_ideals.items():
-        try:
-            # Validate one symbol at a time so a downstream normalization
-            # outage cannot erase a complete, valid Rust plan for its peers.
-            normalize_ideal_orders(orders)
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            unavailable_symbols.add(symbol)
-            unavailable_decisions.extend(
-                ChurnDecision(False, "normalization_unavailable") for _order in orders
-            )
-            for order in orders:
-                if isinstance(order, dict):
-                    order["_churn_evidence"] = False
-                    order["_churn_reason"] = "normalization_unavailable"
-            logging.error(
-                "[order] churn evidence unavailable for symbol; leaving its actual orders "
-                "untouched | symbol=%s | error_type=%s",
-                _pb_attr("Passivbot")._log_symbol(symbol),
-                bounded_exception_type(exc),
-            )
-            continue
-        valid_ideals[symbol] = orders
+        return
     window_seconds = float(bot.live_value("order_replacement_churn_gate_window_minutes")) * 60.0
     stability_seconds = (
         float(bot.live_value("order_replacement_churn_gate_stability_minutes")) * 60.0
     )
     decisions = state.evaluate_and_record(
-        valid_ideals,
-        generation=generation,
+        complete_ideals,
         now_monotonic=time.monotonic(),
-        tight_tolerance=float(bot.live_value("order_match_tolerance_pct")),
-        wider_tolerance=float(
-            bot.live_value("order_replacement_churn_gate_tracking_tolerance_pct")
-        ),
+        tolerance=float(bot.live_value("order_match_tolerance_pct")),
         stability_seconds=stability_seconds,
         window_seconds=window_seconds,
-        max_generation_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
+        max_sample_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
     )
     risk_active_pairs = set(
         getattr(bot, "_order_churn_risk_active_pairs", ()) or ()
     )
-    for orders in valid_ideals.values():
+    for orders in complete_ideals.values():
         for order in orders:
             decision = decisions.get(id(order), ChurnDecision(False, "unavailable"))
             pair = (str(order.get("symbol") or ""), str(order.get("position_side") or ""))
@@ -1316,10 +1152,9 @@ def prepare_order_churn_evidence(
         state=state,
         generation=generation,
         reset=reset,
-        decisions=[*decisions.values(), *unavailable_decisions],
+        decisions=decisions.values(),
         symbols=complete_ideals,
     )
-    return unavailable_symbols
 
 
 async def calc_orders_to_cancel_and_create_from_ideal(
@@ -1328,10 +1163,8 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     *,
     actual_symbols: Optional[Iterable[str]] = None,
     actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
-    apply_creation_guardrails: bool = True,
     apply_mode_filters: bool = True,
     collect_fresh_entry_eligibility: bool = True,
-    order_churn_unavailable_symbols: Optional[Iterable[str]] = None,
 ):
     """Reconcile exchange orders against a supplied ideal order map."""
     bot._fresh_entry_eligibility_trace = None
@@ -1344,13 +1177,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             | set(ideal_orders if isinstance(ideal_orders, dict) else {})
             | set((getattr(bot, "open_orders", {}) or {}).keys())
             | set((getattr(bot, "positions", {}) or {}).keys())
-            | set(
-                getattr(
-                    getattr(bot, "_order_churn_gate_state", None),
-                    "symbols_with_history",
-                    lambda: set(),
-                )()
-            )
         )
     actual_orders = bot._snapshot_actual_orders(
         actual_symbols, psides_by_symbol=actual_psides_by_symbol
@@ -1370,24 +1196,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         getattr(bot, "_malformed_actual_order_counts", {}) or {}
     )
     connector_enabled = connector_supports_order_churn_gate(bot)
-    churn_unavailable_symbols = {
-        str(symbol) for symbol in (order_churn_unavailable_symbols or []) if symbol
-    }
-    churn_unavailable_position_state = {
-        symbol: _symbol_position_state(bot, symbol)
-        for symbol in churn_unavailable_symbols
-    }
-    churn_unavailable_unproven_position_symbols = {
-        symbol
-        for symbol, state in churn_unavailable_position_state.items()
-        if state == "unproven"
-    }
-    churn_unavailable_stateful_symbols = {
-        symbol
-        for symbol in churn_unavailable_symbols
-        if actual_orders.get(symbol)
-        or churn_unavailable_position_state[symbol] == "nonzero"
-    }
     keys = (
         (
             "symbol",
@@ -1408,24 +1216,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         ideal_list = (
             ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
         )
-        if connector_enabled and symbol in churn_unavailable_symbols:
-            trace = _trace_record(
-                trace,
-                "record_blocked_orders",
-                ideal_list,
-                "order_churn_normalization_unavailable",
-            )
-            plan_summaries.append(
-                (
-                    symbol,
-                    len(symbol_orders),
-                    0,
-                    len(ideal_list),
-                    0,
-                    len(symbol_orders) + len(ideal_list),
-                )
-            )
-            continue
         if symbol in malformed_actual_symbols:
             trace = _trace_record(
                 trace,
@@ -1521,46 +1311,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         to_cancel += cancel_
         to_create += create_
 
-    if connector_enabled and churn_unavailable_unproven_position_symbols:
-        blocked = list(to_create)
-        blocked_cancellations = list(to_cancel)
-        to_cancel = []
-        to_create = []
-        trace = _trace_record(
-            trace,
-            "record_blocked_orders",
-            blocked,
-            "order_churn_normalization_position_unproven",
-        )
-        logging.error(
-            "[order] blocking every exchange write because churn normalization is unavailable "
-            "for symbols with unproven position state | symbols=%s | blocked_creations=%d | "
-            "blocked_cancellations=%d",
-            _pb_attr("Passivbot")._log_symbols(
-                sorted(churn_unavailable_unproven_position_symbols), limit=8
-            ),
-            len(blocked),
-            len(blocked_cancellations),
-        )
-    elif connector_enabled and churn_unavailable_stateful_symbols:
-        blocked = [order for order in to_create if not _order_is_market_panic(order)]
-        to_create = [order for order in to_create if _order_is_market_panic(order)]
-        trace = _trace_record(
-            trace,
-            "record_blocked_orders",
-            blocked,
-            "order_churn_normalization_account_barrier",
-        )
-        logging.error(
-            "[order] blocking account-wide non-panic creations because churn normalization "
-            "is unavailable for symbols with actual orders or positions | symbols=%s | "
-            "blocked_creations=%d | market_panic_bypass=%d",
-            _pb_attr("Passivbot")._log_symbols(
-                sorted(churn_unavailable_stateful_symbols), limit=8
-            ),
-            len(blocked),
-            len(to_create),
-        )
     if malformed_actual_symbols and connector_enabled:
         blocked = list(to_create)
         blocked_cancellations = list(to_cancel)
@@ -1581,26 +1331,12 @@ async def calc_orders_to_cancel_and_create_from_ideal(
         )
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
-    if apply_creation_guardrails:
-        before_creation_guardrails = list(to_create)
-        to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
-        trace = _trace_record(
-            trace,
-            "record_blocked_orders",
-            _orders_removed_by_identity(before_creation_guardrails, to_create),
-            "freshness_creation_guardrail",
-        )
-    else:
-        freshness_skipped = 0
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)
         total_pre_create = sum(p[3] for p in plan_summaries)
         total_create = len(to_create)
-        total_skipped = (
-            sum(p[5] for p in plan_summaries)
-            + freshness_skipped
-        )
+        total_skipped = sum(p[5] for p in plan_summaries)
         detail_parts = []
         untouched_cancel = total_pre_cancel - total_cancel
         untouched_create = total_pre_create - total_create
@@ -2337,10 +2073,32 @@ def apply_mode_filters(
     to_create: list[dict],
 ) -> tuple[list[dict], list[dict]]:
     """Apply mode-specific cancel/create filtering rules."""
+    authorized_ema_entry_cancellation_order_keys = set(
+        getattr(bot, "_orchestrator_ema_entry_cancellation_order_keys", set())
+        or set()
+    )
     for pside in ["long", "short"]:
         mode = bot.PB_modes[pside].get(symbol)
         if mode == "manual":
-            to_cancel = [x for x in to_cancel if x["position_side"] != pside]
+            if authorized_ema_entry_cancellation_order_keys:
+                # This pair was dynamically managed by forager when its required
+                # EMA became unavailable. Preserve cancellation only for the
+                # exact proven resting entry; do not broaden manual mode to
+                # closes, creations, replacements, or operator-owned orders.
+                to_cancel = [
+                    x
+                    for x in to_cancel
+                    if x["position_side"] != pside
+                    or (
+                        not x["reduce_only"]
+                        and bool(
+                            ema_entry_cancellation_order_keys(x)
+                            & authorized_ema_entry_cancellation_order_keys
+                        )
+                    )
+                ]
+            else:
+                to_cancel = [x for x in to_cancel if x["position_side"] != pside]
             to_create = [x for x in to_create if x["position_side"] != pside]
         elif mode == "tp_only":
             to_cancel = [

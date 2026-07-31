@@ -96,6 +96,45 @@ passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir select
 passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto
 ```
 
+## Optimizer starting-config preselection
+
+By default, `passivbot optimize -t/--start` accepts ordinary configs or Pareto artifacts, extracts
+their bot parameters, and re-evaluates every unique seed under the new run. Add
+`--filter-starting-configs` to filter metric-bearing Pareto artifacts before seed extraction using
+the optimizer's final effective limits, including config limits and CLI `--limits`, `--limit`, and
+`--clear-limits` changes:
+
+```shell
+passivbot optimize configs/examples/suite_example.json \
+  -t optimize_results/.../pareto \
+  --filter-starting-configs \
+  -l 'adg_strategy_eq>0.0' \
+  -l 'strategy_eq_recovery_days_max<100' \
+  -l '{"metric":"strategy_eq_recovery_days_max","penalize_if":"greater_than","stat":"max","value":120}'
+```
+
+Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most
+`N` filtered candidates using the same `anchors-farthest` objective-anchor and diversity selection
+as `passivbot tool pareto-compress N`. Compression may also be used without filtering:
+
+```shell
+passivbot optimize configs/examples/suite_example.json \
+  -t optimize_results/.../pareto \
+  --filter-starting-configs \
+  --compress-starting-configs 60 \
+  -l 'drawdown_worst_strategy_eq<0.5 scenario=base'
+```
+
+Both options trust the metrics and objectives stored in the seed artifacts. Passivbot cannot prove
+that their coin universe, exchanges, date range, scenarios, or other backtest settings match the
+new optimization, so it logs a warning whenever metric-based preselection is enabled. This workflow
+is best suited to restarting a comparable optimization with stricter limits. When seeds come from
+different runs or ordinary configs, omit these options so every seed is evaluated before selection.
+Metric-based preselection fails instead of guessing when JSON seeds lack usable Pareto metrics, a
+configured limit metric cannot be resolved, stored artifacts are malformed, or filtering rejects
+every candidate. Survivors are still quantized, deduplicated, and re-evaluated normally by the new
+optimization.
+
 ## Iterative backtester utilities
 
 `src/tools/iterative_backtester.py` and `iterative_history_plot.py` help replay slices of the backtester (or real fills) interactively so you can inspect order-by-order behaviour. Useful when tuning configs by hand.

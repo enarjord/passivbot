@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Iterable, Sequence
 
 from .access import require_config_dict
+from .limits import SUPPORTED_AGGREGATE_MODES, resolve_aggregate_mode
 from .log_output import log_config_message
 from .metrics import canonicalize_metric_name
 
 OBJECTIVE_GOALS = ("min", "max")
+SCORING_ENTRY_FIELDS = {"metric", "goal", "scenario", "aggregate"}
+
+
+class ScenarioSelection(Enum):
+    INHERIT = "inherit"
+
 
 DEFAULT_OBJECTIVE_GOALS = {
     "positions_held_per_day": "min",
@@ -147,13 +155,26 @@ DEFAULT_OBJECTIVE_GOALS = {
 class ObjectiveSpec:
     metric: str
     goal: str
+    scenario: str | None | ScenarioSelection = ScenarioSelection.INHERIT
+    aggregate: str | None = None
 
     @property
     def engine_sign(self) -> float:
         return -1.0 if self.goal == "max" else 1.0
 
-    def to_config(self) -> dict[str, str]:
-        return {"metric": self.metric, "goal": self.goal}
+    def to_config(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"metric": self.metric, "goal": self.goal}
+        if self.scenario is not ScenarioSelection.INHERIT:
+            payload["scenario"] = self.scenario
+        if self.aggregate is not None:
+            payload["aggregate"] = self.aggregate
+        return payload
+
+
+@dataclass(frozen=True)
+class ObjectiveBasis:
+    scenario: str | None
+    aggregate: str | None
 
 
 def _normalize_goal(value: Any, *, path: str) -> str:
@@ -162,6 +183,28 @@ def _normalize_goal(value: Any, *, path: str) -> str:
         allowed = ", ".join(OBJECTIVE_GOALS)
         raise ValueError(f"{path} must be one of {{{allowed}}}, got {value!r}")
     return goal
+
+
+def _normalize_scenario(value: Any, *, path: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a scenario label string or null, got {value!r}")
+    scenario = value.strip()
+    if not scenario:
+        raise ValueError(f"{path} must be a non-empty scenario label or null")
+    return scenario
+
+
+def _normalize_aggregate(value: Any, *, path: str) -> str | None:
+    if value is None:
+        return None
+    aggregate = str(value).strip().lower()
+    if aggregate not in SUPPORTED_AGGREGATE_MODES:
+        raise ValueError(
+            f"{path} must be one of {sorted(SUPPORTED_AGGREGATE_MODES)}, got {value!r}"
+        )
+    return aggregate
 
 
 def default_objective_goal(metric: str) -> str | None:
@@ -184,10 +227,26 @@ def _normalize_spec(
     unknown_goal: str,
 ) -> tuple[ObjectiveSpec, bool]:
     if isinstance(item, ObjectiveSpec):
+        scenario = item.scenario
+        if scenario is not ScenarioSelection.INHERIT:
+            scenario = _normalize_scenario(
+                scenario,
+                path=f"config.optimize.scoring[{index}].scenario",
+            )
         spec = ObjectiveSpec(
             metric=canonicalize_metric_name(item.metric),
             goal=_normalize_goal(item.goal, path=f"config.optimize.scoring[{index}].goal"),
+            scenario=scenario,
+            aggregate=_normalize_aggregate(
+                item.aggregate,
+                path=f"config.optimize.scoring[{index}].aggregate",
+            ),
         )
+        if isinstance(spec.scenario, str) and spec.aggregate is not None:
+            raise ValueError(
+                f"config.optimize.scoring[{index}] cannot set both a named scenario "
+                "and aggregate"
+            )
         return spec, False
 
     if isinstance(item, str):
@@ -205,6 +264,12 @@ def _normalize_spec(
         return ObjectiveSpec(metric=metric, goal=goal), True
 
     if isinstance(item, dict):
+        unknown_fields = sorted(set(item) - SCORING_ENTRY_FIELDS)
+        if unknown_fields:
+            raise ValueError(
+                f"config.optimize.scoring[{index}] has unknown field(s): "
+                f"{', '.join(unknown_fields)}"
+            )
         metric = canonicalize_metric_name(str(item.get("metric", "")).strip())
         if not metric:
             raise ValueError(f"config.optimize.scoring[{index}].metric must be a non-empty string")
@@ -219,11 +284,33 @@ def _normalize_spec(
                 goal = unknown_goal
         else:
             goal = _normalize_goal(raw_goal, path=f"config.optimize.scoring[{index}].goal")
-        return ObjectiveSpec(metric=metric, goal=goal), False
+        scenario = (
+            _normalize_scenario(
+                item.get("scenario"),
+                path=f"config.optimize.scoring[{index}].scenario",
+            )
+            if "scenario" in item
+            else ScenarioSelection.INHERIT
+        )
+        aggregate = _normalize_aggregate(
+            item.get("aggregate"),
+            path=f"config.optimize.scoring[{index}].aggregate",
+        )
+        if isinstance(scenario, str) and aggregate is not None:
+            raise ValueError(
+                f"config.optimize.scoring[{index}] cannot set both a named scenario "
+                "and aggregate"
+            )
+        return ObjectiveSpec(
+            metric=metric,
+            goal=goal,
+            scenario=scenario,
+            aggregate=aggregate,
+        ), False
 
     raise ValueError(
         "config.optimize.scoring entries must be strings or objects like "
-        "{metric: ..., goal: min|max}"
+        "{metric: ..., goal: min|max, scenario: label|null, aggregate: mean|min|max|std|median}"
     )
 
 
@@ -297,6 +384,25 @@ def objective_spec_by_metric(config_or_scoring: Any) -> dict[str, ObjectiveSpec]
     return {spec.metric: spec for spec in extract_objective_specs(config_or_scoring)}
 
 
+def resolve_objective_basis(
+    spec: ObjectiveSpec,
+    *,
+    default_scenario: str | None,
+    aggregate_cfg: dict[str, Any] | None,
+) -> ObjectiveBasis:
+    scenario = default_scenario if spec.scenario is ScenarioSelection.INHERIT else spec.scenario
+    if scenario is not None:
+        if spec.aggregate is not None:
+            raise ValueError(
+                f"scoring objective {spec.metric!r} resolves to scenario {scenario!r} "
+                f"and cannot also use aggregate {spec.aggregate!r}; set scenario to null "
+                "to use suite aggregation"
+            )
+        return ObjectiveBasis(scenario=scenario, aggregate=None)
+    aggregate = spec.aggregate or resolve_aggregate_mode(spec.metric, aggregate_cfg)
+    return ObjectiveBasis(scenario=None, aggregate=aggregate)
+
+
 def to_engine_value(spec: ObjectiveSpec, raw_value: float) -> float:
     return float(raw_value) * spec.engine_sign
 
@@ -336,7 +442,14 @@ def dominates_objectives(
 
 
 def objective_display_name(spec: ObjectiveSpec) -> str:
-    return f"{spec.metric} ({spec.goal})"
+    basis = ""
+    if isinstance(spec.scenario, str):
+        basis = f", scenario={spec.scenario}"
+    elif spec.scenario is None:
+        basis = ", aggregate"
+    if spec.aggregate is not None:
+        basis += f"={spec.aggregate}"
+    return f"{spec.metric} ({spec.goal}{basis})"
 
 
 def default_scoring_weights() -> dict[str, float]:

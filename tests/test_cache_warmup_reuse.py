@@ -187,6 +187,19 @@ class TestCacheHashIndependence:
 
         assert hash_a != hash_b
 
+    def test_same_coin_union_across_sides_has_same_hash(self):
+        cfg_long = _base_config()
+        cfg_short = copy.deepcopy(cfg_long)
+        cfg_short["bot"]["long"]["total_wallet_exposure_limit"] = 0.0
+        cfg_short["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+        cfg_short["bot"]["short"]["n_positions"] = 1
+        cfg_short["live"]["approved_coins"] = {
+            "long": [],
+            "short": ["BTC/USDT:USDT"],
+        }
+
+        assert get_cache_hash(cfg_long, "binance") == get_cache_hash(cfg_short, "binance")
+
     def test_different_dates_different_hash(self):
         """Changing start_date still produces a different hash."""
         cfg_a = _base_config()

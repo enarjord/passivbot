@@ -54,6 +54,50 @@ def test_build_backtest_dataset_metadata_prefers_cache_coin_order_and_absolute_p
     assert metadata["materialization_schema_version"] == 1
     assert metadata["content_hashes"] == {"hlcvs": "abc"}
     assert metadata["side_membership"] == {"long": ["BTC"], "short": ["ETH"]}
+    assert metadata["cache_build_side_membership"] == {
+        "long": ["BTC"],
+        "short": ["ETH"],
+    }
+
+
+def test_build_backtest_dataset_metadata_separates_runtime_and_cache_build_sides(tmp_path):
+    cache_dir = tmp_path / "caches" / "hlcvs_data" / "combined__BTC__abc123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "coins.json").write_text(json.dumps(["BTC"]))
+    (cache_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materialization_schema_version": 1,
+                "files": {},
+                "effective": {
+                    "build_side_membership": {"long": ["BTC"], "short": ["BTC"]},
+                    "side_membership": {"long": ["BTC"], "short": ["BTC"]},
+                },
+            }
+        )
+    )
+    config = {
+        "backtest": {
+            "cache_dir": {"combined": str(cache_dir)},
+            "coins": {"combined": ["BTC"]},
+            "start_date": "2025-01-01",
+            "end_date": "2025-02-01",
+        },
+        "bot": {
+            "long": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+            "short": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+        },
+        "live": {"approved_coins": {"long": ["BTC"], "short": ["BTC"]}},
+    }
+
+    metadata = build_backtest_dataset_metadata(config, "combined")
+
+    assert metadata["side_membership"] == {"long": [], "short": ["BTC"]}
+    assert metadata["cache_build_side_membership"] == {
+        "long": ["BTC"],
+        "short": ["BTC"],
+    }
 
 
 def test_dump_backtest_dataset_metadata_writes_dataset_json(tmp_path):
