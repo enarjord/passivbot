@@ -376,6 +376,51 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
         )
 
 
+def _propagate_optimizer_dataset_override(
+    config: dict,
+    exchange: str,
+    coins: list[str],
+    cache_dir,
+    mss: dict,
+) -> None:
+    """Apply a prepared dataset override's replay policy to the evaluator config.
+
+    Optimizer data preparation uses a bounds-derived config copy so every
+    reachable side is loaded. Dataset-mode overrides also mutate that copy
+    with the manifest's replay policy. Copy only those override-owned values
+    back here; optimizer-reachable bot side gates remain owned by ``config``.
+    """
+    meta = mss.get("__meta__")
+    if not isinstance(meta, dict) or not meta.get("dataset_override"):
+        return
+    side_membership = meta.get("effective_side_membership")
+    if not isinstance(side_membership, dict):
+        raise ValueError("HLCV dataset override metadata missing effective_side_membership")
+    missing_sides = [
+        pside for pside in ("long", "short") if not isinstance(side_membership.get(pside), list)
+    ]
+    if missing_sides:
+        raise ValueError(
+            "HLCV dataset override metadata has invalid side membership for: "
+            + ", ".join(missing_sides)
+        )
+    if cache_dir is None:
+        raise ValueError("HLCV dataset override result missing cache directory")
+    try:
+        effective_start_ts = int(meta["effective_requested_start_ts"])
+        effective_end_ts = int(meta["effective_end_ts"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("HLCV dataset override metadata missing effective date range") from exc
+
+    config.setdefault("live", {})["approved_coins"] = deepcopy(side_membership)
+    backtest = config.setdefault("backtest", {})
+    backtest["start_date"] = ts_to_date(effective_start_ts)
+    backtest["end_date"] = ts_to_date(effective_end_ts)
+    backtest.setdefault("cache_dir", {})[exchange] = str(cache_dir)
+    backtest.setdefault("coins", {})[exchange] = list(coins)
+    config["_hlcvs_dataset_override_meta"] = deepcopy(meta)
+
+
 def _register_exchange_data(
     exchange: str,
     prepare_result: tuple,
@@ -389,12 +434,10 @@ def _register_exchange_data(
 ) -> tuple[list[str], dict]:
     """
     Register one exchange's prepared data into the optimizer's shared-memory
-    pools. Consolidates the previously-duplicated setup logic for the
-    combined and per-exchange branches. No behavioral change from the
-    original inline code; see commit history for the fix that later hooks
-    into this helper.
+    pools and preserve any dataset replay policy on the evaluator config.
     """
-    coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, timestamps = prepare_result
+    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = prepare_result
+    _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
     prepared_hlcvs = hlcvs
     hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
         hlcvs, timestamps, btc_usd_prices, mss, config

@@ -1842,6 +1842,77 @@ class TestValidateArray:
         assert manager.arrays[0] is hlcvs
         assert manager.arrays[1] is btc_usd_prices
 
+    def test_register_exchange_data_propagates_dataset_replay_policy_without_bot_gates(self):
+        class RecordingArrayManager:
+            def create_from(self, array):
+                return object(), array
+
+        hlcvs = np.zeros((3, 2, 5), dtype=np.float64)
+        btc_usd_prices = np.ones(3, dtype=np.float64)
+        timestamps = np.array(
+            [1735689600000, 1735776000000, 1735862400000], dtype=np.int64
+        )
+        override_meta = {
+            "dataset_override": True,
+            "dataset_override_mode": "dataset",
+            "effective_side_membership": {
+                "long": ["BTC", "ETH"],
+                "short": ["ETH"],
+            },
+            "effective_requested_start_ts": 1735776000000,
+            "effective_end_ts": 1735862400000,
+        }
+        mss = {
+            "BTC": {"first_valid_index": 0, "last_valid_index": 2},
+            "ETH": {"first_valid_index": 0, "last_valid_index": 2},
+            "__meta__": override_meta,
+        }
+        original_bot = {
+            "long": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+            "short": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+        }
+        config = {
+            "backtest": {
+                "cache_dir": {},
+                "candle_interval_minutes": 1,
+                "coins": {},
+                "end_date": "2025-12-31",
+                "start_date": "2024-01-01",
+            },
+            "bot": deepcopy(original_bot),
+            "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        }
+        cache_dir = Path("/prepared/dataset")
+
+        with patch("optimize._stamp_optimizer_warmup"):
+            _register_exchange_data(
+                "binance",
+                (
+                    ["BTC", "ETH"],
+                    hlcvs,
+                    mss,
+                    None,
+                    cache_dir,
+                    btc_usd_prices,
+                    timestamps,
+                ),
+                config,
+                msss={},
+                hlcvs_specs={},
+                btc_usd_specs={},
+                timestamps_dict={},
+                array_manager=RecordingArrayManager(),
+            )
+
+        assert config["live"]["approved_coins"] == override_meta["effective_side_membership"]
+        assert config["backtest"]["start_date"] == "2025-01-02T00:00:00"
+        assert config["backtest"]["end_date"] == "2025-01-03T00:00:00"
+        assert config["backtest"]["cache_dir"]["binance"] == str(cache_dir)
+        assert config["backtest"]["coins"]["binance"] == ["BTC", "ETH"]
+        assert config["_hlcvs_dataset_override_meta"] == override_meta
+        assert config["_hlcvs_dataset_override_meta"] is not override_meta
+        assert config["bot"] == original_bot
+
 
 class TestApplyPolishBounds:
     """Test apply_polish_bounds function."""
