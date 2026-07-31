@@ -136,7 +136,10 @@ class HyperliquidOutcomeAccountSnapshot:
         if not matches:
             return None
         yes_fractions = {settlement.yes_fraction for settlement in matches}
-        if len(yes_fractions) != 1:
+        settlement_times = {
+            settlement.settlement_time_ms for settlement in matches
+        }
+        if len(yes_fractions) != 1 or len(settlement_times) != 1:
             raise ValueError(f"outcome snapshot has conflicting settlement for {market_id}")
         return max(
             matches,
@@ -446,7 +449,11 @@ class HyperliquidOutcomeLiveClient:
                 yes_fractions = {
                     evidence.yes_fraction for evidence in historical_settlements
                 }
-                if len(yes_fractions) != 1:
+                settlement_times = {
+                    evidence.settlement_time_ms
+                    for evidence in historical_settlements
+                }
+                if len(yes_fractions) != 1 or len(settlement_times) != 1:
                     raise ValueError(
                         f"HIP-4 market {market.market_id} has conflicting settlement history"
                     )

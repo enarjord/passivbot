@@ -14,9 +14,11 @@ import aiohttp
 
 from outcome.adapters import hyperliquid
 from outcome.archive import OutcomeTradeArchive
-from outcome.archive_replay import consolidated_archived_market
+from outcome.archive_replay import (
+    consolidated_archived_market,
+    load_verified_trade_window,
+)
 from outcome.backtest_input import build_trade_derived_ema_anchor_input
-from outcome.candles import VerifiedCoverage
 from outcome.evaluation import (
     ema_warmup_observations,
     evaluate_ema_anchor_outcome_modes,
@@ -52,23 +54,6 @@ async def _fetch_market(underlying: str):
     if len(markets) != 1:
         raise ValueError(f"expected one active HIP-4 {underlying} market, got {len(markets)}")
     return markets[0]
-
-
-def _proves_interval(
-    coverage: list[VerifiedCoverage],
-    start_ms: int,
-    end_ms: int,
-) -> bool:
-    cursor = start_ms
-    for interval in sorted(coverage, key=lambda item: item.start_ms):
-        if interval.end_ms <= cursor:
-            continue
-        if interval.start_ms > cursor:
-            return False
-        cursor = max(cursor, interval.end_ms)
-        if cursor >= end_ms:
-            return True
-    return False
 
 
 def _window_market_spec(
@@ -229,28 +214,12 @@ async def _main() -> int:
             market = consolidated_archived_market(market_versions)
         else:
             market = await _fetch_market(args.underlying)
-        trades = []
-        for asset in (market.yes_asset, market.no_asset):
-            coverage = archive.load_verified_coverage(
-                market.venue,
-                market.market_id,
-                asset.asset_id,
-                start_ms=args.start_ms,
-                end_ms=args.end_ms,
-            )
-            if not _proves_interval(coverage, args.start_ms, args.end_ms):
-                raise ValueError(
-                    f"archive does not prove complete coverage for {asset.side.value}"
-                )
-            trades.extend(
-                archive.load_trades(
-                    market.venue,
-                    market.market_id,
-                    asset.asset_id,
-                    start_ms=args.start_ms,
-                    end_ms=args.end_ms,
-                )
-            )
+        trades, verified_coverage = load_verified_trade_window(
+            archive,
+            market,
+            start_ms=args.start_ms,
+            end_ms=args.end_ms,
+        )
     finally:
         archive.close()
 
@@ -281,7 +250,7 @@ async def _main() -> int:
             min_order_notional=args.min_order_notional,
         ),
         trades=trades,
-        verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
+        verified_coverage=(verified_coverage,),
         fee_schedule={
             "maker_rate": args.maker_rate,
             "taker_rate": args.taker_rate,
@@ -293,6 +262,7 @@ async def _main() -> int:
         strategy_params=strategy_params,
         settlement_time_ms=args.end_ms,
         yes_fraction=0.0,
+        candle_start_ms=args.start_ms,
     )
     summaries = summarize_outcome_strategy_modes(
         evaluate_ema_anchor_outcome_modes(payload)

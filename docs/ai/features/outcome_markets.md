@@ -277,7 +277,9 @@ that it would accept for that second has had time to arrive.
 
 Polymarket live collection explicitly requests the initial order-book dump and does not expose
 trades to the coverage collector until an initial book has arrived for every requested YES and NO
-asset. A fill from one asset is not subscription-readiness evidence for its complement.
+asset. A fill from one asset is not subscription-readiness evidence for its complement. If the
+final initial book shares a received batch with trades, the collector discards that entire
+transition batch so no trade preceding the readiness boundary can enter verified coverage.
 
 Open and close require a proven chronological order within each second. If multiple fills share
 the same exchange timestamp, use a unique venue-ordered sequence when available, otherwise the
@@ -460,7 +462,10 @@ the latest retained transition before the window even when the corresponding met
 observed later. It requires verified grid-stream coverage for that window and replays every
 retained in-window grid change in chronological order. Before deriving the effective opening grid,
 the complete retained pre-window old-to-new transition chain must be continuous and must include
-the archived metadata grid. Strategy lifecycle
+the archived metadata grid. When the requested window begins in a verified no-trade interval, its
+signal may carry forward the last preceding fill only when both native asset streams prove
+continuous coverage from that fill's second through the window; the seed is excluded from window
+execution candles. Strategy lifecycle
 gates, settlement, and inventory-time metrics use synthetic open and close boundaries matching the
 requested sample; the result is not presented as a full-contract replay. Window-specific
 risk-reduction and entry-cutoff durations are explicit inputs and default to disabled, so a short
@@ -469,9 +474,12 @@ sample does not silently suppress every entry.
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,
 maker ratio, fill rate, and post-fill adverse selection. `pair_completion_ratio` is based on
-cumulative YES and NO buy quantities (`min(YES buys, NO buys) / max(YES buys, NO buys)`), not on
-the final flatness of inventory. Buying YES and later selling YES is a round trip with zero pair
-completion, even though no settlement residual remains.
+cumulative YES and NO buy quantities within one market
+(`min(YES buys, NO buys) / max(YES buys, NO buys)`), not on the final flatness of inventory.
+Buying YES and later selling YES is a round trip with zero pair completion, even though no
+settlement residual remains. Portfolio pair completion is volume weighted across contracts as
+`sum(per-market min buys) / sum(per-market max buys)`; opposite sides in unrelated outcomes never
+complete one another.
 
 Settlement-scenario evaluations retain each run's total rebates. Mode summaries report the minimum
 and maximum rebate totals rather than dropping them or assuming settlement rebates are invariant.
@@ -481,10 +489,11 @@ time-weighted absolute residual and total token inventory from trading open thro
 With one-second aggregate execution candles, all fills eligible in a bucket are applied at that
 bucket's timestamp and the resulting inventory is charged through that bucket's one-second end.
 This is a deterministic bucket model, not a claim about sub-second fill order. The shared-wallet
-orchestrator aggregates buy quantities before calculating portfolio pair completion and weights
-inventory-time areas across overlapping contracts on the common executed-market settlement
-horizon. Delayed redemption extends the separate collateral-utilization horizon but never the
-inventory horizon. Skipped jobs do not extend either horizon. Portfolio peak residual is swept
+orchestrator calculates complementary and larger-side buy quantities within each market before
+aggregating portfolio pair completion, and weights inventory-time areas across overlapping
+contracts on the common executed-market settlement horizon. Delayed redemption extends the
+separate collateral-utilization horizon but never the inventory horizon. Skipped jobs do not
+extend either horizon. Portfolio peak residual is swept
 chronologically as the sum of absolute per-market residuals; every release and fill-derived
 residual update sharing one timestamp is applied atomically before measuring the peak.
 

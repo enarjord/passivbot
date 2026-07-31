@@ -10,6 +10,7 @@ from outcome.candles import VerifiedCoverage
 from outcome.models import (
     MarketLifecycle,
     NormalizedOutcomeMarket,
+    NormalizedOutcomeTrade,
     OutcomeSettlementEvidence,
     OutcomeVenue,
 )
@@ -40,6 +41,74 @@ def _proves_interval(
         if cursor >= end_ms:
             return True
     return False
+
+
+def load_verified_trade_window(
+    archive: OutcomeTradeArchive,
+    market: NormalizedOutcomeMarket,
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> tuple[list[NormalizedOutcomeTrade], VerifiedCoverage]:
+    """Load a bounded fill window plus an authoritative preceding signal seed.
+
+    A preceding fill second is retained only when both native asset streams prove continuous
+    coverage from that second through the requested window. Callers crop generated candles back
+    to ``start_ms`` so the seed establishes the prior close without becoming an executable fill.
+    """
+
+    if start_ms < 0 or end_ms <= start_ms:
+        raise ValueError("outcome trade window must be non-empty and non-negative")
+    trades: list[NormalizedOutcomeTrade] = []
+    for asset in (market.yes_asset, market.no_asset):
+        coverage = archive.load_verified_coverage(
+            market.venue,
+            market.market_id,
+            asset.asset_id,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if not _proves_interval(coverage, start_ms, end_ms):
+            raise ValueError(
+                f"outcome archive does not prove window coverage for "
+                f"{market.market_id} {asset.side.value}"
+            )
+        trades.extend(
+            archive.load_trades(
+                market.venue,
+                market.market_id,
+                asset.asset_id,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        )
+
+    seed = archive.load_trade_seed_before(
+        market.venue,
+        market.market_id,
+        before_ms=start_ms,
+    )
+    coverage_start_ms = start_ms
+    if seed:
+        seed_start_ms = min(trade.exchange_time_ms for trade in seed) // 1_000 * 1_000
+        seed_is_continuous = all(
+            _proves_interval(
+                archive.load_verified_coverage(
+                    market.venue,
+                    market.market_id,
+                    asset.asset_id,
+                    start_ms=seed_start_ms,
+                    end_ms=end_ms,
+                ),
+                seed_start_ms,
+                end_ms,
+            )
+            for asset in (market.yes_asset, market.no_asset)
+        )
+        if seed_is_continuous:
+            trades = [*seed, *trades]
+            coverage_start_ms = seed_start_ms
+    return trades, VerifiedCoverage(coverage_start_ms, end_ms)
 
 
 def _authoritative_settlement(

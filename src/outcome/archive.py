@@ -33,6 +33,26 @@ def _utc_ms() -> int:
     return int(time.time() * 1_000)
 
 
+def _trade_from_row(row: sqlite3.Row) -> NormalizedOutcomeTrade:
+    return NormalizedOutcomeTrade(
+        venue=OutcomeVenue(row["venue"]),
+        market_id=row["market_id"],
+        asset_id=row["asset_id"],
+        outcome=OutcomeSide(row["outcome"]),
+        native_side=OutcomeOrderSide(row["native_side"]),
+        native_price=row["native_price"],
+        canonical_yes_price=row["canonical_yes_price"],
+        qty=row["qty"],
+        exchange_time_ms=row["exchange_time_ms"],
+        received_time_ms=row["received_time_ms"],
+        source_event_id=row["source_event_id"],
+        economic_event_id=row["economic_event_id"],
+        sequence_id=row["sequence_id"],
+        collector_sequence=row["collector_sequence"],
+        raw_payload=json.loads(row["raw_payload_json"]),
+    )
+
+
 class OutcomeVerifiedCoverageOverlap(ValueError):
     """An identity-less collector attempted to certify an already-covered interval."""
 
@@ -948,26 +968,41 @@ class OutcomeTradeArchive:
             """,
             (venue.value, str(market_id), str(asset_id), int(start_ms), int(end_ms)),
         ).fetchall()
-        return [
-            NormalizedOutcomeTrade(
-                venue=OutcomeVenue(row["venue"]),
-                market_id=row["market_id"],
-                asset_id=row["asset_id"],
-                outcome=OutcomeSide(row["outcome"]),
-                native_side=OutcomeOrderSide(row["native_side"]),
-                native_price=row["native_price"],
-                canonical_yes_price=row["canonical_yes_price"],
-                qty=row["qty"],
-                exchange_time_ms=row["exchange_time_ms"],
-                received_time_ms=row["received_time_ms"],
-                source_event_id=row["source_event_id"],
-                economic_event_id=row["economic_event_id"],
-                sequence_id=row["sequence_id"],
-                collector_sequence=row["collector_sequence"],
-                raw_payload=json.loads(row["raw_payload_json"]),
-            )
-            for row in rows
-        ]
+        return [_trade_from_row(row) for row in rows]
+
+    def load_trade_seed_before(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        *,
+        before_ms: int,
+    ) -> list[NormalizedOutcomeTrade]:
+        """Load every retained fill in the final non-empty second before a boundary."""
+
+        if before_ms < 0:
+            raise ValueError("trade seed boundary must be non-negative")
+        latest = self._connect().execute(
+            """
+            SELECT MAX(exchange_time_ms) AS exchange_time_ms
+            FROM outcome_trades
+            WHERE venue = ? AND market_id = ? AND exchange_time_ms < ?
+            """,
+            (venue.value, str(market_id), int(before_ms)),
+        ).fetchone()
+        if latest is None or latest["exchange_time_ms"] is None:
+            return []
+        seed_start_ms = int(latest["exchange_time_ms"]) // 1_000 * 1_000
+        rows = self._connect().execute(
+            """
+            SELECT *
+            FROM outcome_trades
+            WHERE venue = ? AND market_id = ?
+              AND exchange_time_ms >= ? AND exchange_time_ms < ?
+            ORDER BY exchange_time_ms, received_time_ms, record_id
+            """,
+            (venue.value, str(market_id), seed_start_ms, int(before_ms)),
+        ).fetchall()
+        return [_trade_from_row(row) for row in rows]
 
     def load_books(
         self,

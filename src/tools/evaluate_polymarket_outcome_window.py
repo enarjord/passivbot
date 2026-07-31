@@ -13,6 +13,7 @@ import aiohttp
 
 from outcome.adapters import polymarket
 from outcome.archive import OutcomeTradeArchive
+from outcome.archive_replay import load_verified_trade_window
 from outcome.backtest_input import build_trade_derived_ema_anchor_input
 from outcome.candles import VerifiedCoverage
 from outcome.evaluation import (
@@ -214,28 +215,12 @@ async def _main() -> int:
             start_ms=args.start_ms,
             end_ms=args.end_ms,
         )
-        trades = []
-        for asset in (market.yes_asset, market.no_asset):
-            coverage = archive.load_verified_coverage(
-                market.venue,
-                market.market_id,
-                asset.asset_id,
-                start_ms=args.start_ms,
-                end_ms=args.end_ms,
-            )
-            if not _proves_interval(coverage, args.start_ms, args.end_ms):
-                raise ValueError(
-                    f"archive does not prove complete coverage for {asset.side.value}"
-                )
-            trades.extend(
-                archive.load_trades(
-                    market.venue,
-                    market.market_id,
-                    asset.asset_id,
-                    start_ms=args.start_ms,
-                    end_ms=args.end_ms,
-                )
-            )
+        trades, verified_coverage = load_verified_trade_window(
+            archive,
+            market,
+            start_ms=args.start_ms,
+            end_ms=args.end_ms,
+        )
     finally:
         archive.close()
 
@@ -265,7 +250,7 @@ async def _main() -> int:
     payload = build_trade_derived_ema_anchor_input(
         market_spec=market_spec,
         trades=trades,
-        verified_coverage=(VerifiedCoverage(args.start_ms, args.end_ms),),
+        verified_coverage=(verified_coverage,),
         fee_schedule={
             # Current strategy orders are maker-only. The selected market's Gamma fee
             # schedule is retained below for audit; maker charges/rebates are zero here.
@@ -280,6 +265,7 @@ async def _main() -> int:
         settlement_time_ms=args.end_ms,
         yes_fraction=0.0,
         price_grid_changes=price_grid_changes,
+        candle_start_ms=args.start_ms,
     )
     evaluations = evaluate_ema_anchor_outcome_modes(payload)
     summaries = summarize_outcome_strategy_modes(evaluations)

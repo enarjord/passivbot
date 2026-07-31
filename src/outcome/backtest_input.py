@@ -32,6 +32,7 @@ def build_trade_derived_ema_anchor_input(
     settlement_time_ms: int,
     yes_fraction: float,
     price_grid_changes: Iterable[OutcomePriceGridChange] = (),
+    candle_start_ms: int | None = None,
 ) -> dict[str, Any]:
     """Build a Rust strategy input from verified actual fills.
 
@@ -67,6 +68,14 @@ def build_trade_derived_ema_anchor_input(
         trade_list,
         verified_coverage=verified_coverage,
     )
+    if candle_start_ms is not None:
+        if candle_start_ms < 0 or candle_start_ms % 1_000 != 0:
+            raise ValueError("outcome candle start must be non-negative and second-aligned")
+        signal_candles = [
+            candle for candle in signal_candles if candle.timestamp_ms >= candle_start_ms
+        ]
+        if not signal_candles:
+            raise ValueError("outcome fills produced no signal candles at or after candle start")
     execution_candles = [
         {
             **_signal_candle_payload(candle),
@@ -75,6 +84,7 @@ def build_trade_derived_ema_anchor_input(
         for outcome, candles in execution_by_book.items()
         for candle in candles
         if candle.volume > 0.0
+        and (candle_start_ms is None or candle.timestamp_ms >= candle_start_ms)
     ]
     execution_candles.sort(key=lambda candle: (candle["timestamp_ms"], candle["outcome"]))
     signal_times = {candle.timestamp_ms for candle in signal_candles}

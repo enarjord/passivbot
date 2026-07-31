@@ -169,7 +169,11 @@ All notable user-facing changes will be documented in this file.
   the latest pre-window tick transition, identity-less signal seeds outside verified coverage stay
   out of durable history, direct candle inputs enforce market-wide trade identities, stale HIP-4
   account snapshots route to cancel-only safety, and Polygon fills and resolutions require exact
-  32-byte transaction hashes.
+  32-byte transaction hashes. Live HIP-4 settlement selection now rejects contradictory
+  resolution timestamps, Polymarket trade capture discards the complete initial-book transition
+  batch, bounded evaluators seed initial no-trade seconds only from a preceding fill with proven
+  continuous dual-book coverage, and portfolio pair completion pairs complementary buys only
+  within the same outcome contract.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

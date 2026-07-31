@@ -112,15 +112,16 @@ def test_polymarket_trade_gate_waits_for_both_initial_books():
     assert (
         gate.allows(
             [
+                trade_message,
                 {
                     "event_type": "book",
                     "asset_id": "no-token",
                 },
-                trade_message,
             ]
         )
-        is True
+        is False
     )
+    assert gate.allows(trade_message) is True
 
 
 def test_websocket_decoder_assigns_monotonic_collector_sequence_to_batch():

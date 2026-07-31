@@ -436,6 +436,28 @@ async def test_expired_market_uses_account_settlement_fills_as_authoritative_res
 
 
 @pytest.mark.asyncio
+async def test_account_snapshot_rejects_conflicting_settlement_timestamps():
+    payload, market = market_fixture()
+    session = FakeSession(payload)
+    later = settlement_fills(market, yes_fraction=1.0)
+    for index, fill in enumerate(later):
+        fill["time"] += 1_000
+        fill["hash"] = "0xsettlement-later"
+        fill["oid"] += 10
+        fill["tid"] += 10 + index
+    session.user_fills_payload = [
+        *settlement_fills(market, yes_fraction=1.0),
+        *later,
+    ]
+    client = HyperliquidOutcomeLiveClient(session, account_address="0xaccount")
+
+    snapshot = await client.fetch_account_snapshot((market,))
+
+    with pytest.raises(ValueError, match="conflicting settlement"):
+        snapshot.settlement(market.market_id)
+
+
+@pytest.mark.asyncio
 async def test_expired_market_recovers_settlement_from_time_ranged_fill_history():
     payload, market = market_fixture()
     session = FakeSession(payload)
@@ -467,6 +489,33 @@ async def test_expired_market_recovers_settlement_from_time_ranged_fill_history(
         "endTime": now_ms,
         "aggregateByTime": False,
     } in session.public_requests
+
+
+@pytest.mark.asyncio
+async def test_settlement_history_rejects_conflicting_resolution_timestamps():
+    payload, market = market_fixture()
+    session = FakeSession(payload)
+    session.meta_outcomes = []
+    session.user_fills_payload = []
+    later = settlement_fills(market, yes_fraction=0.0)
+    for index, fill in enumerate(later):
+        fill["time"] += 1_000
+        fill["hash"] = "0xsettlement-later"
+        fill["oid"] += 10
+        fill["tid"] += 10 + index
+    session.user_fills_by_time_payload = [
+        *settlement_fills(market, yes_fraction=0.0),
+        *later,
+    ]
+    client = HyperliquidOutcomeLiveClient(session, account_address="0xaccount")
+    account = await client.fetch_account_snapshot((market,))
+
+    with pytest.raises(ValueError, match="conflicting settlement history"):
+        await client.fetch_market_lifecycle(
+            market,
+            account=account,
+            now_ms=market.lifecycle.scheduled_event_time_ms + 3_000,
+        )
 
 
 @pytest.mark.asyncio

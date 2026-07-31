@@ -566,10 +566,17 @@ def run_outcome_portfolio_backtest(
     )
     cumulative_yes_buy_qty = sum(result.cumulative_yes_buy_qty for result in results)
     cumulative_no_buy_qty = sum(result.cumulative_no_buy_qty for result in results)
-    larger_buy_qty = max(cumulative_yes_buy_qty, cumulative_no_buy_qty)
+    completed_pair_qty = sum(
+        min(result.cumulative_yes_buy_qty, result.cumulative_no_buy_qty)
+        for result in results
+    )
+    pair_capacity_qty = sum(
+        max(result.cumulative_yes_buy_qty, result.cumulative_no_buy_qty)
+        for result in results
+    )
     pair_completion_ratio = (
-        min(cumulative_yes_buy_qty, cumulative_no_buy_qty) / larger_buy_qty
-        if larger_buy_qty > 0.0
+        completed_pair_qty / pair_capacity_qty
+        if pair_capacity_qty > 0.0
         else 0.0
     )
     residual_qty_time_area_ms = sum(

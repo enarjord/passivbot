@@ -9,6 +9,8 @@ import pytest
 
 from outcome.adapters import hyperliquid, polymarket
 from outcome.archive import OutcomeTradeArchive
+from outcome.archive_replay import load_verified_trade_window
+from outcome.backtest_input import build_trade_derived_ema_anchor_input
 from outcome.candles import VerifiedCoverage
 from outcome.evaluation import ema_warmup_observations
 from outcome.models import (
@@ -402,6 +404,84 @@ def test_polymarket_window_rejects_discontinuous_pre_window_grid_changes(
             start_ms=4_000,
             end_ms=6_000,
         )
+
+
+def test_window_uses_covered_preceding_fill_as_signal_seed(tmp_path):
+    market = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    seed = polymarket.normalize_market_ws_trade(
+        {
+            "event_type": "last_trade_price",
+            "market": market.market_id,
+            "asset_id": market.yes_asset.asset_id,
+            "price": "0.40",
+            "size": "2",
+            "side": "BUY",
+            "timestamp": "1500",
+        },
+        market,
+        received_time_ms=1_600,
+        collector_sequence=1,
+    )
+    in_window = polymarket.normalize_market_ws_trade(
+        {
+            "event_type": "last_trade_price",
+            "market": market.market_id,
+            "asset_id": market.no_asset.asset_id,
+            "price": "0.55",
+            "size": "3",
+            "side": "SELL",
+            "timestamp": "4200",
+        },
+        market,
+        received_time_ms=4_300,
+        collector_sequence=2,
+    )
+    archive = OutcomeTradeArchive(tmp_path / "window-seed.sqlite")
+    archive.append_trade(seed, collector_session="fills")
+    archive.append_trade(in_window, collector_session="fills")
+    for asset in (market.yes_asset, market.no_asset):
+        archive.record_verified_coverage(
+            market.venue,
+            market.market_id,
+            asset.asset_id,
+            VerifiedCoverage(1_000, 6_000),
+            collector_session="fills",
+        )
+
+    trades, coverage = load_verified_trade_window(
+        archive,
+        market,
+        start_ms=3_000,
+        end_ms=6_000,
+    )
+    payload = build_trade_derived_ema_anchor_input(
+        market_spec={"market_id": market.market_id},
+        trades=trades,
+        verified_coverage=(coverage,),
+        fee_schedule={},
+        starting_collateral=100.0,
+        strategy_params={},
+        settlement_time_ms=6_000,
+        yes_fraction=0.0,
+        candle_start_ms=3_000,
+    )
+
+    assert coverage == VerifiedCoverage(1_000, 6_000)
+    assert [candle["timestamp_ms"] for candle in payload["signal_candles"]] == [
+        3_000,
+        4_000,
+        5_000,
+    ]
+    assert [candle["volume"] for candle in payload["signal_candles"]] == [
+        0.0,
+        3.0,
+        0.0,
+    ]
+    assert payload["signal_candles"][0]["close"] == pytest.approx(0.4)
+    assert [
+        (candle["timestamp_ms"], candle["outcome"])
+        for candle in payload["execution_candles"]
+    ] == [(4_000, "no")]
 
 
 def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():

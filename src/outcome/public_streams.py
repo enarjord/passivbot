@@ -73,6 +73,7 @@ class _PolymarketSubscriptionGate:
 
     def allows(self, message: Mapping[str, Any] | list[Any]) -> bool:
         entries = message if isinstance(message, list) else [message]
+        was_pending = bool(self.pending_asset_ids)
         for payload in entries:
             if not isinstance(payload, Mapping):
                 raise ValueError("Polymarket websocket event must be an object")
@@ -84,7 +85,9 @@ class _PolymarketSubscriptionGate:
                     f"Polymarket initialized an unrequested outcome asset {asset_id!r}"
                 )
             self.pending_asset_ids.discard(asset_id)
-        return not self.pending_asset_ids
+        # The array is one received batch. If it establishes readiness, discard the complete
+        # transition batch so a trade preceding the final initial book cannot leak through.
+        return not was_pending and not self.pending_asset_ids
 
 
 async def _polymarket_ping_loop(websocket: Any) -> None:

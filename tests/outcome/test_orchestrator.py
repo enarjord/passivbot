@@ -133,6 +133,44 @@ def test_settled_capital_and_profit_are_reused_only_after_settlement():
     assert markout.mean_adverse_selection_per_share == pytest.approx(0.05)
 
 
+def test_pair_completion_does_not_pair_opposite_sides_across_markets():
+    yes_only = replace(
+        result("yes-only", 0, 5_000, 50.0, 0.0),
+        cumulative_yes_buy_qty=10.0,
+        cumulative_no_buy_qty=0.0,
+        pair_completion_ratio=0.0,
+    )
+    no_only = replace(
+        result("no-only", 0, 5_000, 50.0, 0.0),
+        cumulative_yes_buy_qty=0.0,
+        cumulative_no_buy_qty=10.0,
+        pair_completion_ratio=0.0,
+    )
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            OutcomeBacktestJob(
+                market_id=yes_only.market_id,
+                trading_open_time_ms=yes_only.trading_open_time_ms,
+                settlement_time_ms=yes_only.settlement_time_ms,
+                requested_collateral=yes_only.starting_collateral,
+                runner=lambda _allocated: yes_only,
+            ),
+            OutcomeBacktestJob(
+                market_id=no_only.market_id,
+                trading_open_time_ms=no_only.trading_open_time_ms,
+                settlement_time_ms=no_only.settlement_time_ms,
+                requested_collateral=no_only.starting_collateral,
+                runner=lambda _allocated: no_only,
+            ),
+        ],
+        starting_collateral=100.0,
+    )
+
+    assert portfolio.cumulative_yes_buy_qty == pytest.approx(10.0)
+    assert portfolio.cumulative_no_buy_qty == pytest.approx(10.0)
+    assert portfolio.pair_completion_ratio == pytest.approx(0.0)
+
+
 def test_same_timestamp_settlement_is_released_before_new_market_allocation():
     portfolio = run_outcome_portfolio_backtest(
         [
