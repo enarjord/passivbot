@@ -5669,6 +5669,7 @@ async def test_manager_coverage_rejects_metadata_claiming_missing_events(tmp_pat
         }
     )
     await manager.ensure_loaded()
+    manager.get_events = MagicMock(side_effect=AssertionError("coverage copied events"))
 
     assert manager.get_coverage_status(start_ms=start_ms) == {
         "ready": False,
@@ -5677,6 +5678,7 @@ async def test_manager_coverage_rejects_metadata_claiming_missing_events(tmp_pat
         "covered_start_ms": start_ms,
         "oldest_event_ts": start_ms + 60_000,
     }
+    manager.get_events.assert_not_called()
 
 
 @pytest.mark.asyncio

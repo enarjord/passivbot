@@ -97,6 +97,7 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
         return out
 
     bot._pnls_manager.get_events.side_effect = _get_events
+    bot._pnls_manager._events = list(events)
     if cache is _DEFAULT_RISK_CACHE:
         oldest_event_ts = min(
             (int(getattr(ev, "timestamp", 0) or 0) for ev in events),

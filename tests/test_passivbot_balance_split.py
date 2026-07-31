@@ -124,6 +124,8 @@ def _with_fill_coverage_api(manager):
                 return []
 
         manager.cache = _CoverageCache()
+    if not hasattr(manager, "_events"):
+        manager._events = list(manager.get_events())
     manager.get_coverage_status = types.MethodType(
         fem.FillEventsManager.get_coverage_status,
         manager,

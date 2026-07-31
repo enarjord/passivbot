@@ -233,6 +233,7 @@ def make_fake_pnls_manager(events, *, covered_start_ms=1, history_scope="all"):
         newest_event_ts=max(timestamps, default=0),
     )
     manager = SimpleNamespace(
+        _events=list(events),
         get_events=lambda: events,
         cache=cache,
         get_history_scope=cache.get_history_scope,
@@ -3766,6 +3767,7 @@ def _bind_reuse_support(bot, tmp_path, monkeypatch, *, fills, covered_start_ms=1
             return "all"
 
     bot._pnls_manager = _StubPnlsManager()
+    bot._pnls_manager._events = bot._pnls_manager.get_events()
     bot._pnls_manager.get_coverage_status = MethodType(
         FillEventsManager.get_coverage_status,
         bot._pnls_manager,
@@ -3877,6 +3879,7 @@ async def _reuse_collection_history(monkeypatch, *, n_minutes, fills, positions,
             return "all"
 
     bot._pnls_manager = _StubPnlsManager(fills)
+    bot._pnls_manager._events = bot._pnls_manager.get_events()
     bot._pnls_manager.get_coverage_status = MethodType(
         FillEventsManager.get_coverage_status,
         bot._pnls_manager,

@@ -5663,7 +5663,7 @@ class FillEventsManager:
             )
             return status
 
-        if not self.get_events() and (metadata_oldest > 0 or metadata_newest > 0):
+        if not self._events and (metadata_oldest > 0 or metadata_newest > 0):
             status["reason"] = "cache_metadata_event_mismatch"
             return status
 
