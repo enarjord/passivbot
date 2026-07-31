@@ -103,6 +103,74 @@ def _hostile_runtime_error(detail: str) -> RuntimeError:
     return error_cls(detail)
 
 
+def _with_fill_coverage_api(manager):
+    if getattr(manager, "cache", None) is None:
+
+        class _CoverageCache:
+            def load_metadata(self):
+                events = list(manager.get_events())
+                timestamps = [
+                    int(getattr(event, "timestamp", 0) or 0) for event in events
+                ]
+                return {
+                    "covered_start_ms": 0,
+                    "oldest_event_ts": min(timestamps, default=0),
+                    "newest_event_ts": max(timestamps, default=0),
+                    "history_scope": manager.get_history_scope(),
+                    "known_gaps": [],
+                }
+
+            def get_known_gaps(self):
+                return []
+
+        manager.cache = _CoverageCache()
+    if not hasattr(manager, "_events"):
+        manager._events = list(manager.get_events())
+    manager.get_coverage_status = types.MethodType(
+        fem.FillEventsManager.get_coverage_status,
+        manager,
+    )
+    return manager
+
+
+def test_passivbot_fill_coverage_status_delegates_to_manager():
+    expected = {
+        "ready": False,
+        "reason": "cache_metadata_event_mismatch",
+        "history_scope": "window",
+        "covered_start_ms": 100,
+        "oldest_event_ts": 200,
+    }
+    get_coverage_status = MagicMock(return_value=expected)
+    bot = Passivbot.__new__(Passivbot)
+    bot._pnls_manager = SimpleNamespace(get_coverage_status=get_coverage_status)
+
+    assert bot._fill_history_coverage_status(start_ms=100, end_ms=300) == expected
+    get_coverage_status.assert_called_once_with(start_ms=100, end_ms=300)
+
+
+def test_incomplete_history_override_does_not_accept_contradictory_cache_evidence():
+    bot = Passivbot.__new__(Passivbot)
+    bot._pnls_manager = SimpleNamespace(
+        get_coverage_status=lambda **_kwargs: {
+            "ready": False,
+            "reason": "cache_metadata_event_mismatch",
+            "history_scope": "window",
+            "covered_start_ms": 100,
+            "oldest_event_ts": 200,
+        }
+    )
+
+    with pytest.raises(fem.FillEventCacheContractError):
+        bot._assert_pnl_history_safe_for_risk(
+            [],
+            context="test",
+            start_ms=100,
+            end_ms=300,
+            allow_incomplete=True,
+        )
+
+
 @pytest.mark.asyncio
 async def test_calc_upnl_sum_redacts_failure_and_returns_zero(caplog, capsys, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
@@ -705,7 +773,7 @@ def _counted_staged_account_refresh_bot(
     bot._detect_foreign_passivbot_orders = AsyncMock()
     bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
     bot._reconcile_balance_after_open_orders_refresh = lambda: False
-    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._fill_history_coverage_ready = lambda: True
 
     counts = {
         "fetch_balance": 0,
@@ -2901,6 +2969,9 @@ async def test_balance_equity_history_records_pnls_manager_coverage_proof(monkey
         def get_history_scope(self):
             return "all"
 
+        def get_known_gaps(self):
+            return []
+
     class _StubPnlsManager:
         cache = _StubCache()
 
@@ -2910,7 +2981,7 @@ async def test_balance_equity_history_records_pnls_manager_coverage_proof(monkey
         def get_history_scope(self):
             return "all"
 
-    bot._pnls_manager = _StubPnlsManager()
+    bot._pnls_manager = _with_fill_coverage_api(_StubPnlsManager())
 
     history = await bot.get_balance_equity_history(
         current_balance=100.0,
@@ -4409,7 +4480,7 @@ async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -4487,7 +4558,7 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -5763,7 +5834,9 @@ async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower()
             self.history_scope = scope
 
     bot.stop_signal_received = False
-    bot._pnls_manager = _Manager(cached_events, history_scope="window")
+    bot._pnls_manager = _with_fill_coverage_api(
+        _Manager(cached_events, history_scope="window")
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -5812,7 +5885,9 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
             "pnls_max_lookback_days": "all",
         }
     }
-    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot._pnls_manager = _with_fill_coverage_api(
+        _Manager(cached_events, history_scope="all")
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -5873,7 +5948,7 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
             "pnls_max_lookback_days": "all",
         }
     }
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -5973,7 +6048,7 @@ async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6086,7 +6161,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
         "next_retry_ms": now_ms + 60_000,
     }
     bot._trailing_fill_fetch_generation = 7
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6208,7 +6283,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6303,7 +6378,7 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
         structured_sinks=[sink],
         monitor_sinks=[],
     )
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6435,7 +6510,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     if failure_stage == "routine":
         bot._pnls_manager.refresh_latest.side_effect = RuntimeError(
             "routine refresh unavailable"
@@ -6564,7 +6639,7 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -6633,7 +6708,9 @@ async def test_update_pnls_uses_confirmation_overlap_when_fills_pending():
         }
     }
     bot._authoritative_pending_confirmations = {"fills": 2}
-    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot._pnls_manager = _with_fill_coverage_api(
+        _Manager(cached_events, history_scope="all")
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -6710,7 +6787,7 @@ async def test_update_pnls_widens_refresh_for_mismatched_trailing_fill_anchor(
         }
     }
     bot._authoritative_pending_confirmations = {"fills": 2}
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6793,7 +6870,7 @@ async def test_mandatory_fill_confirmation_does_not_widen_trailing_recovery(
         }
     }
     bot._authoritative_pending_confirmations = {"fills": 2}
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -6870,7 +6947,9 @@ async def test_update_pnls_propagates_unexpected_refresh_errors_without_retainin
         structured_sinks=[sink],
         monitor_sinks=[],
     )
-    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot._pnls_manager = _with_fill_coverage_api(
+        _Manager(cached_events, history_scope="all")
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -6986,7 +7065,7 @@ async def test_update_pnls_failure_logs_only_bounded_status_and_code(caplog):
             "pnls_max_lookback_days": "all",
         }
     }
-    bot._pnls_manager = _Manager()
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -7040,7 +7119,7 @@ async def test_update_pnls_rate_limit_does_not_advance_trailing_fetch_generation
             "pnls_max_lookback_days": "all",
         }
     }
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -7105,7 +7184,9 @@ async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error
         structured_sinks=[sink],
         monitor_sinks=[],
     )
-    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot._pnls_manager = _with_fill_coverage_api(
+        _Manager(cached_events, history_scope="all")
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -7174,7 +7255,7 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
             "pnls_max_lookback_days": "all",
         }
     }
-    bot._pnls_manager = _Manager(cached_events)
+    bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
@@ -8365,12 +8446,14 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.balance = 100.0
     bot.balance_raw = 200.0
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [
-            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-        ],
-        cache=_SafeRiskCache(),
-        get_history_scope=lambda: "all",
+    bot._pnls_manager = _with_fill_coverage_api(
+        types.SimpleNamespace(
+            get_events=lambda: [
+                types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+            ],
+            cache=_SafeRiskCache(),
+            get_history_scope=lambda: "all",
+        )
     )
     bot.bot_value = lambda pside, key: {
         "unstuck_loss_allowance_pct": 0.2 if pside == "long" else 0.0,
@@ -8412,13 +8495,15 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.balance = 100.0
     bot.balance_raw = 200.0
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda: [
-            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-            types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
-        ],
-        cache=_SafeRiskCache(),
-        get_history_scope=lambda: "all",
+    bot._pnls_manager = _with_fill_coverage_api(
+        types.SimpleNamespace(
+            get_events=lambda: [
+                types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+                types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
+            ],
+            cache=_SafeRiskCache(),
+            get_history_scope=lambda: "all",
+        )
     )
 
     def bot_value(pside, key):
@@ -8460,18 +8545,22 @@ def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
     bot.balance_raw = 1000.0
     bot.get_raw_balance = lambda: float(bot.balance_raw)
     _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
-            ev
-            for ev in [
-                types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
-                types.SimpleNamespace(pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1),
-                types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
-            ]
-            if start_ms is None or ev.timestamp >= start_ms
-        ],
-        cache=_SafeRiskCache(),
-        get_history_scope=lambda: "all",
+    bot._pnls_manager = _with_fill_coverage_api(
+        types.SimpleNamespace(
+            get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+                ev
+                for ev in [
+                    types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
+                    types.SimpleNamespace(
+                        pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1
+                    ),
+                    types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
+                ]
+                if start_ms is None or ev.timestamp >= start_ms
+            ],
+            cache=_SafeRiskCache(),
+            get_history_scope=lambda: "all",
+        )
     )
 
     def bot_value(pside, key):
@@ -9297,7 +9386,7 @@ def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
-    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._fill_history_coverage_ready = lambda: True
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
@@ -9318,7 +9407,7 @@ def test_staged_refresh_plan_schedules_trailing_recovery_without_barrier(
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
-    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._fill_history_coverage_ready = lambda: True
     bot._trailing_fill_recovery_prefetch_due = lambda: True
     scheduled = []
     bot._schedule_routine_fill_refresh_prefetch = (
@@ -9342,7 +9431,7 @@ def test_staged_refresh_plan_keeps_stale_fills_during_trailing_recovery(
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
-    bot._pnl_history_coverage_ready_for_risk = lambda: True
+    bot._fill_history_coverage_ready = lambda: True
     bot._trailing_fill_recovery_prefetch_due = lambda: True
     scheduled = []
     bot._schedule_routine_fill_refresh_prefetch = (
@@ -9363,7 +9452,7 @@ def test_staged_refresh_plan_keeps_fills_when_risk_coverage_unproven(monkeypatch
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
-    bot._pnl_history_coverage_ready_for_risk = lambda: False
+    bot._fill_history_coverage_ready = lambda: False
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
@@ -9407,9 +9496,12 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
-    bot._pnls_manager = SimpleNamespace(
-        cache=cache,
-        get_history_scope=lambda: "window",
+    bot._pnls_manager = _with_fill_coverage_api(
+        SimpleNamespace(
+            cache=cache,
+            get_events=lambda: [],
+            get_history_scope=lambda: "window",
+        )
     )
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
     bot.live_value = lambda key: bot.config["live"][key]
@@ -9418,7 +9510,7 @@ def test_staged_refresh_plan_keeps_fills_when_known_gap_overlaps_lookback(monkey
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
 
-    assert bot._pnl_history_coverage_ready_for_risk() is False
+    assert bot._fill_history_coverage_ready() is False
     assert bot._authoritative_staged_refresh_plan() == {
         "balance",
         "positions",

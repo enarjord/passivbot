@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fill-history coverage now has one canonical verdict owned by
+  `FillEventsManager`. Refresh, staged readiness, HSL replay, and realized-PnL
+  consumers no longer duplicate cache/gap interpretation. Metadata that claims
+  missing cached rows and malformed known-gap bounds fail closed and trigger
+  repair or deferral, while confirmed empty windows remain valid.
 - Prepared HLCV caches now key direction-agnostic candle data by the effective
   long/short coin union, allowing long-only, short-only, and both-side runs with
   matching data inputs to reuse one verified cache. Backtest artifacts report

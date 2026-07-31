@@ -5648,6 +5648,174 @@ async def test_manager_refresh_for_lookback_rebuilds_when_metadata_claims_histor
     await manager.refresh_for_lookback(start_ms=start_ms)
 
     assert manager.fetcher.calls == [(start_ms, None)]
+    metadata = manager.cache.load_metadata()
+    assert metadata["oldest_event_ts"] == 0
+    assert metadata["newest_event_ts"] == 0
+    assert manager.get_coverage_status(start_ms=start_ms) == {
+        "ready": True,
+        "reason": "window_covered",
+        "history_scope": "unknown",
+        "covered_start_ms": start_ms,
+        "oldest_event_ts": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_rejects_metadata_claiming_missing_events(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_metadata_mismatch",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": start_ms + 60_000,
+            "newest_event_ts": start_ms + 120_000,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [],
+        }
+    )
+    await manager.ensure_loaded()
+    manager.get_events = MagicMock(side_effect=AssertionError("coverage copied events"))
+
+    assert manager.get_coverage_status(start_ms=start_ms) == {
+        "ready": False,
+        "reason": "cache_metadata_event_mismatch",
+        "history_scope": "window",
+        "covered_start_ms": start_ms,
+        "oldest_event_ts": start_ms + 60_000,
+    }
+    manager.get_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_accepts_proven_empty_window(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_empty_window",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [],
+        }
+    )
+    await manager.ensure_loaded()
+
+    assert manager.get_coverage_status(start_ms=start_ms)["reason"] == "window_covered"
+    assert manager.get_coverage_status(start_ms=start_ms)["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_rejects_malformed_known_gap(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_malformed_gap",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [
+                {
+                    "start_ts": start_ms + 120_000,
+                    "end_ts": start_ms + 60_000,
+                    "reason": "fetch_failed",
+                    "confidence": 0.0,
+                }
+            ],
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(
+        start_ms=start_ms,
+        end_ms=start_ms + 180_000,
+    )
+
+    assert status["ready"] is False
+    assert status["reason"] == "malformed_known_gap"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_gaps", [None, {"reason": "fetch_failed"}])
+async def test_manager_coverage_rejects_malformed_known_gap_container(
+    tmp_path: Path,
+    known_gaps: object,
+):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_malformed_gap_container",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": known_gaps,
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(start_ms=start_ms)
+
+    assert status["ready"] is False
+    assert status["reason"] == "malformed_known_gap"
+    assert status["gap_reason"] == "malformed"
+
+
+@pytest.mark.asyncio
+async def test_manager_coverage_allows_confirmed_legitimate_gap(tmp_path: Path):
+    start_ms = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=MagicMock(),
+        cache_path=tmp_path / "fills_coverage_confirmed_gap",
+    )
+    manager.cache.save_metadata(
+        {
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [
+                {
+                    "start_ts": start_ms + 60_000,
+                    "end_ts": start_ms + 120_000,
+                    "reason": "confirmed_legitimate",
+                    "confidence": 1.0,
+                }
+            ],
+        }
+    )
+    await manager.ensure_loaded()
+
+    status = manager.get_coverage_status(
+        start_ms=start_ms,
+        end_ms=start_ms + 180_000,
+    )
+
+    assert status["ready"] is True
+    assert status["reason"] == "window_covered"
 
 
 @pytest.mark.asyncio

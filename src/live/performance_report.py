@@ -2273,10 +2273,14 @@ class _StartupFillCacheProofAccumulator:
     _CACHE_REASONS = frozenset({"fill_cache_ready"})
     _COVERAGE_REASONS = frozenset(
         {
+            "cache_metadata_event_mismatch",
+            "cache_not_loaded",
             "full_history",
             "full_history_scope_not_proven",
             "known_gap_overlaps_lookback",
+            "malformed_known_gap",
             "missing_cache",
+            "missing_coverage_api",
             "missing_pnl_manager",
             "window_coverage_not_proven",
             "window_covered",

@@ -11,6 +11,7 @@ import pytest
 
 from passivbot import Passivbot
 from backtest import prep_backtest_args
+from fill_events_manager import FillEventsManager
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 # ---------------------------------------------------------------------------
@@ -96,20 +97,35 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
         return out
 
     bot._pnls_manager.get_events.side_effect = _get_events
+    bot._pnls_manager._events = list(events)
     if cache is _DEFAULT_RISK_CACHE:
         oldest_event_ts = min(
             (int(getattr(ev, "timestamp", 0) or 0) for ev in events),
-            default=1,
+            default=0,
         )
         cache = _RiskCache(
             covered_start_ms=1,
             history_scope="all",
-            oldest_event_ts=max(1, oldest_event_ts),
+            oldest_event_ts=oldest_event_ts,
         )
     bot._pnls_manager.cache = cache
     if cache is not None:
         bot._pnls_manager.cache = cache
         bot._pnls_manager.get_history_scope.side_effect = cache.get_history_scope
+        bot._pnls_manager.get_coverage_status.side_effect = (
+            lambda **kwargs: FillEventsManager.get_coverage_status(
+                bot._pnls_manager,
+                **kwargs,
+            )
+        )
+    else:
+        bot._pnls_manager.get_coverage_status.return_value = {
+            "ready": False,
+            "reason": "missing_cache",
+            "history_scope": "unknown",
+            "covered_start_ms": 0,
+            "oldest_event_ts": 0,
+        }
     bot.balance = balance
     return bot
 
