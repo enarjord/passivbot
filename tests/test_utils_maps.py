@@ -111,6 +111,63 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_load_markets_uses_native_bitunix_client_on_cold_cache(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "swap": True,
+            "baseName": "BTC",
+            "base": "BTC",
+        }
+    }
+    observed = {}
+
+    class DummyBitunixClient:
+        def __init__(self, config):
+            observed["config"] = config
+
+        async def load_markets(self, reload):
+            observed["reload"] = reload
+            return markets
+
+        async def close(self):
+            observed["closed"] = True
+
+    import exchanges.bitunix as bitunix
+
+    def unexpected_ccxt(*_args, **_kwargs):
+        raise AssertionError("Bitunix cold start must not use CCXT")
+
+    monkeypatch.setattr(bitunix, "BitunixClient", DummyBitunixClient)
+    monkeypatch.setattr(
+        utils,
+        "resolve_custom_endpoint_override",
+        lambda _exchange: None,
+    )
+    monkeypatch.setattr(
+        utils,
+        "load_ccxt_instance",
+        unexpected_ccxt,
+    )
+
+    result = await utils.load_markets("bitunix")
+
+    assert result == markets
+    assert observed == {
+        "config": {
+            "enableRateLimit": True,
+            "timeout": 60_000,
+            "wsEnabled": False,
+        },
+        "reload": True,
+        "closed": True,
+    }
+    assert os.path.exists("caches/bitunix/markets.json")
+
+
+@pytest.mark.asyncio
 async def test_load_markets_uses_fresh_cache(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ex = "binance"

@@ -371,7 +371,10 @@ candlestick-manager contract may bridge delayed current candles.
 Bitunix is not available in the pinned CCXT release, so the production connector is a narrow
 native async REST/WebSocket implementation rather than a generic `CCXTBot` exchange class.
 It retains the CCXT-compatible object boundary consumed by Passivbot while implementing only the
-futures operations required by live trading.
+futures operations required by live trading. Cold-cache standalone market preloads use this native
+public REST client as well; they must never fall through to CCXT before the bot is constructed.
+Native market records use Bitunix's documented VIP0 futures maker/taker fees as conservative
+planning inputs because the trading-pairs endpoint does not publish account fee tiers.
 
 Handling:
 
@@ -380,15 +383,18 @@ Handling:
 2. Supply `marginCoin=USDT` to account and symbol-configuration requests. Successful account data
    may be either an object or a singleton list; accept exactly those shapes.
 3. Map business error envelopes to CCXT exception classes and propagate unknown failures. Keep
-   request spacing below the venue's documented UID/IP rolling limit.
+   request spacing below the venue's documented UID/IP rolling limit. Treat the observed
+   `code=1, msg=Network Error` envelope like documented network error `10001`, and retry native
+   market discovery with bounded backoff so a transient cold-start response is not permanent.
 4. Authenticate the private WebSocket with its seconds-based signature, subscribe to `order`, and
-   enrich each notification from REST order detail before publishing it. The raw push lacks enough
-   durable close-only metadata for authoritative reconciliation. If REST reports that the order is
-   not found or returns semantically invalid order detail, publish only that raw row as untrusted so
-   the generic watcher requests an authoritative account-state refresh instead of silently
-   discarding the transition. Treat non-object pushes and rows without an order ID the same way
-   instead of dropping them before reconciliation. Transport failures still fail the batch and
-   reconnect.
+   send Bitunix's application-level JSON ping while idle; transport-level WebSocket heartbeats do
+   not replace the venue keepalive. Enrich each order notification from REST detail before
+   publishing it. The raw push lacks enough durable close-only metadata for authoritative
+   reconciliation. If REST reports that the order is not found or returns semantically invalid
+   order detail, publish only that raw row as untrusted so the generic watcher requests an
+   authoritative account-state refresh instead of silently discarding the transition. Treat
+   non-object pushes and rows without an order ID the same way instead of dropping them before
+   reconciliation. Transport failures still fail the batch and reconnect.
 5. Apply custom endpoint domain rewrites and `rest.url_overrides.api` to the native REST base, and
    merge `rest.extra_headers` into every request. Reject authentication header names
    case-insensitively in configured headers so proxy or user headers cannot collide with generated
