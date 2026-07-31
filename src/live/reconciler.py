@@ -1003,6 +1003,20 @@ def _validated_rust_finite_number(value: object, context: str) -> float:
     return value_f
 
 
+_PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
+    {
+        "close_panic",
+        "close_auto_reduce_twel",
+        "close_auto_reduce_wel",
+        "close_unstuck",
+    }
+)
+
+
+def _rust_order_requires_risk_critical_priority(order_type: str) -> bool:
+    return order_type.rsplit("_", 1)[0] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
+
+
 def rust_order_conversion_identity(
     symbol_key: object, qty: object, price: object, order_type: object
 ) -> tuple[object, float, float, str]:
@@ -1090,9 +1104,18 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
             )
-        if order.get("execution_priority") not in {"ordinary", "risk_critical"}:
+        execution_priority = order.get("execution_priority")
+        if execution_priority not in {"ordinary", "risk_critical"}:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_priority"
+            )
+        if (
+            _rust_order_requires_risk_critical_priority(order_type)
+            and execution_priority != "risk_critical"
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has execution_priority "
+                "inconsistent with its protective order_type"
             )
         conversion_identity = rust_order_conversion_identity(
             idx_to_symbol[symbol_idx], qty, price, order_type
@@ -1344,13 +1367,27 @@ def validate_rust_orchestrator_output(
     return orders
 
 
+def _reject_duplicate_json_object_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
 def parse_and_validate_rust_orchestrator_output(
     out_json: object, idx_to_symbol: dict[int, str]
 ) -> tuple[dict, list[dict]]:
     """Decode and validate Rust output, preserving malformed-output fatality."""
     try:
-        out = json.loads(out_json)
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        out = json.loads(
+            out_json,
+            object_pairs_hook=_reject_duplicate_json_object_keys,
+        )
+    except (TypeError, ValueError, RecursionError, OverflowError) as exc:
         raise FatalBotException("Rust orchestrator returned malformed JSON") from exc
     orders = validate_rust_orchestrator_output(out, idx_to_symbol)
     return out, orders
@@ -2092,16 +2129,6 @@ def _reduce_only_order_family(order: dict) -> tuple[str, str] | None:
     return pside, family
 
 
-_PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
-    {
-        "close_panic",
-        "close_auto_reduce_twel",
-        "close_auto_reduce_wel",
-        "close_unstuck",
-    }
-)
-
-
 def _order_is_protective_reducer(order: dict) -> bool:
     family = _reduce_only_order_family(order)
     return family is not None and family[1] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
@@ -2557,6 +2584,14 @@ def to_executable_orders(
                 raise ValueError(
                     f"ideal order for {symbol} has invalid execution_priority "
                     f"{order[5]!r}; expected ordinary or risk_critical"
+                )
+            if (
+                _rust_order_requires_risk_critical_priority(str(order[2]))
+                and execution_priority != "risk_critical"
+            ):
+                raise FatalBotException(
+                    f"Rust ideal order for {symbol} has execution_priority "
+                    "inconsistent with its protective order_type"
                 )
             ideal_orders_f[symbol].append(
                 {

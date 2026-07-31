@@ -67,6 +67,11 @@ def _single_symbol_orchestrator_output(*, orders=None, **diagnostics) -> str:
     )
 
 
+def _single_symbol_orchestrator_output_with_duplicate_orders() -> str:
+    valid_output = _single_symbol_orchestrator_output()
+    return '{"orders":[{"malformed":true}],' + valid_output[1:]
+
+
 def _make_mock_pbr():
     module = types.ModuleType("passivbot_rust")
 
@@ -3116,6 +3121,10 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
         ('{"diagnostics": {}}', "missing required orders field"),
         ("{", "malformed JSON"),
         (
+            _single_symbol_orchestrator_output_with_duplicate_orders(),
+            "malformed JSON",
+        ),
+        (
             _single_symbol_orchestrator_output(loss_gate_blocks={}),
             "loss_gate_blocks must be a list",
         ),
@@ -3182,6 +3191,22 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
             ),
             "invalid qty",
         ),
+        (
+            _single_symbol_orchestrator_output(
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": -1.0,
+                        "price": 100.0,
+                        "order_type": "close_unstuck_long",
+                        "execution_type": "limit",
+                        "execution_priority": "ordinary",
+                    }
+                ]
+            ),
+            "inconsistent with its protective",
+        ),
     ],
 )
 async def test_orchestrator_invalid_output_emits_correlated_failed_return(
@@ -3193,9 +3218,13 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     import passivbot_rust as pbr
 
     def fake_order_type_snake_to_id(order_type):
-        if order_type != "entry_initial_normal_long":
+        order_type_ids = {
+            "entry_initial_normal_long": 1,
+            "close_unstuck_long": 2,
+        }
+        if order_type not in order_type_ids:
             raise ValueError(order_type)
-        return 1
+        return order_type_ids[order_type]
 
     monkeypatch.setattr(
         pbr,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from live import reconciler
@@ -366,6 +368,40 @@ def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
 
 
 @pytest.mark.parametrize(
+    "order_type",
+    [
+        "close_panic_long",
+        "close_auto_reduce_twel_long",
+        "close_auto_reduce_wel_long",
+        "close_unstuck_long",
+    ],
+)
+def test_raw_rust_output_rejects_ordinary_priority_for_protective_orders(
+    order_type,
+):
+    order = _raw_rust_order(qty=-1.0, order_type=order_type)
+
+    with pytest.raises(FatalBotException, match="inconsistent with its protective"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+        )
+
+
+def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_unstuck_long",
+        execution_priority="risk_critical",
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+    ) == [order]
+
+
+@pytest.mark.parametrize(
     "orders",
     [
         [_raw_rust_order(), _raw_rust_order()],
@@ -576,6 +612,33 @@ def test_raw_rust_output_accepts_complete_consumed_diagnostics():
 def test_raw_rust_output_malformed_json_is_fatal():
     with pytest.raises(FatalBotException, match="malformed JSON"):
         reconciler.parse_and_validate_rust_orchestrator_output("{", {0: SYMBOL})
+
+
+def test_raw_rust_output_duplicate_json_key_is_fatal():
+    out_json = '{"orders":[{"malformed":true}],"orders":[]}'
+
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output(out_json, {0: SYMBOL})
+
+
+def test_raw_rust_output_integer_digit_limit_failure_is_fatal():
+    max_digits = sys.get_int_max_str_digits()
+    if max_digits == 0:
+        pytest.skip("Python integer string conversion limit is disabled")
+    out_json = '{"value":' + ("1" * (max_digits + 1)) + "}"
+
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output(out_json, {0: SYMBOL})
+
+
+def test_raw_rust_output_decoder_recursion_failure_is_fatal(monkeypatch):
+    def raise_recursion_error(*_args, **_kwargs):
+        raise RecursionError("decoder nesting limit exceeded")
+
+    monkeypatch.setattr(reconciler.json, "loads", raise_recursion_error)
+
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output("{}", {0: SYMBOL})
 
 
 @pytest.mark.asyncio

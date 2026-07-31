@@ -1694,6 +1694,23 @@ def test_to_executable_orders_normalizes_identity_overflow_to_fatal():
         bot._to_executable_orders(ideal, {symbol: 100.0})
 
 
+def test_to_executable_orders_rejects_ordinary_protective_priority():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+
+    order_type = "close_unstuck_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {
+        symbol: [
+            (-0.5, 100.0, order_type, order_type_id, "limit", "ordinary"),
+        ]
+    }
+
+    with pytest.raises(FatalBotException, match="inconsistent with its protective"):
+        bot._to_executable_orders(ideal, {symbol: 100.0})
+
+
 @pytest.mark.asyncio
 async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
     symbol = "BTC/USDT"
