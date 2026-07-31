@@ -1850,7 +1850,7 @@ class TestValidateArray:
         hlcvs = np.zeros((3, 2, 5), dtype=np.float64)
         btc_usd_prices = np.ones(3, dtype=np.float64)
         timestamps = np.array(
-            [1735689600000, 1735776000000, 1735862400000], dtype=np.int64
+            [1735689600000, 1735689660000, 1735689720000], dtype=np.int64
         )
         override_meta = {
             "dataset_override": True,
