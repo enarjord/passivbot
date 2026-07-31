@@ -153,6 +153,9 @@ All notable user-facing changes will be documented in this file.
   Optimizer resume validation now rejects incompatible one-second candle settings, including
   adding the setting to an older result.
   Cancel-only unavailable-signal cycles now apply the same settlement-archive ordering guarantee.
+  Hyperliquid block backfills exclude the first supplied block's entire second from verified
+  coverage, and HIP-4 order serialization canonicalizes harmless Rust floating-point residue
+  without accepting materially off-grid values.
   Shared-wallet portfolio evaluation rejects mixed quote assets, and normalized trades reject
   inconsistent native-to-canonical YES price mappings.
   Reconciliation rejects duplicate kept orders in one managed quote slot before mutation, and the

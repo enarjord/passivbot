@@ -68,7 +68,7 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
     assert len(batch.trades) == 1
     assert batch.trades[0].sequence_id == "00000000000000000100:00000000:00000000"
     coverage = batch.coverage_by_asset[market.yes_asset.asset_id]
-    assert coverage == (VerifiedCoverage(1_000, 3_000),)
+    assert coverage == (VerifiedCoverage(2_000, 3_000),)
     candles = trades_to_canonical_signal_1s_candles(
         batch.trades,
         verified_coverage=coverage,
@@ -87,7 +87,7 @@ def test_hyperliquid_block_archive_deduplicates_participant_fills_and_proves_zer
         market.yes_asset.asset_id,
         start_ms=0,
         end_ms=10_000,
-    ) == [VerifiedCoverage(1_000, 3_000)]
+    ) == [VerifiedCoverage(2_000, 3_000)]
 
 
 def test_historical_batch_rolls_back_all_rows_on_late_trade_conflict(tmp_path):

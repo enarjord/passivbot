@@ -298,6 +298,35 @@ def test_hip4_action_builder_fails_closed_without_authoritative_quantity_constra
         )
 
 
+def test_hip4_action_builder_canonicalizes_float_residue_without_accepting_off_grid():
+    _, market = market_fixture()
+    market = replace(
+        market,
+        qty_step=0.1,
+        min_order_qty=0.1,
+        min_order_notional=0.01,
+    )
+
+    action = hyperliquid.build_limit_order_action(
+        market,
+        outcome=OutcomeSide.YES,
+        side=OutcomeOrderSide.BUY,
+        native_price=0.1 + 0.2,
+        qty=0.1 + 0.2,
+    )
+
+    assert action["orders"][0]["p"] == "0.3"
+    assert action["orders"][0]["s"] == "0.3"
+    with pytest.raises(ValueError, match="step-aligned"):
+        hyperliquid.build_limit_order_action(
+            market,
+            outcome=OutcomeSide.YES,
+            side=OutcomeOrderSide.BUY,
+            native_price=0.3,
+            qty=0.31,
+        )
+
+
 @pytest.mark.asyncio
 async def test_account_snapshot_keeps_outcome_state_separate_and_surfaces_unknown_assets():
     payload, market = market_fixture()

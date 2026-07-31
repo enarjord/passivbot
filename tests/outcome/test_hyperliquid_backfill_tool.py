@@ -39,7 +39,7 @@ def test_plain_node_files_are_ingested_in_explicit_cross_file_order(
         json.dumps(
             {
                 "block_number": 2,
-                "block_time": "1970-01-01T00:00:02Z",
+                "block_time": "1970-01-01T00:00:03Z",
                 "events": [],
             }
         )
@@ -69,7 +69,7 @@ def test_plain_node_files_are_ingested_in_explicit_cross_file_order(
     report = json.loads(capsys.readouterr().out)
     assert report["trades_inserted"] == 0
     assert report["coverage_by_asset"][market.yes_asset.asset_id] == [
-        {"start_ms": 1_000, "end_ms": 2_000}
+        {"start_ms": 2_000, "end_ms": 3_000}
     ]
     archive = OutcomeTradeArchive(archive_path)
     assert archive.load_market_metadata(OutcomeVenue.HYPERLIQUID, "913") == [

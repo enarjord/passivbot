@@ -295,6 +295,9 @@ Preferred backfill sources must preserve event chronology:
   bootstrap/diagnostic source: `tid` is a trade-identity hash, not an ordered sequence. Historical
   ingestion streams chronologically ordered plain or LZ4 hourly files, verifies block continuity
   across file boundaries, and archives coverage only after the complete input manifest parses.
+  The first supplied block does not prove that an omitted predecessor did not share its wall-clock
+  second, so verified coverage begins only after that first block's complete second even when its
+  timestamp is exactly second-aligned.
 - Polymarket: use Polygon CTF Exchange `OrderFilled` logs ordered by block number, transaction
   index, and log index, joined to Gamma market/token metadata. Normalize both the original CTF
   Exchange event schema and CTF Exchange v2 into the same canonical trade contract. Import the
@@ -376,6 +379,10 @@ evaluation tool requires explicit quantity-step, minimum-quantity, and minimum-n
 reports them as experiment assumptions; they do not become live venue metadata.
 The bounded Polymarket evaluator likewise requires an explicit quantity step when retained market
 metadata does not provide one.
+HIP-4 native order serialization removes only ordinary binary floating-point residue within the
+same `1e-12`-scaled grid tolerance used by Rust, then emits canonical decimal text. Materially
+off-grid quantities or prices remain invalid; serialization never rounds an arbitrary intent onto
+the venue grid.
 
 HIP-4 lifecycle reconciliation first checks settlement rows present in the current `userFills`
 snapshot. After scheduled expiry it also queries `userFillsByTime` from the event timestamp

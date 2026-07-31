@@ -270,7 +270,10 @@ def parse_hyperliquid_node_fills_by_block(
             trade.asset_id,
         )
     )
-    start_ms = ((first_block_time_ms + 999) // 1_000) * 1_000
+    # The supplied first block proves nothing about an unsupplied predecessor that may share
+    # its wall-clock second. Start only after the first block's complete second; subsequent
+    # consecutive block numbers then prove that every block in the retained interval was seen.
+    start_ms = ((first_block_time_ms // 1_000) + 1) * 1_000
     end_ms = (last_block_time_ms // 1_000) * 1_000
     coverage = (
         (VerifiedCoverage(start_ms, end_ms),)

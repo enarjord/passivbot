@@ -630,6 +630,34 @@ def _is_step_aligned(value: Decimal, step: Decimal) -> bool:
     return value % step == 0
 
 
+def _canonicalize_near_step(value: Decimal, step: Decimal) -> Decimal:
+    """Remove ordinary float residue without accepting a materially off-grid value."""
+
+    if step <= 0:
+        return value
+    units = value / step
+    nearest_units = units.to_integral_value()
+    tolerance = Decimal("1e-12") * max(abs(units), Decimal(1))
+    if abs(units - nearest_units) <= tolerance:
+        return nearest_units * step
+    return value
+
+
+def _significant_figure_increment(
+    value: Decimal,
+    *,
+    max_significant_figures: int,
+    max_decimal_places: int,
+) -> Decimal:
+    decimal_increment = Decimal(1).scaleb(-max_decimal_places)
+    if value == 0:
+        return decimal_increment
+    significant_increment = Decimal(1).scaleb(
+        value.copy_abs().adjusted() - max_significant_figures + 1
+    )
+    return max(decimal_increment, significant_increment)
+
+
 def _validate_native_order_values(
     market: NormalizedOutcomeMarket,
     *,
@@ -637,35 +665,36 @@ def _validate_native_order_values(
     qty: Any,
     allow_below_min_qty: bool = False,
 ) -> tuple[str, str]:
-    price_text = _decimal_text(native_price, "native_price")
-    qty_text = _decimal_text(qty, "qty")
-    price = Decimal(price_text)
-    quantity = Decimal(qty_text)
+    price = Decimal(_decimal_text(native_price, "native_price"))
+    quantity = Decimal(_decimal_text(qty, "qty"))
+    if market.qty_step is None:
+        raise ValueError("HIP-4 quantity step is unavailable")
+    qty_step = Decimal(str(market.qty_step))
+    quantity = _canonicalize_near_step(quantity, qty_step)
     if not Decimal("0") < price < Decimal(str(market.payout_unit)):
         raise ValueError("HIP-4 order price must be strictly between zero and payout")
     if quantity <= 0:
         raise ValueError("HIP-4 order quantity must be positive")
-    if market.qty_step is None:
-        raise ValueError("HIP-4 quantity step is unavailable")
-    if not _is_step_aligned(quantity, Decimal(str(market.qty_step))):
+    if not _is_step_aligned(quantity, qty_step):
         raise ValueError("HIP-4 order quantity is not step-aligned")
-    if market.min_order_qty is None:
-        raise ValueError("HIP-4 minimum order quantity is unavailable")
-    if not allow_below_min_qty and quantity < Decimal(str(market.min_order_qty)):
-        raise ValueError("HIP-4 order quantity is below the minimum")
-    if market.min_order_notional is None:
-        raise ValueError("HIP-4 minimum order notional is unavailable")
-    if price * quantity < Decimal(str(market.min_order_notional)):
-        raise ValueError("HIP-4 order notional is below the minimum")
-
     grid = market.price_grid
     if grid.kind == "fixed_step":
         assert grid.fixed_step is not None
-        if not _is_step_aligned(price, Decimal(str(grid.fixed_step))):
+        price_step = Decimal(str(grid.fixed_step))
+        price = _canonicalize_near_step(price, price_step)
+        if not _is_step_aligned(price, price_step):
             raise ValueError("HIP-4 order price is not step-aligned")
     elif grid.kind == "significant_figures":
         assert grid.max_significant_figures is not None
         assert grid.max_decimal_places is not None
+        price = _canonicalize_near_step(
+            price,
+            _significant_figure_increment(
+                price,
+                max_significant_figures=grid.max_significant_figures,
+                max_decimal_places=grid.max_decimal_places,
+            ),
+        )
         normalized = price.normalize()
         significant_digits = len(normalized.as_tuple().digits)
         decimal_places = max(0, -normalized.as_tuple().exponent)
@@ -675,7 +704,15 @@ def _validate_native_order_values(
             raise ValueError("HIP-4 order price has too many decimal places")
     else:  # pragma: no cover - model validation already rejects this
         raise ValueError(f"unsupported HIP-4 price grid {grid.kind!r}")
-    return price_text, qty_text
+    if market.min_order_qty is None:
+        raise ValueError("HIP-4 minimum order quantity is unavailable")
+    if not allow_below_min_qty and quantity < Decimal(str(market.min_order_qty)):
+        raise ValueError("HIP-4 order quantity is below the minimum")
+    if market.min_order_notional is None:
+        raise ValueError("HIP-4 minimum order notional is unavailable")
+    if price * quantity < Decimal(str(market.min_order_notional)):
+        raise ValueError("HIP-4 order notional is below the minimum")
+    return _decimal_text(price, "native_price"), _decimal_text(quantity, "qty")
 
 
 def build_limit_order_action(
