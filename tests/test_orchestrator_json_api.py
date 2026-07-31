@@ -368,6 +368,7 @@ def test_live_validator_accepts_complete_rust_output():
     }
     assert len(conversion_identities) == len(orders)
     assert out["diagnostics"]["symbol_states"][0]["symbol_idx"] == 0
+    assert "loss_gate_blocks" in out["diagnostics"]
 
 
 def test_json_rejects_invalid_order_book():

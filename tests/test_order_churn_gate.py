@@ -87,7 +87,13 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
                 },
             }
         ]
-    return {"orders": orders, "diagnostics": {"symbol_states": symbol_states}}
+    return {
+        "orders": orders,
+        "diagnostics": {
+            "symbol_states": symbol_states,
+            "loss_gate_blocks": [],
+        },
+    }
 
 
 def _raw_loss_gate_block(**overrides) -> dict:
@@ -381,7 +387,7 @@ def test_raw_rust_output_rejects_ordinary_priority_for_protective_orders(
 ):
     order = _raw_rust_order(qty=-1.0, order_type=order_type)
 
-    with pytest.raises(FatalBotException, match="inconsistent with its protective"):
+    with pytest.raises(FatalBotException, match="inconsistent with its order_type"):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([order]),
             {0: SYMBOL},
@@ -402,17 +408,63 @@ def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
 
 
 @pytest.mark.parametrize(
+    ("order", "input_mode"),
+    [
+        (
+            _raw_rust_order(execution_priority="risk_critical"),
+            None,
+        ),
+        (
+            _raw_rust_order(
+                qty=-1.0,
+                order_type="close_grid_long",
+                execution_priority="risk_critical",
+            ),
+            None,
+        ),
+        (
+            _raw_rust_order(qty=-1.0, order_type="close_grid_long"),
+            "graceful_stop",
+        ),
+    ],
+    ids=[
+        "risk-critical-entry",
+        "risk-critical-normal-close",
+        "ordinary-graceful-stop-close",
+    ],
+)
+def test_raw_rust_output_rejects_priority_inconsistent_with_full_rust_rule(
+    order, input_mode
+):
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = input_mode
+
+    with pytest.raises(FatalBotException, match="inconsistent with"):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
+def test_raw_rust_output_accepts_risk_critical_graceful_stop_close():
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_grid_long",
+        execution_priority="risk_critical",
+    )
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = "graceful_stop"
+
+    assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}) == [order]
+
+
+@pytest.mark.parametrize(
     "orders",
     [
         [_raw_rust_order(), _raw_rust_order()],
         [_raw_rust_order(), _raw_rust_order(execution_type="market")],
-        [_raw_rust_order(), _raw_rust_order(execution_priority="risk_critical")],
         [_raw_rust_order(execution_type="market"), _raw_rust_order()],
     ],
     ids=[
         "exact-duplicate",
         "conflicting-execution-type",
-        "conflicting-execution-priority",
         "conflicting-execution-type-reversed",
     ],
 )
@@ -442,6 +494,22 @@ def test_raw_rust_output_requires_complete_symbol_state_coverage():
             _raw_rust_output(symbol_states=[]),
             {0: SYMBOL},
         )
+
+
+def test_raw_rust_output_requires_explicit_input_mode():
+    out = _raw_rust_output()
+    del out["diagnostics"]["symbol_states"][0]["long"]["input_mode"]
+
+    with pytest.raises(FatalBotException, match="invalid long input_mode"):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+
+
+def test_raw_rust_output_requires_loss_gate_blocks_collection():
+    out = _raw_rust_output()
+    del out["diagnostics"]["loss_gate_blocks"]
+
+    with pytest.raises(FatalBotException, match="missing required loss_gate_blocks"):
+        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
 
 
 @pytest.mark.parametrize(

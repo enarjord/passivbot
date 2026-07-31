@@ -88,6 +88,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
         symbol_states.append(row)
     out_diagnostics = dict(diagnostics or {})
     out_diagnostics["symbol_states"] = symbol_states
+    out_diagnostics.setdefault("loss_gate_blocks", [])
     return json.dumps({"orders": [], "diagnostics": out_diagnostics})
 
 

@@ -34,35 +34,44 @@ def _empty_orchestrator_output(input_json: str) -> str:
     return json.dumps(
         {
             "orders": [],
-            "diagnostics": {"warnings": [], "symbol_states": symbol_states},
+            "diagnostics": {
+                "warnings": [],
+                "symbol_states": symbol_states,
+                "loss_gate_blocks": [],
+            },
         }
     )
 
 
-def _single_symbol_orchestrator_output(*, orders=None, **diagnostics) -> str:
+def _single_symbol_orchestrator_output(
+    *, orders=None, include_loss_gate_blocks=True, **diagnostics
+) -> str:
+    diagnostics_payload = {
+        "symbol_states": [
+            {
+                "symbol_idx": 0,
+                "long": {
+                    "input_mode": None,
+                    "effective_mode": "normal",
+                    "active": True,
+                    "allow_initial": True,
+                },
+                "short": {
+                    "input_mode": None,
+                    "effective_mode": "normal",
+                    "active": True,
+                    "allow_initial": True,
+                },
+            }
+        ],
+        **diagnostics,
+    }
+    if include_loss_gate_blocks:
+        diagnostics_payload.setdefault("loss_gate_blocks", [])
     return json.dumps(
         {
             "orders": [] if orders is None else orders,
-            "diagnostics": {
-                "symbol_states": [
-                    {
-                        "symbol_idx": 0,
-                        "long": {
-                            "input_mode": None,
-                            "effective_mode": "normal",
-                            "active": True,
-                            "allow_initial": True,
-                        },
-                        "short": {
-                            "input_mode": None,
-                            "effective_mode": "normal",
-                            "active": True,
-                            "allow_initial": True,
-                        },
-                    }
-                ],
-                **diagnostics,
-            },
+            "diagnostics": diagnostics_payload,
         }
     )
 
@@ -3125,6 +3134,10 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
             "malformed JSON",
         ),
         (
+            _single_symbol_orchestrator_output(include_loss_gate_blocks=False),
+            "missing required loss_gate_blocks",
+        ),
+        (
             _single_symbol_orchestrator_output(loss_gate_blocks={}),
             "loss_gate_blocks must be a list",
         ),
@@ -3169,7 +3182,7 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
                         "price": 100.0,
                         "order_type": "entry_initial_normal_long",
                         "execution_type": "market",
-                        "execution_priority": "risk_critical",
+                        "execution_priority": "ordinary",
                     },
                 ]
             ),
@@ -3205,7 +3218,23 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
                     }
                 ]
             ),
-            "inconsistent with its protective",
+            "inconsistent with its order_type",
+        ),
+        (
+            _single_symbol_orchestrator_output(
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": 1.0,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "limit",
+                        "execution_priority": "risk_critical",
+                    }
+                ]
+            ),
+            "inconsistent with its order_type",
         ),
     ],
 )

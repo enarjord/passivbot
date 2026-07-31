@@ -1017,6 +1017,29 @@ def _rust_order_requires_risk_critical_priority(order_type: str) -> bool:
     return order_type.rsplit("_", 1)[0] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
 
 
+def _expected_rust_execution_priority(order_type: str, input_mode: object) -> str:
+    if _rust_order_requires_risk_critical_priority(order_type) or (
+        input_mode == "graceful_stop" and order_type.startswith("close_")
+    ):
+        return "risk_critical"
+    return "ordinary"
+
+
+def _validate_intrinsic_rust_execution_priority(
+    order_type: str, execution_priority: str, context: str
+) -> None:
+    if _rust_order_requires_risk_critical_priority(order_type):
+        expected_priority = "risk_critical"
+    elif order_type.startswith("entry_"):
+        expected_priority = "ordinary"
+    else:
+        return
+    if execution_priority != expected_priority:
+        raise FatalBotException(
+            f"{context} has execution_priority inconsistent with its order_type"
+        )
+
+
 def rust_order_conversion_identity(
     symbol_key: object, qty: object, price: object, order_type: object
 ) -> tuple[object, float, float, str]:
@@ -1109,14 +1132,11 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_priority"
             )
-        if (
-            _rust_order_requires_risk_critical_priority(order_type)
-            and execution_priority != "risk_critical"
-        ):
-            raise FatalBotException(
-                f"Rust orchestrator order {order_idx} has execution_priority "
-                "inconsistent with its protective order_type"
-            )
+        _validate_intrinsic_rust_execution_priority(
+            order_type,
+            execution_priority,
+            f"Rust orchestrator order {order_idx}",
+        )
         conversion_identity = rust_order_conversion_identity(
             idx_to_symbol[symbol_idx], qty, price, order_type
         )
@@ -1140,6 +1160,7 @@ def validate_rust_orchestrator_output(
         raise FatalBotException("Rust orchestrator symbol_states must be a list")
     expected_symbol_idxs = set(idx_to_symbol)
     seen_symbol_idxs: set[int] = set()
+    input_modes_by_symbol_side: dict[tuple[int, str], object] = {}
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     for state_idx, row in enumerate(symbol_states):
         if not isinstance(row, dict):
@@ -1163,10 +1184,14 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} state"
                 )
-            if side_state.get("input_mode") not in valid_modes | {None}:
+            if (
+                "input_mode" not in side_state
+                or side_state["input_mode"] not in valid_modes | {None}
+            ):
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} input_mode"
                 )
+            input_modes_by_symbol_side[(symbol_idx, pside)] = side_state["input_mode"]
             if side_state.get("effective_mode") not in valid_modes:
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} effective_mode"
@@ -1181,7 +1206,26 @@ def validate_rust_orchestrator_output(
             "Rust orchestrator symbol_states do not cover the requested symbols"
         )
 
-    loss_gate_blocks = diagnostics.get("loss_gate_blocks", [])
+    for order_idx, order in enumerate(orders):
+        order_type = str(order["order_type"])
+        input_mode = input_modes_by_symbol_side[
+            (int(order["symbol_idx"]), str(order["pside"]))
+        ]
+        expected_priority = _expected_rust_execution_priority(
+            order_type,
+            input_mode,
+        )
+        if order["execution_priority"] != expected_priority:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has execution_priority "
+                "inconsistent with its order_type and input mode"
+            )
+
+    if "loss_gate_blocks" not in diagnostics:
+        raise FatalBotException(
+            "Rust orchestrator diagnostics missing required loss_gate_blocks"
+        )
+    loss_gate_blocks = diagnostics["loss_gate_blocks"]
     if not isinstance(loss_gate_blocks, list):
         raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
     finite_fields = (
@@ -2585,14 +2629,11 @@ def to_executable_orders(
                     f"ideal order for {symbol} has invalid execution_priority "
                     f"{order[5]!r}; expected ordinary or risk_critical"
                 )
-            if (
-                _rust_order_requires_risk_critical_priority(str(order[2]))
-                and execution_priority != "risk_critical"
-            ):
-                raise FatalBotException(
-                    f"Rust ideal order for {symbol} has execution_priority "
-                    "inconsistent with its protective order_type"
-                )
+            _validate_intrinsic_rust_execution_priority(
+                str(order[2]),
+                execution_priority,
+                f"Rust ideal order for {symbol}",
+            )
             ideal_orders_f[symbol].append(
                 {
                     "symbol": symbol,
