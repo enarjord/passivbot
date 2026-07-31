@@ -3,12 +3,48 @@ import argparse
 import pytest
 
 from tools.hyperliquid_probe_common import (
+    add_public_probe_address_arg,
+    create_hyperliquid_public_probe_session,
     extract_balance_summary,
     hyperliquid_probe_vault_params,
     mask_secret,
     require_live_mutation_confirmation,
     round_to_step,
 )
+
+
+def test_public_probe_address_is_explicit_and_does_not_load_an_account_name():
+    parser = argparse.ArgumentParser(prog="probe")
+    add_public_probe_address_arg(parser)
+
+    args = parser.parse_args(["--address", "0xabc"])
+
+    assert args.address == "0xabc"
+    assert not hasattr(args, "user")
+    assert not hasattr(args, "api_keys")
+
+
+def test_public_probe_session_has_no_signing_credentials(monkeypatch):
+    captured = {}
+
+    class DummySession:
+        def __init__(self):
+            self.options = {}
+
+    def fake_hyperliquid(config):
+        captured.update(config)
+        return DummySession()
+
+    monkeypatch.setattr(
+        "tools.hyperliquid_probe_common.ccxt_async.hyperliquid",
+        fake_hyperliquid,
+    )
+
+    session = create_hyperliquid_public_probe_session()
+
+    assert "walletAddress" not in captured
+    assert "privateKey" not in captured
+    assert session.options["defaultType"] == "swap"
 
 
 def test_mask_secret_preserves_prefix_and_suffix():

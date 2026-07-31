@@ -108,7 +108,54 @@ def test_optimizer_preaggregation_rewrites_validity_indices():
     assert aggregated_btc.shape[0] == 60
     assert mss["BTC"]["first_valid_index"] == 20
     assert mss["BTC"]["last_valid_index"] == 59
+    assert mss["__meta__"]["data_interval_ms"] == 300_000
+    assert mss["__meta__"]["data_interval_seconds"] == 300
     assert mss["__meta__"]["data_interval_minutes"] == 5
+    assert mss["__meta__"]["source_candle_interval_offset_bars"] == 4
+    assert mss["__meta__"]["candle_interval_offset_bars"] == 0
+
+
+def test_optimizer_preaggregates_native_one_second_data():
+    n_seconds = 14
+    start_ts = 1_609_459_200_000 + 1_000
+    hlcvs = np.ones((n_seconds, 1, 4), dtype=np.float64)
+    timestamps = np.arange(
+        start_ts,
+        start_ts + n_seconds * 1_000,
+        1_000,
+        dtype=np.int64,
+    )
+    btc_usd_prices = np.full(n_seconds, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {"first_valid_index": 4, "last_valid_index": 13},
+        "__meta__": {"data_interval_ms": 1_000},
+    }
+
+    aggregated, aggregated_timestamps, aggregated_btc = (
+        optimize._maybe_aggregate_backtest_data(
+            hlcvs,
+            timestamps,
+            btc_usd_prices,
+            mss,
+            {
+                "backtest": {
+                    "candle_interval_minutes": 1,
+                    "candle_interval_seconds": 5,
+                }
+            },
+        )
+    )
+
+    assert aggregated.shape[0] == 2
+    assert aggregated_timestamps.tolist() == [
+        1_609_459_205_000,
+        1_609_459_210_000,
+    ]
+    assert aggregated_btc.shape[0] == 2
+    assert mss["BTC"] == {"first_valid_index": 0, "last_valid_index": 1}
+    assert mss["__meta__"]["data_interval_ms"] == 5_000
+    assert mss["__meta__"]["data_interval_seconds"] == 5
+    assert "data_interval_minutes" not in mss["__meta__"]
     assert mss["__meta__"]["source_candle_interval_offset_bars"] == 4
     assert mss["__meta__"]["candle_interval_offset_bars"] == 0
 
@@ -1772,8 +1819,11 @@ class TestValidateArray:
 
         hlcvs = np.zeros((4, 2, 5), dtype=np.float64, order="C")
         btc_usd_prices = np.ones(4, dtype=np.float64)
-        timestamps = np.arange(4, dtype=np.int64)
-        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 3}}
+        timestamps = np.arange(4, dtype=np.int64) * 60_000
+        mss = {
+            "BTC": {"first_valid_index": 0, "last_valid_index": 3},
+            "__meta__": {"data_interval_ms": 60_000},
+        }
         config = {"backtest": {"coins": {}, "candle_interval_minutes": 1}}
         manager = RecordingArrayManager()
 

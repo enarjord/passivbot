@@ -91,6 +91,14 @@ def add_probe_identity_args(parser: argparse.ArgumentParser, *, require_user: bo
     )
 
 
+def add_public_probe_address_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--address",
+        required=True,
+        help="public Hyperliquid wallet address to inspect without loading signing credentials",
+    )
+
+
 def add_live_mutation_confirmation_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--yes",
@@ -133,6 +141,21 @@ def create_hyperliquid_probe_session(wallet_address: str, private_key: str):
         {
             "walletAddress": wallet_address,
             "privateKey": private_key,
+            "enableRateLimit": True,
+            "timeout": 30_000,
+        }
+    )
+    session.options["defaultType"] = "swap"
+    session.options["fetchMarkets"] = {
+        "types": ["swap", "hip3"],
+        "hip3": {"dex": ["xyz"]},
+    }
+    return session
+
+
+def create_hyperliquid_public_probe_session():
+    session = ccxt_async.hyperliquid(
+        {
             "enableRateLimit": True,
             "timeout": 30_000,
         }

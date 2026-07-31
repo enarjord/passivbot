@@ -77,7 +77,11 @@ All notable user-facing changes will be documented in this file.
   reconciliation; live sell sizing excludes inventory reserved by unmanaged orders while
   reclaiming managed reservations. Outcome sell constraints are checked after quantity rounding,
   and the candle simulator rejects non-post-only orders until taker execution is modeled. Optimizer
-  candle pre-aggregation now converts per-coin validity indices to the aggregated interval. Partial
+  candle pre-aggregation now converts per-coin validity indices to the aggregated interval and
+  supports second-based datasets before candidate evaluation.
+  Read-only HIP-4 state and dry-cycle probes now take an explicit public wallet address and never
+  load signing credentials. Ordered Hyperliquid block archives reject fill timestamps that move
+  backward across block/event order instead of silently sorting contradictory evidence. Partial
   cancellation failures now recover every targeted managed order to verified absence, and
   settlement re-import rejects contradictory economic evidence under the same source identity
   while allowing endpoint provenance to differ. Full-contract replay rejects unmodeled

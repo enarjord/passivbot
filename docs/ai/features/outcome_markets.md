@@ -481,6 +481,10 @@ inventory horizon. Skipped jobs do not extend either horizon. Portfolio peak res
 chronologically as the sum of absolute per-market residuals; every release and fill-derived
 residual update sharing one timestamp is applied atomically before measuring the peak.
 
+Official ordered historical sources must preserve their authoritative event order. A Hyperliquid
+`node_fills_by_block` import rejects relevant fill timestamps that move backward across block/event
+order instead of sorting the contradiction into a plausible timeline and certifying coverage.
+
 Post-fill adverse selection is represented as a horizon-indexed collection so later experiments
 may add horizons without changing its aggregation contract. The initial collection contains only
 `horizon_ms = 1000`. A fill timestamp denotes the start of its one-second execution bucket, and its
@@ -559,6 +563,10 @@ or disappeared cancellation target may have invalidated the inventory state behi
 Live split, merge, redeem, and order writes are distinct authenticated mutations. Each requires an
 explicitly supported adapter path, reconciliation, idempotency or authoritative confirmation, and
 the normal approval boundary in `AGENTS.md`.
+
+Read-only HIP-4 state and dry-cycle probes accept an explicit public wallet address and create an
+unauthenticated transport. They must not load `api-keys.json` or place a signing key in the CCXT
+session merely to query public address-indexed account state.
 
 ## Initial Non-Goals
 

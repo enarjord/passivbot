@@ -262,6 +262,45 @@ def test_hyperliquid_block_gap_fails_before_claiming_coverage():
         )
 
 
+def test_hyperliquid_fill_times_must_follow_block_event_order():
+    market = hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json"))
+
+    def fill(*, time_ms: int, tid: int) -> dict:
+        return {
+            "coin": market.yes_asset.market_data_symbol,
+            "px": "0.335",
+            "sz": "2",
+            "side": "B",
+            "time": time_ms,
+            "hash": f"0xtrade{tid}",
+            "tid": tid,
+        }
+
+    lines = [
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:01.000Z",
+                "block_number": 100,
+                "events": [["0xfirst", fill(time_ms=2_500, tid=7)]],
+            }
+        ),
+        json.dumps(
+            {
+                "block_time": "1970-01-01T00:00:02.000Z",
+                "block_number": 101,
+                "events": [["0xsecond", fill(time_ms=1_500, tid=8)]],
+            }
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="fill times contradict block/event order"):
+        parse_hyperliquid_node_fills_by_block(
+            lines,
+            market,
+            source_cursor="contradictory-fill-order",
+        )
+
+
 def test_hyperliquid_settlement_is_archived_separately_and_never_becomes_a_candle(
     tmp_path,
 ):

@@ -268,7 +268,7 @@ fee, residual-duration, and capital-utilization metrics.
 ## Current HIP-4 Dry-Cycle Evidence
 
 An authorized read-only dry cycle on a current daily BTC price-binary outcome used public trade
-data plus authenticated account-state reads and made no exchange mutation:
+data plus unauthenticated address-indexed account-state reads and made no exchange mutation:
 
 - the account remained funded with positive conservatively available collateral;
 - zero selected-market YES/NO inventory, open orders, recent fills, or unknown outcome state;

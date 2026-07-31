@@ -204,8 +204,8 @@ def test_outcome_hip4_dry_cycle_dispatch_forwards_module_and_prog(monkeypatch):
             [
                 "tool",
                 "outcome-hip4-dry-cycle",
-                "--user",
-                "outcome_probe_user",
+                "--address",
+                "0xoutcome",
                 "--max-wait-seconds",
                 "3",
             ]
@@ -216,8 +216,8 @@ def test_outcome_hip4_dry_cycle_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["module_name"] == "tools.probe_hyperliquid_outcome_dry_cycle"
     assert captured["argv"] == [
         "passivbot tool outcome-hip4-dry-cycle",
-        "--user",
-        "outcome_probe_user",
+        "--address",
+        "0xoutcome",
         "--max-wait-seconds",
         "3",
     ]

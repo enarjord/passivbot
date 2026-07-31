@@ -17,16 +17,15 @@ from outcome.live_bot import (
     run_hip4_outcome_collected_cycle,
 )
 from tools.hyperliquid_probe_common import (
-    add_probe_identity_args,
-    create_hyperliquid_probe_session,
-    load_hyperliquid_wallet,
+    add_public_probe_address_arg,
+    create_hyperliquid_public_probe_session,
     mask_secret,
 )
 
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_probe_identity_args(parser)
+    add_public_probe_address_arg(parser)
     parser.add_argument("--underlying", default="BTC")
     parser.add_argument("--observations", type=int, default=5)
     parser.add_argument("--max-wait-seconds", type=float, default=120.0)
@@ -39,11 +38,8 @@ async def _main() -> int:
     if args.observations < 2:
         parser.error("--observations must be at least 2")
 
-    _user_info, account_address, private_key = load_hyperliquid_wallet(
-        args.user,
-        api_keys_path=args.api_keys,
-    )
-    session = create_hyperliquid_probe_session(account_address, private_key)
+    account_address = args.address
+    session = create_hyperliquid_public_probe_session()
     archive = OutcomeTradeArchive(Path(args.archive))
     try:
         meta = await session.publicPostInfo({"type": "outcomeMeta"})
@@ -134,7 +130,6 @@ async def _main() -> int:
             print(
                 json.dumps(
                     {
-                        "user": args.user,
                         "wallet_address": mask_secret(account_address),
                         "mutations_enabled": client.allow_mutations,
                         "market": {
@@ -164,7 +159,6 @@ async def _main() -> int:
         print(
             json.dumps(
                 {
-                    "user": args.user,
                     "wallet_address": mask_secret(account_address),
                     "mutations_enabled": client.allow_mutations,
                     "market": {

@@ -59,6 +59,8 @@ from backtest import (
     build_backtest_payload,
     execute_backtest,
     get_backtest_execution_settings,
+    resolve_backtest_candle_interval_ms,
+    _resolve_source_interval_ms,
 )
 import asyncio
 import multiprocessing
@@ -158,7 +160,7 @@ from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List, Dict, Any, Optional
 from shared_arrays import SharedArrayManager, attach_shared_array
-from ohlcv_utils import align_and_aggregate_hlcvs
+from ohlcv_utils import align_and_aggregate_hlcvs_ms
 from optimize_suite import (
     ScenarioEvalContext,
     prepare_suite_contexts,
@@ -262,16 +264,25 @@ def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
 
 
 def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, config):
-    candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
-    if candle_interval <= 1:
+    meta = mss.setdefault("__meta__", {})
+    source_interval_ms = _resolve_source_interval_ms(meta, timestamps)
+    target_interval_ms = resolve_backtest_candle_interval_ms(config)
+    if target_interval_ms == source_interval_ms:
         return hlcvs, timestamps, btc_usd_prices
     n_before = hlcvs.shape[0]
-    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-        hlcvs, timestamps, btc_usd_prices, candle_interval
+    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs_ms(
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        source_interval_ms=source_interval_ms,
+        target_interval_ms=target_interval_ms,
     )
+    candle_interval = target_interval_ms // source_interval_ms
     logging.debug(
-        "[optimize] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
-        candle_interval,
+        "[optimize] aggregated %dms candles to %dms: %d bars -> %d bars "
+        "(trimmed %d for alignment)",
+        source_interval_ms,
+        target_interval_ms,
         n_before,
         hlcvs.shape[0],
         offset_bars,
@@ -307,8 +318,15 @@ def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, confi
             last_target = 0
         coin_meta["first_valid_index"] = first_target
         coin_meta["last_valid_index"] = last_target
-    meta = mss.setdefault("__meta__", {})
-    meta["data_interval_minutes"] = candle_interval
+    meta["data_interval_ms"] = target_interval_ms
+    if target_interval_ms % 1_000 == 0:
+        meta["data_interval_seconds"] = target_interval_ms // 1_000
+    else:
+        meta.pop("data_interval_seconds", None)
+    if target_interval_ms % 60_000 == 0:
+        meta["data_interval_minutes"] = target_interval_ms // 60_000
+    else:
+        meta.pop("data_interval_minutes", None)
     meta["source_candle_interval_offset_bars"] = int(offset_bars)
     meta["candle_interval_offset_bars"] = 0
     if timestamps is not None and len(timestamps) > 0:

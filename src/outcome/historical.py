@@ -174,6 +174,8 @@ def parse_hyperliquid_node_fills_by_block(
     trades: list[NormalizedOutcomeTrade] = []
     settlement_payloads: list[Mapping[str, Any]] = []
     seen_economic_fills: set[tuple[str, int, str, str, str, int]] = set()
+    previous_fill_time_ms: int | None = None
+    previous_fill_position: tuple[int, int] | None = None
     for line_number, raw_line in enumerate(lines, start=1):
         if not raw_line.strip():
             continue
@@ -209,6 +211,20 @@ def parse_hyperliquid_node_fills_by_block(
             coin = str(fill.get("coin", ""))
             if coin not in symbols:
                 continue
+            exchange_time_ms = _non_negative_int(fill.get("time"), "fill time")
+            if (
+                previous_fill_time_ms is not None
+                and exchange_time_ms < previous_fill_time_ms
+            ):
+                assert previous_fill_position is not None
+                raise ValueError(
+                    "Hyperliquid node_fills_by_block fill times contradict block/event "
+                    f"order: block {previous_fill_position[0]} event "
+                    f"{previous_fill_position[1]} has {previous_fill_time_ms}, followed by "
+                    f"block {block_number} event {event_index} with {exchange_time_ms}"
+                )
+            previous_fill_time_ms = exchange_time_ms
+            previous_fill_position = (block_number, event_index)
             if str(fill.get("dir", "")).casefold() == "settlement":
                 payload = dict(fill)
                 payload["historical_user"] = user_address
@@ -217,7 +233,6 @@ def parse_hyperliquid_node_fills_by_block(
                 settlement_payloads.append(payload)
                 continue
             tid = _non_negative_int(fill.get("tid"), "fill tid")
-            exchange_time_ms = _non_negative_int(fill.get("time"), "fill time")
             identity = (
                 coin,
                 tid,

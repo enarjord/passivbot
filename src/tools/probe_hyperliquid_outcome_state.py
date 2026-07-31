@@ -12,16 +12,15 @@ from outcome.adapters import hyperliquid
 from outcome.hyperliquid_live import HyperliquidOutcomeLiveClient
 from outcome.models import OutcomeSide
 from tools.hyperliquid_probe_common import (
-    add_probe_identity_args,
-    create_hyperliquid_probe_session,
-    load_hyperliquid_wallet,
+    add_public_probe_address_arg,
+    create_hyperliquid_public_probe_session,
     mask_secret,
 )
 
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_probe_identity_args(parser)
+    add_public_probe_address_arg(parser)
     parser.add_argument(
         "--underlying",
         default="BTC",
@@ -29,11 +28,8 @@ async def _main() -> int:
     )
     args = parser.parse_args()
 
-    _user_info, account_address, private_key = load_hyperliquid_wallet(
-        args.user,
-        api_keys_path=args.api_keys,
-    )
-    session = create_hyperliquid_probe_session(account_address, private_key)
+    account_address = args.address
+    session = create_hyperliquid_public_probe_session()
     try:
         meta = await session.publicPostInfo({"type": "outcomeMeta"})
         if not isinstance(meta, dict) or not isinstance(meta.get("outcomes"), list):
@@ -70,7 +66,6 @@ async def _main() -> int:
         print(
             json.dumps(
                 {
-                    "user": args.user,
                     "wallet_address": mask_secret(account_address),
                     "mutations_enabled": client.allow_mutations,
                     "active_price_binary_markets": len(markets),
