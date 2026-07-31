@@ -109,7 +109,9 @@ async def _best_effort_unwatch(bot: Any, symbol: str) -> bool:
     try:
         await asyncio.wait_for(unwatch(symbol, "1m"), timeout=2.0)
         return True
-    except (asyncio.CancelledError, TimeoutError):
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
         return False
     except Exception:
         return False
@@ -124,7 +126,9 @@ async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
         subscriptions = [[symbol, "1m"] for symbol in symbols]
         await asyncio.wait_for(unwatch(subscriptions), timeout=3.0)
         return True
-    except (asyncio.CancelledError, TimeoutError):
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
         return False
     except Exception:
         return False

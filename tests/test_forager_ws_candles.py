@@ -843,6 +843,54 @@ async def test_dynamic_subscriptions_follow_flat_forager_universe():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bulk_supported", [False, True])
+async def test_watcher_retirement_propagates_owner_cancellation(bulk_supported):
+    unsubscribe_started = asyncio.Event()
+
+    class _CancellationBlockingCCP:
+        def __init__(self):
+            self.single_calls = 0
+            self.bulk_calls = 0
+            if not bulk_supported:
+                self.un_watch_ohlcv_for_symbols = None
+
+        async def un_watch_ohlcv(self, _symbol, _timeframe):
+            self.single_calls += 1
+            unsubscribe_started.set()
+            await asyncio.Event().wait()
+
+        async def un_watch_ohlcv_for_symbols(self, _subscriptions):
+            self.bulk_calls += 1
+            unsubscribe_started.set()
+            await asyncio.Event().wait()
+
+    symbol = "CANCEL/USDT:USDT"
+    watcher = asyncio.create_task(asyncio.Event().wait())
+    bot = SimpleNamespace(ccp=_CancellationBlockingCCP())
+    retirement = asyncio.create_task(
+        candle_ws._retire_watchers(bot, {symbol: watcher})
+    )
+
+    try:
+        await asyncio.wait_for(unsubscribe_started.wait(), timeout=1.0)
+        retirement.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await retirement
+
+        assert not watcher.done()
+        assert not candle_ws._watcher_is_retiring(bot, symbol, watcher)
+        if bulk_supported:
+            assert bot.ccp.bulk_calls == 1
+            assert bot.ccp.single_calls == 0
+        else:
+            assert bot.ccp.bulk_calls == 0
+            assert bot.ccp.single_calls == 1
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_wakeup_exception_is_consumed_before_watcher_retirement():
     class _UnsubscribeWakeupCCP:
         has = {"watchOHLCV": True}
