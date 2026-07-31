@@ -1419,7 +1419,7 @@ def check_keys(dict0, dict1):
 
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
-    approved_coins = effective_backtest_approved_coins_by_side(config)
+    data_coins = effective_backtest_data_coins(config)
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
     coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
@@ -1428,7 +1428,7 @@ def get_cache_hash(config, exchange):
         (str(k), str(v)) for k, v in market_settings_sources.items()
     )
     to_hash = {
-        "coins": approved_coins,
+        "coins": data_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
         "start_date": require_config_value(config, "backtest.start_date"),
         "exchange": exchanges_cfg if exchange == "combined" else exchange,
