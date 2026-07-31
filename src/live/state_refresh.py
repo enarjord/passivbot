@@ -220,7 +220,7 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
     plan = {"balance", "positions", "open_orders", "fills"}
     if "fills" not in pending:
         coverage_ready = True
-        coverage_ready_fn = getattr(bot, "_pnl_history_coverage_ready_for_risk", None)
+        coverage_ready_fn = getattr(bot, "_fill_history_coverage_ready", None)
         if callable(coverage_ready_fn):
             coverage_ready = bool(coverage_ready_fn())
         if not coverage_ready:

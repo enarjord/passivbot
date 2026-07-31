@@ -44,8 +44,6 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
-    GAP_CONFIDENCE_CONFIRMED,
-    GAP_REASON_CONFIRMED,
     PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
@@ -1802,12 +1800,11 @@ class Passivbot:
         )
         return lookback.event_history_start_ms(self.get_exchange_time())
 
-    def _pnl_history_coverage_status(
+    def _fill_history_coverage_status(
         self,
         *,
         start_ms: Optional[int],
         end_ms: Optional[int] = None,
-        lookback=None,
     ) -> dict[str, object]:
         manager = getattr(self, "_pnls_manager", None)
         if manager is None:
@@ -1818,114 +1815,18 @@ class Passivbot:
                 "covered_start_ms": 0,
                 "oldest_event_ts": 0,
             }
-        cache = getattr(manager, "cache", None)
-        if cache is None:
-            get_history_scope = getattr(manager, "get_history_scope", None)
-            history_scope = (
-                str(get_history_scope() or "unknown").lower()
-                if callable(get_history_scope)
-                else "unknown"
-            )
-            if history_scope == "all":
-                return {
-                    "ready": True,
-                    "reason": "full_history",
-                    "history_scope": history_scope,
-                    "covered_start_ms": 0,
-                    "oldest_event_ts": 0,
-                }
+        get_coverage_status = getattr(manager, "get_coverage_status", None)
+        if not callable(get_coverage_status):
             return {
                 "ready": False,
-                "reason": "missing_cache",
+                "reason": "missing_coverage_api",
                 "history_scope": "unknown",
                 "covered_start_ms": 0,
                 "oldest_event_ts": 0,
             }
+        return dict(get_coverage_status(start_ms=start_ms, end_ms=end_ms))
 
-        metadata = {}
-        load_metadata = getattr(cache, "load_metadata", None)
-        if callable(load_metadata):
-            metadata = load_metadata() or {}
-
-        get_history_scope = getattr(manager, "get_history_scope", None)
-        if not callable(get_history_scope):
-            get_history_scope = getattr(cache, "get_history_scope", None)
-        raw_history_scope = (
-            get_history_scope()
-            if callable(get_history_scope)
-            else metadata.get("history_scope", "unknown")
-        )
-        history_scope = str(raw_history_scope or "unknown").lower()
-        if history_scope not in {"unknown", "window", "all"}:
-            history_scope = "unknown"
-
-        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
-        if callable(get_covered_start_ms):
-            covered_start_ms = int(get_covered_start_ms() or 0)
-        else:
-            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
-        oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
-
-        if end_ms is None:
-            try:
-                end_ms = int(self.get_exchange_time())
-            except (AttributeError, TypeError, ValueError):
-                end_ms = None
-        blocking_gaps = self._pnl_blocking_known_gaps(
-            cache,
-            metadata=metadata,
-            start_ms=start_ms,
-            end_ms=end_ms,
-        )
-        if blocking_gaps:
-            gap = blocking_gaps[0]
-            return {
-                "ready": False,
-                "reason": "known_gap_overlaps_lookback",
-                "history_scope": history_scope,
-                "covered_start_ms": covered_start_ms,
-                "oldest_event_ts": oldest_event_ts,
-                "gap_start_ts": int(gap.get("start_ts", 0) or 0),
-                "gap_end_ts": int(gap.get("end_ts", 0) or 0),
-                "gap_reason": str(gap.get("reason", "unknown")),
-            }
-
-        if history_scope == "all":
-            return {
-                "ready": True,
-                "reason": "full_history",
-                "history_scope": history_scope,
-                "covered_start_ms": covered_start_ms,
-                "oldest_event_ts": oldest_event_ts,
-            }
-
-        if start_ms is None or (lookback is not None and getattr(lookback, "is_all", False)):
-            return {
-                "ready": False,
-                "reason": "full_history_scope_not_proven",
-                "history_scope": history_scope,
-                "covered_start_ms": covered_start_ms,
-                "oldest_event_ts": oldest_event_ts,
-            }
-
-        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
-            return {
-                "ready": True,
-                "reason": "window_covered",
-                "history_scope": history_scope,
-                "covered_start_ms": covered_start_ms,
-                "oldest_event_ts": oldest_event_ts,
-            }
-
-        return {
-            "ready": False,
-            "reason": "window_coverage_not_proven",
-            "history_scope": history_scope,
-            "covered_start_ms": covered_start_ms,
-            "oldest_event_ts": oldest_event_ts,
-        }
-
-    def _pnl_history_coverage_ready_for_risk(self) -> bool:
+    def _fill_history_coverage_ready(self) -> bool:
         try:
             lookback = parse_pnls_max_lookback_days(
                 self.live_value("pnls_max_lookback_days"),
@@ -1935,10 +1836,9 @@ class Passivbot:
             start_ms = lookback.fill_cache_age_limit_ms(now_ms)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
-        status = self._pnl_history_coverage_status(
+        status = self._fill_history_coverage_status(
             start_ms=start_ms,
             end_ms=now_ms,
-            lookback=lookback,
         )
         return bool(status.get("ready", False))
 
@@ -2024,49 +1924,6 @@ class Passivbot:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
 
     @staticmethod
-    def _pnl_gap_is_confirmed_legitimate(gap: dict) -> bool:
-        reason = str(gap.get("reason") or "").lower()
-        try:
-            confidence = float(gap.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            confidence = 0.0
-        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
-
-    @staticmethod
-    def _pnl_gap_overlaps(gap: dict, start_ms: Optional[int], end_ms: Optional[int]) -> bool:
-        try:
-            gap_start = int(gap.get("start_ts", 0) or 0)
-            gap_end = int(gap.get("end_ts", 0) or 0)
-        except (TypeError, ValueError):
-            return True
-        if gap_end <= gap_start:
-            return False
-        start = 0 if start_ms is None else int(start_ms)
-        end = (2**63 - 1) if end_ms is None else int(end_ms)
-        return gap_start < end and gap_end > start
-
-    def _pnl_blocking_known_gaps(
-        self,
-        cache,
-        *,
-        metadata: Optional[dict] = None,
-        start_ms: Optional[int],
-        end_ms: Optional[int],
-    ) -> list[dict]:
-        get_known_gaps = getattr(cache, "get_known_gaps", None)
-        known_gaps = (
-            list(get_known_gaps() or [])
-            if callable(get_known_gaps)
-            else list((metadata or {}).get("known_gaps", []) or [])
-        )
-        return [
-            gap
-            for gap in known_gaps
-            if not self._pnl_gap_is_confirmed_legitimate(gap)
-            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
-        ]
-
-    @staticmethod
     def _pnl_event_preview(events: Iterable[Any]) -> str:
         preview = ",".join(
             f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
@@ -2114,6 +1971,8 @@ class Passivbot:
             self._assert_pnl_history_coverage_for_risk(
                 context=context, start_ms=start_ms, end_ms=end_ms
             )
+        except FillEventCacheContractError:
+            raise
         except (RuntimeError, FillHistoryCoverageUnavailable) as exc:
             if not allow_incomplete:
                 raise
@@ -2131,34 +1990,34 @@ class Passivbot:
         start_ms: Optional[int],
         end_ms: Optional[int] = None,
     ) -> None:
-        cache = getattr(self._pnls_manager, "cache", None)
-        if cache is None:
-            raise RuntimeError(
-                f"{context}: fill history coverage unavailable; missing FillEventsManager cache"
-            )
-
         if end_ms is None:
             try:
                 end_ms = int(self.get_exchange_time())
             except (AttributeError, TypeError, ValueError):
                 end_ms = None
 
-        blocking_gaps = self._pnl_blocking_known_gaps(
-            cache,
-            start_ms=start_ms,
-            end_ms=end_ms,
-        )
-        if blocking_gaps:
-            gap = blocking_gaps[0]
+        status = self._fill_history_coverage_status(start_ms=start_ms, end_ms=end_ms)
+        reason = str(status.get("reason", "unknown"))
+        if reason in {"cache_metadata_event_mismatch", "malformed_known_gap"}:
+            raise FillEventCacheContractError(
+                f"{context}: fill history cache evidence is contradictory "
+                f"(reason={reason})"
+            )
+        if reason in {"missing_cache", "missing_coverage_api"}:
+            raise RuntimeError(
+                f"{context}: fill history coverage unavailable; "
+                f"missing FillEventsManager cache coverage API (reason={reason})"
+            )
+        if reason == "known_gap_overlaps_lookback":
             raise RuntimeError(
                 f"{context}: fill history gap overlaps risk lookback "
                 f"start={start_ms if start_ms is not None else 'all'} "
                 f"end={end_ms if end_ms is not None else 'latest'} "
-                f"gap={int(gap.get('start_ts', 0) or 0)}-{int(gap.get('end_ts', 0) or 0)} "
-                f"reason={gap.get('reason', 'unknown')}"
+                f"gap={int(status.get('gap_start_ts', 0) or 0)}-"
+                f"{int(status.get('gap_end_ts', 0) or 0)} "
+                f"reason={status.get('gap_reason', 'unknown')}"
             )
 
-        status = self._pnl_history_coverage_status(start_ms=start_ms, end_ms=end_ms)
         if bool(status.get("ready", False)):
             return
         history_scope = str(status.get("history_scope", "unknown"))
@@ -12486,10 +12345,9 @@ class Passivbot:
             # lookback before fill-dependent planning.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
-            coverage_status = self._pnl_history_coverage_status(
+            coverage_status = self._fill_history_coverage_status(
                 start_ms=age_limit,
                 end_ms=self.get_exchange_time(),
-                lookback=lookback,
             )
             coverage_ready = bool(coverage_status.get("ready", False))
             needs_full_refresh = lookback.is_all and not coverage_ready
@@ -12707,10 +12565,9 @@ class Passivbot:
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             self._last_fill_refresh_degraded_pnl_count = len(degraded_pnl_events)
             pnls_safe = not pending_pnl_events and not degraded_pnl_events
-            post_refresh_coverage_status = self._pnl_history_coverage_status(
+            post_refresh_coverage_status = self._fill_history_coverage_status(
                 start_ms=age_limit,
                 end_ms=self.get_exchange_time(),
-                lookback=lookback,
             )
             coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
             fills_ready = coverage_ready_after and (
@@ -15096,10 +14953,9 @@ class Passivbot:
                 "history_scope": "unknown",
             }
         else:
-            fill_coverage_status = self._pnl_history_coverage_status(
+            fill_coverage_status = self._fill_history_coverage_status(
                 start_ms=None if lookback_start is None else int(record_start_ts),
                 end_ms=int(ts_now),
-                lookback=lookback,
             )
         result = {
             "panic_flatten_events": panic_flatten_events,
