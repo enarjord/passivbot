@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Scope live fill-history readiness to enabled consumers: PnL risk keeps its configured lookback, entry cooldown proves only its structural-fill horizon, and bots without historical consumers use bounded recent ingestion.
+
 - Live fill-history coverage now has one canonical verdict owned by
   `FillEventsManager`. Refresh, staged readiness, HSL replay, and realized-PnL
   consumers no longer duplicate cache/gap interpretation. Metadata that claims

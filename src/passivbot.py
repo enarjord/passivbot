@@ -1947,14 +1947,47 @@ class Passivbot:
                 field_name="live.pnls_max_lookback_days",
             )
             now_ms = self.get_exchange_time()
-            start_ms = lookback.fill_cache_age_limit_ms(now_ms)
+            pnl_start_ms = lookback.fill_cache_age_limit_ms(now_ms)
+            coverage_required, start_ms = self._required_fill_history_start_ms(
+                now_ms, pnl_start_ms=pnl_start_ms
+            )
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
+        if not coverage_required:
+            return True
         status = self._fill_history_coverage_status(
             start_ms=start_ms,
             end_ms=now_ms,
         )
         return bool(status.get("ready", False))
+
+    @staticmethod
+    def _entry_cooldown_fill_lookback_minutes(cooldown_minutes: float) -> int:
+        if cooldown_minutes <= 0.0:
+            return 0
+        return 1 if cooldown_minutes < 1.0 else int(math.ceil(cooldown_minutes)) + 1
+
+    def _max_configured_entry_cooldown_minutes(self) -> float:
+        symbols: list[Optional[str]] = [None]
+        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
+        return max(
+            float(self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0)
+            for symbol in symbols
+            for pside in ("long", "short")
+        )
+
+    def _required_fill_history_start_ms(
+        self, now_ms: int, *, pnl_start_ms: Optional[int]
+    ) -> tuple[bool, Optional[int]]:
+        """Return whether planning needs historical coverage and its earliest timestamp."""
+        if self._live_risk_uses_authoritative_pnl():
+            return True, pnl_start_ms
+        cooldown_lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
+            self._max_configured_entry_cooldown_minutes()
+        )
+        if cooldown_lookback_minutes <= 0:
+            return False, None
+        return True, max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
 
     def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
         try:
@@ -12513,7 +12546,12 @@ class Passivbot:
                 lookback_config_value,
                 field_name="live.pnls_max_lookback_days",
             )
-            age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+            exchange_time_ms = self.get_exchange_time()
+            pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
+            coverage_required, age_limit = self._required_fill_history_start_ms(
+                exchange_time_ms,
+                pnl_start_ms=pnl_age_limit,
+            )
 
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
@@ -12587,20 +12625,35 @@ class Passivbot:
             # lookback before fill-dependent planning.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
-            coverage_status = self._fill_history_coverage_status(
-                start_ms=age_limit,
-                end_ms=self.get_exchange_time(),
+            if coverage_required:
+                coverage_status = self._fill_history_coverage_status(
+                    start_ms=age_limit,
+                    end_ms=exchange_time_ms,
+                )
+                coverage_ready = bool(coverage_status.get("ready", False))
+            else:
+                coverage_status = {
+                    "ready": True,
+                    "reason": "historical_coverage_not_required",
+                    "history_scope": "recent",
+                    "covered_start_ms": 0,
+                    "oldest_event_ts": 0,
+                }
+                coverage_ready = True
+            needs_full_refresh = (
+                coverage_required and age_limit is None and not coverage_ready
             )
-            coverage_ready = bool(coverage_status.get("ready", False))
-            needs_full_refresh = lookback.is_all and not coverage_ready
-            needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            needs_lookback_refresh = (
+                coverage_required and age_limit is not None and not coverage_ready
+            )
             fill_fetch_completed = False
             degraded_repair_attempted = False
             history_scope = str(coverage_status.get("history_scope", "unknown"))
             degraded_before = [
                 event
                 for event in FillEventsManager.degraded_pnl_events(events)
-                if age_limit is None or int(event.timestamp) >= int(age_limit)
+                if pnl_age_limit is None
+                or int(event.timestamp) >= int(pnl_age_limit)
             ]
             repair_degraded = getattr(
                 self._pnls_manager, "refresh_degraded_pnl_events", None
@@ -12614,7 +12667,9 @@ class Passivbot:
                 degraded_repair_attempted = True
                 try:
                     await repair_degraded(
-                        start_ms=None if age_limit is None else int(age_limit),
+                        start_ms=(
+                            None if pnl_age_limit is None else int(pnl_age_limit)
+                        ),
                         end_ms=int(self.get_exchange_time()),
                     )
                 finally:
@@ -12737,7 +12792,7 @@ class Passivbot:
                     # widening is reserved for the nonblocking trailing
                     # recovery prefetch.
                     recovery_start_ms = (
-                        self._trailing_fill_history_recovery_start_ms(age_limit)
+                        self._trailing_fill_history_recovery_start_ms(pnl_age_limit)
                         if trailing_recovery_refresh
                         else None
                     )
@@ -12760,6 +12815,22 @@ class Passivbot:
                             start_ms=int(recovery_start_ms),
                             end_ms=None,
                         )
+                    elif not coverage_required and before_events_count == 0:
+                        refresh_mode = "incremental_bounded"
+                        bounded_start_ms = max(
+                            0,
+                            int(exchange_time_ms)
+                            - int(overlap_minutes * 60 * 1000),
+                        )
+                        await self._pnls_manager.refresh(
+                            start_ms=bounded_start_ms,
+                            end_ms=None,
+                        )
+                        cache = getattr(self._pnls_manager, "cache", None)
+                        mark_covered_start = getattr(cache, "mark_covered_start", None)
+                        if callable(mark_covered_start):
+                            mark_covered_start(bounded_start_ms)
+                        self._pnls_manager.set_history_scope("window")
                     else:
                         await self._pnls_manager.refresh_latest(
                             overlap=20,
@@ -12802,16 +12873,23 @@ class Passivbot:
             degraded_pnl_events = [
                 event
                 for event in FillEventsManager.degraded_pnl_events(all_events)
-                if age_limit is None or int(event.timestamp) >= int(age_limit)
+                if pnl_age_limit is None
+                or int(event.timestamp) >= int(pnl_age_limit)
             ]
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             self._last_fill_refresh_degraded_pnl_count = len(degraded_pnl_events)
             pnls_safe = not pending_pnl_events and not degraded_pnl_events
-            post_refresh_coverage_status = self._fill_history_coverage_status(
-                start_ms=age_limit,
-                end_ms=self.get_exchange_time(),
-            )
-            coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
+            if coverage_required:
+                post_refresh_coverage_status = self._fill_history_coverage_status(
+                    start_ms=age_limit,
+                    end_ms=self.get_exchange_time(),
+                )
+                coverage_ready_after = bool(
+                    post_refresh_coverage_status.get("ready", False)
+                )
+            else:
+                post_refresh_coverage_status = dict(coverage_status)
+                coverage_ready_after = True
             fills_ready = coverage_ready_after and (
                 pnls_safe or not authoritative_pnl_required
             )
@@ -13226,8 +13304,8 @@ class Passivbot:
 
         if now_ms is None:
             now_ms = int(self.get_exchange_time())
-        lookback_minutes = (
-            1 if max_cooldown_minutes < 1.0 else int(math.ceil(max_cooldown_minutes)) + 1
+        lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
+            max_cooldown_minutes
         )
         start_ms = max(0, int(now_ms) - lookback_minutes * 60_000)
         events = self._pnls_manager.get_events(start_ms=start_ms)
