@@ -4169,42 +4169,73 @@ class CandlestickManager:
                 def intersect_missing(
                     masks: Iterable[Tuple[int, int]],
                 ) -> List[Tuple[int, int]]:
+                    missing_sorted = merge_spans(missing)
+                    masks_sorted = merge_spans(masks)
                     intersections: List[Tuple[int, int]] = []
-                    for missing_start, missing_end in missing:
-                        for mask_start, mask_end in masks:
-                            overlap_start = max(int(missing_start), int(mask_start))
-                            overlap_end = min(int(missing_end), int(mask_end))
-                            if overlap_start <= overlap_end:
-                                intersections.append((overlap_start, overlap_end))
-                    return merge_spans(intersections)
+                    missing_index = 0
+                    mask_index = 0
+                    while (
+                        missing_index < len(missing_sorted)
+                        and mask_index < len(masks_sorted)
+                    ):
+                        missing_start, missing_end = missing_sorted[missing_index]
+                        mask_start, mask_end = masks_sorted[mask_index]
+                        overlap_start = max(missing_start, mask_start)
+                        overlap_end = min(missing_end, mask_end)
+                        if overlap_start <= overlap_end:
+                            intersections.append((overlap_start, overlap_end))
+                        if missing_end < mask_end:
+                            missing_index += 1
+                        else:
+                            mask_index += 1
+                    return intersections
 
                 def subtract_spans(
                     source: Iterable[Tuple[int, int]],
                     masks: Iterable[Tuple[int, int]],
                 ) -> List[Tuple[int, int]]:
-                    remaining = list(source)
-                    for mask_start, mask_end in merge_spans(masks):
-                        next_remaining: List[Tuple[int, int]] = []
-                        for span_start, span_end in remaining:
-                            if mask_end < span_start or mask_start > span_end:
-                                next_remaining.append((span_start, span_end))
+                    source_sorted = merge_spans(source)
+                    masks_sorted = merge_spans(masks)
+                    remaining: List[Tuple[int, int]] = []
+                    mask_index = 0
+                    for span_start, span_end in source_sorted:
+                        while (
+                            mask_index < len(masks_sorted)
+                            and masks_sorted[mask_index][1] < span_start
+                        ):
+                            mask_index += 1
+                        cursor = span_start
+                        scan_index = mask_index
+                        while (
+                            scan_index < len(masks_sorted)
+                            and masks_sorted[scan_index][0] <= span_end
+                        ):
+                            mask_start, mask_end = masks_sorted[scan_index]
+                            if mask_end < cursor:
+                                scan_index += 1
                                 continue
-                            if span_start < mask_start:
-                                next_remaining.append(
-                                    (span_start, mask_start - ONE_MIN_MS)
+                            if mask_start > cursor:
+                                remaining.append(
+                                    (cursor, min(span_end, mask_start - ONE_MIN_MS))
                                 )
-                            if mask_end < span_end:
-                                next_remaining.append(
-                                    (mask_end + ONE_MIN_MS, span_end)
-                                )
-                        remaining = next_remaining
-                    return merge_spans(remaining)
+                            cursor = max(cursor, mask_end + ONE_MIN_MS)
+                            if cursor > span_end:
+                                break
+                            scan_index += 1
+                        if cursor <= span_end:
+                            remaining.append((cursor, span_end))
+                        mask_index = scan_index
+                    return remaining
 
                 verified_masks: List[Tuple[int, int]] = []
                 deferred_masks: List[Tuple[int, int]] = []
+                combined_ts = combined["ts"].astype(np.int64, copy=False)
                 for gap in known_gaps:
                     gap_start = int(gap["start_ts"])
                     gap_end = int(gap["end_ts"])
+                    if gap_end < start_ts or gap_start > end_ts:
+                        continue
+                    clipped_gap = (max(gap_start, start_ts), min(gap_end, end_ts))
                     reason = str(gap.get("reason", GAP_REASON_AUTO))
                     if reason == GAP_REASON_NO_TRADES:
                         # A continuity candle needs real price on both sides.
@@ -4212,16 +4243,20 @@ class CandlestickManager:
                         # candle can replace them authoritatively.
                         if gap_end >= end_ts:
                             continue
-                        prior = combined[combined["ts"] < gap_start]
-                        if prior.size == 0:
+                        prior_index = int(
+                            np.searchsorted(combined_ts, gap_start, side="left")
+                        )
+                        if prior_index == 0:
                             prior_ts = self._latest_cached_ts_before(
                                 symbol, gap_start, timeframe=tf_norm
                             )
                             if prior_ts is None:
                                 continue
-                        successor = combined[combined["ts"] > gap_end]
-                        if successor.size:
-                            verified_masks.append((gap_start, gap_end))
+                        successor_index = int(
+                            np.searchsorted(combined_ts, gap_end, side="right")
+                        )
+                        if successor_index < combined_ts.size:
+                            verified_masks.append(clipped_gap)
                         continue
 
                     retry_due = self._should_retry_gap(gap, now_ms=ts_now)
@@ -4234,7 +4269,7 @@ class CandlestickManager:
                     ):
                         retry_due = True
                     if not retry_due:
-                        deferred_masks.append((gap_start, gap_end))
+                        deferred_masks.append(clipped_gap)
 
                 verified_no_trade_spans = intersect_missing(verified_masks)
                 deferred_missing_spans = intersect_missing(deferred_masks)

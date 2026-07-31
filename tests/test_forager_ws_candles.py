@@ -943,14 +943,76 @@ async def test_watcher_retirement_abandons_cancellation_resistant_task(
                 candle_ws._retire_watchers(bot, {symbol: task}), timeout=0.2
             )
         assert not task.done()
-        assert symbol in candle_ws._retiring_symbols(bot)
+        assert candle_ws._watcher_is_retiring(bot, symbol, task)
         assert "websocket watcher cancellation grace expired" in caplog.text
     finally:
         release.set()
         await asyncio.wait_for(task, timeout=1.0)
         await asyncio.sleep(0)
 
-    assert symbol not in candle_ws._retiring_symbols(bot)
+    assert not candle_ws._watcher_is_retiring(bot, symbol, task)
+
+
+@pytest.mark.asyncio
+async def test_resistant_old_watcher_does_not_retire_replacement(monkeypatch):
+    monkeypatch.setattr(candle_ws, "_WATCHER_RETIRE_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(candle_ws, "_WATCHER_CANCEL_GRACE_SECONDS", 0.01)
+    release_old = asyncio.Event()
+    replacement_waiting = asyncio.Event()
+    ingested = asyncio.Event()
+
+    async def resistant_old_watcher():
+        while not release_old.is_set():
+            try:
+                await release_old.wait()
+            except asyncio.CancelledError:
+                continue
+
+    class _ReplacementCCP:
+        def __init__(self):
+            self.calls = 0
+
+        async def watch_ohlcv(self, _symbol, _timeframe):
+            self.calls += 1
+            if self.calls == 1:
+                return [[ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0]]
+            await replacement_waiting.wait()
+            return []
+
+        async def un_watch_ohlcv(self, _symbol, _timeframe):
+            return None
+
+    symbol = "REENTERED/USDT:USDT"
+    old_task = asyncio.create_task(resistant_old_watcher())
+    bot = SimpleNamespace(
+        ccp=_ReplacementCCP(),
+        cm=SimpleNamespace(
+            ingest_live_ws_ohlcv=lambda *_args: ingested.set(),
+            clear_live_ws_ohlcv_state=lambda _symbol: None,
+        ),
+        stop_signal_received=False,
+    )
+
+    try:
+        await candle_ws._retire_watchers(bot, {symbol: old_task})
+        replacement = asyncio.create_task(
+            candle_ws.watch_forager_ws_symbol(bot, symbol)
+        )
+        await asyncio.wait_for(ingested.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        assert candle_ws._watcher_is_retiring(bot, symbol, old_task)
+        assert not candle_ws._watcher_is_retiring(bot, symbol, replacement)
+        assert not replacement.done()
+    finally:
+        if "replacement" in locals():
+            replacement.cancel()
+            await asyncio.gather(replacement, return_exceptions=True)
+        release_old.set()
+        await asyncio.wait_for(old_task, timeout=1.0)
+        await asyncio.sleep(0)
+
+    assert not candle_ws._watcher_is_retiring(bot, symbol, old_task)
 
 
 @pytest.mark.asyncio

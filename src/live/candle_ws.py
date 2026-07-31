@@ -130,12 +130,32 @@ async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
         return False
 
 
-def _retiring_symbols(bot: Any) -> set[str]:
-    retiring = getattr(bot, "_forager_ws_retiring_symbols", None)
-    if not isinstance(retiring, set):
-        retiring = set()
-        bot._forager_ws_retiring_symbols = retiring
+def _retiring_watcher_tasks(bot: Any) -> dict[str, set[asyncio.Task]]:
+    retiring = getattr(bot, "_forager_ws_retiring_watchers", None)
+    if not isinstance(retiring, dict):
+        retiring = {}
+        bot._forager_ws_retiring_watchers = retiring
     return retiring
+
+
+def _watcher_is_retiring(bot: Any, symbol: str, task: asyncio.Task | None) -> bool:
+    if task is None:
+        return False
+    return task in _retiring_watcher_tasks(bot).get(symbol, set())
+
+
+def _mark_watcher_retiring(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    _retiring_watcher_tasks(bot).setdefault(symbol, set()).add(task)
+
+
+def _clear_watcher_retiring(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    retiring = _retiring_watcher_tasks(bot)
+    symbol_tasks = retiring.get(symbol)
+    if not symbol_tasks:
+        return
+    symbol_tasks.discard(task)
+    if not symbol_tasks:
+        retiring.pop(symbol, None)
 
 
 async def _retire_watcher(bot: Any, symbol: str, task: asyncio.Task) -> None:
@@ -158,9 +178,9 @@ async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
     if not active:
         return
     symbols = sorted(active)
-    retiring = _retiring_symbols(bot)
-    retiring.update(symbols)
-    abandoned_symbols: set[str] = set()
+    for symbol, task in active.items():
+        _mark_watcher_retiring(bot, symbol, task)
+    abandoned_tasks: dict[str, asyncio.Task] = {}
 
     def consume_done(done_tasks) -> None:
         for done_task in done_tasks:
@@ -192,33 +212,38 @@ async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
                 )
                 consume_done(cancelled)
                 resistant_set = set(resistant)
-                abandoned_symbols = {
-                    symbol
+                abandoned_tasks = {
+                    symbol: task
                     for symbol, task in active.items()
                     if task in resistant_set
                 }
-                if abandoned_symbols:
+                if abandoned_tasks:
                     logging.warning(
                         "[candle] websocket watcher cancellation grace expired "
                         "| symbols=%d action=abandon_pending",
-                        len(abandoned_symbols),
+                        len(abandoned_tasks),
                     )
-                    for symbol in abandoned_symbols:
-                        active[symbol].add_done_callback(
-                            lambda _task, symbol=symbol: retiring.discard(symbol)
+                    for symbol, task in abandoned_tasks.items():
+                        task.add_done_callback(
+                            lambda done_task, symbol=symbol: _clear_watcher_retiring(
+                                bot, symbol, done_task
+                            )
                         )
     finally:
-        retiring.difference_update(set(symbols) - abandoned_symbols)
+        for symbol, task in active.items():
+            if abandoned_tasks.get(symbol) is not task:
+                _clear_watcher_retiring(bot, symbol, task)
 
 
 async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
     """Watch one symbol and pass only validated finalized rows to the manager."""
     consecutive_failures = 0
+    watcher_task = asyncio.current_task()
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
-                if symbol in _retiring_symbols(bot):
+                if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
@@ -234,7 +259,7 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if symbol in _retiring_symbols(bot):
+                if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
                 consecutive_failures += 1
                 delay_s = reconnect_delay_seconds(consecutive_failures)
@@ -267,7 +292,7 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     stage="forager_ws_candle_reconnect",
                 )
     finally:
-        if symbol not in _retiring_symbols(bot):
+        if not _watcher_is_retiring(bot, symbol, watcher_task):
             await _best_effort_unwatch(bot, symbol)
 
 
