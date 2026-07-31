@@ -78,6 +78,13 @@
     contradictory cache evidence: they are unavailable rather than proof of
     coverage. A window with no fills remains valid when zero oldest/newest metadata
     and `covered_start_ms` prove that empty result.
+12. Live coverage requirements follow the enabled consumer. Realized-PnL risk
+    features require the configured PnL lookback and authoritative PnL quality.
+    Entry cooldown without a PnL consumer requires structural fill coverage only
+    across its maximum configured cooldown horizon. Trailing reconstruction retains
+    its symbol/position-side confirmation and bounded recovery. With no historical
+    consumer enabled, routine ingestion starts from a bounded recent fetch rather
+    than proving an unrelated PnL window.
 
 ## Runtime Provenance
 
