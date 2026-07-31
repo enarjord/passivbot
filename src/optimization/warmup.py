@@ -4,13 +4,18 @@ from collections import Counter
 from copy import deepcopy
 from typing import Sequence
 
+from backtest_universe import backtest_side_enabled
 from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path
 from config.shared_bot import flatten_shared_bot_side
 from optimizer_overrides import optimizer_overrides
 from optimization.bounds import Bound, enforce_bounds
-from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
+from optimization.config_adapter import (
+    extract_bounds_tuple_list_from_config,
+    get_optimization_key_paths,
+    resolve_optimization_bound_path,
+)
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.shape import build_optimization_shape
 from warmup_utils import compute_per_coin_warmup_minutes
@@ -229,24 +234,62 @@ def build_optimizer_max_config(config: dict) -> dict:
     )
 
 
-def compute_optimizer_per_coin_warmup_minutes(config: dict) -> dict:
+def _build_optimizer_boundary_configs(config: dict) -> list[dict]:
     anchor_plan = get_anchor_plan(config)
-    if anchor_plan is not None:
-        shape = build_optimization_shape(config)
-        overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
-        tunable_max_vector = [bound.high for bound in shape.bounds[1:]]
+    if anchor_plan is None:
+        return [build_optimizer_max_config(config)]
+    shape = build_optimization_shape(config)
+    overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
+    tunable_max_vector = [bound.high for bound in shape.bounds[1:]]
+    return [
+        build_optimizer_vector_config(
+            [float(anchor_id), *tunable_max_vector],
+            config,
+            key_paths=shape.key_paths,
+            overrides_list=overrides_list,
+        )
+        for anchor_id in range(len(anchor_plan.get("anchors") or []))
+    ]
+
+
+def build_optimizer_data_config(config: dict) -> dict:
+    """Return a copy whose side gates cover every optimizer-reachable side."""
+    boundary_configs = _build_optimizer_boundary_configs(config)
+    if not boundary_configs:
+        return deepcopy(config)
+    data_config = deepcopy(config)
+    for pside in ("long", "short"):
+        source = next(
+            (
+                candidate
+                for candidate in boundary_configs
+                if backtest_side_enabled(candidate, pside)
+            ),
+            boundary_configs[0],
+        )
+        for field in ("n_positions", "total_wallet_exposure_limit"):
+            path = resolve_optimization_bound_path(data_config, f"{pside}_{field}")
+            if path is None:
+                raise KeyError(f"optimizer data side gate does not resolve: {pside}_{field}")
+            value = _try_get_path(source, path)
+            if value is None:
+                raise KeyError(
+                    f"optimizer data side gate is missing from boundary config: {'.'.join(path)}"
+                )
+            _set_path(data_config, path, deepcopy(value))
+    _refresh_shared_bot_runtime_aliases(data_config)
+    return data_config
+
+
+def compute_optimizer_per_coin_warmup_minutes(config: dict) -> dict:
+    boundary_configs = _build_optimizer_boundary_configs(config)
+    if len(boundary_configs) > 1:
         merged: dict[str, int] = {}
-        for anchor_id in range(len(anchor_plan.get("anchors") or [])):
-            anchor_config = build_optimizer_vector_config(
-                [float(anchor_id), *tunable_max_vector],
-                config,
-                key_paths=shape.key_paths,
-                overrides_list=overrides_list,
-            )
-            for key, value in compute_per_coin_warmup_minutes(anchor_config).items():
+        for boundary_config in boundary_configs:
+            for key, value in compute_per_coin_warmup_minutes(boundary_config).items():
                 merged[key] = max(int(value), int(merged.get(key, 0)))
         return merged
-    return compute_per_coin_warmup_minutes(build_optimizer_max_config(config))
+    return compute_per_coin_warmup_minutes(boundary_configs[0])
 
 
 def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
@@ -275,6 +318,7 @@ def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> 
 
 
 __all__ = [
+    "build_optimizer_data_config",
     "build_optimizer_max_config",
     "build_optimizer_vector_config",
     "canonicalize_dead_optimizer_params",

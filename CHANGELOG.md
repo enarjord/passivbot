@@ -9,6 +9,12 @@ All notable user-facing changes will be documented in this file.
   consumers no longer duplicate cache/gap interpretation. Metadata that claims
   missing cached rows and malformed known-gap bounds fail closed and trigger
   repair or deferral, while confirmed empty windows remain valid.
+- Prepared HLCV caches now key direction-agnostic candle data by the effective
+  long/short coin union, allowing long-only, short-only, and both-side runs with
+  matching data inputs to reuse one verified cache. Backtest artifacts report
+  the current run's side membership separately from cache-build provenance, and
+  optimizer data preparation derives reachable sides from optimization bounds
+  so fixed-bound starts and Pareto restarts resolve consistently.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
