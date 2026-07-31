@@ -151,7 +151,10 @@
    enters the urgent active-candle universe. Removal requests the CCXT Pro unsubscribe while the
    watcher still owns its pending `watch_ohlcv` future, lets that watcher consume the transport's
    unsubscribe wake-up, and uses cancellation only as a bounded fallback. Restart cleanup awaits
-   this owner-managed teardown before closing exchange clients.
+   this owner-managed teardown before closing exchange clients. Both the graceful wait and the
+   post-cancellation wait are bounded. A cancellation-resistant watcher is abandoned without
+   blocking reconciliation and remains marked retiring until it actually terminates, preventing
+   it from resuming ingestion beside its replacement.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing

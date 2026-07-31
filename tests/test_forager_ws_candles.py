@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -915,6 +916,41 @@ async def test_bulk_watcher_retirement_uses_one_supported_unsubscribe():
     ]
     assert ccp.single_calls == []
     assert all(task.done() and not task.cancelled() for task in tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_watcher_retirement_abandons_cancellation_resistant_task(
+    caplog, monkeypatch
+):
+    monkeypatch.setattr(candle_ws, "_WATCHER_RETIRE_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(candle_ws, "_WATCHER_CANCEL_GRACE_SECONDS", 0.01)
+    release = asyncio.Event()
+
+    async def resistant_watcher():
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    symbol = "RESISTANT/USDT:USDT"
+    task = asyncio.create_task(resistant_watcher())
+    bot = SimpleNamespace(ccp=SimpleNamespace())
+
+    try:
+        with caplog.at_level(logging.WARNING):
+            await asyncio.wait_for(
+                candle_ws._retire_watchers(bot, {symbol: task}), timeout=0.2
+            )
+        assert not task.done()
+        assert symbol in candle_ws._retiring_symbols(bot)
+        assert "websocket watcher cancellation grace expired" in caplog.text
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.sleep(0)
+
+    assert symbol not in candle_ws._retiring_symbols(bot)
 
 
 @pytest.mark.asyncio

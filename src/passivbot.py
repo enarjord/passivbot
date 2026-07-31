@@ -522,7 +522,7 @@ def _bounded_traceback_origin(exc: BaseException) -> str:
         return "unknown"
 
 
-def _bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
+def _bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
     """Return a durable frame chain without exception text, locals, or source lines."""
     exceptions: list[dict[str, Any]] = []
     visited: set[int] = set()
@@ -587,6 +587,21 @@ def _bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
         "includes_exception_text": False,
         "includes_locals": False,
     }
+
+
+def _bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
+    """Isolate optional traceback projection from the execution failure policy."""
+    try:
+        return _bounded_traceback_detail_inner(exc)
+    except BaseException:
+        return {
+            "exceptions": [],
+            "frame_count": 0,
+            "truncated": True,
+            "unavailable_reason": "projection_failed",
+            "includes_exception_text": False,
+            "includes_locals": False,
+        }
 
 
 def _bounded_runtime_stage(bot: Any) -> str:
@@ -8394,11 +8409,17 @@ class Passivbot:
             finally:
                 setattr(self, attr, None)
 
-        self._close_live_event_pipeline(timeout=2.0)
+        pipeline_closed = self._close_live_event_pipeline(timeout=2.0)
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             try:
-                publisher.close()
+                if pipeline_closed:
+                    publisher.close()
+                else:
+                    logging.warning(
+                        "[restart] monitor publisher close skipped "
+                        "| reason=event_pipeline_close_incomplete action=abandon_publisher"
+                    )
             except Exception as exc:
                 logging.warning(
                     "[restart] monitor publisher close failed | error_type=%s",

@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import hashlib
+import heapq
 import inspect
 import json
 import logging
@@ -3106,27 +3107,38 @@ class CandlestickManager:
                 )
             }
         )
+        starts = sorted(
+            (int(gap["start_ts"]), index)
+            for index, gap in enumerate(prepared)
+        )
+        active: list[tuple[int, int]] = []
+        start_index = 0
         normalized: List[GapEntry] = []
         for segment_start, next_start in zip(boundaries, boundaries[1:]):
             segment_end = int(next_start) - ONE_MIN_MS
             if segment_start > segment_end:
                 continue
-            active = [
-                (index, gap)
-                for index, gap in enumerate(prepared)
-                if int(gap["start_ts"]) <= segment_start
-                and int(gap["end_ts"]) >= segment_end
-            ]
+            while (
+                start_index < len(starts)
+                and starts[start_index][0] <= segment_start
+            ):
+                _start_ts, gap_index = starts[start_index]
+                terminal = int(
+                    str(prepared[gap_index].get("reason", GAP_REASON_AUTO))
+                    in _GAP_NON_EXPIRING_REASONS
+                )
+                # Highest proof class wins; within one class the later input
+                # retains the legacy last-write-wins behavior.
+                heapq.heappush(active, (-terminal, -gap_index))
+                start_index += 1
+            while active:
+                winner_index = -active[0][1]
+                if int(prepared[winner_index]["end_ts"]) >= segment_end:
+                    break
+                heapq.heappop(active)
             if not active:
                 continue
-            _index, winner = max(
-                active,
-                key=lambda item: (
-                    str(item[1].get("reason", GAP_REASON_AUTO))
-                    in _GAP_NON_EXPIRING_REASONS,
-                    item[0],
-                ),
-            )
+            winner = prepared[-active[0][1]]
             normalized.append(
                 {
                     **winner,

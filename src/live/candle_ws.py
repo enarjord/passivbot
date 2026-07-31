@@ -21,6 +21,8 @@ _SUBSCRIPTION_RECONCILE_SECONDS = 5.0
 _MAX_RECONNECT_DELAY_SECONDS = 30.0
 _FAILURES_BEFORE_COOLDOWN = 5
 _UNSTABLE_COOLDOWN_SECONDS = 300.0
+_WATCHER_RETIRE_GRACE_SECONDS = 3.0
+_WATCHER_CANCEL_GRACE_SECONDS = 1.0
 
 
 def reconnect_delay_seconds(consecutive_failures: int) -> float:
@@ -158,6 +160,16 @@ async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
     symbols = sorted(active)
     retiring = _retiring_symbols(bot)
     retiring.update(symbols)
+    abandoned_symbols: set[str] = set()
+
+    def consume_done(done_tasks) -> None:
+        for done_task in done_tasks:
+            if done_task.done() and not done_task.cancelled():
+                try:
+                    done_task.exception()
+                except BaseException:
+                    pass
+
     try:
         unwatched = await _best_effort_unwatch_many(bot, symbols)
         if not unwatched:
@@ -165,14 +177,38 @@ async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
                 *(_best_effort_unwatch(bot, symbol) for symbol in symbols),
                 return_exceptions=True,
             )
+        consume_done(task for task in active.values() if task.done())
         pending = [task for task in active.values() if not task.done()]
         if pending:
-            _, still_pending = await asyncio.wait(pending, timeout=3.0)
+            done, still_pending = await asyncio.wait(
+                pending, timeout=_WATCHER_RETIRE_GRACE_SECONDS
+            )
+            consume_done(done)
             for task in still_pending:
                 task.cancel()
-        await asyncio.gather(*active.values(), return_exceptions=True)
+            if still_pending:
+                cancelled, resistant = await asyncio.wait(
+                    still_pending, timeout=_WATCHER_CANCEL_GRACE_SECONDS
+                )
+                consume_done(cancelled)
+                resistant_set = set(resistant)
+                abandoned_symbols = {
+                    symbol
+                    for symbol, task in active.items()
+                    if task in resistant_set
+                }
+                if abandoned_symbols:
+                    logging.warning(
+                        "[candle] websocket watcher cancellation grace expired "
+                        "| symbols=%d action=abandon_pending",
+                        len(abandoned_symbols),
+                    )
+                    for symbol in abandoned_symbols:
+                        active[symbol].add_done_callback(
+                            lambda _task, symbol=symbol: retiring.discard(symbol)
+                        )
     finally:
-        retiring.difference_update(symbols)
+        retiring.difference_update(set(symbols) - abandoned_symbols)
 
 
 async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:

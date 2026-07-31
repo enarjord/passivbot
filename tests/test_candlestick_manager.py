@@ -3034,6 +3034,34 @@ def test_completed_candle_health_keeps_adjacent_unverified_minute_refreshable(tm
     assert report["refresh_needed"] is True
 
 
+def test_known_gap_normalization_scales_to_large_sparse_history(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MANYGAPS/USDT:USDT"
+    gap_count = 5_000
+    gaps = [
+        {
+            "start_ts": index * 2 * ONE_MIN_MS,
+            "end_ts": index * 2 * ONE_MIN_MS,
+            "retry_count": 1,
+            "reason": GAP_REASON_AUTO,
+            "added_at": 1,
+            "last_retry_at": 1,
+        }
+        for index in range(gap_count)
+    ]
+
+    started = time.perf_counter()
+    cm._save_known_gaps_enhanced(symbol, gaps, defer_index=True)
+    elapsed = time.perf_counter() - started
+
+    assert len(cm._get_known_gaps_enhanced(symbol)) == gap_count
+    assert elapsed < 2.0
+
+
 def test_completed_candle_health_defers_unknown_gap_until_retry_is_due(tmp_path):
     class _Ex:
         id = "kucoinfutures"

@@ -525,7 +525,9 @@ exception-chain frame sequence at normal logging levels so a rare failure remain
 without a DEBUG restart. The detail contains normalized file/function/line values but no exception
 text, locals, source lines, request URLs, or response payloads. The normal console keeps only the
 compact operator signature; its omission of the frame chain is a readability and volume decision,
-not a public/privacy boundary.
+not a public/privacy boundary. Traceback projection is entirely observability-only: hostile or
+malformed exception accessors produce a bounded `projection_failed` detail instead of replacing the
+original error, its counter update, restart-threshold handling, or backoff.
 
 Equivalent repeats use `health.summary` with the execution-error-burst reason. Its latest-failure
 fields are `latest_error_type`, optional `latest_status`, `latest_code`, and `latest_endpoint`; it

@@ -12940,6 +12940,44 @@ def test_bounded_traceback_detail_retains_exception_chain_without_values_or_loca
     assert "raise_cause" in str(detail)
 
 
+@pytest.mark.asyncio
+async def test_hostile_traceback_projection_does_not_replace_execution_failure(
+    monkeypatch,
+):
+    class HostileError(RuntimeError):
+        def __getattribute__(self, name):
+            if name in {"__traceback__", "__cause__", "__context__"}:
+                raise KeyboardInterrupt("projection trap")
+            return super().__getattribute__(name)
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot._health_errors = 0
+    bot.error_counts = []
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    monitor_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
+    bot.restart_bot = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    assert await bot._handle_execution_loop_failure(
+        HostileError("token=SECRET"), allow_time_sync_recovery=False
+    ) is True
+
+    assert bot._health_errors == 1
+    assert len(bot.error_counts) == 1
+    assert [event[0][0] for event in monitor_events] == [
+        "error.bot",
+        "error.bot.detail",
+    ]
+    detail = monitor_events[1][0][2]["traceback"]
+    assert detail["unavailable_reason"] == "projection_failed"
+    assert detail["truncated"] is True
+    assert "SECRET" not in str(monitor_events)
+
+
 def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint():
     bot = Passivbot.__new__(Passivbot)
 

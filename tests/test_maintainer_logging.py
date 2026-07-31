@@ -171,6 +171,37 @@ async def test_restart_cleanup_abandons_cancellation_resistant_maintainer(caplog
 
 
 @pytest.mark.asyncio
+async def test_restart_cleanup_skips_publisher_close_after_pipeline_timeout(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    closed_clients = []
+
+    class _Client:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            closed_clients.append(self.label)
+
+    class _Publisher:
+        def close(self):
+            raise AssertionError("publisher close must be skipped")
+
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Client("public")
+    bot.cca = _Client("private")
+    bot.monitor_publisher = _Publisher()
+    bot._close_live_event_pipeline = lambda **_kwargs: False
+
+    with caplog.at_level(logging.WARNING):
+        await bot.cleanup_for_restart()
+
+    assert closed_clients == ["public", "private"]
+    assert bot.monitor_publisher is None
+    assert "monitor publisher close skipped" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_shutdown_bot_redacts_close_failure_text(capsys):
     class _FailingBot:
         def stop_data_maintainers(self):

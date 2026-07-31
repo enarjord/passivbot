@@ -24,6 +24,11 @@ compact `error.bot` summary by incident id, while excluding exception text, loca
 URLs, payloads, and credentials. Existing rotation and retention limits bound this diagnostic data;
 its production does not depend on DEBUG logging.
 
+During an internal bot restart, a failed or timed-out event-pipeline close may leave its worker
+holding the publisher lock. The restart path therefore abandons that process-local publisher
+without calling its synchronous close; startup recovery owns any missing final checkpoint. This
+bounded observability fallback must not delay exchange-client closure or replacement-bot startup.
+
 Event sequences are monotonic within a monitor root, including across unclean restart. The startup
 watermark is the maximum of the manifest and checksummed segment recovery metadata. Never infer an
 envelope sequence from payload bytes or an invalid row.
