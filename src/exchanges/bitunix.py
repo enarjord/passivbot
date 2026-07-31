@@ -31,6 +31,30 @@ from passivbot import logging
 from utils import symbol_to_coin
 
 
+def apply_bitunix_endpoint_override(
+    config: dict, endpoint_override: Any | None
+) -> dict:
+    """Apply the native Bitunix REST override contract to a client config."""
+    resolved = dict(config)
+    if endpoint_override is None:
+        return resolved
+    unsupported_keys = set(endpoint_override.rest_url_overrides) - {"api"}
+    if unsupported_keys:
+        raise CustomEndpointConfigError(
+            "bitunix: unsupported REST URL override key(s): "
+            + ", ".join(sorted(unsupported_keys))
+            + "; use 'api' for the native REST base"
+        )
+    rest_urls = endpoint_override.apply_to_api_urls(
+        {"api": BitunixClient.REST_URL}
+    )
+    resolved["restUrl"] = rest_urls["api"]
+    headers = dict(resolved.get("headers") or {})
+    headers.update(endpoint_override.rest_extra_headers)
+    resolved["headers"] = headers
+    return resolved
+
+
 def _float(value: Any, *, field: str, default: float | None = None) -> float:
     if value in (None, ""):
         if default is not None:
@@ -86,6 +110,11 @@ class BitunixClient:
     TICKER_MAX_AGE_MS = 30_000
     TICKER_WAIT_SECONDS = 8.0
     MAX_DEPTH_FALLBACK_SYMBOLS = 8
+    # Bitunix does not expose fee rates through the trading-pairs endpoint.
+    # Use the documented VIP0 futures rates as conservative live-planning
+    # inputs; higher VIP tiers pay equal or lower fees.
+    DEFAULT_MAKER_FEE = 0.0002
+    DEFAULT_TAKER_FEE = 0.0006
     RESERVED_AUTH_HEADERS = frozenset({"api-key", "nonce", "timestamp", "sign"})
 
     has = {
@@ -233,7 +262,12 @@ class BitunixClient:
         text = f"Bitunix error {code_text}: {safe_message}"
         if code_text in {"403", "10003", "10004", "10007"}:
             raise AuthenticationError(text)
-        if code_text == "10001":
+        # The documented transport code is 10001. The live trading-pairs
+        # endpoint also emits code 1 with the same message; classify both as
+        # retryable network failures instead of permanent bad requests.
+        if code_text == "10001" or (
+            code_text == "1" and safe_message.strip().lower() == "network error"
+        ):
             raise NetworkError(text)
         if code_text in {"10005", "10006", "429"}:
             raise RateLimitExceeded(text)
@@ -306,9 +340,17 @@ class BitunixClient:
     async def load_markets(self, reload: bool = False) -> dict[str, dict]:
         if self.markets and not reload:
             return self.markets
-        rows = await self._request(
-            "GET", "/api/v1/futures/market/trading_pairs"
-        )
+        rows = None
+        for attempt in range(3):
+            try:
+                rows = await self._request(
+                    "GET", "/api/v1/futures/market/trading_pairs"
+                )
+                break
+            except NetworkError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.5 * (2**attempt))
         if not isinstance(rows, list):
             raise ValueError("Bitunix trading-pairs response is not a list")
         markets: dict[str, dict] = {}
@@ -360,6 +402,8 @@ class BitunixClient:
                 "contract": True,
                 "linear": True,
                 "inverse": False,
+                "maker": self.DEFAULT_MAKER_FEE,
+                "taker": self.DEFAULT_TAKER_FEE,
                 "active": (
                     str(row.get("symbolStatus") or "").upper() == "OPEN"
                     and row.get("isApiSupported") is True
@@ -1413,11 +1457,27 @@ class BitunixOrderStream:
 
     id = "bitunix"
     has = {"watchOrders": True}
+    PING_INTERVAL_SECONDS = 15.0
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
         self.options: dict[str, Any] = {}
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._last_ping_monotonic = time.monotonic()
+
+    async def _receive_with_keepalive(
+        self, ws: aiohttp.ClientWebSocketResponse
+    ) -> aiohttp.WSMessage:
+        """Receive one frame while satisfying Bitunix's JSON ping contract."""
+        while True:
+            elapsed = time.monotonic() - self._last_ping_monotonic
+            timeout = max(0.0, self.PING_INTERVAL_SECONDS - elapsed)
+            try:
+                return await asyncio.wait_for(ws.receive(), timeout=timeout)
+            except asyncio.TimeoutError:
+                ping_timestamp = int(time.time())
+                await ws.send_json({"op": "ping", "ping": ping_timestamp})
+                self._last_ping_monotonic = time.monotonic()
 
     def _login_payload(self) -> dict:
         if not self.rest.apiKey or not self.rest.secret:
@@ -1460,6 +1520,7 @@ class BitunixOrderStream:
                     raise AuthenticationError("Bitunix private websocket login failed")
                 break
         await ws.send_json({"op": "subscribe", "args": [{"ch": "order"}]})
+        self._last_ping_monotonic = time.monotonic()
         self._ws = ws
         return ws
 
@@ -1468,7 +1529,7 @@ class BitunixOrderStream:
         if ws is None or ws.closed:
             ws = await self._connect()
         while True:
-            message = await ws.receive()
+            message = await self._receive_with_keepalive(ws)
             if message.type == aiohttp.WSMsgType.TEXT:
                 payload = json.loads(message.data)
                 if payload.get("ch") != "order":
@@ -1528,22 +1589,9 @@ class BitunixBot(CCXTBot):
     def create_ccxt_sessions(self) -> None:
         ccxt_config = self._build_ccxt_config()
         ccxt_config["wsEnabled"] = bool(self.ws_enabled)
-        endpoint_override = getattr(self, "endpoint_override", None)
-        if endpoint_override is not None:
-            unsupported_keys = set(endpoint_override.rest_url_overrides) - {"api"}
-            if unsupported_keys:
-                raise CustomEndpointConfigError(
-                    "bitunix: unsupported REST URL override key(s): "
-                    + ", ".join(sorted(unsupported_keys))
-                    + "; use 'api' for the native REST base"
-                )
-            rest_urls = endpoint_override.apply_to_api_urls(
-                {"api": BitunixClient.REST_URL}
-            )
-            ccxt_config["restUrl"] = rest_urls["api"]
-            headers = dict(ccxt_config.get("headers") or {})
-            headers.update(endpoint_override.rest_extra_headers)
-            ccxt_config["headers"] = headers
+        ccxt_config = apply_bitunix_endpoint_override(
+            ccxt_config, getattr(self, "endpoint_override", None)
+        )
         self.cca = BitunixClient(ccxt_config)
         self.cca.options.update(self.user_info.get("options", {}))
         if self.ws_enabled:
@@ -1616,8 +1664,21 @@ class BitunixBot(CCXTBot):
                 )
 
     def set_market_specific_settings(self) -> None:
+        sizing_symbols = sorted(self.symbols_requiring_market_sizing())
+        for symbol in sizing_symbols:
+            market = self.markets_dict[symbol]
+            # Caches written by the initial native connector release predate
+            # fee metadata. Upgrade those records in memory so existing users
+            # do not need to delete a fresh markets cache manually.
+            if market.get("maker_fee") is None and market.get("maker") is None:
+                market["maker"] = BitunixClient.DEFAULT_MAKER_FEE
+            if market.get("taker_fee") is None and market.get("taker") is None:
+                market["taker"] = BitunixClient.DEFAULT_TAKER_FEE
         super().set_market_specific_settings()
-        for symbol in sorted(self.symbols_requiring_market_sizing()):
+        for symbol in sizing_symbols:
+            # Fail during initialization, before entering the execution loop,
+            # if native metadata ever stops providing mandatory planning fees.
+            self._get_exchange_fee_rates(symbol)
             raw = self.markets_dict[symbol].get("info") or {}
             max_leverage = _float(
                 raw.get("maxLeverage"), field=f"{symbol}.maxLeverage"

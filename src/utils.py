@@ -489,12 +489,12 @@ async def load_markets(
     quote=None,
 ) -> dict:
     """
-    Standalone helper to load and cache CCXT markets for a given exchange.
+    Standalone helper to load and cache markets for a given exchange.
 
     - Reads from caches/{exchange}/markets.json if fresh
-    - Otherwise fetches via ccxt, writes cache, and returns the markets dict
+    - Otherwise fetches through the exchange client, writes cache, and returns the markets dict
 
-    Returns a markets dictionary as provided by ccxt.
+    Returns a CCXT-compatible markets dictionary.
 
     Note: Uses the exchange name as-is (e.g., "binance" not "binanceusdm") for
     consistency with other cache paths (pnls, ohlcv, fill_events).
@@ -517,10 +517,29 @@ async def load_markets(
     except Exception as e:
         logging.error("Error loading %s: %s", markets_path, e)
 
-    # Fetch from exchange via ccxt
+    # Fetch from the exchange client.
     owned_cc = cc is None
     if owned_cc:
-        cc = load_ccxt_instance(ex, enable_rate_limit=True)
+        if ex == "bitunix":
+            # Bitunix is intentionally native because it is absent from CCXT.
+            # Standalone market preloads must use the same public REST client as
+            # the live bot so a cold cache cannot fall through to CCXT.
+            from exchanges.bitunix import (
+                BitunixClient,
+                apply_bitunix_endpoint_override,
+            )
+
+            client_config = apply_bitunix_endpoint_override(
+                {
+                    "enableRateLimit": True,
+                    "timeout": 60_000,
+                    "wsEnabled": False,
+                },
+                resolve_custom_endpoint_override(ex),
+            )
+            cc = BitunixClient(client_config)
+        else:
+            cc = load_ccxt_instance(ex, enable_rate_limit=True)
     try:
         markets = await cc.load_markets(True)
     except Exception as e:

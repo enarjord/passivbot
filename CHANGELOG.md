@@ -78,7 +78,10 @@ All notable user-facing changes will be documented in this file.
   WebSockets are explicitly disabled. The connector rejects invalid order quantities and
   case-insensitive authentication-header collisions, isolates malformed order-detail rows, retains
   synthetic ticker provenance, refreshes public ticker subscriptions as markets change, times
-  ticker-cache freshness locally, and reconciles malformed private-WebSocket rows.
+  ticker-cache freshness locally, reconciles malformed private-WebSocket rows, sends the venue's
+  JSON keepalive on idle private streams, supplies conservative documented VIP0 futures fees to
+  live planning, retries transient native market-discovery failures, and uses native public REST
+  market loading during cold-cache CLI startup instead of falling through to CCXT.
 - Fills sharing a single millisecond are now ordered by the position chain the exchange reports
   with each fill instead of by arbitrary response order. Hyperliquid executions retain their
   individual `startPosition` boundaries, and older coalesced cache rows are expanded back into those

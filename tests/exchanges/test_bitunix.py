@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,6 +52,8 @@ def _market():
         "id": "BTCUSDT",
         "symbol": "BTC/USDT:USDT",
         "active": True,
+        "maker": BitunixClient.DEFAULT_MAKER_FEE,
+        "taker": BitunixClient.DEFAULT_TAKER_FEE,
         "info": MARKET_ROW,
     }
 
@@ -197,6 +200,11 @@ def test_api_errors_map_to_ccxt_exception_contract(code, error_type):
         BitunixClient._raise_api_error(code, "test")
 
 
+def test_observed_code_one_network_envelope_is_retryable():
+    with pytest.raises(NetworkError, match="Network Error"):
+        BitunixClient._raise_api_error(1, "Network Error")
+
+
 @pytest.mark.asyncio
 async def test_load_markets_maps_base_quantity_and_tick_sizes():
     client = BitunixClient()
@@ -210,9 +218,27 @@ async def test_load_markets_maps_base_quantity_and_tick_sizes():
     assert market["linear"] is True
     assert market["active"] is True
     assert market["contractSize"] == 1.0
+    assert market["maker"] == pytest.approx(0.0002)
+    assert market["taker"] == pytest.approx(0.0006)
     assert market["precision"] == {"amount": 0.0001, "price": 0.1}
     assert market["limits"]["amount"]["min"] == pytest.approx(0.0001)
     assert market["limits"]["leverage"]["max"] == pytest.approx(125)
+
+
+@pytest.mark.asyncio
+async def test_load_markets_retries_observed_network_error(monkeypatch):
+    client = BitunixClient()
+    client._request = AsyncMock(
+        side_effect=[NetworkError("transient"), [MARKET_ROW]]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr("exchanges.bitunix.asyncio.sleep", sleep)
+
+    markets = await client.load_markets(True)
+
+    assert "BTC/USDT:USDT" in markets
+    assert client._request.await_count == 2
+    sleep.assert_awaited_once_with(0.5)
 
 
 @pytest.mark.asyncio
@@ -772,6 +798,45 @@ async def test_order_stream_surfaces_unenriched_row_when_detail_is_not_found():
 
 
 @pytest.mark.asyncio
+async def test_order_stream_sends_documented_json_ping_when_idle(monkeypatch):
+    client = _prepared_client()
+    stream = BitunixOrderStream(client)
+    stream._last_ping_monotonic = (
+        time.monotonic() - stream.PING_INTERVAL_SECONDS - 1.0
+    )
+    monkeypatch.setattr("exchanges.bitunix.time.time", lambda: 1_700_000_000.9)
+    order_message = SimpleNamespace(
+        type=aiohttp.WSMsgType.TEXT,
+        data=json.dumps(
+            {
+                "ch": "order",
+                "data": {
+                    "orderId": "order-1",
+                    "symbol": "BTCUSDT",
+                    "status": "FILLED",
+                },
+            }
+        ),
+    )
+    ws = SimpleNamespace(
+        closed=False,
+        receive=AsyncMock(return_value=order_message),
+        send_json=AsyncMock(),
+    )
+    stream._ws = ws
+    client.fetch_order = AsyncMock(
+        return_value={"id": "order-1", "symbol": "BTC/USDT:USDT"}
+    )
+
+    rows = await stream.watch_orders()
+
+    ws.send_json.assert_awaited_once_with(
+        {"op": "ping", "ping": 1_700_000_000}
+    )
+    assert rows == [{"id": "order-1", "symbol": "BTC/USDT:USDT"}]
+
+
+@pytest.mark.asyncio
 async def test_order_stream_isolates_malformed_rest_detail_to_its_row():
     client = _prepared_client()
     valid_order = client._normalize_order(_order_row(orderId="order-2"))
@@ -1215,6 +1280,30 @@ def test_native_session_rejects_unsupported_endpoint_url_keys():
 
     with pytest.raises(CustomEndpointConfigError, match="unsupported REST URL override"):
         bot.create_ccxt_sessions()
+
+
+def test_market_settings_upgrade_legacy_cache_with_conservative_fees():
+    bot = build_contract_bot("bitunix")
+    symbol = "BTC/USDT:USDT"
+    market = {
+        **_market(),
+        "precision": {"amount": 0.0001, "price": 0.1},
+        "limits": {
+            "amount": {"min": 0.0001, "max": None},
+            "price": {"min": 0.1, "max": None},
+            "cost": {"min": None, "max": None},
+        },
+        "contractSize": 1.0,
+    }
+    market.pop("maker")
+    market.pop("taker")
+    bot.markets_dict = {symbol: market}
+    bot.eligible_symbols = {symbol}
+
+    bot.set_market_specific_settings()
+
+    assert bot.markets_dict[symbol]["maker"] == pytest.approx(0.0002)
+    assert bot.markets_dict[symbol]["taker"] == pytest.approx(0.0006)
 
 
 def test_bot_order_params_require_durable_hedge_semantics():
