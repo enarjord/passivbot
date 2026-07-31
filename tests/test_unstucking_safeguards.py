@@ -3166,6 +3166,22 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
             ),
             "collide under conversion identity",
         ),
+        (
+            _single_symbol_orchestrator_output(
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": 10**400,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "limit",
+                        "execution_priority": "ordinary",
+                    }
+                ]
+            ),
+            "invalid qty",
+        ),
     ],
 )
 async def test_orchestrator_invalid_output_emits_correlated_failed_return(

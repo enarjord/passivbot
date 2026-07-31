@@ -88,6 +88,24 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
     return {"orders": orders, "diagnostics": {"symbol_states": symbol_states}}
 
 
+def _raw_loss_gate_block(**overrides) -> dict:
+    block = {
+        "symbol_idx": 0,
+        "pside": "long",
+        "order_type": "close_auto_reduce_wel_long",
+        "qty": -1.0,
+        "price": 100.0,
+        "projected_pnl": -1.0,
+        "balance_before": 1_000.0,
+        "projected_balance_after": 999.0,
+        "balance_peak": 1_000.0,
+        "balance_floor": 900.0,
+        "max_realized_loss_pct": 0.1,
+    }
+    block.update(overrides)
+    return block
+
+
 def _raw_min_effective_cost_block(**overrides) -> dict:
     block = {
         "symbol_idx": 0,
@@ -329,7 +347,9 @@ def test_raw_rust_output_requires_orders_field():
         ({"pside": "both"}, "invalid pside"),
         ({"qty": 0.0}, "invalid qty"),
         ({"qty": float("nan")}, "invalid qty"),
+        ({"qty": 10**400}, "invalid qty"),
         ({"price": 0.0}, "invalid price"),
+        ({"price": 10**400}, "invalid price"),
         ({"order_type": ""}, "invalid order_type"),
         ({"order_type": "not_an_order_long"}, "invalid order_type"),
         ({"qty": -1.0}, "qty sign disagrees"),
@@ -395,6 +415,7 @@ def test_raw_rust_output_requires_complete_symbol_state_coverage():
         (["invalid"], "must be a mapping"),
         ([{"symbol_idx": 999}], "invalid symbol_idx"),
         ([{"symbol_idx": 0, "pside": "both"}], "invalid pside"),
+        ([_raw_loss_gate_block(projected_pnl=10**400)], "invalid projected_pnl"),
     ],
 )
 def test_raw_rust_output_rejects_malformed_loss_gate_diagnostics(
@@ -441,6 +462,14 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
             },
             "invalid balance",
         ),
+        (
+            {
+                "min_effective_cost_blocks": [
+                    _raw_min_effective_cost_block(balance=10**400)
+                ]
+            },
+            "invalid balance",
+        ),
         ({"forager_selections": {}}, "must be a list"),
         (
             {"forager_selections": [_raw_forager_selection(slots_to_fill="1")]},
@@ -474,6 +503,21 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
             "invalid score",
         ),
         (
+            {
+                "forager_selections": [
+                    _raw_forager_selection(
+                        top_scores=[
+                            {
+                                **_raw_forager_selection()["top_scores"][0],
+                                "score": 10**400,
+                            }
+                        ]
+                    )
+                ]
+            },
+            "invalid score",
+        ),
+        (
             {"forager_selections": [_raw_forager_selection(hysteresis_events={})]},
             "hysteresis_events must be a list",
         ),
@@ -491,6 +535,21 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
                 ]
             },
             "invalid kept_incumbent",
+        ),
+        (
+            {
+                "forager_selections": [
+                    _raw_forager_selection(
+                        hysteresis_events=[
+                            {
+                                **_raw_forager_selection()["hysteresis_events"][0],
+                                "score_gap": 10**400,
+                            }
+                        ]
+                    )
+                ]
+            },
+            "invalid score_gap",
         ),
     ],
 )

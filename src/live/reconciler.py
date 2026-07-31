@@ -990,14 +990,33 @@ def validate_rust_ideal_orders(ideal_orders: object) -> None:
             ) from exc
 
 
+def _validated_rust_finite_number(value: object, context: str) -> float:
+    error = f"Rust orchestrator {context}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FatalBotException(error)
+    try:
+        value_f = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise FatalBotException(error) from exc
+    if not math.isfinite(value_f):
+        raise FatalBotException(error)
+    return value_f
+
+
 def rust_order_conversion_identity(
     symbol_key: object, qty: object, price: object, order_type: object
 ) -> tuple[object, float, float, str]:
     """Return the identity for one order at the Rust-to-exchange conversion boundary."""
+    qty_f = _validated_rust_finite_number(
+        qty, "order conversion identity has invalid qty"
+    )
+    price_f = _validated_rust_finite_number(
+        price, "order conversion identity has invalid price"
+    )
     return (
         symbol_key,
-        abs(float(qty)),
-        float(price),
+        abs(qty_f),
+        price_f,
         str(order_type),
     )
 
@@ -1033,23 +1052,17 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid pside"
             )
-        qty = order.get("qty")
-        if (
-            isinstance(qty, bool)
-            or not isinstance(qty, (int, float))
-            or not math.isfinite(float(qty))
-            or float(qty) == 0.0
-        ):
+        qty = _validated_rust_finite_number(
+            order.get("qty"), f"order {order_idx} has invalid qty"
+        )
+        if qty == 0.0:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid qty"
             )
-        price = order.get("price")
-        if (
-            isinstance(price, bool)
-            or not isinstance(price, (int, float))
-            or not math.isfinite(float(price))
-            or float(price) <= 0.0
-        ):
+        price = _validated_rust_finite_number(
+            order.get("price"), f"order {order_idx} has invalid price"
+        )
+        if price <= 0.0:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid price"
             )
@@ -1060,9 +1073,7 @@ def validate_rust_orchestrator_output(
             )
         try:
             _pb_attr("pbr").order_type_snake_to_id(order_type)
-            order_side = determine_side_from_order_tuple(
-                (float(qty), float(price), order_type)
-            )
+            order_side = determine_side_from_order_tuple((qty, price, order_type))
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid order_type"
@@ -1071,7 +1082,7 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} order_type disagrees with pside"
             )
-        if (order_side == "buy") != (float(qty) > 0.0):
+        if (order_side == "buy") != (qty > 0.0):
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
@@ -1191,23 +1202,18 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid order_type"
             ) from exc
         for field in finite_fields:
-            value = block.get(field)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-            ):
+            value = _validated_rust_finite_number(
+                block.get(field),
+                f"loss_gate_block {block_idx} has invalid {field}",
+            )
+            if field == "qty" and value == 0.0:
                 raise FatalBotException(
-                    f"Rust orchestrator loss_gate_block {block_idx} has invalid {field}"
+                    f"Rust orchestrator loss_gate_block {block_idx} has invalid qty"
                 )
-        if float(block["qty"]) == 0.0:
-            raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} has invalid qty"
-            )
-        if float(block["price"]) <= 0.0:
-            raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
-            )
+            if field == "price" and value <= 0.0:
+                raise FatalBotException(
+                    f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
+                )
 
     def validate_diagnostic_symbol_idx(value: object, context: str) -> None:
         if (
@@ -1227,15 +1233,9 @@ def validate_rust_orchestrator_output(
         item: dict, fields: tuple[str, ...], context: str
     ) -> None:
         for field in fields:
-            value = item.get(field)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-            ):
-                raise FatalBotException(
-                    f"Rust orchestrator {context} has invalid {field}"
-                )
+            _validated_rust_finite_number(
+                item.get(field), f"{context} has invalid {field}"
+            )
 
     def validate_diagnostic_symbol_idx_list(value: object, context: str) -> None:
         if not isinstance(value, list):

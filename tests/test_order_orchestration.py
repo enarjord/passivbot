@@ -1677,6 +1677,23 @@ def test_to_executable_orders_uses_structured_conversion_identity():
     }
 
 
+def test_to_executable_orders_normalizes_identity_overflow_to_fatal():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+
+    order_type = "entry_initial_normal_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {
+        symbol: [
+            (10**400, 100.0, order_type, order_type_id, "limit", "ordinary"),
+        ]
+    }
+
+    with pytest.raises(FatalBotException, match="conversion identity has invalid qty"):
+        bot._to_executable_orders(ideal, {symbol: 100.0})
+
+
 @pytest.mark.asyncio
 async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
     symbol = "BTC/USDT"
