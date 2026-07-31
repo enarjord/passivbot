@@ -6069,14 +6069,10 @@ async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists(
-    monkeypatch,
-):
+async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists():
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
-    wall_ms = {"value": now_ms}
-    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: wall_ms["value"])
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
     cached_events = [
@@ -6155,11 +6151,6 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
         }
     }
     bot._authoritative_pending_confirmations = {}
-    bot._fill_coverage_retry_state = {
-        "key": ("stale",),
-        "retry_count": 3,
-        "next_retry_ms": now_ms + 60_000,
-    }
     bot._trailing_fill_fetch_generation = 7
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
     bot.init_pnls = AsyncMock()
@@ -6178,19 +6169,11 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._last_fill_refresh_pending_pnl_count == 0
+    assert bot._last_fill_refresh_block_reason == "fill_history_coverage"
     ledger = getattr(bot, "freshness_ledger", None)
     assert ledger is None or ledger.surface_signature("fills") is None
     assert bot._trailing_fill_fetch_generation == 7
-    retry_state = getattr(bot, "_fill_coverage_retry_state", {})
-    assert retry_state["next_retry_ms"] > wall_ms["value"]
 
-    result = await bot.update_pnls(source="staged_blocking")
-
-    assert result is False
-    bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
-    assert bot._trailing_fill_fetch_generation == 7
-
-    wall_ms["value"] = int(retry_state["next_retry_ms"]) + 1
     result = await bot.update_pnls(source="staged_blocking")
 
     assert result is False
@@ -6300,7 +6283,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot.freshness_ledger.surface_signature("fills") is not None
-    assert getattr(bot, "_fill_coverage_retry_state", {}) == {}
+    assert bot._last_fill_refresh_block_reason is None
 
 
 @pytest.mark.asyncio
@@ -7904,6 +7887,36 @@ async def test_refresh_authoritative_state_staged_does_not_blame_nonblocking_pnl
     assert bot._last_authoritative_block_reason is None
     assert bot._last_authoritative_pending_pnl_count == 1
     assert bot._last_authoritative_degraded_pnl_count == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_classifies_unproven_fill_coverage():
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot._last_fill_refresh_block_reason = "fill_history_coverage"
+    bot._authoritative_staged_refresh_plan = lambda: {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": 100.0,
+            "positions": [{"symbol": "BTC/USDT:USDT"}],
+            "open_orders": [],
+            "pnls_ok": False,
+            "pending_pnl_count": 0,
+            "degraded_pnl_count": 0,
+        }
+    )
+
+    result = await bot._refresh_authoritative_state_staged()
+
+    assert result is False
+    assert bot._last_authoritative_block_reason == "fill_history_coverage"
+    assert bot._last_authoritative_pending_pnl_count == 0
+    assert bot._last_authoritative_degraded_pnl_count == 0
 
 
 @pytest.mark.asyncio
@@ -12093,6 +12106,79 @@ async def test_run_execution_loop_waits_on_degraded_pnl_without_restart():
     ]
     assert len(degraded_events) == 3
     assert all(event["data"]["degraded_pnl_count"] == 1 for event in degraded_events)
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_waits_on_fill_coverage_without_restart():
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    sleeps = []
+
+    async def fake_sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        if cycle["n"] <= 12:
+            bot._last_authoritative_block_reason = "fill_history_coverage"
+            bot._last_authoritative_pending_pnl_count = 0
+            bot._last_authoritative_degraded_pnl_count = 0
+            return False
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.prepare_planning_universe = AsyncMock()
+    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
+    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 13})
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"executed_cycle": 13}
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert [seconds for seconds, _stage in sleeps] == [
+        30.0,
+        60.0,
+        120.0,
+        240.0,
+        300.0,
+        300.0,
+        300.0,
+        300.0,
+        300.0,
+        300.0,
+        300.0,
+        300.0,
+    ]
+    assert {stage for _seconds, stage in sleeps} == {"fill_history_coverage_retry"}
+    coverage_events = [
+        call.kwargs
+        for call in bot._emit_live_cycle_degraded.call_args_list
+        if call.kwargs["reason_code"] == "fill_history_coverage_unavailable"
+    ]
+    assert len(coverage_events) == 12
 
 
 @pytest.mark.asyncio

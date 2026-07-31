@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Prevent unproven fill-history coverage from consuming the generic live restart budget; one execution-loop backoff now owns coverage retries while planning remains fail-closed.
+
 - Live fill-history coverage now has one canonical verdict owned by
   `FillEventsManager`. Refresh, staged readiness, HSL replay, and realized-PnL
   consumers no longer duplicate cache/gap interpretation. Metadata that claims
