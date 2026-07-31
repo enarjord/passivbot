@@ -166,6 +166,7 @@ def build_hlcvs_manifest(
         }
 
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    build_side_membership = _side_membership(config, coins)
     manifest = {
         "schema_version": HLCVS_MANIFEST_SCHEMA_VERSION,
         "materialization_schema_version": HLCVS_MATERIALIZATION_SCHEMA_VERSION,
@@ -185,7 +186,10 @@ def build_hlcvs_manifest(
         },
         "effective": {
             "coins": list(coins),
-            "side_membership": _side_membership(config, coins),
+            # Side eligibility is run-specific and is not part of the content-cache key.
+            # Keep the build request for explicit dataset replay and provenance.
+            "build_side_membership": build_side_membership,
+            "side_membership": build_side_membership,
             "start_ts": effective_start_ts,
             "end_ts": effective_end_ts,
         },

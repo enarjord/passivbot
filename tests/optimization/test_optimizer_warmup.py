@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from backtest_universe import effective_backtest_data_coins
 from config_utils import get_template_config
 from optimization.warmup import (
     _apply_config_overrides,
+    build_optimizer_data_config,
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
@@ -101,6 +103,34 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
     assert warmup_map["__default__"] == 30
     assert "HYPE" not in warmup_map
     assert compute_optimizer_backtest_warmup_minutes(config) == 30
+
+
+def test_optimizer_data_config_uses_reachable_side_gates_from_bounds():
+    config = get_template_config()
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    config["optimize"]["bounds"]["long_n_positions"] = [1, 3, 1]
+    config["optimize"]["bounds"]["long_total_wallet_exposure_limit"] = [0.5, 1.5, 0.01]
+    config["optimize"]["bounds"]["short_n_positions"] = [1, 3, 1]
+    config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0.0]
+
+    data_config = build_optimizer_data_config(config)
+
+    assert data_config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] > 0.0
+    assert data_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+    assert effective_backtest_data_coins(data_config) == ["BTC"]
+
+
+def test_optimizer_data_config_enables_template_disabled_side_when_bounds_reach_it():
+    config = get_template_config()
+    config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config["optimize"]["bounds"]["short_n_positions"] = [1, 3, 1]
+    config["optimize"]["bounds"]["short_total_wallet_exposure_limit"] = [0.5, 1.5, 0.01]
+
+    data_config = build_optimizer_data_config(config)
+
+    assert data_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.5
 
 
 def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
