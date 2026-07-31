@@ -12367,7 +12367,6 @@ class Passivbot:
                     "side",
                     "qty",
                     "price",
-                    "fee_paid",
                     "pb_order_type",
                     "position_side",
                     "client_order_id",

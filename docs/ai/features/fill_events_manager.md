@@ -65,9 +65,9 @@
     authoritative net realized PnL only: pending and synthetic values remain visible in
     fill diagnostics but do not enter the health counter, and later enrichment adds the
     full authoritative amount without retaining fill-identity accounting state.
-    PnL-only enrichment changes local accounting evidence and does not request another
-    account-wide confirmation. New source identities and structural fill changes still
-    confirm account surfaces because they may represent a new exchange-state transition.
+    PnL- or fee-only enrichment changes local accounting evidence and does not request
+    another account-wide confirmation. New source identities and structural fill changes
+    still confirm account surfaces because they may represent a new exchange-state transition.
     Structured `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
     `degraded_pnl_count` fields through the centralized payload sanitizer.
 11. `FillEventsManager` owns the canonical fill-history coverage verdict used by

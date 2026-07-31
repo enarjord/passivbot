@@ -4596,15 +4596,26 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("current_source_ids", "current_id"),
+    (
+        "current_source_ids",
+        "current_id",
+        "current_qty",
+        "current_fee_paid",
+        "expect_confirmation",
+    ),
     [
-        (["fill-a", "fill-b"], "fill-a+fill-b"),
-        (["fill-a"], "fill-a"),
+        (["fill-a", "fill-b"], "fill-a+fill-b", -2.0, -0.01, True),
+        (["fill-a"], "fill-a", -2.0, -0.01, True),
+        (["fill-a"], "fill-a", -1.0, -0.02, False),
     ],
-    ids=["mixed_new_source", "same_source_structural_change"],
+    ids=["mixed_new_source", "same_source_structural_change", "fee_only_change"],
 )
-async def test_update_pnls_confirms_non_pnl_only_enrichment(
-    current_source_ids, current_id
+async def test_update_pnls_confirms_only_structural_enrichment(
+    current_source_ids,
+    current_id,
+    current_qty,
+    current_fee_paid,
+    expect_confirmation,
 ):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
@@ -4629,7 +4640,8 @@ async def test_update_pnls_confirms_non_pnl_only_enrichment(
             **vars(previous),
             "id": current_id,
             "source_ids": current_source_ids,
-            "qty": -2.0,
+            "qty": current_qty,
+            "fee_paid": current_fee_paid,
             "pnl": 1.0,
             "pnl_status": "complete",
             "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
@@ -4679,7 +4691,12 @@ async def test_update_pnls_confirms_non_pnl_only_enrichment(
     # A mixed aggregate is already accounted by the enrichment path, so it
     # requests confirmation without counting the aggregate as a second fill.
     bot._log_new_fill_events.assert_not_called()
-    bot._request_authoritative_confirmation.assert_called_once_with(ACCOUNT_SURFACES)
+    if expect_confirmation:
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
 
 
 def test_min_effective_cost_blocks_are_aggregated(caplog):
