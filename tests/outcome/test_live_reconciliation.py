@@ -698,3 +698,59 @@ async def test_executor_recovers_all_targets_after_partial_cancellation_failure(
         stale_ask,
         stale_ask,
     ]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_race_cancels_previously_kept_managed_quote():
+    kept_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_bid",
+        observation_end_ms=2_000,
+    )
+    stale_cloid = managed_outcome_client_order_id(
+        "913",
+        slot="canonical_ask",
+        observation_end_ms=2_000,
+    )
+    kept = order(
+        "1",
+        outcome=OutcomeSide.YES,
+        price=0.49,
+        cloid=kept_cloid,
+    )
+    stale = order(
+        "2",
+        outcome=OutcomeSide.NO,
+        price=0.48,
+        cloid=stale_cloid,
+    )
+    unmanaged = order(
+        "3",
+        outcome=OutcomeSide.YES,
+        price=0.47,
+        cloid=None,
+    )
+    reconciliation = reconcile_outcome_orders(
+        market(),
+        plan(),
+        snapshot((kept, stale, unmanaged)),
+    )
+    client = FakeClient(snapshot((kept, unmanaged)), snapshot((unmanaged,)))
+    original_cancel = client.cancel_order
+    failed_once = False
+
+    async def fail_stale_cancel(*args, **kwargs):
+        nonlocal failed_once
+        result = await original_cancel(*args, **kwargs)
+        if kwargs["order_id"] == 2 and not failed_once:
+            failed_once = True
+            raise ValueError("cancel target disappeared")
+        return result
+
+    client.cancel_order = fail_stale_cancel
+
+    with pytest.raises(ValueError, match="cancel target disappeared"):
+        await execute_hip4_order_reconciliation(client, market(), reconciliation)
+
+    assert [item[2] for item in client.cancelled] == [2, 1]
+    assert [item[3] for item in client.cancelled] == [stale_cloid, kept_cloid]

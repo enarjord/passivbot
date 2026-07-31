@@ -117,55 +117,6 @@ async def _cancel_all_managed_orders(
     return tuple(cancelled), verified
 
 
-async def _cancel_reconciliation_targets(
-    client: HyperliquidOutcomeLiveClient,
-    market: NormalizedOutcomeMarket,
-    cancellations: tuple[OutcomeOrderCancel, ...],
-) -> None:
-    """Drive every targeted managed order to a verified absent state after cancel failure."""
-
-    targets = {cancellation.order_id: cancellation for cancellation in cancellations}
-    authoritative = await client.fetch_account_snapshot((market,))
-    cleanup_errors: list[Exception] = []
-    for order in authoritative.open_orders:
-        cancellation = targets.get(order.order_id)
-        if cancellation is None or order.market_id != market.market_id:
-            continue
-        if (
-            order.outcome is not cancellation.outcome
-            or order.client_order_id != cancellation.client_order_id
-        ):
-            cleanup_errors.append(
-                RuntimeError(
-                    f"HIP-4 cancellation target {order.order_id} changed authoritative identity"
-                )
-            )
-            continue
-        try:
-            await client.cancel_order(
-                market,
-                outcome=cancellation.outcome,
-                order_id=int(cancellation.order_id),
-                expected_client_order_id=cancellation.client_order_id,
-            )
-        except Exception as exc:
-            cleanup_errors.append(exc)
-
-    verified = await client.fetch_account_snapshot((market,))
-    remaining = sorted(
-        order.order_id
-        for order in verified.open_orders
-        if order.market_id == market.market_id and order.order_id in targets
-    )
-    if remaining:
-        error = RuntimeError(
-            f"HIP-4 cancellation recovery is not authoritative: {remaining}"
-        )
-        if cleanup_errors:
-            raise error from cleanup_errors[0]
-        raise error
-
-
 def _order_matches_intent(
     order: OutcomeOpenOrder,
     intent: OutcomeLiveOrderIntent,
@@ -370,15 +321,14 @@ async def execute_hip4_order_reconciliation(
                 )
     except Exception:
         try:
-            await _cancel_reconciliation_targets(
+            await _cancel_all_managed_orders(
                 client,
                 market,
-                reconciliation.cancels,
             )
         except Exception as cleanup_error:
             raise RuntimeError(
-                "HIP-4 order cancellation failed and recovery could not establish "
-                "an authoritative safe state"
+                "HIP-4 order cancellation failed and managed-order cleanup could "
+                "not establish an authoritative safe state"
             ) from cleanup_error
         raise
 

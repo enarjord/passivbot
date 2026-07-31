@@ -475,10 +475,11 @@ With one-second aggregate execution candles, all fills eligible in a bucket are 
 bucket's timestamp and the resulting inventory is charged through that bucket's one-second end.
 This is a deterministic bucket model, not a claim about sub-second fill order. The shared-wallet
 orchestrator aggregates buy quantities before calculating portfolio pair completion and weights
-inventory-time areas across overlapping contracts on the common executed-market horizon. Skipped
-jobs do not extend that horizon. Portfolio peak residual is swept chronologically as the sum of
-absolute per-market residuals; every release and fill-derived residual update sharing one timestamp
-is applied atomically before measuring the peak.
+inventory-time areas across overlapping contracts on the common executed-market settlement
+horizon. Delayed redemption extends the separate collateral-utilization horizon but never the
+inventory horizon. Skipped jobs do not extend either horizon. Portfolio peak residual is swept
+chronologically as the sum of absolute per-market residuals; every release and fill-derived
+residual update sharing one timestamp is applied atomically before measuring the peak.
 
 Post-fill adverse selection is represented as a horizon-indexed collection so later experiments
 may add horizons without changing its aggregation contract. The initial collection contains only
@@ -552,6 +553,8 @@ every managed quote for that market is driven to verified absence.
 Any other lifecycle, account, book, or private-submission failure during creation also drives every
 managed quote for that market, including previously kept quotes, to verified absence before the
 failure propagates.
+A cancellation failure follows the same complete managed-order cleanup contract because a filled
+or disappeared cancellation target may have invalidated the inventory state behind kept quotes.
 
 Live split, merge, redeem, and order writes are distinct authenticated mutations. Each requires an
 explicitly supported adapter path, reconciliation, idempotency or authoritative confirmation, and

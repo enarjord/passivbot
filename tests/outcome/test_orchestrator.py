@@ -170,6 +170,26 @@ def test_resolved_capital_is_not_reused_before_authoritative_release():
     assert portfolio.ending_collateral == pytest.approx(102.0)
 
 
+def test_redemption_lag_does_not_dilute_inventory_time_metrics():
+    portfolio = run_outcome_portfolio_backtest(
+        [
+            job(
+                "delayed-redemption",
+                0,
+                5_000,
+                100.0,
+                1.0,
+                capital_release_ms=10_000,
+            ),
+        ],
+        starting_collateral=100.0,
+    )
+
+    assert portfolio.allocated_collateral_time_ratio == pytest.approx(1.0)
+    assert portfolio.time_weighted_abs_residual_qty == pytest.approx(0.5)
+    assert portfolio.time_weighted_total_inventory_qty == pytest.approx(6.0)
+
+
 def test_overlapping_market_residual_peaks_are_aggregated_chronologically():
     first = replace(
         result("first", 0, 10_000, 40.0, 0.0),

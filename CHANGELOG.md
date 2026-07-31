@@ -129,6 +129,8 @@ All notable user-facing changes will be documented in this file.
   active Polymarket evaluation windows apply their synthetic close before Rust translation.
   HIP-4 creates now recheck market lifecycle after account/book preflight, while any create failure
   drives kept and newly attempted managed quotes to verified absence.
+  Portfolio inventory-time metrics now end at the latest accepted settlement rather than delayed
+  redemption, and HIP-4 cancellation races drive kept managed quotes to verified absence.
   Polymarket reconnects now discard
   abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
   archived fee selection uses opening metadata and rejects unsupported later transitions, and the

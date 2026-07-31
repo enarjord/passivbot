@@ -547,19 +547,21 @@ def run_outcome_portfolio_backtest(
             post_fill_adverse_selection=(),
         )
 
-    final_time_ms = max(accepted_release_times.values())
-    if last_event_time_ms < final_time_ms:
-        advance_time(final_time_ms)
+    capital_release_horizon_ms = max(accepted_release_times.values())
+    if last_event_time_ms < capital_release_horizon_ms:
+        advance_time(capital_release_horizon_ms)
     if pending_releases:
         raise AssertionError("portfolio capital-release queue was not fully released")
     if abs(allocated_collateral) > 1e-9:
         raise AssertionError("portfolio retained allocated collateral after final settlement")
 
     portfolio_start_time_ms = min(result.trading_open_time_ms for result in results)
-    portfolio_duration_ms = final_time_ms - portfolio_start_time_ms
+    capital_release_duration_ms = capital_release_horizon_ms - portfolio_start_time_ms
+    inventory_horizon_ms = max(result.settlement_time_ms for result in results)
+    inventory_duration_ms = inventory_horizon_ms - portfolio_start_time_ms
     utilization = (
-        allocation_time_area / (starting_collateral * portfolio_duration_ms)
-        if portfolio_duration_ms > 0
+        allocation_time_area / (starting_collateral * capital_release_duration_ms)
+        if capital_release_duration_ms > 0
         else 0.0
     )
     cumulative_yes_buy_qty = sum(result.cumulative_yes_buy_qty for result in results)
@@ -602,13 +604,13 @@ def run_outcome_portfolio_backtest(
         pair_completion_ratio=pair_completion_ratio,
         max_abs_residual_qty=_portfolio_max_abs_residual_qty(results),
         time_weighted_abs_residual_qty=(
-            residual_qty_time_area_ms / portfolio_duration_ms
-            if portfolio_duration_ms > 0
+            residual_qty_time_area_ms / inventory_duration_ms
+            if inventory_duration_ms > 0
             else 0.0
         ),
         time_weighted_total_inventory_qty=(
-            total_inventory_time_area_ms / portfolio_duration_ms
-            if portfolio_duration_ms > 0
+            total_inventory_time_area_ms / inventory_duration_ms
+            if inventory_duration_ms > 0
             else 0.0
         ),
         worst_case_settlement_equity_min=worst_case_equity_min,
