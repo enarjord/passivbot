@@ -12335,7 +12335,6 @@ class Passivbot:
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
-                    self._request_authoritative_confirmation(ACCOUNT_SURFACES)
                     enriched_events.extend(transitions)
                 return transitions
 
@@ -12942,7 +12941,7 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         self._assert_pnl_history_safe_for_risk(
             events,
-            context="realized loss gate PnL cumsum",
+            context="orchestrator realized PnL cumsum",
             start_ms=start_ms,
         )
         if not events:
@@ -16416,19 +16415,9 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances()
 
-    def _auto_unstuck_allowed_live(self) -> bool:
-        if self._pnls_manager is None:
-            return False
-        if not self._unstuck_uses_realized_pnl():
-            return False
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
-        self._assert_pnl_history_safe_for_risk(
-            events,
-            context="auto unstuck realized PnL",
-            start_ms=start_ms,
-        )
-        return True
+    def _auto_unstuck_configured_live(self) -> bool:
+        """Whether configured Rust unstuck logic consumes validated PnL inputs."""
+        return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_pnl_cumsum: dict
@@ -18925,8 +18914,8 @@ class Passivbot:
         # Python only proves the realized-PnL inputs are safe to expose; Rust
         # owns unstuck emission from the cumsum facts below, and duplicate
         # order risk rides normal live reconciliation like any other order.
-        auto_unstuck_allowed = self._auto_unstuck_allowed_live()
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
             symbols, now_ms=now_ms

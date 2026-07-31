@@ -4563,6 +4563,7 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
+    bot._request_authoritative_confirmation = MagicMock()
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._monitor_record_error = lambda *args, **kwargs: None
     refresh_summaries = []
@@ -4585,6 +4586,12 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     assert f"new={int(add_new_fill)}" in fill_timing_records[0].message
     assert len(refresh_summaries) == 1
     assert refresh_summaries[0]["level"] == "info"
+    if add_new_fill:
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
 
 
 def test_min_effective_cost_blocks_are_aggregated(caplog):
@@ -6554,6 +6561,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     previous, current = bot._log_enriched_fill_events.call_args.args[0][0]
     assert previous is degraded
     assert current is authoritative
+    bot._request_authoritative_confirmation.assert_not_called()
     if failure_stage is not None:
         return
     summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
@@ -8446,11 +8454,14 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.balance = 100.0
     bot.balance_raw = 200.0
+    get_events = MagicMock(
+        return_value=[
+            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+        ]
+    )
     bot._pnls_manager = _with_fill_coverage_api(
         types.SimpleNamespace(
-            get_events=lambda: [
-                types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-            ],
+            get_events=get_events,
             cache=_SafeRiskCache(),
             get_history_scope=lambda: "all",
         )
@@ -8474,8 +8485,11 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     out = bot._calc_unstuck_allowances()
     assert out["long"] == pytest.approx(77.0)
 
-    # The emission input stays available while the order is open.
-    assert bot._auto_unstuck_allowed_live() is True
+    # The emission input stays available while the order is open, without a
+    # second fill scan after the cumsum/allowance history was validated.
+    get_events.reset_mock()
+    assert bot._auto_unstuck_configured_live() is True
+    get_events.assert_not_called()
 
 
 def _make_unstuck_custom_id() -> str:
