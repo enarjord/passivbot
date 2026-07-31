@@ -39,10 +39,10 @@ def _empty_orchestrator_output(input_json: str) -> str:
     )
 
 
-def _single_symbol_orchestrator_output(**diagnostics) -> str:
+def _single_symbol_orchestrator_output(*, orders=None, **diagnostics) -> str:
     return json.dumps(
         {
-            "orders": [],
+            "orders": [] if orders is None else orders,
             "diagnostics": {
                 "symbol_states": [
                     {
@@ -3141,6 +3141,31 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
             ),
             "invalid symbol_idx",
         ),
+        (
+            _single_symbol_orchestrator_output(
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": 1.0,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "limit",
+                        "execution_priority": "ordinary",
+                    },
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": 1.0,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "market",
+                        "execution_priority": "risk_critical",
+                    },
+                ]
+            ),
+            "collide under conversion identity",
+        ),
     ],
 )
 async def test_orchestrator_invalid_output_emits_correlated_failed_return(
@@ -3150,6 +3175,18 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
+
+    def fake_order_type_snake_to_id(order_type):
+        if order_type != "entry_initial_normal_long":
+            raise ValueError(order_type)
+        return 1
+
+    monkeypatch.setattr(
+        pbr,
+        "order_type_snake_to_id",
+        fake_order_type_snake_to_id,
+        raising=False,
+    )
 
     bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}

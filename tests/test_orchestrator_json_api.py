@@ -360,6 +360,13 @@ def test_live_validator_accepts_complete_rust_output():
 
     assert orders == out["orders"]
     assert orders
+    conversion_identities = {
+        reconciler.rust_order_conversion_identity(
+            "BTC/USDT:USDT", order["qty"], order["price"], order["order_type"]
+        )
+        for order in orders
+    }
+    assert len(conversion_identities) == len(orders)
     assert out["diagnostics"]["symbol_states"][0]["symbol_idx"] == 0
 
 

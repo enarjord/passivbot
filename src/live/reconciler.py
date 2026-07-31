@@ -990,6 +990,18 @@ def validate_rust_ideal_orders(ideal_orders: object) -> None:
             ) from exc
 
 
+def rust_order_conversion_identity(
+    symbol_key: object, qty: object, price: object, order_type: object
+) -> tuple[object, float, float, str]:
+    """Return the identity for one order at the Rust-to-exchange conversion boundary."""
+    return (
+        symbol_key,
+        abs(float(qty)),
+        float(price),
+        str(order_type),
+    )
+
+
 def validate_rust_orchestrator_output(
     out: object, idx_to_symbol: dict[int, str]
 ) -> list[dict]:
@@ -1001,6 +1013,7 @@ def validate_rust_orchestrator_output(
     orders = out["orders"]
     if not isinstance(orders, list):
         raise FatalBotException("Rust orchestrator orders must be a list")
+    seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     for order_idx, order in enumerate(orders):
         if not isinstance(order, dict):
             raise FatalBotException(
@@ -1070,6 +1083,16 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_priority"
             )
+        conversion_identity = rust_order_conversion_identity(
+            idx_to_symbol[symbol_idx], qty, price, order_type
+        )
+        if conversion_identity in seen_conversion_identities:
+            previous_idx = seen_conversion_identities[conversion_identity]
+            raise FatalBotException(
+                "Rust orchestrator orders "
+                f"{previous_idx} and {order_idx} collide under conversion identity"
+            )
+        seen_conversion_identities[conversion_identity] = order_idx
 
     diagnostics = out.get("diagnostics")
     if not isinstance(diagnostics, dict):
@@ -2486,7 +2509,7 @@ def to_executable_orders(
     for symbol, orders in ideal_orders.items():
         ideal_orders_f[symbol] = []
         last_mprice = last_prices[symbol]
-        seen = set()
+        seen: set[tuple[object, float, float, str]] = set()
         with_mprice_diff = []
         for order in orders:
             side = determine_side_from_order_tuple(order)
@@ -2506,12 +2529,13 @@ def to_executable_orders(
                 if str(order[2]).startswith("entry_initial_"):
                     conversion_blocked_counts[(symbol, position_side)] += 1
                 continue
-            seen_key = str(abs(order[0])) + str(order[1]) + order[2]
+            seen_key = rust_order_conversion_identity(
+                symbol, order[0], order[1], order[2]
+            )
             if seen_key in seen:
-                logging.debug("duplicate ideal order for %s skipped: %s", symbol, order)
-                if str(order[2]).startswith("entry_initial_"):
-                    conversion_blocked_counts[(symbol, position_side)] += 1
-                continue
+                raise FatalBotException(
+                    f"Rust ideal orders for {symbol} collide under conversion identity"
+                )
             pb_order_type = snake_of(order[3])
             # The Rust orchestrator is the single source of execution-type
             # truth (every live path builds 6-tuples from its execution_type

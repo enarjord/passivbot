@@ -1637,6 +1637,46 @@ def test_to_executable_orders_respects_rust_limit_execution_hint():
     assert orders[symbol][0]["execution_priority"] == "risk_critical"
 
 
+def test_to_executable_orders_rejects_colliding_conversion_identities():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+
+    order_type = "entry_initial_normal_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {
+        symbol: [
+            (1.0, 100.0, order_type, order_type_id, "limit", "ordinary"),
+            (1.0, 100.0, order_type, order_type_id, "market", "risk_critical"),
+        ]
+    }
+
+    with pytest.raises(FatalBotException, match="collide under conversion identity"):
+        bot._to_executable_orders(ideal, {symbol: 100.0})
+
+
+def test_to_executable_orders_uses_structured_conversion_identity():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+
+    order_type = "entry_initial_normal_long"
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal = {
+        symbol: [
+            (1.0, 23.0, order_type, order_type_id, "limit", "ordinary"),
+            (1.02, 3.0, order_type, order_type_id, "limit", "ordinary"),
+        ]
+    }
+
+    orders, _ = bot._to_executable_orders(ideal, {symbol: 100.0})
+
+    assert {(order["qty"], order["price"]) for order in orders[symbol]} == {
+        (1.0, 23.0),
+        (1.02, 3.0),
+    }
+
+
 @pytest.mark.asyncio
 async def test_order_hysteresis_skips_near_identical_cancel_create(monkeypatch):
     symbol = "BTC/USDT"

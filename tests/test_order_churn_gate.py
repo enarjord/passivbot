@@ -345,6 +345,41 @@ def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
         )
 
 
+@pytest.mark.parametrize(
+    "orders",
+    [
+        [_raw_rust_order(), _raw_rust_order()],
+        [_raw_rust_order(), _raw_rust_order(execution_type="market")],
+        [_raw_rust_order(), _raw_rust_order(execution_priority="risk_critical")],
+        [_raw_rust_order(execution_type="market"), _raw_rust_order()],
+    ],
+    ids=[
+        "exact-duplicate",
+        "conflicting-execution-type",
+        "conflicting-execution-priority",
+        "conflicting-execution-type-reversed",
+    ],
+)
+def test_raw_rust_output_rejects_colliding_conversion_identities(orders):
+    with pytest.raises(FatalBotException, match="collide under conversion identity"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+        )
+
+
+def test_raw_rust_output_keeps_distinct_structured_conversion_identities():
+    orders = [
+        _raw_rust_order(qty=1.0, price=23.0),
+        _raw_rust_order(qty=1.02, price=3.0),
+    ]
+
+    reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output(orders),
+        {0: SYMBOL},
+    )
+
+
 def test_raw_rust_output_requires_complete_symbol_state_coverage():
     with pytest.raises(FatalBotException, match="do not cover"):
         reconciler.validate_rust_orchestrator_output(
