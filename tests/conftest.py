@@ -266,7 +266,11 @@ def _install_passivbot_rust_stub():
         return json.dumps(
             {
                 "orders": [],
-                "diagnostics": {"warnings": [], "symbol_states": symbol_states},
+                "diagnostics": {
+                    "warnings": [],
+                    "symbol_states": symbol_states,
+                    "loss_gate_blocks": [],
+                },
             }
         )
 

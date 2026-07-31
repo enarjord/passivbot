@@ -356,6 +356,7 @@ def test_live_validator_accepts_complete_rust_output():
     out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
         pbr.compute_ideal_orders_json(json.dumps(inp)),
         {0: "BTC/USDT:USDT"},
+        inp,
     )
 
     assert orders == out["orders"]
@@ -1692,6 +1693,10 @@ def test_panic_close_order_type_is_side_local():
     )
 
     out = compute(pbr, inp)
+    assert inp["global"].get("market_orders_allowed", False) is False
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
     by_pside = {o["pside"]: o for o in out["orders"]}
 
     assert by_pside["long"]["order_type"] == "close_panic_long"
@@ -1882,6 +1887,7 @@ def test_forager_respects_n_positions_selects_one_coin():
     reconciler.validate_rust_orchestrator_output(
         out,
         {0: "BTC/USDT:USDT", 1: "ETH/USDT:USDT"},
+        inp,
     )
     assert out["orders"], "expected at least one order"
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
@@ -2338,7 +2344,9 @@ def test_live_validator_accepts_real_min_effective_cost_diagnostic():
     out = compute(pbr, inp)
 
     assert out["diagnostics"]["min_effective_cost_blocks"]
-    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"})
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
 
 
 def test_manual_positions_consume_twel_entry_gate_budget():
@@ -2744,7 +2752,9 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     inp["global"]["max_realized_loss_pct"] = 0.019
 
     out = compute(pbr, inp)
-    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"})
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_unstuck_long" in order_types

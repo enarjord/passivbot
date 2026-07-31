@@ -30,6 +30,10 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    outcomes. They retain only a bounded exception type in diagnostics and fall back to authoritative
    replay when reuse is unavailable. Coin replay failures retain the same bounded classification
    without changing exception propagation or held-pair protection and flat-pair entry blocking.
+8. `bot.{pside}.hsl.panic_close_order_type = "market"` is an explicit protective execution
+   override when HSL is enabled. Rust may emit that side's `close_panic_*` as a market order even
+   when `live.market_orders_allowed = false`; the live flag gates non-panic market execution and
+   must not downgrade an explicitly configured HSL panic close to a limit order.
 
 ## Failure Semantics
 

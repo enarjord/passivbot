@@ -21,8 +21,10 @@ All notable user-facing changes will be documented in this file.
   so fixed-bound starts and Pareto restarts resolve consistently.
 - Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if its JSON
   (including duplicate keys or decoder failures), required order batch, order fields (including
-  overflowing numeric values or priority inconsistent with Rust's order and configured-mode rule),
-  conversion identities, complete per-symbol mode state, or required consumed diagnostic
+  overflowing numeric values, execution type forbidden by the submitted input, or priority
+  inconsistent with Rust's order and configured-mode rule), while preserving configured HSL panic
+  market closes as the protective exception to `live.market_orders_allowed`. Conversion
+  identities, complete per-symbol mode state, or required consumed diagnostic
   collections are missing or malformed. The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED

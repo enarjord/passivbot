@@ -16039,6 +16039,7 @@ class Passivbot:
         out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
             pbr.compute_ideal_orders_json(json.dumps(input_dict)),
             idx_to_symbol,
+            input_dict,
         )
         ideal_orders: dict[str, list] = {}
         for order in orders:
@@ -16780,7 +16781,7 @@ class Passivbot:
                         )
             raise
         out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
-            out_json, idx_to_symbol
+            out_json, idx_to_symbol, input_dict
         )
         diagnostics = out["diagnostics"]
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
@@ -19243,7 +19244,7 @@ class Passivbot:
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
             out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
-                out_json, idx_to_symbol
+                out_json, idx_to_symbol, input_dict
             )
             diagnostics = out["diagnostics"]
             self._order_churn_risk_active_pairs = (

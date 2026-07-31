@@ -1040,6 +1040,29 @@ def _validate_intrinsic_rust_execution_priority(
         )
 
 
+def _rust_input_allows_market_execution(
+    global_input: dict, order_type: str, pside: str
+) -> bool:
+    if global_input.get("market_orders_allowed", False) is True:
+        return True
+    if order_type.rsplit("_", 1)[0] != "close_panic":
+        return False
+    # HSL panic execution is an explicit protective override. Rust evaluates
+    # this before market_orders_allowed, so Python must preserve the same rule.
+    if global_input.get("panic_close_market", False) is True:
+        return True
+    global_bot_params = global_input.get("global_bot_params")
+    if not isinstance(global_bot_params, dict):
+        return False
+    side_params = global_bot_params.get(pside)
+    if not isinstance(side_params, dict):
+        return False
+    return (
+        side_params.get("hsl_enabled", False) is True
+        and side_params.get("hsl_panic_close_order_type", "market") == "market"
+    )
+
+
 def rust_order_conversion_identity(
     symbol_key: object, qty: object, price: object, order_type: object
 ) -> tuple[object, float, float, str]:
@@ -1059,9 +1082,18 @@ def rust_order_conversion_identity(
 
 
 def validate_rust_orchestrator_output(
-    out: object, idx_to_symbol: dict[int, str]
+    out: object,
+    idx_to_symbol: dict[int, str],
+    orchestrator_input: object,
 ) -> list[dict]:
     """Validate the required Rust output envelope before any result is consumed."""
+    if not isinstance(orchestrator_input, dict) or not isinstance(
+        orchestrator_input.get("global"), dict
+    ):
+        raise FatalBotException(
+            "Rust orchestrator validation missing corresponding global input"
+        )
+    global_input = orchestrator_input["global"]
     if not isinstance(out, dict):
         raise FatalBotException("Rust orchestrator output must be a mapping")
     if "orders" not in out:
@@ -1123,9 +1155,17 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
-        if order.get("execution_type") not in {"limit", "market"}:
+        execution_type = order.get("execution_type")
+        if execution_type not in {"limit", "market"}:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
+            )
+        if execution_type == "market" and not _rust_input_allows_market_execution(
+            global_input, order_type, pside
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} has market execution_type "
+                "inconsistent with its submitted input"
             )
         execution_priority = order.get("execution_priority")
         if execution_priority not in {"ordinary", "risk_critical"}:
@@ -1423,7 +1463,9 @@ def _reject_duplicate_json_object_keys(
 
 
 def parse_and_validate_rust_orchestrator_output(
-    out_json: object, idx_to_symbol: dict[int, str]
+    out_json: object,
+    idx_to_symbol: dict[int, str],
+    orchestrator_input: object,
 ) -> tuple[dict, list[dict]]:
     """Decode and validate Rust output, preserving malformed-output fatality."""
     try:
@@ -1433,7 +1475,9 @@ def parse_and_validate_rust_orchestrator_output(
         )
     except (TypeError, ValueError, RecursionError, OverflowError) as exc:
         raise FatalBotException("Rust orchestrator returned malformed JSON") from exc
-    orders = validate_rust_orchestrator_output(out, idx_to_symbol)
+    orders = validate_rust_orchestrator_output(
+        out, idx_to_symbol, orchestrator_input
+    )
     return out, orders
 
 

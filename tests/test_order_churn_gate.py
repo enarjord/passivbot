@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
@@ -66,6 +67,25 @@ def _raw_rust_order(**overrides) -> dict:
     return order
 
 
+def _raw_rust_input(**global_overrides) -> dict:
+    global_input = {
+        "market_orders_allowed": False,
+        "panic_close_market": False,
+        "global_bot_params": {
+            "long": {
+                "hsl_enabled": False,
+                "hsl_panic_close_order_type": "market",
+            },
+            "short": {
+                "hsl_enabled": False,
+                "hsl_panic_close_order_type": "market",
+            },
+        },
+    }
+    global_input.update(global_overrides)
+    return {"global": global_input}
+
+
 def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
     if orders is None:
         orders = []
@@ -94,6 +114,16 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
             "loss_gate_blocks": [],
         },
     }
+
+
+def test_passivbot_rust_stub_emits_required_loss_gate_collection():
+    import passivbot_rust as pbr
+
+    if not getattr(pbr, "__is_stub__", False):
+        pytest.skip("real Rust extension is loaded")
+    out = json.loads(pbr.compute_ideal_orders_json(json.dumps({"symbols": []})))
+
+    assert out["diagnostics"]["loss_gate_blocks"] == []
 
 
 def _raw_loss_gate_block(**overrides) -> dict:
@@ -340,13 +370,15 @@ def test_raw_rust_order_batch_with_unknown_symbol_is_fatal_as_a_whole():
 
     with pytest.raises(FatalBotException, match="unknown symbol_idx 999"):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output(orders), {0: SYMBOL}
+            _raw_rust_output(orders), {0: SYMBOL}, _raw_rust_input()
         )
 
 
 def test_raw_rust_output_requires_orders_field():
     with pytest.raises(FatalBotException, match="missing required orders field"):
-        reconciler.validate_rust_orchestrator_output({}, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            {}, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 @pytest.mark.parametrize(
@@ -370,6 +402,7 @@ def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([_raw_rust_order(**overrides)]),
             {0: SYMBOL},
+            _raw_rust_input(),
         )
 
 
@@ -391,6 +424,7 @@ def test_raw_rust_output_rejects_ordinary_priority_for_protective_orders(
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([order]),
             {0: SYMBOL},
+            _raw_rust_input(),
         )
 
 
@@ -404,6 +438,7 @@ def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
     assert reconciler.validate_rust_orchestrator_output(
         _raw_rust_output([order]),
         {0: SYMBOL},
+        _raw_rust_input(),
     ) == [order]
 
 
@@ -440,7 +475,9 @@ def test_raw_rust_output_rejects_priority_inconsistent_with_full_rust_rule(
     out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = input_mode
 
     with pytest.raises(FatalBotException, match="inconsistent with"):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_accepts_risk_critical_graceful_stop_close():
@@ -452,7 +489,101 @@ def test_raw_rust_output_accepts_risk_critical_graceful_stop_close():
     out = _raw_rust_output([order])
     out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = "graceful_stop"
 
-    assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}) == [order]
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: SYMBOL}, _raw_rust_input()
+    ) == [order]
+
+
+def test_raw_rust_output_rejects_market_entry_when_input_forbids_it():
+    order = _raw_rust_order(execution_type="market")
+
+    with pytest.raises(FatalBotException, match="inconsistent with its submitted input"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(market_orders_allowed=False),
+        )
+
+
+def test_raw_rust_output_accepts_market_entry_when_input_allows_it():
+    order = _raw_rust_order(execution_type="market")
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(market_orders_allowed=True),
+    ) == [order]
+
+
+@pytest.mark.parametrize(
+    "global_overrides",
+    [
+        {
+            "global_bot_params": {
+                "long": {
+                    "hsl_enabled": True,
+                    "hsl_panic_close_order_type": "market",
+                },
+                "short": {
+                    "hsl_enabled": False,
+                    "hsl_panic_close_order_type": "market",
+                },
+            }
+        },
+        {"panic_close_market": True},
+    ],
+    ids=["side-local-hsl-market", "global-panic-market"],
+)
+def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disabled(
+    global_overrides,
+):
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_panic_long",
+        execution_type="market",
+        execution_priority="risk_critical",
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(market_orders_allowed=False, **global_overrides),
+    ) == [order]
+
+
+@pytest.mark.parametrize(
+    "global_overrides",
+    [
+        {},
+        {
+            "global_bot_params": {
+                "long": {
+                    "hsl_enabled": True,
+                    "hsl_panic_close_order_type": "limit",
+                },
+                "short": {
+                    "hsl_enabled": False,
+                    "hsl_panic_close_order_type": "market",
+                },
+            }
+        },
+    ],
+    ids=["hsl-disabled", "hsl-limit"],
+)
+def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_overrides):
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_panic_long",
+        execution_type="market",
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(FatalBotException, match="inconsistent with its submitted input"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(market_orders_allowed=False, **global_overrides),
+        )
 
 
 @pytest.mark.parametrize(
@@ -473,6 +604,7 @@ def test_raw_rust_output_rejects_colliding_conversion_identities(orders):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output(orders),
             {0: SYMBOL},
+            _raw_rust_input(market_orders_allowed=True),
         )
 
 
@@ -485,6 +617,7 @@ def test_raw_rust_output_keeps_distinct_structured_conversion_identities():
     reconciler.validate_rust_orchestrator_output(
         _raw_rust_output(orders),
         {0: SYMBOL},
+        _raw_rust_input(),
     )
 
 
@@ -493,6 +626,7 @@ def test_raw_rust_output_requires_complete_symbol_state_coverage():
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output(symbol_states=[]),
             {0: SYMBOL},
+            _raw_rust_input(),
         )
 
 
@@ -501,7 +635,9 @@ def test_raw_rust_output_requires_explicit_input_mode():
     del out["diagnostics"]["symbol_states"][0]["long"]["input_mode"]
 
     with pytest.raises(FatalBotException, match="invalid long input_mode"):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_requires_loss_gate_blocks_collection():
@@ -509,7 +645,9 @@ def test_raw_rust_output_requires_loss_gate_blocks_collection():
     del out["diagnostics"]["loss_gate_blocks"]
 
     with pytest.raises(FatalBotException, match="missing required loss_gate_blocks"):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 @pytest.mark.parametrize(
@@ -529,7 +667,9 @@ def test_raw_rust_output_rejects_malformed_loss_gate_diagnostics(
     out["diagnostics"]["loss_gate_blocks"] = loss_gate_blocks
 
     with pytest.raises(FatalBotException, match=error):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_rejects_incomplete_loss_gate_block():
@@ -543,7 +683,9 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
     ]
 
     with pytest.raises(FatalBotException, match="invalid qty"):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 @pytest.mark.parametrize(
@@ -662,7 +804,9 @@ def test_raw_rust_output_rejects_malformed_consumed_diagnostics(diagnostics, err
     out["diagnostics"].update(diagnostics)
 
     with pytest.raises(FatalBotException, match=error):
-        reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL})
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_accepts_complete_consumed_diagnostics():
@@ -674,19 +818,25 @@ def test_raw_rust_output_accepts_complete_consumed_diagnostics():
         }
     )
 
-    assert reconciler.validate_rust_orchestrator_output(out, {0: SYMBOL}) == []
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: SYMBOL}, _raw_rust_input()
+    ) == []
 
 
 def test_raw_rust_output_malformed_json_is_fatal():
     with pytest.raises(FatalBotException, match="malformed JSON"):
-        reconciler.parse_and_validate_rust_orchestrator_output("{", {0: SYMBOL})
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            "{", {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_duplicate_json_key_is_fatal():
     out_json = '{"orders":[{"malformed":true}],"orders":[]}'
 
     with pytest.raises(FatalBotException, match="malformed JSON"):
-        reconciler.parse_and_validate_rust_orchestrator_output(out_json, {0: SYMBOL})
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_integer_digit_limit_failure_is_fatal():
@@ -696,7 +846,9 @@ def test_raw_rust_output_integer_digit_limit_failure_is_fatal():
     out_json = '{"value":' + ("1" * (max_digits + 1)) + "}"
 
     with pytest.raises(FatalBotException, match="malformed JSON"):
-        reconciler.parse_and_validate_rust_orchestrator_output(out_json, {0: SYMBOL})
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 def test_raw_rust_output_decoder_recursion_failure_is_fatal(monkeypatch):
@@ -706,7 +858,9 @@ def test_raw_rust_output_decoder_recursion_failure_is_fatal(monkeypatch):
     monkeypatch.setattr(reconciler.json, "loads", raise_recursion_error)
 
     with pytest.raises(FatalBotException, match="malformed JSON"):
-        reconciler.parse_and_validate_rust_orchestrator_output("{}", {0: SYMBOL})
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            "{}", {0: SYMBOL}, _raw_rust_input()
+        )
 
 
 @pytest.mark.asyncio

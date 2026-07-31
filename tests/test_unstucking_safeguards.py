@@ -3181,12 +3181,28 @@ async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monk
                         "qty": 1.0,
                         "price": 100.0,
                         "order_type": "entry_initial_normal_long",
-                        "execution_type": "market",
+                        "execution_type": "limit",
                         "execution_priority": "ordinary",
                     },
                 ]
             ),
             "collide under conversion identity",
+        ),
+        (
+            _single_symbol_orchestrator_output(
+                orders=[
+                    {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "qty": 1.0,
+                        "price": 100.0,
+                        "order_type": "entry_initial_normal_long",
+                        "execution_type": "market",
+                        "execution_priority": "ordinary",
+                    }
+                ]
+            ),
+            "inconsistent with its submitted input",
         ),
         (
             _single_symbol_orchestrator_output(
