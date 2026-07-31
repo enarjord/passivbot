@@ -918,6 +918,58 @@ async def test_bulk_watcher_retirement_uses_one_supported_unsubscribe():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_retires_removed_watchers_in_one_bulk_unsubscribe():
+    class _BulkWakeupCCP:
+        def __init__(self):
+            self.futures = {}
+            self.bulk_calls = []
+            self.single_calls = []
+
+        async def watch_ohlcv(self, symbol, _timeframe):
+            future = asyncio.get_running_loop().create_future()
+            self.futures[symbol] = future
+            return await future
+
+        async def un_watch_ohlcv_for_symbols(self, subscriptions):
+            self.bulk_calls.append(subscriptions)
+            for symbol, _timeframe in subscriptions:
+                self.futures[symbol].set_exception(RuntimeError("unsubscribe wakeup"))
+
+        async def un_watch_ohlcv(self, symbol, _timeframe):
+            self.single_calls.append(symbol)
+
+    ccp = _BulkWakeupCCP()
+    bot = SimpleNamespace(
+        config={"live": {"enable_forager_ws_candles": True}},
+        ws_enabled=True,
+        ccp=ccp,
+        cm=SimpleNamespace(
+            ingest_live_ws_ohlcv=lambda *_args: 0,
+            clear_live_ws_ohlcv_state=lambda _symbol: None,
+        ),
+        stop_signal_received=False,
+        approved_coins_minus_ignored_coins={"long": set(), "short": set()},
+        is_forager_mode=lambda pside=None: pside in {None, "long"},
+        _urgent_active_candle_symbols=lambda: [],
+    )
+    tasks = {
+        symbol: asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, symbol))
+        for symbol in ("A/USDT:USDT", "B/USDT:USDT")
+    }
+    await asyncio.sleep(0)
+
+    added, removed = await candle_ws.reconcile_forager_ws_tasks(bot, tasks)
+
+    assert added == set()
+    assert removed == {"A/USDT:USDT", "B/USDT:USDT"}
+    assert tasks == {}
+    assert ccp.bulk_calls == [
+        [["A/USDT:USDT", "1m"], ["B/USDT:USDT", "1m"]]
+    ]
+    assert ccp.single_calls == []
+
+
+@pytest.mark.asyncio
 async def test_ws_maintainer_starts_before_forager_mode_becomes_active():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {

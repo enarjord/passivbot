@@ -12349,25 +12349,19 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
     assert result is None
     assert bot._health_errors == 1
     bot._monitor_record_error.assert_not_called()
-    assert monitor_events == [
-        (
-            ("error.bot", ("error", "bot"), {
-                "source": "run_execution_loop",
-                "error_type": "CancelledError",
-                "status": "-",
-                "code": "-",
-                "endpoint": "unknown",
-                "stage": "unknown",
-                "origin": monitor_events[0][0][2]["origin"],
-                "action": "record_error_restart_backoff",
-                "cycle": "abandoned",
-            }),
-            {},
-        )
+    assert [event[0][0] for event in monitor_events] == [
+        "error.bot",
+        "error.bot.detail",
     ]
-    assert monitor_events[0][0][2]["origin"].startswith(
+    summary = monitor_events[0][0][2]
+    detail = monitor_events[1][0][2]
+    assert summary["error_type"] == "CancelledError"
+    assert summary["incident_id"] == detail["incident_id"]
+    assert summary["origin"].startswith(
         "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
     )
+    assert detail["traceback"]["frame_count"] >= 1
+    assert detail["traceback"]["includes_exception_text"] is False
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot.execute_to_exchange.assert_not_awaited()
     messages = [record.message for record in caplog.records]
@@ -12817,25 +12811,22 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert bot._health_errors == 1
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot._monitor_record_error.assert_not_called()
-    assert monitor_events == [
-        (
-            ("error.bot", ("error", "bot"), {
-                "source": "run_execution_loop",
-                "error_type": "RuntimeError",
-                "status": "500",
-                "code": "500000",
-                "endpoint": "account-overview",
-                "stage": "unknown",
-                "origin": monitor_events[0][0][2]["origin"],
-                "action": "record_error_restart_backoff",
-                "cycle": "abandoned",
-            }),
-            {},
-        )
+    assert [event[0][0] for event in monitor_events] == [
+        "error.bot",
+        "error.bot.detail",
     ]
-    assert monitor_events[0][0][2]["origin"].startswith(
+    summary = monitor_events[0][0][2]
+    detail = monitor_events[1][0][2]
+    assert summary["status"] == "500"
+    assert summary["code"] == "500000"
+    assert summary["endpoint"] == "account-overview"
+    assert summary["incident_id"] == detail["incident_id"]
+    assert summary["origin"].startswith(
         "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
     )
+    assert detail["traceback"]["frame_count"] >= 1
+    assert raw_error not in str(detail)
+    assert "SECRET" not in str(detail)
     messages = [record.message for record in caplog.records]
     assert not any("error with run_execution_loop" in message for message in messages)
     assert any(
@@ -12857,18 +12848,15 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     assert "error" not in degraded_event["data"]
     assert raw_error not in str(degraded_event)
     assert "SECRET" not in str(degraded_event)
-    debug_stack_messages = [
-        record.message
+    assert not [
+        record
         for record in caplog.records
         if record.levelno == logging.DEBUG and "stack frames" in record.message
     ]
-    assert len(debug_stack_messages) == 1
-    assert raw_error not in debug_stack_messages[0]
-    assert "FakeExchangeError" not in debug_stack_messages[0]
 
 
 @pytest.mark.asyncio
-async def test_execution_loop_error_normal_info_is_bounded_and_skips_nondebug_frames(
+async def test_execution_loop_error_normal_info_persists_bounded_traceback_detail(
     caplog, monkeypatch
 ):
     bot = Passivbot.__new__(Passivbot)
@@ -12876,15 +12864,16 @@ async def test_execution_loop_error_normal_info_is_bounded_and_skips_nondebug_fr
     bot._health_errors = 0
     bot.error_counts = []
     bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
-    bot._monitor_record_event = MagicMock()
+    monitor_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
     bot.restart_bot = AsyncMock()
 
     async def fake_sleep(_seconds):
         return None
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-    format_tb = MagicMock()
-    monkeypatch.setattr(passivbot_module.traceback, "format_tb", format_tb)
     raw_error = "raw-message https://example.invalid/private?api_key=SECRET"
 
     try:
@@ -12898,13 +12887,57 @@ async def test_execution_loop_error_normal_info_is_bounded_and_skips_nondebug_fr
     assert bot._health_errors == 1
     assert len(bot.error_counts) == 1
     bot.restart_bot.assert_not_awaited()
-    format_tb.assert_not_called()
+    assert [event[0][0] for event in monitor_events] == [
+        "error.bot",
+        "error.bot.detail",
+    ]
+    summary = monitor_events[0][0][2]
+    detail = monitor_events[1][0][2]
+    assert summary["incident_id"] == detail["incident_id"]
+    assert detail["traceback"]["frame_count"] >= 1
+    assert detail["traceback"]["includes_exception_text"] is False
+    assert detail["traceback"]["includes_locals"] is False
+    assert raw_error not in str(detail)
+    assert "SECRET" not in str(detail)
     normal_messages = [
         record.message for record in caplog.records if record.levelno >= logging.INFO
     ]
     assert "[health] error_budget count=1 limit=10 window=1h action=continue" in normal_messages
     assert all(raw_error not in message for message in normal_messages)
     assert all("SECRET" not in message for message in normal_messages)
+
+
+def test_bounded_traceback_detail_retains_exception_chain_without_values_or_locals():
+    secret = "api_key=TOP-SECRET"
+
+    def raise_cause():
+        raise ValueError(secret)
+
+    def raise_outer():
+        try:
+            raise_cause()
+        except ValueError as cause:
+            raise RuntimeError(secret) from cause
+
+    try:
+        raise_outer()
+    except RuntimeError as exc:
+        detail = passivbot_module._bounded_traceback_detail(exc)
+
+    assert [item["relation"] for item in detail["exceptions"]] == [
+        "raised",
+        "cause",
+    ]
+    assert [item["error_type"] for item in detail["exceptions"]] == [
+        "RuntimeError",
+        "ValueError",
+    ]
+    assert detail["frame_count"] >= 3
+    assert detail["includes_exception_text"] is False
+    assert detail["includes_locals"] is False
+    assert secret not in str(detail)
+    assert "raise_outer" in str(detail)
+    assert "raise_cause" in str(detail)
 
 
 def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint():

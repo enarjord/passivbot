@@ -3083,12 +3083,71 @@ class CandlestickManager:
         *,
         defer_index: bool = False,
     ) -> None:
-        """Save gaps in enhanced format, merging overlapping ranges."""
-        # Sort by start_ts
-        gaps = sorted(gaps, key=lambda g: g["start_ts"])
+        """Save normalized gaps without broadening proof across reason boundaries.
+
+        A terminal reason such as ``no_trades`` is evidence about an exact
+        interval, not about an adjacent unresolved minute.  Normalize overlaps
+        into disjoint segments and merge only segments carrying the same
+        reason.  Terminal evidence wins an actual overlap with retryable
+        metadata, but never expands across adjacency.
+        """
+        prepared = [
+            dict(gap)
+            for gap in gaps
+            if int(gap.get("start_ts", 0)) <= int(gap.get("end_ts", -1))
+        ]
+        boundaries = sorted(
+            {
+                boundary
+                for gap in prepared
+                for boundary in (
+                    int(gap["start_ts"]),
+                    int(gap["end_ts"]) + ONE_MIN_MS,
+                )
+            }
+        )
+        normalized: List[GapEntry] = []
+        for segment_start, next_start in zip(boundaries, boundaries[1:]):
+            segment_end = int(next_start) - ONE_MIN_MS
+            if segment_start > segment_end:
+                continue
+            active = [
+                (index, gap)
+                for index, gap in enumerate(prepared)
+                if int(gap["start_ts"]) <= segment_start
+                and int(gap["end_ts"]) >= segment_end
+            ]
+            if not active:
+                continue
+            _index, winner = max(
+                active,
+                key=lambda item: (
+                    str(item[1].get("reason", GAP_REASON_AUTO))
+                    in _GAP_NON_EXPIRING_REASONS,
+                    item[0],
+                ),
+            )
+            normalized.append(
+                {
+                    **winner,
+                    "start_ts": int(segment_start),
+                    "end_ts": int(segment_end),
+                }
+            )
+
+        gaps = sorted(normalized, key=lambda g: g["start_ts"])
         merged: List[GapEntry] = []
         for gap in gaps:
-            if not merged or gap["start_ts"] > merged[-1]["end_ts"] + ONE_MIN_MS:
+            same_reason = bool(
+                merged
+                and str(gap.get("reason", GAP_REASON_AUTO))
+                == str(merged[-1].get("reason", GAP_REASON_AUTO))
+            )
+            if (
+                not merged
+                or gap["start_ts"] > merged[-1]["end_ts"] + ONE_MIN_MS
+                or not same_reason
+            ):
                 merged.append(gap)
             else:
                 # Merge overlapping gaps, keeping max retry count and earliest added_at
@@ -3097,7 +3156,7 @@ class CandlestickManager:
                     "start_ts": prev["start_ts"],
                     "end_ts": max(prev["end_ts"], gap["end_ts"]),
                     "retry_count": max(prev.get("retry_count", 0), gap.get("retry_count", 0)),
-                    "reason": prev.get("reason", GAP_REASON_AUTO),  # Keep original reason
+                    "reason": prev.get("reason", GAP_REASON_AUTO),
                     "added_at": min(prev.get("added_at", 0), gap.get("added_at", 0)),
                     "last_retry_at": max(
                         prev.get("last_retry_at", prev.get("added_at", 0)),
@@ -3228,11 +3287,22 @@ class CandlestickManager:
         now_ms = self._now_ms()
         gaps = self._get_known_gaps_enhanced(symbol)
 
-        # Check if we have an overlapping gap to update
+        # Check if we have an overlapping gap with compatible evidence to update.
+        # Retryable reasons may evolve between auto/fetch classifications, but
+        # terminal proof must retain its exact range.
         updated = False
         previous_retry_count = 0
         for gap in gaps:
-            if gap["start_ts"] <= end_ts + ONE_MIN_MS and gap["end_ts"] >= start_ts - ONE_MIN_MS:
+            existing_reason = str(gap.get("reason", GAP_REASON_AUTO))
+            compatible_reason = existing_reason == reason or (
+                existing_reason not in _GAP_NON_EXPIRING_REASONS
+                and reason not in _GAP_NON_EXPIRING_REASONS
+            )
+            if (
+                compatible_reason
+                and gap["start_ts"] <= end_ts + ONE_MIN_MS
+                and gap["end_ts"] >= start_ts - ONE_MIN_MS
+            ):
                 # Overlapping - extend and optionally increment retry
                 gap["start_ts"] = min(gap["start_ts"], int(start_ts))
                 gap["end_ts"] = max(gap["end_ts"], int(end_ts))

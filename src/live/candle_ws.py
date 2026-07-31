@@ -243,12 +243,9 @@ async def reconcile_forager_ws_tasks(
     existing = set(tasks)
     removed = existing - desired
     added = desired - existing
-    removed_tasks = []
-    for symbol in sorted(removed):
-        task = tasks.pop(symbol)
-        removed_tasks.append(_retire_watcher(bot, symbol, task))
+    removed_tasks = {symbol: tasks.pop(symbol) for symbol in sorted(removed)}
     if removed_tasks:
-        await asyncio.gather(*removed_tasks, return_exceptions=True)
+        await _retire_watchers(bot, removed_tasks)
     clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
     if callable(clear_state):
         for symbol in sorted(removed):

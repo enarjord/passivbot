@@ -222,9 +222,11 @@
     extending a 1m gap invalidates cached 1m EMA and open-tail projection values. An overlap refresh
     which retries a due gap
     stamps every unresolved remainder before later repair stages run, preventing a
-    second attempt in the same request. Historical pagination
-    flushes deferred partial-page index writes before propagating terminal-empty
-    failure.
+    second attempt in the same request. Historical pagination flushes deferred
+    partial-page index writes before propagating terminal-empty failure.
+    Gap normalization also preserves proof-specific subranges: verified terminal
+    reasons never expand into adjacent retryable minutes, and an overlap gives
+    terminal evidence authority only over the timestamps it actually covers.
     Repeated terminal empty-page failures and successful refreshes which make no
     open-tail progress for a forager candle surface use a bounded in-memory retry
     delay without converting missing data into candles. Expected background

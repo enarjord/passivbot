@@ -130,6 +130,47 @@ async def test_restart_cleanup_awaits_ws_owner_before_closing_resources():
 
 
 @pytest.mark.asyncio
+async def test_restart_cleanup_abandons_cancellation_resistant_maintainer(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    release = asyncio.Event()
+    cancellation_count = 0
+
+    async def resistant_maintainer():
+        nonlocal cancellation_count
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_count += 1
+
+    class _Client:
+        async def close(self):
+            return None
+
+    task = asyncio.create_task(resistant_maintainer())
+    await asyncio.sleep(0)
+    bot.maintainers = {"resistant": task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Client()
+    bot.cca = _Client()
+    bot.monitor_publisher = None
+    bot._close_live_event_pipeline = lambda **_kwargs: True
+
+    try:
+        with caplog.at_level(logging.WARNING):
+            await asyncio.wait_for(
+                bot.cleanup_for_restart(timeout_seconds=0.0), timeout=1.5
+            )
+        assert cancellation_count >= 1
+        assert "maintainer cancellation grace expired" in caplog.text
+        assert bot.ccp is None
+        assert bot.cca is None
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
 async def test_shutdown_bot_redacts_close_failure_text(capsys):
     class _FailingBot:
         def stop_data_maintainers(self):

@@ -17,6 +17,7 @@ import candlestick_manager
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    GAP_REASON_AUTO,
     GAP_REASON_FETCH_FAILED,
     GAP_REASON_NO_ARCHIVE,
     GAP_REASON_NO_TRADES,
@@ -2979,6 +2980,58 @@ def test_completed_candle_health_distinguishes_verified_sparse_continuity(tmp_pa
     assert report["deferred_missing_candles"] == 0
     assert report["refreshable_missing_candles"] == 0
     assert report["refresh_needed"] is False
+
+
+def test_completed_candle_health_keeps_adjacent_unverified_minute_refreshable(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "PARTIALPROOF/USDT:USDT"
+    now_ms = 7 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (6 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._record_verified_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_NO_TRADES,
+    )
+    cm._add_known_gap(
+        symbol,
+        5 * ONE_MIN_MS,
+        5 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+        increment_retry=False,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["reason"]) for gap in gaps
+    ] == [
+        (3 * ONE_MIN_MS, 4 * ONE_MIN_MS, GAP_REASON_NO_TRADES),
+        (5 * ONE_MIN_MS, 5 * ONE_MIN_MS, GAP_REASON_AUTO),
+    ]
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 5}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["missing_candles"] == 3
+    assert report["verified_no_trade_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 1
+    assert report["refresh_needed"] is True
 
 
 def test_completed_candle_health_defers_unknown_gap_until_retry_is_due(tmp_path):
