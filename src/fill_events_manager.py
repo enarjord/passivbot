@@ -2247,9 +2247,12 @@ class FillEventCache:
         metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
-    def mark_refreshed(self) -> None:
+    def mark_refreshed(self, *, reset_event_bounds: bool = False) -> None:
         """Persist a successful refresh timestamp even if no events exist."""
         metadata = self.load_metadata()
+        if reset_event_bounds:
+            metadata["oldest_event_ts"] = 0
+            metadata["newest_event_ts"] = 0
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
@@ -5160,7 +5163,10 @@ class FillEventsManager:
                 self._events, mark_refreshed=mark_refreshed
             )
         elif mark_refreshed:
-            self.cache.mark_refreshed()
+            # A successful empty fetch proves that metadata-only event bounds
+            # are stale. Keeping them would leave coverage permanently blocked
+            # by a cache_metadata_event_mismatch verdict.
+            self.cache.mark_refreshed(reset_event_bounds=True)
         if fetched_bounded_range:
             # A successful bounded fetch proves the retried range even when the
             # exchange returns no new fills or only duplicates.
@@ -5511,13 +5517,14 @@ class FillEventsManager:
                     if bounds is not None
                     else "unknown"
                 )
+                gap_info = gap if isinstance(gap, dict) else {}
                 logger.warning(
                     "[fills] lookback coverage remains unproven because known gap overlaps requested window | start=%s gap=%s reason=%s retry_count=%s confidence=%s",
                     _format_ms(start_ms),
                     range_label,
-                    str(gap.get("reason", "unknown")),
-                    str(gap.get("retry_count", "unknown")),
-                    str(gap.get("confidence", "unknown")),
+                    str(gap_info.get("reason", "malformed")),
+                    str(gap_info.get("retry_count", "unknown")),
+                    str(gap_info.get("confidence", "unknown")),
                 )
                 return True
 
@@ -5572,7 +5579,9 @@ class FillEventsManager:
         return True
 
     @staticmethod
-    def _known_gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
+    def _known_gap_bounds(gap: object) -> Optional[Tuple[int, int]]:
+        if not isinstance(gap, dict):
+            return None
         try:
             gap_start = int(gap["start_ts"])
             gap_end = int(gap["end_ts"])
@@ -5583,7 +5592,9 @@ class FillEventsManager:
         return gap_start, gap_end
 
     @staticmethod
-    def _known_gap_confirmed_legitimate(gap: KnownGap) -> bool:
+    def _known_gap_confirmed_legitimate(gap: object) -> bool:
+        if not isinstance(gap, dict):
+            return False
         reason = str(gap.get("reason", "") or "").lower()
         try:
             confidence = float(gap.get("confidence", 0.0) or 0.0)
@@ -5596,11 +5607,14 @@ class FillEventsManager:
         *,
         start_ms: Optional[int],
         end_ms: Optional[int],
-    ) -> List[KnownGap]:
+    ) -> List[object]:
         window_start = 0 if start_ms is None else int(start_ms)
         window_end = (2**63 - 1) if end_ms is None else int(end_ms)
-        blocking: List[KnownGap] = []
-        for gap in self.cache.get_known_gaps():
+        known_gaps = self.cache.get_known_gaps()
+        if not isinstance(known_gaps, list):
+            return [None]
+        blocking: List[object] = []
+        for gap in known_gaps:
             bounds = FillEventsManager._known_gap_bounds(gap)
             if bounds is None:
                 blocking.append(gap)
