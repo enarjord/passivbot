@@ -12287,6 +12287,14 @@ class Passivbot:
         post_refresh_coverage_status: dict[str, Any] = {}
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
+        account_confirmation_requested = False
+
+        def request_account_confirmation() -> None:
+            nonlocal account_confirmation_requested
+            if account_confirmation_requested:
+                return
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            account_confirmation_requested = True
 
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
@@ -12342,8 +12350,37 @@ class Passivbot:
                     keys.add(f"id:{event_id}")
                 return keys
 
+            def event_structure(event: object) -> tuple[object, ...]:
+                source_ids = tuple(
+                    sorted(
+                        str(value)
+                        for value in getattr(event, "source_ids", None) or ()
+                        if value
+                    )
+                )
+                if not source_ids:
+                    event_id = str(getattr(event, "id", "") or "")
+                    source_ids = (event_id,) if event_id else ()
+                structural_fields = (
+                    "timestamp",
+                    "symbol",
+                    "side",
+                    "qty",
+                    "price",
+                    "pb_order_type",
+                    "position_side",
+                    "client_order_id",
+                    "psize",
+                    "pprice",
+                    "c_mult",
+                )
+                return (source_ids,) + tuple(
+                    getattr(event, field, None) for field in structural_fields
+                )
+
             def collect_enriched_events() -> list[tuple[object, object]]:
                 transitions: list[tuple[object, object]] = []
+                structural_transition = False
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
                     if current_keys & handled_enrichment_keys:
@@ -12370,11 +12407,14 @@ class Passivbot:
                     )
                     if previous_needs_enrichment and current_is_authoritative:
                         transitions.append((previous, current))
+                        if event_structure(previous) != event_structure(current):
+                            structural_transition = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
-                    self._request_authoritative_confirmation(ACCOUNT_SURFACES)
                     enriched_events.extend(transitions)
+                if structural_transition:
+                    request_account_confirmation()
                 return transitions
 
             flush_enriched_events = collect_enriched_events
@@ -12610,6 +12650,7 @@ class Passivbot:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             seen_new_source_ids: set[str] = set()
+            mixed_source_confirmation_required = False
             for ev in all_events:
                 src_ids = getattr(ev, "source_ids", None)
                 if src_ids:
@@ -12618,15 +12659,27 @@ class Passivbot:
                     src_ids = [ev.id] if getattr(ev, "id", None) else []
                 if not src_ids:
                     continue
-                if any(src_id in existing_source_ids for src_id in src_ids):
+                unseen_source_ids = [
+                    src_id
+                    for src_id in src_ids
+                    if src_id not in existing_source_ids
+                    and src_id not in seen_new_source_ids
+                ]
+                if not unseen_source_ids:
                     continue
-                if any(src_id in seen_new_source_ids for src_id in src_ids):
+                has_known_source = any(
+                    src_id in existing_source_ids or src_id in seen_new_source_ids
+                    for src_id in src_ids
+                )
+                seen_new_source_ids.update(unseen_source_ids)
+                if has_known_source:
+                    mixed_source_confirmation_required = True
                     continue
                 new_events.append(ev)
-                seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
-                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            if new_events or mixed_source_confirmation_required:
+                request_account_confirmation()
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
                 event
@@ -13020,7 +13073,7 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         self._assert_pnl_history_safe_for_risk(
             events,
-            context="realized loss gate PnL cumsum",
+            context="orchestrator realized PnL cumsum",
             start_ms=start_ms,
         )
         if not events:
@@ -16494,19 +16547,9 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances()
 
-    def _auto_unstuck_allowed_live(self) -> bool:
-        if self._pnls_manager is None:
-            return False
-        if not self._unstuck_uses_realized_pnl():
-            return False
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
-        self._assert_pnl_history_safe_for_risk(
-            events,
-            context="auto unstuck realized PnL",
-            start_ms=start_ms,
-        )
-        return True
+    def _auto_unstuck_configured_live(self) -> bool:
+        """Whether configured Rust unstuck logic consumes validated PnL inputs."""
+        return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_pnl_cumsum: dict
@@ -19003,8 +19046,8 @@ class Passivbot:
         # Python only proves the realized-PnL inputs are safe to expose; Rust
         # owns unstuck emission from the cumsum facts below, and duplicate
         # order risk rides normal live reconciliation like any other order.
-        auto_unstuck_allowed = self._auto_unstuck_allowed_live()
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
             symbols, now_ms=now_ms

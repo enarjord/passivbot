@@ -4563,6 +4563,7 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
     bot.get_exchange_time = lambda: 1_700_000_060_000
     bot._log_new_fill_events = lambda new_events: None
+    bot._request_authoritative_confirmation = MagicMock()
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._monitor_record_error = lambda *args, **kwargs: None
     refresh_summaries = []
@@ -4585,6 +4586,117 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     assert f"new={int(add_new_fill)}" in fill_timing_records[0].message
     assert len(refresh_summaries) == 1
     assert refresh_summaries[0]["level"] == "info"
+    if add_new_fill:
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "current_source_ids",
+        "current_id",
+        "current_qty",
+        "current_fee_paid",
+        "expect_confirmation",
+    ),
+    [
+        (["fill-a", "fill-b"], "fill-a+fill-b", -2.0, -0.01, True),
+        (["fill-a"], "fill-a", -2.0, -0.01, True),
+        (["fill-a"], "fill-a", -1.0, -0.02, False),
+    ],
+    ids=["mixed_new_source", "same_source_structural_change", "fee_only_change"],
+)
+async def test_update_pnls_confirms_only_structural_enrichment(
+    current_source_ids,
+    current_id,
+    current_qty,
+    current_fee_paid,
+    expect_confirmation,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_risk_uses_authoritative_pnl = lambda: True
+    previous = SimpleNamespace(
+        timestamp=1_700_000_000_000,
+        id="fill-a",
+        source_ids=["fill-a"],
+        symbol="BTC/USDT:USDT",
+        side="sell",
+        qty=-1.0,
+        price=100.0,
+        fee_paid=-0.01,
+        pb_order_type="close",
+        position_side="long",
+        client_order_id="pb-close",
+        pnl=0.0,
+        pnl_status="pending",
+        pnl_source=fem.PNL_SOURCE_PENDING,
+    )
+    current = SimpleNamespace(
+        **{
+            **vars(previous),
+            "id": current_id,
+            "source_ids": current_source_ids,
+            "qty": current_qty,
+            "fee_paid": current_fee_paid,
+            "pnl": 1.0,
+            "pnl_status": "complete",
+            "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+        }
+    )
+
+    class _Manager:
+        def __init__(self):
+            self._events = [previous]
+
+        async def refresh_latest(self, **_kwargs):
+            self._events = [current]
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return "all"
+
+        def set_history_scope(self, _scope):
+            pass
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _with_fill_coverage_api(_Manager())
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = MagicMock()
+    bot._log_enriched_fill_events = MagicMock()
+    bot._request_authoritative_confirmation = MagicMock()
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = MagicMock()
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    assert await bot.update_pnls(source="staged_blocking") is True
+
+    bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    # A mixed aggregate is already accounted by the enrichment path, so it
+    # requests confirmation without counting the aggregate as a second fill.
+    bot._log_new_fill_events.assert_not_called()
+    if expect_confirmation:
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
 
 
 def test_min_effective_cost_blocks_are_aggregated(caplog):
@@ -6492,7 +6604,9 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", [None, "repair", "routine"])
+@pytest.mark.parametrize(
+    "failure_stage", [None, "repair", "repair_structural", "routine"]
+)
 async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authoritative(
     failure_stage,
 ):
@@ -6518,6 +6632,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     authoritative = SimpleNamespace(
         **{
             **vars(degraded),
+            "source_ids": (
+                ["degraded-close", "new-close"]
+                if failure_stage == "repair_structural"
+                else ["degraded-close"]
+            ),
+            "qty": -5.0 if failure_stage == "repair_structural" else -4.0,
             "pnl": 3.0,
             "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
         }
@@ -6551,7 +6671,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
 
         async def _repair_degraded(self, **_kwargs):
             self._events = [authoritative]
-            if failure_stage == "repair":
+            if failure_stage in {"repair", "repair_structural"}:
                 raise RuntimeError("later repair range unavailable")
             return {
                 "attempted": True,
@@ -6616,7 +6736,7 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         start_ms=start_ms,
         end_ms=now_ms,
     )
-    if failure_stage == "repair":
+    if failure_stage in {"repair", "repair_structural"}:
         bot._pnls_manager.refresh_latest.assert_not_awaited()
     else:
         bot._pnls_manager.refresh_latest.assert_awaited_once_with(
@@ -6627,6 +6747,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
     previous, current = bot._log_enriched_fill_events.call_args.args[0][0]
     assert previous is degraded
     assert current is authoritative
+    if failure_stage == "repair_structural":
+        bot._request_authoritative_confirmation.assert_called_once_with(
+            ACCOUNT_SURFACES
+        )
+    else:
+        bot._request_authoritative_confirmation.assert_not_called()
     if failure_stage is not None:
         return
     summary = bot._emit_fills_refresh_summary_event.call_args.kwargs
@@ -8515,11 +8641,14 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.balance = 100.0
     bot.balance_raw = 200.0
+    get_events = MagicMock(
+        return_value=[
+            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+        ]
+    )
     bot._pnls_manager = _with_fill_coverage_api(
         types.SimpleNamespace(
-            get_events=lambda: [
-                types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-            ],
+            get_events=get_events,
             cache=_SafeRiskCache(),
             get_history_scope=lambda: "all",
         )
@@ -8543,8 +8672,11 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     out = bot._calc_unstuck_allowances()
     assert out["long"] == pytest.approx(77.0)
 
-    # The emission input stays available while the order is open.
-    assert bot._auto_unstuck_allowed_live() is True
+    # The emission input stays available while the order is open, without a
+    # second fill scan after the cumsum/allowance history was validated.
+    get_events.reset_mock()
+    assert bot._auto_unstuck_configured_live() is True
+    get_events.assert_not_called()
 
 
 def _make_unstuck_custom_id() -> str:
