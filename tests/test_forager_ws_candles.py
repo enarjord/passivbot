@@ -674,6 +674,7 @@ class _BlockingCCP:
     async def un_watch_ohlcv(self, symbol, timeframe):
         assert timeframe == "1m"
         self.unwatched.append(symbol)
+        self.events.setdefault(symbol, asyncio.Event()).set()
 
 
 @pytest.mark.asyncio
@@ -838,6 +839,82 @@ async def test_dynamic_subscriptions_follow_flat_forager_universe():
     for task in tasks.values():
         task.cancel()
     await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_wakeup_exception_is_consumed_before_watcher_retirement():
+    class _UnsubscribeWakeupCCP:
+        has = {"watchOHLCV": True}
+
+        def __init__(self):
+            self.future = None
+
+        async def watch_ohlcv(self, _symbol, _timeframe):
+            self.future = asyncio.get_running_loop().create_future()
+            return await self.future
+
+        async def un_watch_ohlcv(self, _symbol, _timeframe):
+            self.future.set_exception(RuntimeError("unsubscribe wakeup"))
+
+    ccp = _UnsubscribeWakeupCCP()
+    bot = SimpleNamespace(
+        ccp=ccp,
+        cm=SimpleNamespace(ingest_live_ws_ohlcv=lambda *_args: 0),
+        stop_signal_received=False,
+    )
+    task = asyncio.create_task(
+        candle_ws.watch_forager_ws_symbol(bot, "BTC/USDT:USDT")
+    )
+    await asyncio.sleep(0)
+
+    await candle_ws._retire_watcher(bot, "BTC/USDT:USDT", task)
+
+    assert task.done()
+    assert task.cancelled() is False
+    assert ccp.future.done()
+    assert ccp.future.exception() is not None
+
+
+@pytest.mark.asyncio
+async def test_bulk_watcher_retirement_uses_one_supported_unsubscribe():
+    class _BulkWakeupCCP:
+        def __init__(self):
+            self.futures = {}
+            self.bulk_calls = []
+            self.single_calls = []
+
+        async def watch_ohlcv(self, symbol, _timeframe):
+            future = asyncio.get_running_loop().create_future()
+            self.futures[symbol] = future
+            return await future
+
+        async def un_watch_ohlcv_for_symbols(self, subscriptions):
+            self.bulk_calls.append(subscriptions)
+            for symbol, _timeframe in subscriptions:
+                self.futures[symbol].set_exception(RuntimeError("unsubscribe wakeup"))
+
+        async def un_watch_ohlcv(self, symbol, _timeframe):
+            self.single_calls.append(symbol)
+
+    ccp = _BulkWakeupCCP()
+    bot = SimpleNamespace(
+        ccp=ccp,
+        cm=SimpleNamespace(ingest_live_ws_ohlcv=lambda *_args: 0),
+        stop_signal_received=False,
+    )
+    tasks = {
+        symbol: asyncio.create_task(candle_ws.watch_forager_ws_symbol(bot, symbol))
+        for symbol in ("A/USDT:USDT", "B/USDT:USDT")
+    }
+    await asyncio.sleep(0)
+
+    await candle_ws._retire_watchers(bot, tasks)
+
+    assert ccp.bulk_calls == [
+        [["A/USDT:USDT", "1m"], ["B/USDT:USDT", "1m"]]
+    ]
+    assert ccp.single_calls == []
+    assert all(task.done() and not task.cancelled() for task in tasks.values())
 
 
 @pytest.mark.asyncio

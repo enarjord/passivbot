@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -70,6 +71,62 @@ def test_stop_data_maintainers_keeps_cancellation_failures_at_error(caplog):
     assert "websocket-secret" not in caplog.text
     assert "private.invalid" not in caplog.text
     assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_awaits_ws_owner_before_closing_resources():
+    bot = Passivbot.__new__(Passivbot)
+    calls = []
+    child = None
+
+    async def child_watcher():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            calls.append("watcher_stopped")
+
+    async def ws_owner():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            child.cancel()
+            await asyncio.gather(child, return_exceptions=True)
+            calls.append("owner_stopped")
+
+    class _Client:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            calls.append(self.label)
+
+    class _Publisher:
+        def close(self):
+            calls.append("publisher")
+
+    child = asyncio.create_task(child_watcher())
+    owner = asyncio.create_task(ws_owner())
+    await asyncio.sleep(0)
+    bot.maintainers = {"maintain_forager_ws_candles": owner}
+    bot.WS_ohlcvs_1m_tasks = {"BTC": child}
+    bot.ccp = _Client("public")
+    bot.cca = _Client("private")
+    bot.monitor_publisher = _Publisher()
+    bot._close_live_event_pipeline = lambda **_kwargs: calls.append("pipeline") or True
+
+    await bot.cleanup_for_restart(timeout_seconds=1.0)
+
+    assert calls == [
+        "watcher_stopped",
+        "owner_stopped",
+        "public",
+        "private",
+        "pipeline",
+        "publisher",
+    ]
+    assert bot.ccp is None
+    assert bot.cca is None
+    assert bot.monitor_publisher is None
 
 
 @pytest.mark.asyncio

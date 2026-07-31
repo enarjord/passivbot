@@ -12265,12 +12265,17 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
                 "status": "-",
                 "code": "-",
                 "endpoint": "unknown",
+                "stage": "unknown",
+                "origin": monitor_events[0][0][2]["origin"],
                 "action": "record_error_restart_backoff",
                 "cycle": "abandoned",
             }),
             {},
         )
     ]
+    assert monitor_events[0][0][2]["origin"].startswith(
+        "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
+    )
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot.execute_to_exchange.assert_not_awaited()
     messages = [record.message for record in caplog.records]
@@ -12728,12 +12733,17 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
                 "status": "500",
                 "code": "500000",
                 "endpoint": "account-overview",
+                "stage": "unknown",
+                "origin": monitor_events[0][0][2]["origin"],
                 "action": "record_error_restart_backoff",
                 "cycle": "abandoned",
             }),
             {},
         )
     ]
+    assert monitor_events[0][0][2]["origin"].startswith(
+        "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
+    )
     messages = [record.message for record in caplog.records]
     assert not any("error with run_execution_loop" in message for message in messages)
     assert any(
@@ -12825,6 +12835,8 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
         "status": "429",
         "code": "10006",
         "endpoint": "unknown",
+        "stage": "unknown",
+        "origin": "unknown",
     }
     assert "SECRET" not in str(fields)
     assert "SIG" not in str(fields)
@@ -12841,6 +12853,25 @@ def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
 
     assert fields["endpoint"] == "unknown"
     assert secret not in str(fields)
+
+
+def test_execution_loop_error_fields_include_bounded_stage_and_origin():
+    bot = Passivbot.__new__(Passivbot)
+    bot._log_silence_watchdog_stage = "refresh_authoritative_state"
+
+    def fail_in_test():
+        raise RuntimeError("api_key=must-not-be-projected")
+
+    try:
+        fail_in_test()
+    except RuntimeError as exc:
+        fields = bot._execution_loop_error_fields(exc)
+
+    assert fields["stage"] == "refresh_authoritative_state"
+    assert fields["origin"].startswith(
+        "test_passivbot_balance_split.py:fail_in_test:"
+    )
+    assert "must-not-be-projected" not in str(fields)
 
 
 def test_execution_loop_error_fields_contain_hostile_exception_metadata():
@@ -12870,6 +12901,8 @@ def test_execution_loop_error_fields_contain_hostile_exception_metadata():
         "status": "-",
         "code": "-",
         "endpoint": "unknown",
+        "stage": "unknown",
+        "origin": "unknown",
     }
 
 

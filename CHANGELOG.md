@@ -29,6 +29,16 @@ All notable user-facing changes will be documented in this file.
   streams cool down to REST-only maintenance before retrying automatically, and
   the subscription reconciler remains ready for runtime transitions into
   forager mode.
+- Dynamic candle WebSocket removal now lets the owning watcher consume CCXT
+  Pro's unsubscribe wake-up before cancellation, avoiding orphaned-future error
+  spam. Internal bot restarts await maintainer teardown and close event,
+  monitor, and exchange-client resources before constructing the replacement
+  bot; bounded stage and source-location diagnostics identify future lifecycle
+  failures without exposing exchange response text. Background forager refresh
+  also distinguishes currently fetchable missing candles from verified
+  no-trade continuity and retry-deferred gaps, preventing sparse KuCoin markets
+  from repeatedly consuming REST budget while raw coverage remains honestly
+  unavailable where proof is incomplete.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

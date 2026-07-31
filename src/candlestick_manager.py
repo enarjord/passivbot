@@ -4062,6 +4062,115 @@ class CandlestickManager:
                 )
             )
             missing_candles = int(sum((e - s) // step_ms + 1 for s, e in missing))
+            verified_no_trade_spans: List[Tuple[int, int]] = []
+            deferred_missing_spans: List[Tuple[int, int]] = []
+            refreshable_missing_spans: List[Tuple[int, int]] = list(missing)
+            if step_ms == ONE_MIN_MS and missing:
+                known_gaps = self._get_known_gaps_enhanced(symbol)
+
+                def merge_spans(
+                    spans: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    merged: List[Tuple[int, int]] = []
+                    for span_start, span_end in sorted(
+                        (int(a), int(b)) for a, b in spans if int(a) <= int(b)
+                    ):
+                        if merged and span_start <= merged[-1][1] + ONE_MIN_MS:
+                            merged[-1] = (
+                                merged[-1][0],
+                                max(merged[-1][1], span_end),
+                            )
+                        else:
+                            merged.append((span_start, span_end))
+                    return merged
+
+                def intersect_missing(
+                    masks: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    intersections: List[Tuple[int, int]] = []
+                    for missing_start, missing_end in missing:
+                        for mask_start, mask_end in masks:
+                            overlap_start = max(int(missing_start), int(mask_start))
+                            overlap_end = min(int(missing_end), int(mask_end))
+                            if overlap_start <= overlap_end:
+                                intersections.append((overlap_start, overlap_end))
+                    return merge_spans(intersections)
+
+                def subtract_spans(
+                    source: Iterable[Tuple[int, int]],
+                    masks: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    remaining = list(source)
+                    for mask_start, mask_end in merge_spans(masks):
+                        next_remaining: List[Tuple[int, int]] = []
+                        for span_start, span_end in remaining:
+                            if mask_end < span_start or mask_start > span_end:
+                                next_remaining.append((span_start, span_end))
+                                continue
+                            if span_start < mask_start:
+                                next_remaining.append(
+                                    (span_start, mask_start - ONE_MIN_MS)
+                                )
+                            if mask_end < span_end:
+                                next_remaining.append(
+                                    (mask_end + ONE_MIN_MS, span_end)
+                                )
+                        remaining = next_remaining
+                    return merge_spans(remaining)
+
+                verified_masks: List[Tuple[int, int]] = []
+                deferred_masks: List[Tuple[int, int]] = []
+                for gap in known_gaps:
+                    gap_start = int(gap["start_ts"])
+                    gap_end = int(gap["end_ts"])
+                    reason = str(gap.get("reason", GAP_REASON_AUTO))
+                    if reason == GAP_REASON_NO_TRADES:
+                        # A continuity candle needs real price on both sides.
+                        # Open tails remain unavailable so a delayed exchange
+                        # candle can replace them authoritatively.
+                        if gap_end >= end_ts:
+                            continue
+                        prior = combined[combined["ts"] < gap_start]
+                        if prior.size == 0:
+                            prior_ts = self._latest_cached_ts_before(
+                                symbol, gap_start, timeframe=tf_norm
+                            )
+                            if prior_ts is None:
+                                continue
+                        successor = combined[combined["ts"] > gap_end]
+                        if successor.size:
+                            verified_masks.append((gap_start, gap_end))
+                        continue
+
+                    retry_due = self._should_retry_gap(gap, now_ms=ts_now)
+                    if (
+                        not retry_due
+                        and isinstance(self._ex_id, str)
+                        and "kucoin" in self._ex_id.lower()
+                        and reason in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+                        and self._kucoin_contextual_retry_due(gap, now_ms=ts_now)
+                    ):
+                        retry_due = True
+                    if not retry_due:
+                        deferred_masks.append((gap_start, gap_end))
+
+                verified_no_trade_spans = intersect_missing(verified_masks)
+                deferred_missing_spans = intersect_missing(deferred_masks)
+                refreshable_missing_spans = subtract_spans(
+                    missing,
+                    [*verified_no_trade_spans, *deferred_missing_spans],
+                )
+
+            def span_candle_count(spans: Iterable[Tuple[int, int]]) -> int:
+                return int(sum((e - s) // step_ms + 1 for s, e in spans))
+
+            verified_no_trade_missing_candles = span_candle_count(
+                verified_no_trade_spans
+            )
+            deferred_missing_candles = span_candle_count(deferred_missing_spans)
+            refreshable_missing_candles = span_candle_count(
+                refreshable_missing_spans
+            )
             last_cached_ts: Optional[int] = None
             if combined.size:
                 last_cached_ts = int(np.max(combined["ts"].astype(np.int64)))
@@ -4153,6 +4262,14 @@ class CandlestickManager:
                 "missing_spans": missing,
                 "missing_spans_preview": top_spans,
                 "missing_candles": int(missing_candles),
+                "verified_no_trade_missing_candles": int(
+                    verified_no_trade_missing_candles
+                ),
+                "deferred_missing_candles": int(deferred_missing_candles),
+                "refreshable_missing_candles": int(
+                    refreshable_missing_candles
+                ),
+                "refresh_needed": bool(refreshable_missing_candles > 0),
                 "open_tail_gap": bool(open_tail_gap),
                 "tail_gap_candles": int(tail_gap_candles),
                 "tail_gap_age_ms": (

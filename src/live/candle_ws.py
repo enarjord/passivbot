@@ -99,17 +99,80 @@ async def _sleep_unless_shutdown(bot: Any, delay_s: float, *, stage: str) -> Non
         await asyncio.sleep(delay_s)
 
 
-async def _best_effort_unwatch(bot: Any, symbol: str) -> None:
+async def _best_effort_unwatch(bot: Any, symbol: str) -> bool:
     ccp = getattr(bot, "ccp", None)
     unwatch = getattr(ccp, "un_watch_ohlcv", None)
     if not callable(unwatch):
-        return
+        return False
     try:
         await asyncio.wait_for(unwatch(symbol, "1m"), timeout=2.0)
+        return True
     except (asyncio.CancelledError, TimeoutError):
-        return
+        return False
     except Exception:
+        return False
+
+
+async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
+    ccp = getattr(bot, "ccp", None)
+    unwatch = getattr(ccp, "un_watch_ohlcv_for_symbols", None)
+    if not callable(unwatch) or not symbols:
+        return False
+    try:
+        subscriptions = [[symbol, "1m"] for symbol in symbols]
+        await asyncio.wait_for(unwatch(subscriptions), timeout=3.0)
+        return True
+    except (asyncio.CancelledError, TimeoutError):
+        return False
+    except Exception:
+        return False
+
+
+def _retiring_symbols(bot: Any) -> set[str]:
+    retiring = getattr(bot, "_forager_ws_retiring_symbols", None)
+    if not isinstance(retiring, set):
+        retiring = set()
+        bot._forager_ws_retiring_symbols = retiring
+    return retiring
+
+
+async def _retire_watcher(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    """Unsubscribe while the watcher still owns CCXT's subscription future.
+
+    CCXT Pro uses ``UnsubscribeError`` to wake outstanding ``watch_ohlcv``
+    futures after an unsubscribe acknowledgement.  Cancelling Passivbot's
+    awaiting task first leaves that future orphaned, which asyncio later logs
+    as ``Future exception was never retrieved``.  Mark retirement first, ask
+    CCXT to unsubscribe, and let the watcher consume the wake-up exception.
+    Cancellation remains the bounded fallback for transports which do not wake
+    the watcher.
+    """
+    await _retire_watchers(bot, {symbol: task})
+
+
+async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
+    """Retire a watcher set through one bulk unsubscribe where available."""
+    active = {symbol: task for symbol, task in tasks.items() if task is not None}
+    if not active:
         return
+    symbols = sorted(active)
+    retiring = _retiring_symbols(bot)
+    retiring.update(symbols)
+    try:
+        unwatched = await _best_effort_unwatch_many(bot, symbols)
+        if not unwatched:
+            await asyncio.gather(
+                *(_best_effort_unwatch(bot, symbol) for symbol in symbols),
+                return_exceptions=True,
+            )
+        pending = [task for task in active.values() if not task.done()]
+        if pending:
+            _, still_pending = await asyncio.wait(pending, timeout=3.0)
+            for task in still_pending:
+                task.cancel()
+        await asyncio.gather(*active.values(), return_exceptions=True)
+    finally:
+        retiring.difference_update(symbols)
 
 
 async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
@@ -119,6 +182,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
         while not bool(getattr(bot, "stop_signal_received", False)):
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
+                if symbol in _retiring_symbols(bot):
+                    break
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
                     # Some venues return hundreds of cached rows on every
@@ -133,6 +198,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if symbol in _retiring_symbols(bot):
+                    break
                 consecutive_failures += 1
                 delay_s = reconnect_delay_seconds(consecutive_failures)
                 clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
@@ -164,7 +231,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     stage="forager_ws_candle_reconnect",
                 )
     finally:
-        await _best_effort_unwatch(bot, symbol)
+        if symbol not in _retiring_symbols(bot):
+            await _best_effort_unwatch(bot, symbol)
 
 
 async def reconcile_forager_ws_tasks(
@@ -178,8 +246,7 @@ async def reconcile_forager_ws_tasks(
     removed_tasks = []
     for symbol in sorted(removed):
         task = tasks.pop(symbol)
-        task.cancel()
-        removed_tasks.append(task)
+        removed_tasks.append(_retire_watcher(bot, symbol, task))
     if removed_tasks:
         await asyncio.gather(*removed_tasks, return_exceptions=True)
     clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
@@ -213,9 +280,5 @@ async def maintain_forager_ws_candles(bot: Any) -> None:
     except asyncio.CancelledError:
         raise
     finally:
-        pending = list(tasks.values())
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        await _retire_watchers(bot, dict(tasks))
         tasks.clear()

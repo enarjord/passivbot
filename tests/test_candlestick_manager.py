@@ -2938,6 +2938,95 @@ def test_completed_candle_health_non_required_window_does_not_fail_overall(tmp_p
     assert report["timeframes"]["15m"]["missing_candles"] == 1
 
 
+def test_completed_candle_health_distinguishes_verified_sparse_continuity(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="kucoin",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSE/USDT:USDT"
+    now_ms = 6 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (5 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._record_verified_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_NO_TRADES,
+    )
+
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 4}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["coverage_ok"] is False
+    assert report["missing_candles"] == 2
+    assert report["verified_no_trade_missing_candles"] == 2
+    assert report["deferred_missing_candles"] == 0
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
+
+
+def test_completed_candle_health_defers_unknown_gap_until_retry_is_due(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="kucoin",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "DEFERRED/USDT:USDT"
+    now_ms = 6 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (5 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    gaps[0]["last_contextual_retry_at"] = now_ms
+    cm._save_known_gaps_enhanced(symbol, gaps)
+
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 4}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["coverage_ok"] is False
+    assert report["verified_no_trade_missing_candles"] == 0
+    assert report["deferred_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
+
+
 @pytest.mark.asyncio
 async def test_refresh_bounds_disk_load_range(monkeypatch, tmp_path):
     fixed_now_ms = 1725590400000  # 2024-09-06 00:00:00 UTC
