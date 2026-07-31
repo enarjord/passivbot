@@ -140,9 +140,24 @@ def _load_archived_market_and_grid_window(
         else []
     )
     if pre_window_grid_changes:
+        known_grids = {pre_window_grid_changes[0].old_grid}
+        expected_grid = pre_window_grid_changes[0].old_grid
+        for change in pre_window_grid_changes:
+            if change.old_grid != expected_grid:
+                raise ValueError(
+                    "archived Polymarket pre-window price-grid transitions "
+                    "do not form a continuous chain"
+                )
+            expected_grid = change.new_grid
+            known_grids.add(expected_grid)
+        if market.price_grid not in known_grids:
+            raise ValueError(
+                "archived Polymarket pre-window price-grid transitions "
+                "disagree with market metadata"
+            )
         market = replace(
             market,
-            price_grid=pre_window_grid_changes[-1].new_grid,
+            price_grid=expected_grid,
         )
     price_grid_changes = archive.load_price_grid_changes(
         market.venue,

@@ -441,7 +441,8 @@ at the opening boundary. When opening metadata omits a quantity step, minimum qu
 notional, full-contract replay requires an explicit user-supplied assumption for each missing
 constraint, rejects any assumption that conflicts with retained metadata, and records the
 overrides in its report. The authoritative settlement payout unit must match the market payout
-unit. The archive replay builder also requires independent full-window
+unit, and all retained resolution/redemption evidence must agree on the resolution timestamp even
+when capital-release times differ. The archive replay builder also requires independent full-window
 price-grid stream coverage on venues such as Polymarket where tick-size changes are a separate
 event source. Fill coverage does not prove grid coverage. A bounded live capture without an
 authoritative grid-subscription readiness boundary archives observed changes but does not certify
@@ -457,7 +458,9 @@ Any bounded outcome-window evaluation uses the archived market metadata state va
 of its requested window, not the latest discovery row. Its effective opening price grid includes
 the latest retained transition before the window even when the corresponding metadata refresh was
 observed later. It requires verified grid-stream coverage for that window and replays every
-retained in-window grid change in chronological order. Strategy lifecycle
+retained in-window grid change in chronological order. Before deriving the effective opening grid,
+the complete retained pre-window old-to-new transition chain must be continuous and must include
+the archived metadata grid. Strategy lifecycle
 gates, settlement, and inventory-time metrics use synthetic open and close boundaries matching the
 requested sample; the result is not presented as a full-contract replay. Window-specific
 risk-reduction and entry-cutoff durations are explicit inputs and default to disabled, so a short

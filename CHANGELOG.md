@@ -92,7 +92,9 @@ All notable user-facing changes will be documented in this file.
   captures retain grid changes without fabricating unproven grid-stream coverage. Full-contract
   replay now exposes and records explicit minimum-quantity and minimum-notional assumptions
   alongside quantity step when opening metadata omits them, and rejects settlement evidence whose
-  payout unit disagrees with the market. Outcome archive imports now reject contradictory trades
+  payout unit or resolution timestamp disagrees with the market or other retained settlement
+  evidence. Bounded Polymarket replay validates the full pre-window price-grid transition chain
+  before deriving its opening grid. Outcome archive imports now reject contradictory trades
   under the same source or sequence identity, attempted
   quote cleanup continues through individual cancellation errors, Rust keeps order-entry
   acceptance separate from market open and permits authoritative trading close after the scheduled

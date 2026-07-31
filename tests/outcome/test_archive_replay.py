@@ -209,6 +209,40 @@ def test_authoritative_settlement_must_match_market_payout_unit():
         )
 
 
+def test_authoritative_settlement_requires_one_resolution_timestamp():
+    settlement = OutcomeSettlementEvidence(
+        venue=OutcomeVenue.HYPERLIQUID,
+        market_id="binary-1",
+        yes_fraction=1.0,
+        payout_unit=1.0,
+        settlement_time_ms=5_100,
+        capital_release_time_ms=5_100,
+        received_time_ms=5_200,
+        source_event_id="resolution",
+        evidence_source="fixture_resolution",
+        observed_yes_qty=1.0,
+        observed_no_qty=0.0,
+        collateral_payout=1.0,
+        fee=0.0,
+        fee_asset="USDC",
+    )
+    contradictory = replace(
+        settlement,
+        settlement_time_ms=5_101,
+        capital_release_time_ms=5_200,
+        received_time_ms=5_300,
+        source_event_id="redemption",
+        evidence_source="fixture_redemption",
+    )
+
+    with pytest.raises(ValueError, match="conflicting settlement evidence"):
+        _authoritative_settlement(
+            [settlement, contradictory],
+            market_id=settlement.market_id,
+            payout_unit=1.0,
+        )
+
+
 def test_replay_merges_later_actual_close_into_initial_market_terms(tmp_path):
     raw_market = json.loads(
         (FIXTURES / "hyperliquid_price_binary.json").read_text()

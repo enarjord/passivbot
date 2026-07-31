@@ -345,6 +345,65 @@ def test_polymarket_window_applies_latest_pre_window_grid_change(tmp_path):
     assert changes == []
 
 
+def test_polymarket_window_rejects_discontinuous_pre_window_grid_changes(
+    tmp_path,
+):
+    discovered = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    fee_free = OutcomeFeeMetadata(
+        formula="venue_reported_zero",
+        maker_rate=0.0,
+        taker_rate=0.0,
+    )
+    opening_market = replace(discovered, fee_metadata=fee_free)
+    first_grid = OutcomePriceGridMetadata(kind="fixed_step", fixed_step=0.001)
+    unrelated_grid = OutcomePriceGridMetadata(kind="fixed_step", fixed_step=0.002)
+    final_grid = OutcomePriceGridMetadata(kind="fixed_step", fixed_step=0.0001)
+    archive = OutcomeTradeArchive(tmp_path / "polymarket-broken-grid-chain.sqlite")
+    archive.append_market_metadata(
+        opening_market,
+        observed_at_ms=1_000,
+        observation_source="gamma",
+    )
+    archive.append_price_grid_change(
+        OutcomePriceGridChange(
+            venue=opening_market.venue,
+            market_id=opening_market.market_id,
+            timestamp_ms=2_000,
+            received_time_ms=2_100,
+            old_grid=opening_market.price_grid,
+            new_grid=first_grid,
+            raw_payload={"event_type": "tick_size_change"},
+        ),
+        collector_session="grid",
+    )
+    archive.append_price_grid_change(
+        OutcomePriceGridChange(
+            venue=opening_market.venue,
+            market_id=opening_market.market_id,
+            timestamp_ms=3_000,
+            received_time_ms=3_100,
+            old_grid=unrelated_grid,
+            new_grid=final_grid,
+            raw_payload={"event_type": "tick_size_change"},
+        ),
+        collector_session="grid",
+    )
+    archive.record_verified_price_grid_coverage(
+        opening_market.venue,
+        opening_market.market_id,
+        VerifiedCoverage(1_000, 6_000),
+        collector_session="grid",
+    )
+
+    with pytest.raises(ValueError, match="do not form a continuous chain"):
+        _load_archived_market_and_grid_window(
+            archive,
+            opening_market,
+            start_ms=4_000,
+            end_ms=6_000,
+        )
+
+
 def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
     market = replace(
         hyperliquid.normalize_market(fixture("hyperliquid_price_binary.json")),

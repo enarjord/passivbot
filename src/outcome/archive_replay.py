@@ -52,7 +52,14 @@ def _authoritative_settlement(
         raise ValueError(f"outcome archive has no settlement evidence for {market_id}")
     yes_fractions = {settlement.yes_fraction for settlement in settlements}
     payout_units = {settlement.payout_unit for settlement in settlements}
-    if len(yes_fractions) != 1 or len(payout_units) != 1:
+    settlement_times = {
+        settlement.settlement_time_ms for settlement in settlements
+    }
+    if (
+        len(yes_fractions) != 1
+        or len(payout_units) != 1
+        or len(settlement_times) != 1
+    ):
         raise ValueError(f"outcome archive has conflicting settlement evidence for {market_id}")
     settlement_payout_unit = next(iter(payout_units))
     if not math.isclose(
