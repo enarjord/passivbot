@@ -65,6 +65,9 @@
     authoritative net realized PnL only: pending and synthetic values remain visible in
     fill diagnostics but do not enter the health counter, and later enrichment adds the
     full authoritative amount without retaining fill-identity accounting state.
+    PnL- or fee-only enrichment changes local accounting evidence and does not request
+    another account-wide confirmation. New source identities and structural fill changes
+    still confirm account surfaces because they may represent a new exchange-state transition.
     Structured `cycle.degraded` diagnostics preserve bounded `pending_pnl_count` and
     `degraded_pnl_count` fields through the centralized payload sanitizer.
 11. `FillEventsManager` owns the canonical fill-history coverage verdict used by
@@ -75,6 +78,13 @@
     contradictory cache evidence: they are unavailable rather than proof of
     coverage. A window with no fills remains valid when zero oldest/newest metadata
     and `covered_start_ms` prove that empty result.
+12. Live coverage requirements follow the enabled consumer. Realized-PnL risk
+    features require the configured PnL lookback and authoritative PnL quality.
+    Entry cooldown without a PnL consumer requires structural fill coverage only
+    across its maximum configured cooldown horizon. Trailing reconstruction retains
+    its symbol/position-side confirmation and bounded recovery. With no historical
+    consumer enabled, routine ingestion starts from a bounded recent fetch rather
+    than proving an unrelated PnL window.
 
 ## Runtime Provenance
 
@@ -159,9 +169,11 @@ quarantine, rebuild, or defer according to `../error_contract.md`; it must not a
 merely because an auxiliary endpoint failed.
 
 Unproven required coverage is a controlled live-planning deferral. The execution loop owns its
-bounded retry cadence, and persistent coverage gaps do not consume the generic process-restart
-budget. Manager-owned known-gap state remains evidence about coverage, not a second orchestration
-timer.
+bounded, reason-aware retry cadence, and persistent coverage gaps do not consume the generic
+process-restart budget. A change between coverage and PnL block reasons restarts that reason's
+backoff at its configured base. Already-latched HSL RED supervisors continue protective management
+without fills while coverage repair proceeds. Manager-owned known-gap state remains evidence about
+coverage, not a second orchestration timer.
 
 ## Validation
 

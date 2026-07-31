@@ -1835,14 +1835,117 @@ class Passivbot:
                 field_name="live.pnls_max_lookback_days",
             )
             now_ms = self.get_exchange_time()
-            start_ms = lookback.fill_cache_age_limit_ms(now_ms)
+            pnl_start_ms = lookback.fill_cache_age_limit_ms(now_ms)
+            coverage_required, start_ms = self._required_fill_history_start_ms(
+                now_ms, pnl_start_ms=pnl_start_ms
+            )
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
+        if not coverage_required:
+            return True
         status = self._fill_history_coverage_status(
             start_ms=start_ms,
             end_ms=now_ms,
         )
         return bool(status.get("ready", False))
+
+    @staticmethod
+    def _entry_cooldown_fill_lookback_minutes(cooldown_minutes: float) -> int:
+        if cooldown_minutes <= 0.0:
+            return 0
+        return 1 if cooldown_minutes < 1.0 else int(math.ceil(cooldown_minutes)) + 1
+
+    def _max_configured_entry_cooldown_minutes(self) -> float:
+        symbols: list[Optional[str]] = [None]
+        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
+        return max(
+            float(self.bp(pside, "risk_entry_cooldown_minutes", symbol) or 0.0)
+            for symbol in symbols
+            for pside in ("long", "short")
+        )
+
+    def _required_fill_history_start_ms(
+        self, now_ms: int, *, pnl_start_ms: Optional[int]
+    ) -> tuple[bool, Optional[int]]:
+        """Return whether planning needs historical coverage and its earliest timestamp."""
+        if self._live_risk_uses_authoritative_pnl():
+            return True, pnl_start_ms
+        cooldown_lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
+            self._max_configured_entry_cooldown_minutes()
+        )
+        if cooldown_lookback_minutes <= 0:
+            return False, None
+        return True, max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
+
+    def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
+        try:
+            base_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_delay_seconds",
+                    30.0,
+                )
+            )
+        except Exception:
+            base_delay = 30.0
+        try:
+            max_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_max_delay_seconds",
+                    300.0,
+                )
+            )
+        except Exception:
+            max_delay = 300.0
+        base_delay = max(0.0, base_delay)
+        max_delay = max(base_delay, max_delay)
+        retry_count = max(1, int(retry_count or 1))
+        return min(max_delay, base_delay * (2 ** min(retry_count - 1, 6)))
+
+    @staticmethod
+    def _fill_coverage_retry_key(status: dict[str, object]) -> tuple:
+        return (
+            str(status.get("reason", "unknown")),
+            str(status.get("history_scope", "unknown")),
+            int(status.get("covered_start_ms", 0) or 0),
+            int(status.get("oldest_event_ts", 0) or 0),
+            int(status.get("gap_start_ts", 0) or 0),
+            int(status.get("gap_end_ts", 0) or 0),
+            str(status.get("gap_reason", "")),
+        )
+
+    def _fill_coverage_retry_deferred(self, status: dict[str, object], now_ms: int) -> bool:
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        if not isinstance(state, dict):
+            return False
+        if state.get("key") != self._fill_coverage_retry_key(status):
+            return False
+        next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+        return next_retry_ms > int(now_ms)
+
+    def _record_fill_coverage_retry_defer(
+        self, status: dict[str, object], *, now_ms: Optional[int] = None
+    ) -> None:
+        now = utc_ms() if now_ms is None else int(now_ms)
+        key = self._fill_coverage_retry_key(status)
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        previous_count = (
+            int(state.get("retry_count", 0) or 0)
+            if isinstance(state, dict) and state.get("key") == key
+            else 0
+        )
+        retry_count = previous_count + 1
+        delay_s = self._fill_coverage_retry_delay_seconds(retry_count)
+        self._fill_coverage_retry_state = {
+            "key": key,
+            "retry_count": retry_count,
+            "next_retry_ms": now + int(delay_s * 1000.0),
+        }
+
+    def _clear_fill_coverage_retry_defer(self) -> None:
+        if hasattr(self, "_fill_coverage_retry_state"):
+            self._fill_coverage_retry_state = {}
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -5902,6 +6005,35 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
+    async def _run_latched_hsl_supervisor_if_active(
+        self, *, cycle_id: object, loop_timings_ms: dict[str, int]
+    ) -> bool:
+        """Run already-latched RED supervision without requiring fill readiness."""
+        if not self._equity_hard_stop_enabled():
+            return False
+        if self._equity_hard_stop_signal_mode() == "coin":
+            if not self._equity_hard_stop_coin_red_active():
+                return False
+            reason_code = "coin_hsl_red_supervisor"
+            supervisor = self._equity_hard_stop_run_coin_red_supervisor
+        else:
+            if not any(
+                self._equity_hard_stop_runtime_red_latched(pside)
+                and not self._hsl_state(pside)["halted"]
+                for pside in self._hsl_psides()
+                if self._equity_hard_stop_enabled(pside)
+            ):
+                return False
+            reason_code = "hsl_red_supervisor"
+            supervisor = self._equity_hard_stop_run_red_supervisor
+        self._emit_live_cycle_degraded(
+            cycle_id=cycle_id,
+            reason_code=reason_code,
+            data={"timings_ms": dict(loop_timings_ms)},
+        )
+        await supervisor()
+        return True
+
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
         current_task = asyncio.current_task()
@@ -5911,6 +6043,7 @@ class Passivbot:
         self._execution_loop_stopped = execution_loop_stopped
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         authoritative_fill_retry_count = 0
+        authoritative_fill_retry_reason = None
         max_n_fails = 10
         if self._equity_hard_stop_enabled():
             if self._equity_hard_stop_signal_mode() == "coin":
@@ -5975,6 +6108,9 @@ class Passivbot:
                         "degraded_pnl",
                         "fill_history_coverage",
                     }:
+                        if authoritative_fill_retry_reason != authoritative_block_reason:
+                            authoritative_fill_retry_count = 0
+                            authoritative_fill_retry_reason = authoritative_block_reason
                         authoritative_fill_retry_count += 1
                         failed_update_pos_oos_pnls_ohlcvs_count = 0
                         retry_delay_seconds = (
@@ -6020,6 +6156,14 @@ class Passivbot:
                                 "timings_ms": dict(loop_timings_ms),
                             },
                         )
+                        if (
+                            coverage_blocked
+                            and await self._run_latched_hsl_supervisor_if_active(
+                                cycle_id=cycle_id,
+                                loop_timings_ms=loop_timings_ms,
+                            )
+                        ):
+                            continue
                         await self._sleep_unless_shutdown(
                             retry_delay_seconds,
                             stage=(
@@ -6032,6 +6176,7 @@ class Passivbot:
                         )
                     else:
                         authoritative_fill_retry_count = 0
+                        authoritative_fill_retry_reason = None
                         failed_update_pos_oos_pnls_ohlcvs_count += 1
                         self._emit_live_cycle_degraded(
                             cycle_id=cycle_id,
@@ -6051,6 +6196,7 @@ class Passivbot:
                             await self.restart_bot_on_too_many_errors()
                     continue
                 authoritative_fill_retry_count = 0
+                authoritative_fill_retry_reason = None
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self.stop_signal_received:
                     self._emit_live_cycle_degraded(
@@ -6061,29 +6207,11 @@ class Passivbot:
                     break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if self._equity_hard_stop_signal_mode() == "coin":
-                        if self._equity_hard_stop_coin_red_active():
-                            self._emit_live_cycle_degraded(
-                                cycle_id=cycle_id,
-                                reason_code="coin_hsl_red_supervisor",
-                                data={"timings_ms": dict(loop_timings_ms)},
-                            )
-                            await self._equity_hard_stop_run_coin_red_supervisor()
-                            continue
-                    else:
-                        if any(
-                            self._equity_hard_stop_runtime_red_latched(pside)
-                            and not self._hsl_state(pside)["halted"]
-                            for pside in self._hsl_psides()
-                            if self._equity_hard_stop_enabled(pside)
-                        ):
-                            self._emit_live_cycle_degraded(
-                                cycle_id=cycle_id,
-                                reason_code="hsl_red_supervisor",
-                                data={"timings_ms": dict(loop_timings_ms)},
-                            )
-                            await self._equity_hard_stop_run_red_supervisor()
-                            continue
+                    if await self._run_latched_hsl_supervisor_if_active(
+                        cycle_id=cycle_id,
+                        loop_timings_ms=loop_timings_ms,
+                    ):
+                        continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
@@ -12208,6 +12336,14 @@ class Passivbot:
         post_refresh_coverage_status: dict[str, Any] = {}
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
+        account_confirmation_requested = False
+
+        def request_account_confirmation() -> None:
+            nonlocal account_confirmation_requested
+            if account_confirmation_requested:
+                return
+            self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            account_confirmation_requested = True
 
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
@@ -12225,7 +12361,12 @@ class Passivbot:
                 lookback_config_value,
                 field_name="live.pnls_max_lookback_days",
             )
-            age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+            exchange_time_ms = self.get_exchange_time()
+            pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
+            coverage_required, age_limit = self._required_fill_history_start_ms(
+                exchange_time_ms,
+                pnl_start_ms=pnl_age_limit,
+            )
 
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
@@ -12258,8 +12399,37 @@ class Passivbot:
                     keys.add(f"id:{event_id}")
                 return keys
 
+            def event_structure(event: object) -> tuple[object, ...]:
+                source_ids = tuple(
+                    sorted(
+                        str(value)
+                        for value in getattr(event, "source_ids", None) or ()
+                        if value
+                    )
+                )
+                if not source_ids:
+                    event_id = str(getattr(event, "id", "") or "")
+                    source_ids = (event_id,) if event_id else ()
+                structural_fields = (
+                    "timestamp",
+                    "symbol",
+                    "side",
+                    "qty",
+                    "price",
+                    "pb_order_type",
+                    "position_side",
+                    "client_order_id",
+                    "psize",
+                    "pprice",
+                    "c_mult",
+                )
+                return (source_ids,) + tuple(
+                    getattr(event, field, None) for field in structural_fields
+                )
+
             def collect_enriched_events() -> list[tuple[object, object]]:
                 transitions: list[tuple[object, object]] = []
+                structural_transition = False
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
                     if current_keys & handled_enrichment_keys:
@@ -12286,11 +12456,14 @@ class Passivbot:
                     )
                     if previous_needs_enrichment and current_is_authoritative:
                         transitions.append((previous, current))
+                        if event_structure(previous) != event_structure(current):
+                            structural_transition = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
-                    self._request_authoritative_confirmation(ACCOUNT_SURFACES)
                     enriched_events.extend(transitions)
+                if structural_transition:
+                    request_account_confirmation()
                 return transitions
 
             flush_enriched_events = collect_enriched_events
@@ -12299,20 +12472,35 @@ class Passivbot:
             # lookback before fill-dependent planning.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
-            coverage_status = self._fill_history_coverage_status(
-                start_ms=age_limit,
-                end_ms=self.get_exchange_time(),
+            if coverage_required:
+                coverage_status = self._fill_history_coverage_status(
+                    start_ms=age_limit,
+                    end_ms=exchange_time_ms,
+                )
+                coverage_ready = bool(coverage_status.get("ready", False))
+            else:
+                coverage_status = {
+                    "ready": True,
+                    "reason": "historical_coverage_not_required",
+                    "history_scope": "recent",
+                    "covered_start_ms": 0,
+                    "oldest_event_ts": 0,
+                }
+                coverage_ready = True
+            needs_full_refresh = (
+                coverage_required and age_limit is None and not coverage_ready
             )
-            coverage_ready = bool(coverage_status.get("ready", False))
-            needs_full_refresh = lookback.is_all and not coverage_ready
-            needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            needs_lookback_refresh = (
+                coverage_required and age_limit is not None and not coverage_ready
+            )
             fill_fetch_completed = False
             degraded_repair_attempted = False
             history_scope = str(coverage_status.get("history_scope", "unknown"))
             degraded_before = [
                 event
                 for event in FillEventsManager.degraded_pnl_events(events)
-                if age_limit is None or int(event.timestamp) >= int(age_limit)
+                if pnl_age_limit is None
+                or int(event.timestamp) >= int(pnl_age_limit)
             ]
             repair_degraded = getattr(
                 self._pnls_manager, "refresh_degraded_pnl_events", None
@@ -12326,7 +12514,9 @@ class Passivbot:
                 degraded_repair_attempted = True
                 try:
                     await repair_degraded(
-                        start_ms=None if age_limit is None else int(age_limit),
+                        start_ms=(
+                            None if pnl_age_limit is None else int(pnl_age_limit)
+                        ),
                         end_ms=int(self.get_exchange_time()),
                     )
                 finally:
@@ -12420,7 +12610,7 @@ class Passivbot:
                     # widening is reserved for the nonblocking trailing
                     # recovery prefetch.
                     recovery_start_ms = (
-                        self._trailing_fill_history_recovery_start_ms(age_limit)
+                        self._trailing_fill_history_recovery_start_ms(pnl_age_limit)
                         if trailing_recovery_refresh
                         else None
                     )
@@ -12443,6 +12633,22 @@ class Passivbot:
                             start_ms=int(recovery_start_ms),
                             end_ms=None,
                         )
+                    elif not coverage_required and before_events_count == 0:
+                        refresh_mode = "incremental_bounded"
+                        bounded_start_ms = max(
+                            0,
+                            int(exchange_time_ms)
+                            - int(overlap_minutes * 60 * 1000),
+                        )
+                        await self._pnls_manager.refresh(
+                            start_ms=bounded_start_ms,
+                            end_ms=None,
+                        )
+                        cache = getattr(self._pnls_manager, "cache", None)
+                        mark_covered_start = getattr(cache, "mark_covered_start", None)
+                        if callable(mark_covered_start):
+                            mark_covered_start(bounded_start_ms)
+                        self._pnls_manager.set_history_scope("window")
                     else:
                         await self._pnls_manager.refresh_latest(
                             overlap=20,
@@ -12464,6 +12670,7 @@ class Passivbot:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
             new_events = []
             seen_new_source_ids: set[str] = set()
+            mixed_source_confirmation_required = False
             for ev in all_events:
                 src_ids = getattr(ev, "source_ids", None)
                 if src_ids:
@@ -12472,29 +12679,48 @@ class Passivbot:
                     src_ids = [ev.id] if getattr(ev, "id", None) else []
                 if not src_ids:
                     continue
-                if any(src_id in existing_source_ids for src_id in src_ids):
+                unseen_source_ids = [
+                    src_id
+                    for src_id in src_ids
+                    if src_id not in existing_source_ids
+                    and src_id not in seen_new_source_ids
+                ]
+                if not unseen_source_ids:
                     continue
-                if any(src_id in seen_new_source_ids for src_id in src_ids):
+                has_known_source = any(
+                    src_id in existing_source_ids or src_id in seen_new_source_ids
+                    for src_id in src_ids
+                )
+                seen_new_source_ids.update(unseen_source_ids)
+                if has_known_source:
+                    mixed_source_confirmation_required = True
                     continue
                 new_events.append(ev)
-                seen_new_source_ids.update(src_ids)
             if new_events:
                 self._log_new_fill_events(new_events)
-                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            if new_events or mixed_source_confirmation_required:
+                request_account_confirmation()
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
                 event
                 for event in FillEventsManager.degraded_pnl_events(all_events)
-                if age_limit is None or int(event.timestamp) >= int(age_limit)
+                if pnl_age_limit is None
+                or int(event.timestamp) >= int(pnl_age_limit)
             ]
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             self._last_fill_refresh_degraded_pnl_count = len(degraded_pnl_events)
             pnls_safe = not pending_pnl_events and not degraded_pnl_events
-            post_refresh_coverage_status = self._fill_history_coverage_status(
-                start_ms=age_limit,
-                end_ms=self.get_exchange_time(),
-            )
-            coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
+            if coverage_required:
+                post_refresh_coverage_status = self._fill_history_coverage_status(
+                    start_ms=age_limit,
+                    end_ms=self.get_exchange_time(),
+                )
+                coverage_ready_after = bool(
+                    post_refresh_coverage_status.get("ready", False)
+                )
+            else:
+                post_refresh_coverage_status = dict(coverage_status)
+                coverage_ready_after = True
             fills_ready = coverage_ready_after and (
                 pnls_safe or not authoritative_pnl_required
             )
@@ -12863,7 +13089,7 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         self._assert_pnl_history_safe_for_risk(
             events,
-            context="realized loss gate PnL cumsum",
+            context="orchestrator realized PnL cumsum",
             start_ms=start_ms,
         )
         if not events:
@@ -12905,8 +13131,8 @@ class Passivbot:
 
         if now_ms is None:
             now_ms = int(self.get_exchange_time())
-        lookback_minutes = (
-            1 if max_cooldown_minutes < 1.0 else int(math.ceil(max_cooldown_minutes)) + 1
+        lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
+            max_cooldown_minutes
         )
         start_ms = max(0, int(now_ms) - lookback_minutes * 60_000)
         events = self._pnls_manager.get_events(start_ms=start_ms)
@@ -16337,19 +16563,9 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances()
 
-    def _auto_unstuck_allowed_live(self) -> bool:
-        if self._pnls_manager is None:
-            return False
-        if not self._unstuck_uses_realized_pnl():
-            return False
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
-        self._assert_pnl_history_safe_for_risk(
-            events,
-            context="auto unstuck realized PnL",
-            start_ms=start_ms,
-        )
-        return True
+    def _auto_unstuck_configured_live(self) -> bool:
+        """Whether configured Rust unstuck logic consumes validated PnL inputs."""
+        return self._pnls_manager is not None and self._unstuck_uses_realized_pnl()
 
     def _calc_orchestrator_unstuck_allowance_for_symbol(
         self, pside: str, symbol: str, realized_pnl_cumsum: dict
@@ -18846,8 +19062,8 @@ class Passivbot:
         # Python only proves the realized-PnL inputs are safe to expose; Rust
         # owns unstuck emission from the cumsum facts below, and duplicate
         # order risk rides normal live reconciliation like any other order.
-        auto_unstuck_allowed = self._auto_unstuck_allowed_live()
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
+        auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
             symbols, now_ms=now_ms
