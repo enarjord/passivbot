@@ -1049,9 +1049,11 @@ def test_raw_rust_output_rejects_active_state_for_submitted_ineligible_side(
 def test_raw_rust_output_rejects_active_state_for_flat_globally_disabled_side(
     input_overrides,
 ):
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
     with pytest.raises(FatalBotException, match="inconsistent with submitted eligibility"):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output(),
+            out,
             {0: SYMBOL},
             _raw_rust_input(long_pos_size=0.0, **input_overrides),
         )
@@ -1104,8 +1106,11 @@ def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
     input_overrides,
 ):
     out = _raw_rust_output([_raw_rust_order()])
-    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
-    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        effective_mode="manual",
+        active=False,
+        allow_initial=False,
+    )
 
     with pytest.raises(FatalBotException, match="globally disabled long"):
         reconciler.validate_rust_orchestrator_output(
@@ -1124,9 +1129,11 @@ def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
     ids=["entry", "close"],
 )
 def test_raw_rust_output_rejects_orders_for_globally_disabled_held_side(order):
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
     with pytest.raises(FatalBotException, match="globally disabled long"):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output([order]),
+            out,
             {0: SYMBOL},
             _raw_rust_input(
                 long_pos_size=1.0,
@@ -1357,6 +1364,47 @@ def test_raw_rust_output_accepts_limit_price_aligned_to_submitted_price_step():
     ) == [order]
 
 
+@pytest.mark.parametrize(
+    ("order_overrides", "input_overrides", "error"),
+    [
+        (
+            {"qty": -0.5, "order_type": "close_grid_long"},
+            {"long_pos_size": 2.0, "qty_step": 0.1, "min_qty": 1.0},
+            "close minimum",
+        ),
+        (
+            {"qty": -1.05, "order_type": "close_grid_long"},
+            {"long_pos_size": 2.0, "qty_step": 0.1},
+            "qty_step",
+        ),
+    ],
+    ids=["below-effective-minimum", "off-quantity-step"],
+)
+def test_raw_rust_output_rejects_close_quantity_outside_exchange_constraints(
+    order_overrides,
+    input_overrides,
+    error,
+):
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(**order_overrides)]),
+            {0: SYMBOL},
+            _raw_rust_input(**input_overrides),
+        )
+
+
+def test_raw_rust_output_accepts_exact_remaining_below_minimum_dust_close():
+    order = _raw_rust_order(
+        qty=-0.55,
+        order_type="close_grid_long",
+    )
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=0.55, qty_step=0.1, min_qty=1.0),
+    ) == [order]
+
+
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
     order = _raw_rust_order(order_type="entry_grid_normal_long")
     out = _raw_rust_output([order])
@@ -1371,14 +1419,39 @@ def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
 
 
 def test_raw_rust_output_keeps_active_held_side_when_globally_disabled():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output(),
+        out,
         {0: SYMBOL},
         _raw_rust_input(
             long_pos_size=1.0,
             long_n_positions=0,
             long_total_wallet_exposure_limit=0.0,
         ),
+    ) == []
+
+
+def test_raw_rust_output_rejects_incorrect_recognized_effective_mode():
+    out = _raw_rust_output_for_long_mode([], "panic")
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "normal"
+
+    with pytest.raises(FatalBotException, match="effective_mode inconsistent"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_mode="panic", long_pos_size=1.0),
+        )
+
+
+def test_raw_rust_output_accepts_held_graceful_stop_effective_normal_mode():
+    out = _raw_rust_output_for_long_mode([], "graceful_stop")
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "normal"
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(long_mode="graceful_stop", long_pos_size=1.0),
     ) == []
 
 
@@ -1648,6 +1721,15 @@ def test_raw_rust_output_duplicate_json_key_is_fatal():
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
 def test_raw_rust_output_nonstandard_json_numeric_constant_is_fatal(constant):
     out_json = f'{{"diagnostics":{{"warnings":[{constant}]}}}}'
+
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+def test_raw_rust_output_exponent_overflow_json_number_is_fatal():
+    out_json = '{"diagnostics":{"warnings":[1e400]}}'
 
     with pytest.raises(FatalBotException, match="malformed JSON"):
         reconciler.parse_and_validate_rust_orchestrator_output(

@@ -2253,8 +2253,8 @@ mod core {
             PositionSide::Short => pos.size.abs(),
         };
         let price = match pside {
-            PositionSide::Long => ob.ask - exchange.price_step,
-            PositionSide::Short => ob.bid + exchange.price_step,
+            PositionSide::Long => round_dn(ob.ask - exchange.price_step, exchange.price_step),
+            PositionSide::Short => round_up(ob.bid + exchange.price_step, exchange.price_step),
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
             return None;
@@ -4364,6 +4364,47 @@ mod core {
             assert!(should_use_market_execution(&order, &global, &order_book));
             let executable = to_executable_order(order, &global, &order_book, TradingMode::Normal);
             assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn panic_close_quantizes_off_tick_book_prices() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 1.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 100.003,
+                ask: 100.007,
+            };
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 100.0,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+            let short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 100.0,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 99.99);
+            assert_eq!(short.price, 100.02);
         }
 
         #[test]

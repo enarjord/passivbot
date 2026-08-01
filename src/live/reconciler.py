@@ -1134,6 +1134,65 @@ def _validate_rust_limit_price_exchange_constraints(
         )
 
 
+def _rust_effective_min_qty(
+    price: float, exchange: tuple[float, float, float, float, float]
+) -> float:
+    """Mirror Rust's compact effective-minimum calculation for boundary checks."""
+    qty_step, _price_step, min_qty, min_cost, c_mult = exchange
+    raw_min_cost_steps = (min_cost / price / c_mult) / qty_step
+    if not math.isfinite(raw_min_cost_steps):
+        return math.inf
+    min_cost_qty = round(math.ceil(raw_min_cost_steps) * qty_step, 10)
+    return max(min_qty, min_cost_qty)
+
+
+def _validate_rust_close_exchange_constraints(
+    qty: float,
+    position_size: float,
+    order_book: tuple[float, float],
+    exchange: tuple[float, float, float, float, float],
+    context: str,
+) -> None:
+    """Reject close quantities Rust trimming cannot emit under submitted constraints."""
+    qty_step, _price_step, _min_qty, _min_cost, _c_mult = exchange
+    qty_abs = abs(qty)
+    position_abs = abs(position_size)
+    market_price = order_book[1] if qty < 0.0 else order_book[0]
+    effective_min_qty = _rust_effective_min_qty(market_price, exchange)
+    qty_tolerance = max(qty_step * 1e-8, 1e-12)
+    closes_exact_remaining_position = math.isclose(
+        qty_abs, position_abs, rel_tol=0.0, abs_tol=qty_tolerance
+    )
+    if (
+        position_abs < effective_min_qty - 1e-12
+        and closes_exact_remaining_position
+    ):
+        return
+    qty_steps = qty_abs / qty_step
+    if not math.isfinite(qty_steps):
+        raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
+    rounded_qty = round(qty_steps) * qty_step
+    if not math.isclose(qty_abs, rounded_qty, rel_tol=0.0, abs_tol=qty_tolerance):
+        raise FatalBotException(
+            f"{context} quantity is inconsistent with submitted qty_step"
+        )
+    if qty_abs + qty_tolerance < effective_min_qty:
+        raise FatalBotException(
+            f"{context} quantity is below submitted effective close minimum"
+        )
+
+
+def _expected_rust_effective_mode(
+    input_mode: str | None, has_position: bool, globally_enabled: bool
+) -> str:
+    """Return Rust's deterministic generation mode for one submitted side."""
+    if not globally_enabled:
+        return "manual"
+    if input_mode == "graceful_stop" and has_position:
+        return "normal"
+    return "normal" if input_mode is None else input_mode
+
+
 def _expected_rust_panic_execution_type(
     global_input: dict, order_type: str, pside: str
 ) -> str | None:
@@ -1536,6 +1595,13 @@ def validate_rust_orchestrator_output(
                 )
             protective_reducer_order_indices[pair] = order_idx
         if order_type.startswith("close_"):
+            _validate_rust_close_exchange_constraints(
+                qty,
+                submitted_position_sizes[pair],
+                submitted_order_books[symbol_idx],
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
+            )
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
             if aggregate_close_qty[pair] > submitted_position_sizes[pair] + 1e-12:
                 raise FatalBotException(
@@ -1634,9 +1700,20 @@ def validate_rust_orchestrator_output(
                     f"Rust orchestrator symbol_state {state_idx} has {pside} input_mode "
                     "inconsistent with its submitted input"
                 )
-            if side_state.get("effective_mode") not in valid_modes:
+            effective_mode = side_state.get("effective_mode")
+            if effective_mode not in valid_modes:
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} effective_mode"
+                )
+            expected_effective_mode = _expected_rust_effective_mode(
+                submitted_input_modes[(symbol_idx, pside)],
+                submitted_position_sizes[(symbol_idx, pside)] != 0.0,
+                submitted_global_side_enablement[pside],
+            )
+            if effective_mode != expected_effective_mode:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has {pside} effective_mode "
+                    "inconsistent with its submitted input"
                 )
             for field in ("active", "allow_initial"):
                 if not isinstance(side_state.get(field), bool):
@@ -2013,6 +2090,13 @@ def _reject_nonstandard_json_constant(constant: str) -> None:
     raise ValueError(f"non-standard JSON numeric constant {constant!r}")
 
 
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite JSON float {value!r}")
+    return parsed
+
+
 def parse_and_validate_rust_orchestrator_output(
     out_json: object,
     idx_to_symbol: dict[int, str],
@@ -2024,6 +2108,7 @@ def parse_and_validate_rust_orchestrator_output(
             out_json,
             object_pairs_hook=_reject_duplicate_json_object_keys,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_float=_parse_finite_json_float,
         )
     except (TypeError, ValueError, RecursionError, OverflowError) as exc:
         raise FatalBotException("Rust orchestrator returned malformed JSON") from exc

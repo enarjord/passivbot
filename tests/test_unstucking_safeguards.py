@@ -25,7 +25,7 @@ def _empty_orchestrator_output(input_json: str) -> str:
             input_mode = symbol[pside].get("mode")
             position_size = float(symbol[pside]["position"]["size"])
             has_position = position_size != 0.0
-            effective_mode = (
+            selection_effective_mode = (
                 "normal"
                 if input_mode is None
                 or (input_mode == "graceful_stop" and has_position)
@@ -36,17 +36,20 @@ def _empty_orchestrator_output(input_json: str) -> str:
                 float(side_params["total_wallet_exposure_limit"]) > 0.0
                 and int(side_params["n_positions"]) > 0
             )
+            effective_mode = (
+                selection_effective_mode if global_side_enabled else "manual"
+            )
             symbol_side_eligible = (
                 bool(symbol.get("tradable", False))
                 and float(symbol[pside]["bot_params"]["wallet_exposure_limit"])
                 != 0.0
             )
             active = symbol_side_eligible and (
-                (has_position and effective_mode != "manual")
+                (has_position and selection_effective_mode != "manual")
                 or (
                     not has_position
                     and global_side_enabled
-                    and effective_mode == "normal"
+                    and selection_effective_mode == "normal"
                 )
             )
             row[pside] = {

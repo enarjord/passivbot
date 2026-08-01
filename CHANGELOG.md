@@ -20,7 +20,7 @@ All notable user-facing changes will be documented in this file.
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
 - Live Rust orchestrator output now fails fatally before diagnostics or reconciliation when its JSON
-  (including duplicate keys, non-standard numeric constants, or decoder failures), required order
+  (including duplicate keys, non-standard numeric constants, exponent-overflow floats, or decoder failures), required order
   batch, order fields, aggregate
   close quantity relative to the submitted position, conversion identities, complete per-symbol
   mode state, or required consumed diagnostic collections are missing or malformed. Diagnostic
@@ -32,7 +32,10 @@ All notable user-facing changes will be documented in this file.
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects entry quantities below the submitted effective exchange minimum or
-  outside the submitted quantity step, rejects limit prices outside the submitted price step,
+  outside the submitted quantity step, rejects close quantities below their effective minimum or
+  outside the submitted quantity step except for an exact remaining dust position, rejects limit
+  prices outside the submitted price step, requires diagnostic effective modes to match Rust's
+  submitted mode/position/global-enable rule,
   requires order-type names to round-trip through Rust's
   canonical ID mapping, and validates active-state diagnostics in both directions for ineligible
   sides and eligible managed positions, while preserving Rust's
@@ -40,7 +43,8 @@ All notable user-facing changes will be documented in this file.
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
-  supervisors no longer swallow fatal producer failures.
+  supervisors no longer swallow fatal producer failures. Rust now also quantizes protective panic
+  limit prices when the submitted top-of-book quote itself is off tick.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

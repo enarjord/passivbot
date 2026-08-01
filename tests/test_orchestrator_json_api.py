@@ -1679,6 +1679,32 @@ def test_panic_mode_emits_close_panic_long():
     assert o["qty"] < 0.0
 
 
+def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.003,
+                ask=100.007,
+                long_mode="panic",
+                long_pos_size=1.5,
+                long_pos_price=100.0,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["execution_type"] == "limit"
+    assert out["orders"][0]["price"] == 99.99
+
+
 def test_panic_close_order_type_is_side_local():
     import passivbot_rust as pbr
 
