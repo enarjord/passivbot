@@ -3414,10 +3414,12 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot._bot_ready = False
     bot.user_info = {"exchange": "gateio"}
     bot._log_startup_banner = lambda: None
-    monitor_errors = []
+    monitor_events = []
     stop_events = []
-    bot._monitor_record_event = lambda *args, **kwargs: None
-    bot._monitor_record_error = lambda *args, **kwargs: monitor_errors.append((args, kwargs))
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
+    bot._monitor_record_error = MagicMock()
     bot._monitor_flush_snapshot = AsyncMock()
     bot._monitor_emit_stop = lambda *args, **kwargs: stop_events.append((args, kwargs))
     bot.init_markets = AsyncMock()
@@ -3441,11 +3443,21 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
         ) as exc_info:
             await bot.start_bot()
 
-    assert monitor_errors
-    assert (
-        monitor_errors[-1][1]["payload"]["stage"]
-        == "equity_hard_stop_initialize_coin_from_history"
-    )
+    incident_events = [
+        item for item in monitor_events if item[0][0] in {"error.bot", "error.bot.detail"}
+    ]
+    assert [item[0][0] for item in incident_events] == [
+        "error.bot",
+        "error.bot.detail",
+    ]
+    summary = incident_events[0][0][2]
+    detail = incident_events[1][0][2]
+    assert summary["stage"] == "equity_hard_stop_initialize_coin_from_history"
+    assert summary["incident_id"] == detail["incident_id"]
+    assert summary["origin"] != "unknown"
+    assert detail["traceback"]["frame_count"] >= 1
+    assert detail["traceback"]["includes_exception_text"] is False
+    bot._monitor_record_error.assert_not_called()
     assert stop_events[-1][0][0] == "startup_error"
     assert stop_events[-1][1]["payload"] == {
         "stage": "equity_hard_stop_initialize_coin_from_history",

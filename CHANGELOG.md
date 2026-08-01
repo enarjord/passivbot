@@ -90,6 +90,14 @@ All notable user-facing changes will be documented in this file.
   proof- and retry-epoch-specific ranges so adjacent unverified or newly
   finalized minutes remain refreshable, using log-linear sweep normalization
   for large sparse histories.
+- Coin-mode HSL startup now bounds and rebases `always`-policy held-pair
+  replay at a fill-proven current episode plus any cooldown-linked predecessor
+  episodes,
+  so exchanges with limited recent 1m history do not strand a protected open
+  position on irrelevant older closed episodes without carrying their realized
+  PnL into the current episode. Startup failures also retain a
+  correlated private bounded frame chain at normal log level while the console
+  remains compact.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then

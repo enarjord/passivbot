@@ -517,17 +517,19 @@ helper apply the same type-only boundary.
 
 ## Execution-Loop Incidents
 
-An execution-loop failure publishes a bounded `error.bot` record and an equivalent first-occurrence
+An execution-loop or startup failure publishes a bounded `error.bot` record and an equivalent
 operator signature. The stable diagnostic fields are incident id, operation/source, exception
 type, optional bounded status/code and endpoint, stage, innermost origin, action, and cycle. A
 companion private `error.bot.detail` record uses the same incident id and retains the bounded full
 exception-chain frame sequence at normal logging levels so a rare failure remains diagnosable
 without a DEBUG restart. The detail contains normalized file/function/line values but no exception
-text, locals, source lines, request URLs, or response payloads. The normal console keeps only the
-compact operator signature; its omission of the frame chain is a readability and volume decision,
-not a public/privacy boundary. Traceback projection is entirely observability-only: hostile or
-malformed exception accessors produce a bounded `projection_failed` detail instead of replacing the
-original error, its counter update, restart-threshold handling, or backoff.
+text, locals, source lines, request URLs, or response payloads. Startup records use the exact
+pre-wrapper exception, including deterministic validation failures later wrapped as fatal process
+errors. The normal console keeps only the compact operator signature; its omission of the frame
+chain is a readability and volume decision, not a public/privacy boundary. Traceback projection is
+entirely observability-only: hostile or malformed exception accessors produce a bounded
+`projection_failed` detail instead of replacing the original error, its counter update,
+restart-threshold handling, startup propagation, or backoff.
 
 Equivalent repeats use `health.summary` with the execution-error-burst reason. Its latest-failure
 fields are `latest_error_type`, optional `latest_status`, `latest_code`, and `latest_endpoint`; it

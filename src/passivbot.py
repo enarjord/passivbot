@@ -3589,11 +3589,37 @@ class Passivbot:
             error_type = bounded_exception_type(exc)
             error_status = bounded_exception_status(exc) or "-"
             error_code = bounded_exception_code(exc) or "-"
-            self._monitor_record_error(
+            incident_sequence = int(
+                getattr(self, "_startup_incident_sequence", 0) or 0
+            ) + 1
+            self._startup_incident_sequence = incident_sequence
+            incident_id = f"startup-{error_ts}-{incident_sequence}"
+            incident_action = "stop_startup"
+            incident_cycle = "not_started"
+            incident_fields = {
+                "source": "start_bot",
+                "stage": boot_stage,
+                "incident_id": incident_id,
+                "error_type": error_type,
+                "status": error_status,
+                "code": error_code,
+                "origin": _bounded_traceback_origin(exc),
+                "action": incident_action,
+                "cycle": incident_cycle,
+            }
+            self._monitor_record_event(
                 "error.bot",
-                exc,
-                tags=("error", "bot", "startup"),
-                payload={"source": "start_bot", "stage": boot_stage},
+                ("error", "bot", "startup"),
+                incident_fields,
+                ts=error_ts,
+            )
+            self._monitor_record_event(
+                "error.bot.detail",
+                ("error", "bot", "startup", "diagnostic"),
+                {
+                    **incident_fields,
+                    "traceback": _bounded_traceback_detail(exc),
+                },
                 ts=error_ts,
             )
             await self._monitor_flush_snapshot(force=True, ts=error_ts)
