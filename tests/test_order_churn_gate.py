@@ -84,6 +84,7 @@ def _raw_rust_input(
     bid=100.0,
     ask=100.0,
     qty_step=0.001,
+    price_step=0.01,
     min_qty=0.001,
     min_cost=1.0,
     c_mult=1.0,
@@ -125,6 +126,7 @@ def _raw_rust_input(
                 "order_book": {"bid": bid, "ask": ask},
                 "exchange": {
                     "qty_step": qty_step,
+                    "price_step": price_step,
                     "min_qty": min_qty,
                     "min_cost": min_cost,
                     "c_mult": c_mult,
@@ -1335,6 +1337,24 @@ def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
     ) == [
         _raw_rust_order(qty=1.1),
     ]
+
+
+def test_raw_rust_output_rejects_limit_price_off_submitted_price_step():
+    with pytest.raises(FatalBotException, match="price_step"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(price=100.005)]),
+            {0: SYMBOL},
+            _raw_rust_input(price_step=0.01),
+        )
+
+
+def test_raw_rust_output_accepts_limit_price_aligned_to_submitted_price_step():
+    order = _raw_rust_order(price=100.01)
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(price_step=0.01, bid=100.01, ask=100.01),
+    ) == [order]
 
 
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():

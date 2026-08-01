@@ -32,7 +32,8 @@ All notable user-facing changes will be documented in this file.
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects entry quantities below the submitted effective exchange minimum or
-  outside the submitted quantity step, requires order-type names to round-trip through Rust's
+  outside the submitted quantity step, rejects limit prices outside the submitted price step,
+  requires order-type names to round-trip through Rust's
   canonical ID mapping, and validates active-state diagnostics in both directions for ineligible
   sides and eligible managed positions, while preserving Rust's
   held-position DCA and configured HSL panic market closes as explicit Rust

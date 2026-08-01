@@ -1094,11 +1094,11 @@ def _validate_rust_order_family_for_submitted_strategy(
 def _validate_rust_entry_exchange_constraints(
     qty: float,
     price: float,
-    exchange: tuple[float, float, float, float],
+    exchange: tuple[float, float, float, float, float],
     context: str,
 ) -> None:
     """Reject entry quantities impossible under the submitted exchange constraints."""
-    qty_step, min_qty, min_cost, c_mult = exchange
+    qty_step, _price_step, min_qty, min_cost, c_mult = exchange
     qty_abs = abs(qty)
     qty_steps = qty_abs / qty_step
     entry_cost = qty_abs * price * c_mult
@@ -1113,6 +1113,24 @@ def _validate_rust_entry_exchange_constraints(
     if qty_abs + qty_tolerance < min_qty or entry_cost + 1e-9 < min_cost:
         raise FatalBotException(
             f"{context} quantity is below submitted effective entry minimum"
+        )
+
+
+def _validate_rust_limit_price_exchange_constraints(
+    price: float,
+    exchange: tuple[float, float, float, float, float],
+    context: str,
+) -> None:
+    """Reject limit prices impossible under the submitted exchange constraints."""
+    _qty_step, price_step, _min_qty, _min_cost, _c_mult = exchange
+    price_steps = price / price_step
+    if not math.isfinite(price_steps):
+        raise FatalBotException(f"{context} has invalid exchange-constrained price")
+    rounded_price = round(price_steps) * price_step
+    price_tolerance = max(price_step * 1e-8, 1e-12)
+    if not math.isclose(price, rounded_price, rel_tol=0.0, abs_tol=price_tolerance):
+        raise FatalBotException(
+            f"{context} price is inconsistent with submitted price_step"
         )
 
 
@@ -1182,7 +1200,7 @@ def _submitted_rust_input_context(
     dict[str, int],
     bool,
     str,
-    dict[int, tuple[float, float, float, float]],
+    dict[int, tuple[float, float, float, float, float]],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1194,7 +1212,7 @@ def _submitted_rust_input_context(
     order_books: dict[int, tuple[float, float]] = {}
     position_sizes: dict[tuple[int, str], float] = {}
     symbol_side_eligibility: dict[tuple[int, str], bool] = {}
-    exchange_constraints: dict[int, tuple[float, float, float, float]] = {}
+    exchange_constraints: dict[int, tuple[float, float, float, float, float]] = {}
     global_input = orchestrator_input.get("global")
     if not isinstance(global_input, dict):
         raise FatalBotException(
@@ -1282,6 +1300,10 @@ def _submitted_rust_input_context(
             exchange.get("qty_step"),
             f"symbol input {input_idx} has invalid exchange qty_step",
         )
+        price_step = _validated_rust_finite_number(
+            exchange.get("price_step"),
+            f"symbol input {input_idx} has invalid exchange price_step",
+        )
         min_qty = _validated_rust_finite_number(
             exchange.get("min_qty"),
             f"symbol input {input_idx} has invalid exchange min_qty",
@@ -1294,11 +1316,23 @@ def _submitted_rust_input_context(
             exchange.get("c_mult"),
             f"symbol input {input_idx} has invalid exchange c_mult",
         )
-        if qty_step <= 0.0 or min_qty < 0.0 or min_cost < 0.0 or c_mult <= 0.0:
+        if (
+            qty_step <= 0.0
+            or price_step <= 0.0
+            or min_qty < 0.0
+            or min_cost < 0.0
+            or c_mult <= 0.0
+        ):
             raise FatalBotException(
                 f"Rust orchestrator symbol input {input_idx} has invalid exchange"
             )
-        exchange_constraints[symbol_idx] = (qty_step, min_qty, min_cost, c_mult)
+        exchange_constraints[symbol_idx] = (
+            qty_step,
+            price_step,
+            min_qty,
+            min_cost,
+            c_mult,
+        )
         tradable = row.get("tradable")
         if not isinstance(tradable, bool):
             raise FatalBotException(
@@ -1512,6 +1546,12 @@ def validate_rust_orchestrator_output(
         if execution_type not in {"limit", "market"}:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
+            )
+        if execution_type == "limit":
+            _validate_rust_limit_price_exchange_constraints(
+                price,
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
             )
         expected_execution_type = _expected_rust_execution_type(
             global_input,
