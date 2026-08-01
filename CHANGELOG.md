@@ -29,6 +29,8 @@ All notable user-facing changes will be documented in this file.
   inconsistent with the submitted market policy, order book, and near-touch threshold, and priority
   inconsistent with Rust's order and submitted-mode rule. It also rejects order families forbidden
   by the submitted mode or flat-side eligibility, rejects all orders for globally disabled sides,
+  requires each flat-side entry batch to contain the strategy's valid initial family while
+  preserving Rust's recursive initial-plus-grid ladders,
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects entry quantities below the submitted effective exchange minimum or
@@ -55,7 +57,8 @@ All notable user-facing changes will be documented in this file.
   ordinary floating-point noise. The complete serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position
-  rule.
+  rule. Forager selections must agree with the corresponding flat active/allow-initial symbol
+  states before those states can authorize live entries.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

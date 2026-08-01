@@ -1176,6 +1176,51 @@ def test_raw_rust_output_rejects_flat_entry_contradicted_by_symbol_state():
         )
 
 
+@pytest.mark.parametrize(
+    "order_type",
+    [
+        "entry_grid_normal_long",
+        "entry_initial_partial_long",
+        "entry_trailing_cropped_long",
+    ],
+)
+def test_raw_rust_output_rejects_impossible_flat_entry_batch(order_type):
+    with pytest.raises(FatalBotException, match="flat submitted side"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(order_type=order_type)]),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0),
+        )
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_raw_rust_output_accepts_recursive_flat_grid_entry_batch(strategy_kind):
+    orders = [
+        _raw_rust_order(order_type="entry_initial_normal_long"),
+        _raw_rust_order(
+            qty=1.1,
+            price=99.0,
+            order_type="entry_grid_normal_long",
+        ),
+    ]
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output(orders),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=0.0, strategy_kind=strategy_kind),
+    ) == orders
+
+
+def test_raw_rust_output_accepts_flat_ema_anchor_entry_batch():
+    order = _raw_rust_order(order_type="entry_ema_anchor_long")
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=0.0, strategy_kind="ema_anchor"),
+    ) == [order]
+
+
 def _two_flat_long_symbol_inputs(*, forced_normal: bool = False):
     orchestrator_input = _raw_rust_input(
         long_pos_size=0.0,
@@ -1828,7 +1873,7 @@ def test_raw_rust_output_rejects_malformed_consumed_diagnostics(diagnostics, err
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(long_pos_size=0.0)
         )
 
 
@@ -1842,8 +1887,26 @@ def test_raw_rust_output_accepts_complete_consumed_diagnostics():
     )
 
     assert reconciler.validate_rust_orchestrator_output(
-        out, {0: SYMBOL}, _raw_rust_input()
+        out, {0: SYMBOL}, _raw_rust_input(long_pos_size=0.0)
     ) == []
+
+
+def test_raw_rust_output_rejects_forager_selection_disagreeing_with_active_state():
+    orchestrator_input, out = _two_flat_long_symbol_inputs()
+    out["diagnostics"]["symbol_states"][1]["long"].update(
+        active=False,
+        allow_initial=False,
+    )
+    out["diagnostics"]["forager_selections"] = [
+        _raw_forager_selection(selected_symbol_indices=[1])
+    ]
+
+    with pytest.raises(FatalBotException, match="disagree with submitted flat active"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL, 1: "ETH/USDT:USDT"},
+            orchestrator_input,
+        )
 
 
 @pytest.mark.parametrize(

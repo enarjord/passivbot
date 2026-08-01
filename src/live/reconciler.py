@@ -1091,6 +1091,29 @@ def _validate_rust_order_family_for_submitted_strategy(
         )
 
 
+def _validate_rust_flat_entry_batch(
+    order_types: list[str], strategy_kind: str, pside: str, context: str
+) -> None:
+    """Reject flat-side entry batches no submitted Rust strategy can emit."""
+    if strategy_kind == "ema_anchor":
+        valid = order_types == [f"entry_ema_anchor_{pside}"]
+    else:
+        initial_type = f"entry_initial_normal_{pside}"
+        allowed_types = {
+            initial_type,
+            f"entry_grid_normal_{pside}",
+            f"entry_grid_cropped_{pside}",
+        }
+        valid = (
+            order_types.count(initial_type) == 1
+            and all(order_type in allowed_types for order_type in order_types)
+        )
+    if not valid:
+        raise FatalBotException(
+            f"{context} has entry families inconsistent with a flat submitted side"
+        )
+
+
 def _validate_rust_entry_exchange_constraints(
     qty: float,
     price: float,
@@ -1506,6 +1529,7 @@ def validate_rust_orchestrator_output(
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     protective_reducer_order_indices: dict[tuple[int, str], int] = {}
     flat_entry_pairs: set[tuple[int, str]] = set()
+    flat_entry_order_types: dict[tuple[int, str], list[str]] = {}
     for order_idx, order in enumerate(orders):
         if not isinstance(order, dict):
             raise FatalBotException(
@@ -1588,6 +1612,7 @@ def validate_rust_orchestrator_output(
             )
         if order_type.startswith("entry_") and submitted_position_sizes[pair] == 0.0:
             flat_entry_pairs.add(pair)
+            flat_entry_order_types.setdefault(pair, []).append(order_type)
         if _rust_order_requires_risk_critical_priority(order_type):
             if pair in protective_reducer_order_indices:
                 previous_idx = protective_reducer_order_indices[pair]
@@ -1660,6 +1685,14 @@ def validate_rust_orchestrator_output(
                 f"{previous_idx} and {order_idx} collide under conversion identity"
             )
         seen_conversion_identities[conversion_identity] = order_idx
+
+    for (symbol_idx, pside), order_types in flat_entry_order_types.items():
+        _validate_rust_flat_entry_batch(
+            order_types,
+            submitted_strategy_kind,
+            pside,
+            f"Rust orchestrator flat {pside} entry batch for symbol_idx {symbol_idx}",
+        )
 
     diagnostics = out.get("diagnostics")
     if not isinstance(diagnostics, dict):
@@ -2141,7 +2174,8 @@ def validate_rust_orchestrator_output(
         context = f"forager_selection {selection_idx}"
         if not isinstance(selection, dict):
             raise FatalBotException(f"Rust orchestrator {context} must be a mapping")
-        validate_diagnostic_pside(selection.get("pside"), context)
+        selection_pside = selection.get("pside")
+        validate_diagnostic_pside(selection_pside, context)
         slots_to_fill = selection.get("slots_to_fill")
         if (
             isinstance(slots_to_fill, bool)
@@ -2156,6 +2190,19 @@ def validate_rust_orchestrator_output(
             validate_diagnostic_symbol_idx_list(
                 selection.get(field), f"{context} {field}"
             )
+        selected_symbol_indices = selection["selected_symbol_indices"]
+        for symbol_idx in selected_symbol_indices:
+            pair = (symbol_idx, selection_pside)
+            side_state = submitted_symbol_states[pair]
+            if (
+                submitted_position_sizes[pair] != 0.0
+                or not side_state["active"]
+                or not side_state["allow_initial"]
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator {context} selected_symbol_indices "
+                    "disagree with submitted flat active symbol states"
+                )
 
         top_scores = selection.get("top_scores")
         if not isinstance(top_scores, list):
