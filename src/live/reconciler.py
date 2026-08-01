@@ -1040,6 +1040,35 @@ def _validate_intrinsic_rust_execution_priority(
         )
 
 
+def _validate_rust_order_family_for_submitted_mode(
+    order_type: str,
+    input_mode: object,
+    submitted_position_size: float,
+    context: str,
+) -> None:
+    """Reject order families which Rust cannot emit for the submitted mode."""
+    mode = "normal" if input_mode is None else input_mode
+    is_entry = order_type.startswith("entry_")
+    is_close = order_type.startswith("close_")
+    is_panic_close = order_type.rsplit("_", 1)[0] == "close_panic"
+    if not (is_entry or is_close):
+        raise FatalBotException(f"{context} has unsupported order family")
+    invalid = (
+        mode == "manual"
+        or (mode == "panic" and not is_panic_close)
+        or (mode != "panic" and is_panic_close)
+        or (mode == "tp_only" and is_entry)
+        or (
+            mode == "graceful_stop"
+            and submitted_position_size <= 1e-12
+        )
+    )
+    if invalid:
+        raise FatalBotException(
+            f"{context} has order family inconsistent with its submitted mode"
+        )
+
+
 def _expected_rust_panic_execution_type(
     global_input: dict, order_type: str, pside: str
 ) -> str | None:
@@ -1101,6 +1130,7 @@ def _submitted_rust_input_context(
     dict[tuple[int, str], object],
     dict[int, tuple[float, float]],
     dict[tuple[int, str], float],
+    dict[tuple[int, str], bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1111,6 +1141,7 @@ def _submitted_rust_input_context(
     modes: dict[tuple[int, str], object] = {}
     order_books: dict[int, tuple[float, float]] = {}
     position_sizes: dict[tuple[int, str], float] = {}
+    symbol_side_eligibility: dict[tuple[int, str], bool] = {}
     seen_symbol_idxs: set[int] = set()
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
@@ -1146,6 +1177,11 @@ def _submitted_rust_input_context(
                 f"Rust orchestrator symbol input {input_idx} has invalid order_book"
             )
         order_books[symbol_idx] = (bid, ask)
+        tradable = row.get("tradable")
+        if not isinstance(tradable, bool):
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid tradable"
+            )
         for pside in ("long", "short"):
             side_input = row.get(pside)
             if not isinstance(side_input, dict):
@@ -1170,11 +1206,23 @@ def _submitted_rust_input_context(
                 f"symbol input {input_idx} has invalid {pside} position size",
             )
             position_sizes[(symbol_idx, pside)] = abs(position_size)
+            bot_params = side_input.get("bot_params")
+            if not isinstance(bot_params, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} bot_params"
+                )
+            wallet_exposure_limit = _validated_rust_finite_number(
+                bot_params.get("wallet_exposure_limit"),
+                f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
+            )
+            symbol_side_eligibility[(symbol_idx, pside)] = (
+                tradable and wallet_exposure_limit != 0.0
+            )
     if seen_symbol_idxs != expected_symbol_idxs:
         raise FatalBotException(
             "Rust orchestrator symbol inputs do not cover the requested symbols"
         )
-    return modes, order_books, position_sizes
+    return modes, order_books, position_sizes, symbol_side_eligibility
 
 
 def rust_order_conversion_identity(
@@ -1220,6 +1268,7 @@ def validate_rust_orchestrator_output(
         submitted_input_modes,
         submitted_order_books,
         submitted_position_sizes,
+        submitted_symbol_side_eligibility,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -1276,8 +1325,14 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
+        pair = (symbol_idx, pside)
+        _validate_rust_order_family_for_submitted_mode(
+            order_type,
+            submitted_input_modes[pair],
+            submitted_position_sizes[pair],
+            f"Rust orchestrator order {order_idx}",
+        )
         if order_type.startswith("close_"):
-            pair = (symbol_idx, pside)
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
             if aggregate_close_qty[pair] > submitted_position_sizes[pair] + 1e-12:
                 raise FatalBotException(
@@ -1378,6 +1433,14 @@ def validate_rust_orchestrator_output(
                     raise FatalBotException(
                         f"Rust orchestrator symbol_state {state_idx} has invalid {pside} {field}"
                     )
+            if (
+                side_state["active"]
+                and not submitted_symbol_side_eligibility[(symbol_idx, pside)]
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has {pside} active "
+                    "inconsistent with submitted eligibility"
+                )
     if seen_symbol_idxs != expected_symbol_idxs:
         raise FatalBotException(
             "Rust orchestrator symbol_states do not cover the requested symbols"

@@ -26,8 +26,10 @@ All notable user-facing changes will be documented in this file.
   validation rejects impossible realized-loss blocks. Order-field validation includes overflowing
   numeric values, execution type
   inconsistent with the submitted market policy, order book, and near-touch threshold, and priority
-  inconsistent with Rust's order and submitted-mode rule, while preserving configured HSL panic
-  market closes as the protective exception to `live.market_orders_allowed`. The bot no longer
+  inconsistent with Rust's order and submitted-mode rule. It also rejects order families forbidden
+  by the submitted mode and active-state diagnostics for non-tradable or zero-exposure sides, while
+  preserving held-position graceful-stop DCA and configured HSL panic market closes as explicit Rust
+  behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
   supervisors no longer swallow fatal producer failures.

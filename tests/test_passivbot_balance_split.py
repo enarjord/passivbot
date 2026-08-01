@@ -9116,7 +9116,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
             raise AssertionError("protective panic path must not load EMA bundles")
 
         def _bot_params_to_rust_dict(self, pside, sym):
-            return {}
+            return {"wallet_exposure_limit": 1.0}
 
         def _strategy_params_to_rust_dict(self, pside, sym):
             return {}
@@ -9327,7 +9327,7 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {"wallet_exposure_limit": 1.0}
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}

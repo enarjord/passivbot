@@ -73,6 +73,9 @@ def _raw_rust_input(
     short_mode="manual",
     long_pos_size=1.0,
     short_pos_size=0.0,
+    tradable=True,
+    long_wallet_exposure_limit=1.0,
+    short_wallet_exposure_limit=1.0,
     bid=100.0,
     ask=100.0,
     **global_overrides,
@@ -99,13 +102,20 @@ def _raw_rust_input(
             {
                 "symbol_idx": 0,
                 "order_book": {"bid": bid, "ask": ask},
+                "tradable": tradable,
                 "long": {
                     "mode": long_mode,
                     "position": {"size": long_pos_size, "price": 100.0},
+                    "bot_params": {
+                        "wallet_exposure_limit": long_wallet_exposure_limit
+                    },
                 },
                 "short": {
                     "mode": short_mode,
                     "position": {"size": short_pos_size, "price": 100.0},
+                    "bot_params": {
+                        "wallet_exposure_limit": short_wallet_exposure_limit
+                    },
                 },
             }
         ],
@@ -142,6 +152,15 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
             "forager_selections": [],
         },
     }
+
+
+def _raw_rust_output_for_long_mode(orders, input_mode: str) -> dict:
+    out = _raw_rust_output(orders)
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        input_mode=input_mode,
+        effective_mode=input_mode,
+    )
+    return out
 
 
 def test_passivbot_rust_stub_emits_required_diagnostic_collections():
@@ -480,6 +499,68 @@ def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
 
 
 @pytest.mark.parametrize(
+    ("input_mode", "position_size", "order"),
+    [
+        ("manual", 1.0, _raw_rust_order()),
+        ("panic", 1.0, _raw_rust_order()),
+        (
+            "panic",
+            1.0,
+            _raw_rust_order(qty=-1.0, order_type="close_grid_long"),
+        ),
+        (
+            "normal",
+            1.0,
+            _raw_rust_order(
+                qty=-1.0,
+                order_type="close_panic_long",
+                execution_priority="risk_critical",
+            ),
+        ),
+        ("tp_only", 1.0, _raw_rust_order()),
+        ("graceful_stop", 0.0, _raw_rust_order()),
+    ],
+    ids=[
+        "manual-entry",
+        "panic-entry",
+        "panic-ordinary-close",
+        "normal-panic-close",
+        "tp-only-entry",
+        "flat-graceful-stop-entry",
+    ],
+)
+def test_raw_rust_output_rejects_order_family_forbidden_by_submitted_mode(
+    input_mode, position_size, order
+):
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = input_mode
+
+    with pytest.raises(FatalBotException, match="inconsistent with its submitted mode"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=input_mode,
+                long_pos_size=position_size,
+            ),
+        )
+
+
+def test_raw_rust_output_keeps_graceful_stop_dca_with_open_position():
+    order = _raw_rust_order()
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = (
+        "graceful_stop"
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(long_mode="graceful_stop", long_pos_size=1.0),
+    ) == [order]
+
+
+@pytest.mark.parametrize(
     "order_type",
     [
         "close_panic_long",
@@ -492,12 +573,18 @@ def test_raw_rust_output_rejects_ordinary_priority_for_protective_orders(
     order_type,
 ):
     order = _raw_rust_order(qty=-1.0, order_type=order_type)
+    input_mode = "panic" if order_type == "close_panic_long" else None
+    out = (
+        _raw_rust_output_for_long_mode([order], input_mode)
+        if input_mode is not None
+        else _raw_rust_output([order])
+    )
 
     with pytest.raises(FatalBotException, match="inconsistent with its order_type"):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output([order]),
+            out,
             {0: SYMBOL},
-            _raw_rust_input(),
+            _raw_rust_input(long_mode=input_mode),
         )
 
 
@@ -707,9 +794,13 @@ def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disab
     )
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output([order]),
+        _raw_rust_output_for_long_mode([order], "panic"),
         {0: SYMBOL},
-        _raw_rust_input(market_orders_allowed=False, **global_overrides),
+        _raw_rust_input(
+            long_mode="panic",
+            market_orders_allowed=False,
+            **global_overrides,
+        ),
     ) == [order]
 
 
@@ -746,9 +837,13 @@ def test_raw_rust_output_rejects_limit_panic_close_when_market_is_configured(
         FatalBotException, match="inconsistent with its submitted input"
     ):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output([order]),
+            _raw_rust_output_for_long_mode([order], "panic"),
             {0: SYMBOL},
-            _raw_rust_input(market_orders_allowed=False, **global_overrides),
+            _raw_rust_input(
+                long_mode="panic",
+                market_orders_allowed=False,
+                **global_overrides,
+            ),
         )
 
 
@@ -774,9 +869,10 @@ def test_raw_rust_output_rejects_market_panic_close_when_limit_is_configured():
         FatalBotException, match="inconsistent with its submitted input"
     ):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output([order]),
+            _raw_rust_output_for_long_mode([order], "panic"),
             {0: SYMBOL},
             _raw_rust_input(
+                long_mode="panic",
                 market_orders_allowed=True,
                 global_bot_params=global_bot_params,
             ),
@@ -814,9 +910,13 @@ def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_override
         FatalBotException, match="inconsistent with its submitted input"
     ):
         reconciler.validate_rust_orchestrator_output(
-            _raw_rust_output([order]),
+            _raw_rust_output_for_long_mode([order], "panic"),
             {0: SYMBOL},
-            _raw_rust_input(market_orders_allowed=False, **global_overrides),
+            _raw_rust_input(
+                long_mode="panic",
+                market_orders_allowed=False,
+                **global_overrides,
+            ),
         )
 
 
@@ -861,6 +961,37 @@ def test_raw_rust_output_requires_explicit_input_mode():
         reconciler.validate_rust_orchestrator_output(
             out, {0: SYMBOL}, _raw_rust_input()
         )
+
+
+@pytest.mark.parametrize(
+    "input_overrides",
+    [
+        {"tradable": False},
+        {"long_wallet_exposure_limit": 0.0},
+    ],
+    ids=["non-tradable", "zero-wallet-exposure-limit"],
+)
+def test_raw_rust_output_rejects_active_state_for_submitted_ineligible_side(
+    input_overrides,
+):
+    with pytest.raises(FatalBotException, match="inconsistent with submitted eligibility"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(),
+            {0: SYMBOL},
+            _raw_rust_input(**input_overrides),
+        )
+
+
+def test_raw_rust_output_accepts_inactive_state_for_submitted_ineligible_side():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(tradable=False),
+    ) == []
 
 
 @pytest.mark.parametrize(
