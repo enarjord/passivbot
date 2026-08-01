@@ -51,10 +51,13 @@ All notable user-facing changes will be documented in this file.
   side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values or collapsing a positive sub-step minimum to zero,
-  quantizes EMA Anchor touch prices in the protective direction, and keeps panic limit prices
+  quantizes EMA Anchor touch prices in the protective direction and clamps bids to the lowest
+  positive tick, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step, without skipping a tick because of
-  ordinary floating-point noise. The complete serialized diagnostic envelope now requires and
+  ordinary floating-point noise. Close validation rejects positions at or below Rust's final
+  close-trimming dust threshold before applying the exact-position exception. The complete
+  serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position
   rule. Forager selections must agree with the corresponding flat active/allow-initial symbol

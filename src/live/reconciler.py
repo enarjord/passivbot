@@ -1185,6 +1185,10 @@ def _validate_rust_close_exchange_constraints(
     qty_step, _price_step, _min_qty, _min_cost, _c_mult = exchange
     qty_abs = abs(qty)
     position_abs = abs(position_size)
+    if position_abs <= 1e-12:
+        raise FatalBotException(
+            f"{context} cannot close a submitted position at or below Rust's dust threshold"
+        )
     market_price = order_book[1] if qty < 0.0 else order_book[0]
     effective_min_qty = _rust_effective_min_qty(market_price, exchange)
     qty_tolerance = max(qty_step * 1e-8, 1e-12)

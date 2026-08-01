@@ -1476,6 +1476,21 @@ def test_raw_rust_output_accepts_exact_remaining_below_minimum_dust_close():
     ) == [order]
 
 
+@pytest.mark.parametrize("position_size", [1e-13, 1e-12])
+def test_raw_rust_output_rejects_close_for_position_rust_trims_as_dust(position_size):
+    order = _raw_rust_order(
+        qty=-position_size,
+        order_type="close_grid_long",
+    )
+
+    with pytest.raises(FatalBotException, match="Rust's dust threshold"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=position_size),
+        )
+
+
 def test_raw_rust_output_accepts_exact_remaining_off_step_full_close():
     order = _raw_rust_order(
         qty=-1.005,

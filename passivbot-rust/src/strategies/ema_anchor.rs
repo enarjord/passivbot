@@ -50,7 +50,7 @@ pub fn calc_bid_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
-    round_dn(f64::min(state.order_book.bid, target), exchange.price_step)
+    round_dn(f64::min(state.order_book.bid, target), exchange.price_step).max(exchange.price_step)
 }
 
 #[inline]
@@ -464,6 +464,29 @@ mod tests {
 
         assert_eq!(bid, 98.0);
         assert_eq!(ask, 102.01);
+    }
+
+    #[test]
+    fn sub_tick_bid_clamps_to_lowest_positive_tick() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.005,
+                ask: 0.015,
+            },
+            ema_bands: EMABands {
+                lower: 0.005,
+                upper: 0.015,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_bid_price(&state, &exchange, &params, -1.0, 1.0), 0.01);
     }
 
     #[test]

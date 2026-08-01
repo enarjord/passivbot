@@ -1214,6 +1214,58 @@ def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     assert prices["close_ema_anchor_long"] == 102.01
 
 
+def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        strategy_kind="ema_anchor",
+        symbols=[
+            make_symbol(
+                0,
+                bid=0.005,
+                ask=0.015,
+                short_pos_size=-1.0,
+                short_pos_price=0.02,
+                short_bp={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+                long_strategy=strategy,
+                short_strategy=strategy,
+                emas=ema_bundle(
+                    m1_close=[
+                        [10.0, 0.005],
+                        [20.0, 0.005],
+                        [math.sqrt(10.0 * 20.0), 0.005],
+                    ],
+                    m1_volume=[[10.0, 1_000.0]],
+                    m1_log_range=[[10.0, 0.01]],
+                ),
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    short_close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_ema_anchor_short"
+    )
+    assert short_close["price"] == 0.01
+
+
 def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     import passivbot_rust as pbr
 
