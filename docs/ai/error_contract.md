@@ -29,7 +29,8 @@ to the caller. It does not mean every failed symbol fetch must crash the whole b
    consumer boundary.
 6. Validate a produced trading decision before downstream policy consumes it. A malformed Rust
    ideal-order batch is fatal before reconciliation; prior ideals, actual orders, and partial output
-   are not fallbacks.
+   are not fallbacks. When submitted inputs deterministically define an output field, validate the
+   exact result against the full input policy rather than checking only a coarse permission flag.
 
 ## Forbidden Patterns
 

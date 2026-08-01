@@ -1065,9 +1065,39 @@ def _expected_rust_panic_execution_type(
     )
 
 
-def _submitted_rust_input_modes(
+def _expected_rust_execution_type(
+    global_input: dict,
+    order_book: tuple[float, float],
+    order_type: str,
+    pside: str,
+    qty: float,
+    price: float,
+) -> str:
+    panic_execution_type = _expected_rust_panic_execution_type(
+        global_input, order_type, pside
+    )
+    if panic_execution_type is not None:
+        return panic_execution_type
+    if global_input.get("market_orders_allowed", False) is not True:
+        return "limit"
+    market_price = (order_book[0] + order_book[1]) * 0.5
+    if not math.isfinite(market_price) or market_price <= 0.0:
+        return "limit"
+    if (qty > 0.0 and price >= market_price) or (
+        qty < 0.0 and price <= market_price
+    ):
+        return "market"
+    threshold = _validated_rust_finite_number(
+        global_input.get("market_order_near_touch_threshold", 0.001),
+        "global input has invalid market_order_near_touch_threshold",
+    )
+    price_diff = abs(price / market_price - 1.0)
+    return "market" if price_diff <= max(threshold, 0.0) else "limit"
+
+
+def _submitted_rust_input_context(
     orchestrator_input: dict, expected_symbol_idxs: set[int]
-) -> dict[tuple[int, str], object]:
+) -> tuple[dict[tuple[int, str], object], dict[int, tuple[float, float]]]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
         raise FatalBotException(
@@ -1075,6 +1105,7 @@ def _submitted_rust_input_modes(
         )
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     modes: dict[tuple[int, str], object] = {}
+    order_books: dict[int, tuple[float, float]] = {}
     seen_symbol_idxs: set[int] = set()
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
@@ -1092,6 +1123,24 @@ def _submitted_rust_input_modes(
                 f"Rust orchestrator symbol input {input_idx} has invalid symbol_idx"
             )
         seen_symbol_idxs.add(symbol_idx)
+        order_book = row.get("order_book")
+        if not isinstance(order_book, dict):
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid order_book"
+            )
+        bid = _validated_rust_finite_number(
+            order_book.get("bid"),
+            f"symbol input {input_idx} has invalid order_book bid",
+        )
+        ask = _validated_rust_finite_number(
+            order_book.get("ask"),
+            f"symbol input {input_idx} has invalid order_book ask",
+        )
+        if bid <= 0.0 or ask <= 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid order_book"
+            )
+        order_books[symbol_idx] = (bid, ask)
         for pside in ("long", "short"):
             side_input = row.get(pside)
             if not isinstance(side_input, dict):
@@ -1110,7 +1159,7 @@ def _submitted_rust_input_modes(
         raise FatalBotException(
             "Rust orchestrator symbol inputs do not cover the requested symbols"
         )
-    return modes
+    return modes, order_books
 
 
 def rust_order_conversion_identity(
@@ -1152,7 +1201,7 @@ def validate_rust_orchestrator_output(
     if not isinstance(orders, list):
         raise FatalBotException("Rust orchestrator orders must be a list")
     expected_symbol_idxs = set(idx_to_symbol)
-    submitted_input_modes = _submitted_rust_input_modes(
+    submitted_input_modes, submitted_order_books = _submitted_rust_input_context(
         orchestrator_input, expected_symbol_idxs
     )
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
@@ -1214,17 +1263,15 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
             )
-        expected_panic_execution_type = _expected_rust_panic_execution_type(
-            global_input, order_type, pside
+        expected_execution_type = _expected_rust_execution_type(
+            global_input,
+            submitted_order_books[symbol_idx],
+            order_type,
+            pside,
+            qty,
+            price,
         )
-        if (
-            expected_panic_execution_type is not None
-            and execution_type != expected_panic_execution_type
-        ) or (
-            expected_panic_execution_type is None
-            and execution_type == "market"
-            and global_input.get("market_orders_allowed", False) is not True
-        ):
+        if execution_type != expected_execution_type:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"

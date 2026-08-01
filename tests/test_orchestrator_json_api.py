@@ -372,6 +372,23 @@ def test_live_validator_accepts_complete_rust_output():
     assert "loss_gate_blocks" in out["diagnostics"]
 
 
+def test_live_validator_accepts_rust_market_execution_policy():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+    out = compute(pbr, inp)
+
+    assert any(order["execution_type"] == "market" for order in out["orders"])
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    ) == out["orders"]
+
+
 def test_json_rejects_invalid_order_book():
     import passivbot_rust as pbr
 

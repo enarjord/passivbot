@@ -67,9 +67,17 @@ def _raw_rust_order(**overrides) -> dict:
     return order
 
 
-def _raw_rust_input(*, long_mode=None, short_mode="manual", **global_overrides) -> dict:
+def _raw_rust_input(
+    *,
+    long_mode=None,
+    short_mode="manual",
+    bid=100.0,
+    ask=100.0,
+    **global_overrides,
+) -> dict:
     global_input = {
         "market_orders_allowed": False,
+        "market_order_near_touch_threshold": 0.001,
         "panic_close_market": False,
         "global_bot_params": {
             "long": {
@@ -88,6 +96,7 @@ def _raw_rust_input(*, long_mode=None, short_mode="manual", **global_overrides) 
         "symbols": [
             {
                 "symbol_idx": 0,
+                "order_book": {"bid": bid, "ask": ask},
                 "long": {"mode": long_mode},
                 "short": {"mode": short_mode},
             }
@@ -533,7 +542,7 @@ def test_raw_rust_output_rejects_market_entry_when_input_forbids_it():
         )
 
 
-def test_raw_rust_output_accepts_market_entry_when_input_allows_it():
+def test_raw_rust_output_accepts_market_entry_when_policy_selects_it():
     order = _raw_rust_order(execution_type="market")
 
     assert reconciler.validate_rust_orchestrator_output(
@@ -541,6 +550,76 @@ def test_raw_rust_output_accepts_market_entry_when_input_allows_it():
         {0: SYMBOL},
         _raw_rust_input(market_orders_allowed=True),
     ) == [order]
+
+
+@pytest.mark.parametrize(
+    ("qty", "price", "execution_type"),
+    [
+        (1.0, 90.0, "limit"),
+        (-1.0, 110.0, "limit"),
+        (1.0, 99.95, "market"),
+        (-1.0, 100.05, "market"),
+    ],
+    ids=["far-buy-limit", "far-sell-limit", "near-buy-market", "near-sell-market"],
+)
+def test_raw_rust_output_accepts_non_panic_execution_type_matching_policy(
+    qty, price, execution_type
+):
+    order = _raw_rust_order(
+        qty=qty,
+        price=price,
+        order_type=(
+            "entry_initial_normal_long" if qty > 0.0 else "close_grid_long"
+        ),
+        execution_type=execution_type,
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(market_orders_allowed=True),
+    ) == [order]
+
+
+@pytest.mark.parametrize(
+    ("qty", "price", "execution_type"),
+    [
+        (1.0, 90.0, "market"),
+        (-1.0, 110.0, "market"),
+        (1.0, 99.95, "limit"),
+        (-1.0, 100.05, "limit"),
+        (1.0, 101.0, "limit"),
+        (-1.0, 99.0, "limit"),
+    ],
+    ids=[
+        "far-buy-market",
+        "far-sell-market",
+        "near-buy-limit",
+        "near-sell-limit",
+        "crossing-buy-limit",
+        "crossing-sell-limit",
+    ],
+)
+def test_raw_rust_output_rejects_non_panic_execution_type_mismatch(
+    qty, price, execution_type
+):
+    order = _raw_rust_order(
+        qty=qty,
+        price=price,
+        order_type=(
+            "entry_initial_normal_long" if qty > 0.0 else "close_grid_long"
+        ),
+        execution_type=execution_type,
+    )
+
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(market_orders_allowed=True),
+        )
 
 
 @pytest.mark.parametrize(
@@ -686,25 +765,14 @@ def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_override
         )
 
 
-@pytest.mark.parametrize(
-    "orders",
-    [
-        [_raw_rust_order(), _raw_rust_order()],
-        [_raw_rust_order(), _raw_rust_order(execution_type="market")],
-        [_raw_rust_order(execution_type="market"), _raw_rust_order()],
-    ],
-    ids=[
-        "exact-duplicate",
-        "conflicting-execution-type",
-        "conflicting-execution-type-reversed",
-    ],
-)
-def test_raw_rust_output_rejects_colliding_conversion_identities(orders):
+def test_raw_rust_output_rejects_colliding_conversion_identities():
+    orders = [_raw_rust_order(), _raw_rust_order()]
+
     with pytest.raises(FatalBotException, match="collide under conversion identity"):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output(orders),
             {0: SYMBOL},
-            _raw_rust_input(market_orders_allowed=True),
+            _raw_rust_input(),
         )
 
 
