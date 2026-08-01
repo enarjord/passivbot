@@ -104,6 +104,13 @@ mod core {
         RiskCritical,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum StrategyInputScope {
+        StrategyOrders,
+        Unstuck,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct IdealOrder {
@@ -137,6 +144,11 @@ mod core {
         NonTradableHasPosition {
             symbol_idx: usize,
             pside: PositionSide,
+        },
+        StrategyInputUnavailable {
+            symbol_idx: usize,
+            pside: PositionSide,
+            scope: StrategyInputScope,
         },
         TwelRepairBlockedByLossGate {
             pside: PositionSide,
@@ -389,6 +401,11 @@ mod core {
         pub order_book: OrderBook, // must have bid>0 and ask>0
         pub exchange: ExchangeParams,
         pub tradable: bool,
+        /// Live-only authorization to scope absent EMA inputs to the strategy
+        /// actions that consume them. Defaults to strict for backtests and all
+        /// callers that do not explicitly establish live data unavailability.
+        #[serde(default)]
+        pub allow_missing_strategy_inputs: bool,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -2291,6 +2308,29 @@ mod core {
         }
     }
 
+    fn handle_strategy_input_error(
+        err: OrchestratorError,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        scope: StrategyInputScope,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) -> Result<(), OrchestratorError> {
+        if symbol.allow_missing_strategy_inputs
+            && matches!(err, OrchestratorError::MissingEma { .. })
+        {
+            diagnostics
+                .warnings
+                .push(OrchestratorWarning::StrategyInputUnavailable {
+                    symbol_idx: symbol.symbol_idx,
+                    pside,
+                    scope,
+                });
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
     fn strategy_order_generation_needs_ema_for_symbol_side(
         params: &StrategyParams,
         pside: PositionSide,
@@ -2374,6 +2414,100 @@ mod core {
                 order_type: order.order_type,
             });
         }
+    }
+
+    fn generate_strategy_ideal_orders(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        cache: &mut [CachedSideDerived],
+        runtime_budget: RuntimeBudgetState,
+        wants_entries: bool,
+        wants_closes: bool,
+    ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>), OrchestratorError> {
+        let (strategy_side, side) = match pside {
+            PositionSide::Long => (StrategySide::Long, &symbol.long),
+            PositionSide::Short => (StrategySide::Short, &symbol.short),
+        };
+        let strategy_params = cached_strategy_params_for_symbol_side(
+            cache,
+            symbol.symbol_idx,
+            input.global.strategy_kind,
+            strategy_side,
+            side,
+        )?;
+        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
+            &strategy_params,
+            pside,
+            wants_entries,
+            wants_closes,
+            &side.position,
+            &symbol.exchange,
+            &symbol.order_book,
+            &side.bot_params,
+            runtime_budget,
+            input.balance,
+        ) {
+            cached_ema_bands(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            EMABands::default()
+        };
+        let volatility_ema_1h =
+            cached_volatility_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?;
+        let volatility_ema_1m =
+            cached_volatility_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?;
+        let state = StateParams {
+            balance: input.balance,
+            order_book: symbol.order_book,
+            ema_bands,
+            volatility_ema_1m,
+            volatility_ema_1h,
+        };
+        let generated = generate_strategy_orders(
+            strategy_kind_for_symbol_side(&input.global),
+            strategy_side,
+            StrategyRequest {
+                wants_entries,
+                wants_closes,
+                exchange: &symbol.exchange,
+                state: &state,
+                bot_params: &side.bot_params,
+                strategy_params: &strategy_params,
+                runtime_budget,
+                position: &side.position,
+                trailing: &side.trailing,
+                next_candle: symbol.next_candle.as_ref().map(|candle| NextStepHint {
+                    low: candle.low,
+                    high: candle.high,
+                    tradable: candle.tradable,
+                }),
+                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                    expand_entries: match pside {
+                        PositionSide::Long => hints.expand_grid_long.contains(&symbol.symbol_idx),
+                        PositionSide::Short => hints.expand_grid_short.contains(&symbol.symbol_idx),
+                    },
+                    expand_closes: match pside {
+                        PositionSide::Long => hints.expand_close_long.contains(&symbol.symbol_idx),
+                        PositionSide::Short => {
+                            hints.expand_close_short.contains(&symbol.symbol_idx)
+                        }
+                    },
+                }),
+            },
+        );
+        let mut entries = Vec::new();
+        append_strategy_orders_as_ideal(&mut entries, generated.entries, symbol.symbol_idx, pside);
+        apply_add_order_gates(
+            &mut entries,
+            pside,
+            input.timestamp_ms,
+            side.last_increase_fill_timestamp_ms,
+            side.bot_params.risk_entry_cooldown_minutes,
+            strategy_requires_sequential_entry_staging(&strategy_params),
+        );
+        let mut closes = Vec::new();
+        append_strategy_orders_as_ideal(&mut closes, generated.closes, symbol.symbol_idx, pside);
+        Ok((entries, closes))
     }
 
     #[derive(Clone)]
@@ -3166,98 +3300,24 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params = cached_strategy_params_for_symbol_side(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            input.global.strategy_kind,
-                            StrategySide::Long,
-                            &s.long,
-                        )?;
-                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
-                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
-                            &strategy_params,
+                        match generate_strategy_ideal_orders(
+                            input,
+                            s,
                             PositionSide::Long,
+                            &mut workspace.derived_long,
+                            workspace.runtime_budget_long[s.symbol_idx],
                             wants_entries,
                             wants_closes,
-                            &s.long.position,
-                            &s.exchange,
-                            &s.order_book,
-                            &s.long.bot_params,
-                            runtime_budget,
-                            input.balance,
                         ) {
-                            cached_ema_bands(
-                                &mut workspace.derived_long,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?
-                        } else {
-                            EMABands::default()
-                        };
-                        let volatility_ema_1h = cached_volatility_ema_1h(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let volatility_ema_1m = cached_volatility_ema_1m(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let state = StateParams {
-                            balance: input.balance,
-                            order_book: s.order_book,
-                            ema_bands,
-                            volatility_ema_1m,
-                            volatility_ema_1h,
-                        };
-                        let generated = generate_strategy_orders(
-                            strategy_kind_for_symbol_side(&input.global),
-                            StrategySide::Long,
-                            StrategyRequest {
-                                wants_entries,
-                                wants_closes,
-                                exchange: &s.exchange,
-                                state: &state,
-                                bot_params: &s.long.bot_params,
-                                strategy_params: &strategy_params,
-                                runtime_budget,
-                                position: &s.long.position,
-                                trailing: &s.long.trailing,
-                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
-                                    low: nc.low,
-                                    high: nc.high,
-                                    tradable: nc.tradable,
-                                }),
-                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
-                                    expand_entries: hints.expand_grid_long.contains(&s.symbol_idx),
-                                    expand_closes: hints.expand_close_long.contains(&s.symbol_idx),
-                                }),
-                            },
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut entries,
-                            generated.entries,
-                            s.symbol_idx,
-                            PositionSide::Long,
-                        );
-                        apply_add_order_gates(
-                            &mut entries,
-                            PositionSide::Long,
-                            input.timestamp_ms,
-                            s.long.last_increase_fill_timestamp_ms,
-                            s.long.bot_params.risk_entry_cooldown_minutes,
-                            strategy_requires_sequential_entry_staging(&strategy_params),
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut closes,
-                            generated.closes,
-                            s.symbol_idx,
-                            PositionSide::Long,
-                        );
+                            Ok(generated) => (entries, closes) = generated,
+                            Err(err) => handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Long,
+                                StrategyInputScope::StrategyOrders,
+                                &mut diagnostics,
+                            )?,
+                        }
                     }
                 }
 
@@ -3332,98 +3392,24 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params = cached_strategy_params_for_symbol_side(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            input.global.strategy_kind,
-                            StrategySide::Short,
-                            &s.short,
-                        )?;
-                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
-                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
-                            &strategy_params,
+                        match generate_strategy_ideal_orders(
+                            input,
+                            s,
                             PositionSide::Short,
+                            &mut workspace.derived_short,
+                            workspace.runtime_budget_short[s.symbol_idx],
                             wants_entries,
                             wants_closes,
-                            &s.short.position,
-                            &s.exchange,
-                            &s.order_book,
-                            &s.short.bot_params,
-                            runtime_budget,
-                            input.balance,
                         ) {
-                            cached_ema_bands(
-                                &mut workspace.derived_short,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?
-                        } else {
-                            EMABands::default()
-                        };
-                        let volatility_ema_1h = cached_volatility_ema_1h(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let volatility_ema_1m = cached_volatility_ema_1m(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let state = StateParams {
-                            balance: input.balance,
-                            order_book: s.order_book,
-                            ema_bands,
-                            volatility_ema_1m,
-                            volatility_ema_1h,
-                        };
-                        let generated = generate_strategy_orders(
-                            strategy_kind_for_symbol_side(&input.global),
-                            StrategySide::Short,
-                            StrategyRequest {
-                                wants_entries,
-                                wants_closes,
-                                exchange: &s.exchange,
-                                state: &state,
-                                bot_params: &s.short.bot_params,
-                                strategy_params: &strategy_params,
-                                runtime_budget,
-                                position: &s.short.position,
-                                trailing: &s.short.trailing,
-                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
-                                    low: nc.low,
-                                    high: nc.high,
-                                    tradable: nc.tradable,
-                                }),
-                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
-                                    expand_entries: hints.expand_grid_short.contains(&s.symbol_idx),
-                                    expand_closes: hints.expand_close_short.contains(&s.symbol_idx),
-                                }),
-                            },
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut entries,
-                            generated.entries,
-                            s.symbol_idx,
-                            PositionSide::Short,
-                        );
-                        apply_add_order_gates(
-                            &mut entries,
-                            PositionSide::Short,
-                            input.timestamp_ms,
-                            s.short.last_increase_fill_timestamp_ms,
-                            s.short.bot_params.risk_entry_cooldown_minutes,
-                            strategy_requires_sequential_entry_staging(&strategy_params),
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut closes,
-                            generated.closes,
-                            s.symbol_idx,
-                            PositionSide::Short,
-                        );
+                            Ok(generated) => (entries, closes) = generated,
+                            Err(err) => handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Short,
+                                StrategyInputScope::StrategyOrders,
+                                &mut diagnostics,
+                            )?,
+                        }
                     }
                 }
 
@@ -3461,12 +3447,24 @@ mod core {
                     StrategySide::Long,
                     &sym.long,
                 )?;
-                cached_ema_bands(
+                match cached_ema_bands(
                     &mut workspace.derived_long,
                     s.symbol_idx,
                     &sym.emas,
                     &strategy_params,
-                )?
+                ) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err,
+                            sym,
+                            PositionSide::Long,
+                            StrategyInputScope::Unstuck,
+                            &mut diagnostics,
+                        )?;
+                        continue;
+                    }
+                }
             } else {
                 EMABands::default()
             };
@@ -3518,12 +3516,24 @@ mod core {
                     StrategySide::Short,
                     &sym.short,
                 )?;
-                cached_ema_bands(
+                match cached_ema_bands(
                     &mut workspace.derived_short,
                     s.symbol_idx,
                     &sym.emas,
                     &strategy_params,
-                )?
+                ) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err,
+                            sym,
+                            PositionSide::Short,
+                            StrategyInputScope::Unstuck,
+                            &mut diagnostics,
+                        )?;
+                        continue;
+                    }
+                }
             } else {
                 EMABands::default()
             };
@@ -4150,6 +4160,7 @@ mod core {
                     ..Default::default()
                 },
                 tradable: true,
+                allow_missing_strategy_inputs: false,
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,

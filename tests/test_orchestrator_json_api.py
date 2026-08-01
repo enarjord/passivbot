@@ -377,6 +377,162 @@ def test_json_rejects_missing_ema():
         compute(pbr, inp)
 
 
+def test_live_authorized_missing_ema_scopes_strategy_orders_atomically():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        emas=ema_bundle(m1_close=[]),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    assert not any(
+        order["pside"] == "long"
+        and (
+            order["order_type"].startswith("entry_")
+            or order["order_type"].startswith("close_grid")
+            or order["order_type"].startswith("close_trailing")
+        )
+        for order in out["orders"]
+    )
+    assert {
+        "strategy_input_unavailable": {
+            "symbol_idx": 0,
+            "pside": "long",
+            "scope": "strategy_orders",
+        }
+    } in out["diagnostics"]["warnings"]
+
+
+def test_live_authorized_missing_ema_still_emits_twel_reducer():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "total_wallet_exposure_limit": 0.9,
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    symbols = [
+        make_symbol(
+            0,
+            bid=50.0,
+            ask=50.0,
+            long_pos_size=8.0,
+            long_pos_price=50.0,
+            long_bp=long_bp,
+            emas=ema_bundle(m1_close=[]),
+        ),
+        make_symbol(
+            1,
+            bid=50.0,
+            ask=50.0,
+            long_pos_size=12.0,
+            long_pos_price=50.0,
+            long_bp=long_bp,
+            emas=ema_bundle(m1_close=[]),
+        ),
+    ]
+    for symbol in symbols:
+        symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols)
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    twel_orders = [
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_twel_long"
+    ]
+    assert twel_orders
+    assert {order["symbol_idx"] for order in twel_orders} == {1}
+
+
+def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
+    import passivbot_rust as pbr
+
+    enabled_short = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        short_pos_size=-1.0,
+        short_pos_price=100.0,
+        short_bp=enabled_short,
+        long_strategy=adaptive_strategy_params(
+            entry_volatility_ema_span_1h=4.0,
+            entry_weight_volatility_1h=1.0,
+        ),
+        short_strategy=adaptive_strategy_params(),
+        emas=ema_bundle(h1_log_range=[]),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=enabled_short),
+        symbols=[symbol],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    assert any(order["pside"] == "short" for order in out["orders"])
+    assert not any(
+        order["pside"] == "long"
+        and (
+            order["order_type"].startswith("entry_")
+            or order["order_type"].startswith("close_grid")
+            or order["order_type"].startswith("close_trailing")
+        )
+        for order in out["orders"]
+    )
+    scoped_warnings = [
+        warning["strategy_input_unavailable"]
+        for warning in out["diagnostics"]["warnings"]
+        if "strategy_input_unavailable" in warning
+    ]
+    assert scoped_warnings == [
+        {"symbol_idx": 0, "pside": "long", "scope": "strategy_orders"}
+    ]
+
+
+def test_live_authorization_does_not_tolerate_malformed_ema_values():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 0.0],
+                [20.0, 0.0],
+                [math.sqrt(10.0 * 20.0), 0.0],
+            ]
+        ),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+    inp["global"]["hedge_mode"] = True
+
+    with pytest.raises(ValueError, match="NonFiniteInput"):
+        compute(pbr, inp)
+
+
 def test_ema_gate_mode_disabled_initial_long_uses_best_bid_without_ema():
     import passivbot_rust as pbr
 

@@ -662,7 +662,7 @@ class _BundleReproBot:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("close_mode", ["timeout", "nan"])
-async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close_mode):
+async def test_held_symbol_missing_ema_is_explicitly_scoped_for_rust(close_mode):
     try:
         import passivbot as pb_mod
         import passivbot_rust as pbr
@@ -674,10 +674,23 @@ async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close
 
     symbol = "AVAX/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode=close_mode)
-    with pytest.raises(
-        RuntimeError, match=r"missing required close EMA for AVAX/USDT:USDT"
-    ):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert m1_close_emas[symbol] == {}
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert h1_log_range_emas[symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
+    assert bot._orchestrator_ema_unavailable_symbols == set()
 
     payload = _make_orchestrator_payload(
         symbol,
@@ -775,7 +788,7 @@ async def test_forager_eligible_flat_normal_missing_close_ema_marks_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_mixed_forager_fixed_normal_side_missing_ema_remains_strict():
+async def test_mixed_forager_fixed_normal_side_missing_ema_is_scoped_in_rust():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -804,13 +817,13 @@ async def test_mixed_forager_fixed_normal_side_missing_ema_remains_strict():
     bot.is_forager_mode = lambda pside=None: pside in {None, "long"}
     mode_overrides = {"long": {symbol: None}, "short": {symbol: None}}
 
-    with pytest.raises(
-        RuntimeError, match=r"missing required close EMA for BTC/USDT:USDT"
-    ):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot, [symbol], mode_overrides
-        )
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
 
+    assert result[0][symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
+    assert bot._orchestrator_ema_unavailable_symbols == set()
     assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
 
 
@@ -2277,7 +2290,7 @@ async def test_cached_forager_ema_failure_log_omits_exception_text(caplog):
 
 
 @pytest.mark.asyncio
-async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
+async def test_close_ema_fallback_scopes_symbol_when_previous_ema_is_stale(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2297,9 +2310,12 @@ async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
     bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(RuntimeError, match="previous close EMA stale"):
-            await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+        result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
 
+    assert result[0][symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
     stale_warnings = [
         record.message
         for record in caplog.records
@@ -2427,7 +2443,7 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("h1_mode", ["timeout", "nan"])
-async def test_required_h1_log_range_ema_raises_when_missing(h1_mode):
+async def test_required_h1_log_range_ema_is_scoped_when_missing(h1_mode):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2440,8 +2456,13 @@ async def test_required_h1_log_range_ema_raises_when_missing(h1_mode):
         h1_mode=h1_mode,
         entry_h1_span_hours=4.0,
     )
-    with pytest.raises(RuntimeError, match=r"missing required h1_log_range EMA for AVAX/USDT:USDT"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert result[0][symbol]
+    assert result[3][symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
 
 
 @pytest.mark.asyncio
@@ -2606,7 +2627,7 @@ async def test_trailing_grid_v7_grid_spacing_volatility_requires_h1_log_range():
 
 
 @pytest.mark.asyncio
-async def test_trailing_grid_v7_grid_spacing_h1_log_range_missing_fails_loudly():
+async def test_trailing_grid_v7_grid_spacing_h1_missing_is_scoped_in_rust():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2641,8 +2662,13 @@ async def test_trailing_grid_v7_grid_spacing_h1_log_range_missing_fails_loudly()
 
     bot._strategy_params_to_rust_dict = trailing_grid_v7_params
 
-    with pytest.raises(RuntimeError, match=r"missing required h1_log_range EMA for AVAX/USDT:USDT"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert result[0][symbol]
+    assert result[3][symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
 
 
 @pytest.mark.asyncio

@@ -17163,6 +17163,7 @@ class Passivbot:
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
         self._orchestrator_ema_unavailable_symbols = set()
+        self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
         previous_ema_entry_cancellation_order_keys = set(
@@ -18679,6 +18680,10 @@ class Passivbot:
             requested_m1_lr_spans = sorted(
                 set(m1_lr_spans) | set(required_m1_lr_for_symbol)
             )
+            close: dict[float, float] = {}
+            vol: Optional[dict[float, float]] = None
+            lr1m: Optional[dict[float, float]] = None
+            h1: dict[float, float] = {}
             forager_lr1m: Optional[dict[float, float]] = None
             try:
                 projection_ctx = projection_contexts.get(sym)
@@ -18788,6 +18793,26 @@ class Passivbot:
                     forager_lr1m = {}
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
+                    if isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                        self._orchestrator_allow_missing_strategy_inputs_symbols.add(
+                            sym
+                        )
+                        log_ema_issue(
+                            ("strategy_inputs_unavailable", sym),
+                            logging.WARNING,
+                            "[ema] strategy inputs unavailable %s action=scope_consumers_in_rust error_type=%s | %s",
+                            Passivbot._log_symbol(sym),
+                            ema_error_type(exc),
+                            ema_candle_health_context(sym),
+                            interval_ms=15 * 60 * 1000,
+                        )
+                        return (
+                            close,
+                            vol or {},
+                            lr1m or {},
+                            h1,
+                            forager_lr1m or {},
+                        )
                     raise
                 if sym in cache_only_symbols:
                     reason = "cache_only_fetch_failed"
@@ -19304,6 +19329,13 @@ class Passivbot:
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
         )
+        allow_missing_strategy_inputs_symbols = set(
+            getattr(
+                self,
+                "_orchestrator_allow_missing_strategy_inputs_symbols",
+                set(),
+            )
+        )
         forager_m1_log_range_emas = getattr(
             self, "_orchestrator_forager_m1_log_range_emas", {}
         )
@@ -19469,6 +19501,9 @@ class Passivbot:
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
+                    "allow_missing_strategy_inputs": (
+                        symbol in allow_missing_strategy_inputs_symbols
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -21031,7 +21066,7 @@ class Passivbot:
                 Passivbot._log_active_candle_refresh_incomplete(
                     self, ordered_symbols, missing
                 )
-                return False
+                return True
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
                 signature,

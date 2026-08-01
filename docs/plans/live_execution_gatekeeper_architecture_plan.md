@@ -12,6 +12,13 @@ build the event/data-packet spine and immutable per-cycle snapshot boundary firs
 enforcement should remain conditional until the Rust planning-completeness contract is explicit and
 tested.
 
+Implementation checkpoint (2026-08): the staged planner barrier covers authoritative account
+surfaces plus the cycle's market snapshot, not blanket completed-candle freshness. Live Python may
+identify known absent EMA inputs per symbol without fabricating values; Rust then records and
+scopes only consumers that encounter `MissingEma`, while backtest and unannotated calls remain
+strict. Ordinary ideals omitted by that scoped result are still authoritative, so reconciliation
+cancels stale resting strategy orders. Candle-independent panic and TWEL reducers remain eligible.
+
 ## Purpose
 
 Split the live bot into narrow components with explicit data contracts and structured decision
@@ -268,6 +275,8 @@ Policy:
 - Stale candles for flat symbols must not block protective management of held symbols.
 - Candle unavailability must be represented explicitly. Do not convert missing candle windows into
   neutral EMA inputs.
+- Do not require one completed-candle signature for the entire planner cycle. The Rust consumer
+  determines whether each strategy, unstuck, or independent risk action needs an unavailable EMA.
 
 ### Fill Events
 
@@ -359,8 +368,8 @@ Rules:
   positions, open orders, balance.
 - The snapshot may include stale/noncritical packets, but their status must be explicit.
 - Do not fabricate required Rust inputs with neutral values.
-- If a surface is unavailable for a symbol/order class, represent that as planning-unavailable
-  metadata.
+- If a surface is unavailable for a symbol/order class, represent that explicitly in the Rust
+  input/output contract; do not infer a hypothetical Python requirement matrix.
 - Background refresh tasks may be scheduled while building the snapshot, but their results belong
   to a later snapshot revision.
 
