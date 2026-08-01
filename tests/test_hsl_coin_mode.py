@@ -5203,19 +5203,25 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
     old_entry_ts = 60_001
     old_flatten_ts = 120_001
     current_entry_ts = 900_001
+    old_entry_fee = -5.0
+    old_close_pnl = -55.0
+    old_realized_pnl = -60.0
+    realized = np.zeros(len(timestamps), dtype=np.float64)
+    realized[0] = old_entry_fee
+    realized[1:] = old_realized_pnl
+    balances = np.full(len(timestamps), 100.0, dtype=np.float64)
+    balances[0] = 100.0 - old_close_pnl
     unrealized = np.zeros(len(timestamps), dtype=np.float64)
     unrealized[0] = np.nan
     unrealized[14:] = -1.0
     history = {
         "hsl_coin_compact_replay": {
             "timestamps": timestamps,
-            "balances": np.full(len(timestamps), 100.0, dtype=np.float64),
-            "realized_pnl": np.zeros(len(timestamps), dtype=np.float64),
+            "balances": balances,
+            "realized_pnl": realized,
             "pair_values": {
                 ("long", symbol): {
-                    "realized_pnl": np.zeros(
-                        len(timestamps), dtype=np.float64
-                    ),
+                    "realized_pnl": realized,
                     "unrealized_pnl": unrealized,
                 }
             },
@@ -5229,6 +5235,7 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
                 "action": "increase",
                 "qty": 1.0,
                 "pnl": 0.0,
+                "fee_paid": old_entry_fee,
             },
             {
                 "timestamp": old_flatten_ts,
@@ -5236,7 +5243,7 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
                 "pside": "long",
                 "action": "decrease",
                 "qty": 1.0,
-                "pnl": 0.0,
+                "pnl": old_close_pnl,
             },
             {
                 "timestamp": current_entry_ts,
@@ -5282,7 +5289,9 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
     state = bot._hsl_coin_state("long", symbol)
     assert state["halted"] is False
     assert state["last_metrics"]["timestamp_ms"] == int(timestamps[-1])
+    assert state["last_metrics"]["realized_pnl"] == pytest.approx(0.0)
     assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-1.0)
+    assert state["last_metrics"]["tier"] == "green"
     assert state["pnl_reset_timestamp_ms"] is None
 
 

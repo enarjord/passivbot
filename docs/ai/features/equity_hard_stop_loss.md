@@ -35,8 +35,10 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    Replay retains preceding episodes while their cooldown horizons overlap the next episode, so a
    chain of possible cooldown interventions remains strict. An ambiguous fill sequence, a position
    size mismatch, `threshold`/`never`, or a missing current-episode boundary preserves full-lookback
-   replay. Unavailable candles before the resulting boundary cannot strand an otherwise provable
-   held episode; unavailable required candles at or after it still fail closed.
+   replay. The cumulative realized PnL of discarded episodes becomes the new replay baseline, so
+   their gains, losses, and fees cannot affect the retained episode. Unavailable candles before the
+   resulting boundary cannot strand an otherwise provable held episode; unavailable required
+   candles at or after it still fail closed.
 
 ## Failure Semantics
 

@@ -5943,6 +5943,19 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     symbol,
                     qty_step=qty_step,
                 )
+                if (
+                    replay_start_boundary_ts is not None
+                    and (pside, symbol) in bounded_held_replay_starts
+                ):
+                    # Pair realized values are cumulative across the replay
+                    # record window. Discarded closed episodes must therefore
+                    # become the current episode's baseline rather than leaking
+                    # their gains/losses into its drawdown state.
+                    reset_baseline_realized = sum(
+                        float(realized_delta)
+                        for event_ts, _action, _qty, realized_delta in replay_events
+                        if int(event_ts) < int(replay_start_boundary_ts)
+                    )
                 pair_uses_dense_replay = (
                     compact_replay is None
                     or replay_ambiguous
