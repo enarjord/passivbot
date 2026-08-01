@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from passivbot import Passivbot, shutdown_bot
+from passivbot_exceptions import RestartBotException
 
 
 class _Task:
@@ -71,6 +72,18 @@ def test_stop_data_maintainers_keeps_cancellation_failures_at_error(caplog):
     assert "websocket-secret" not in caplog.text
     assert "private.invalid" not in caplog.text
     assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_restart_request_defers_maintainer_cancellation_to_outer_cleanup():
+    bot = Passivbot.__new__(Passivbot)
+    stop_calls = []
+    bot.stop_data_maintainers = lambda: stop_calls.append("stop")
+
+    with pytest.raises(RestartBotException, match="Bot will restart"):
+        await bot.restart_bot()
+
+    assert stop_calls == []
 
 
 @pytest.mark.asyncio

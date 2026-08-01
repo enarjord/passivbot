@@ -51,7 +51,8 @@ All notable user-facing changes will be documented in this file.
   and post-cancellation waits are hard-bounded even when connector coroutines
   suppress cancellation. Removed watchers remain owned until retirement returns,
   and abandoned watchers remain marked retiring until they actually stop.
-  Internal bot restarts await maintainer teardown and close event,
+  Internal bot restarts delegate the single maintainer cancellation to outer cleanup,
+  then await teardown and close event,
   monitor, and exchange-client resources before constructing the replacement
   bot; cancellation-resistant tasks cannot extend cleanup beyond the bounded
   grace deadline, and an incomplete event-pipeline shutdown no longer permits a

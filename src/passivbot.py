@@ -20072,7 +20072,10 @@ class Passivbot:
         # Note: Do NOT set stop_signal_received=True here - that would cause
         # the main loop to exit instead of restart. The flag is only for
         # user-initiated stops (SIGINT/SIGTERM).
-        self.stop_data_maintainers()
+        # The outer lifecycle finally block owns maintainer cancellation and
+        # awaits owner-managed teardown exactly once before closing clients.
+        # Cancelling here as well can inject a second CancelledError while the
+        # WebSocket owner is already retiring its child watchers.
         raise RestartBotException("Bot will restart.")
 
     def _forager_refresh_budget(
