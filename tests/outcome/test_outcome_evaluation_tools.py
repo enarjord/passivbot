@@ -505,6 +505,7 @@ def test_hip4_window_uses_requested_synthetic_lifecycle_boundaries():
     assert spec["order_entry_opens_ms"] == 2_000
     assert spec["trading_closes_ms"] == 5_000
     assert spec["scheduled_event_ms"] == 5_000
+    assert spec["min_notional"] == 10.0
 
 
 def test_polymarket_window_applies_synthetic_close_before_rust_translation():
@@ -522,12 +523,14 @@ def test_polymarket_window_applies_synthetic_close_before_rust_translation():
         start_ms=2_000,
         end_ms=5_000,
         qty_step=0.01,
+        min_order_notional=0.0,
     )
 
     assert spec["trading_opens_ms"] == 2_000
     assert spec["order_entry_opens_ms"] == 2_000
     assert spec["trading_closes_ms"] == 5_000
     assert spec["scheduled_event_ms"] == 5_000
+    assert spec["min_notional"] == 0.0
 
 
 def test_hip4_window_close_phases_default_to_disabled_and_are_configurable():
@@ -572,12 +575,17 @@ def test_hip4_window_requires_explicit_quantity_constraint_assumptions():
     assert configured.min_order_notional == 5.0
 
 
-def test_polymarket_window_requires_explicit_quantity_step_assumption():
+def test_polymarket_window_requires_explicit_quantity_and_notional_assumptions():
     parser = argparse.ArgumentParser()
     _add_polymarket_constraint_arguments(parser)
 
     with pytest.raises(SystemExit):
         parser.parse_args([])
-    configured = parser.parse_args(["--qty-step", "0.01"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--qty-step", "0.01"])
+    configured = parser.parse_args(
+        ["--qty-step", "0.01", "--min-order-notional", "0"]
+    )
 
     assert configured.qty_step == 0.01
+    assert configured.min_order_notional == 0.0

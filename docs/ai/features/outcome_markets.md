@@ -377,8 +377,9 @@ construction route to observable cancel-only handling while any required constra
 unavailable; generic spot assumptions are not HIP-4 outcome constraints. The bounded HIP-4
 evaluation tool requires explicit quantity-step, minimum-quantity, and minimum-notional inputs and
 reports them as experiment assumptions; they do not become live venue metadata.
-The bounded Polymarket evaluator likewise requires an explicit quantity step when retained market
-metadata does not provide one.
+The bounded Polymarket evaluator likewise requires an explicit quantity step and minimum-notional
+assumption when retained market metadata does not provide them. An intentional zero minimum must
+be supplied explicitly rather than inferred from missing metadata.
 HIP-4 native order serialization removes only ordinary binary floating-point residue within the
 same `1e-12`-scaled grid tolerance used by Rust, then emits canonical decimal text. Materially
 off-grid quantities or prices remain invalid; serialization never rounds an arbitrary intent onto
@@ -568,6 +569,22 @@ If the verified actual-fill signal is unavailable or stale, new and replacement 
 unavailable. Reconciliation targets an empty managed-order set for the affected outcome market:
 cancel Passivbot-namespaced quotes and preserve all unmanaged user orders. A missing fill is never
 converted into a fabricated candle merely to keep existing quotes alive.
+
+Normal live EMA-anchor operation owns one continuous public-fill stream outside account and order
+reconciliation cycles. After one actual fill establishes the canonical close, its verified
+coverage watermark advances the same dense one-second signal used by the backtester: completed
+no-trade seconds carry the prior close with zero volume, and every newly verified second triggers
+planning from the newest snapshot. Exact unchanged native orders may be retained instead of
+physically cancelled and recreated; this is an execution optimization and must not preserve intent
+that Rust no longer emits. The backtester remains deterministic and does not simulate websocket
+disconnects, API latency, or retries in its core single-market kernel.
+
+Signal freshness is a live data-availability watchdog, not the ordinary lifetime of an outcome
+quote. A running collector advances the watermark during proven market silence. A stopped,
+failed, or insufficiently current collector cannot advance it, and the next cycle targets an empty
+managed-order set. Before the first continuous signal after startup or restart, an executing bot
+also drives any recovered managed quotes to verified absence. A bounded one-shot executing cycle
+uses the same conservative bootstrap cleanup; read-only probes need not mutate account state.
 
 A stale or future-dated account snapshot follows the same explicit unavailable path and targets an
 empty managed-order set; it is not surfaced as a generic planning error that leaves prior managed

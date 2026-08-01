@@ -16,6 +16,7 @@ from outcome.hyperliquid_live import (
     HyperliquidOutcomeLiveClient,
 )
 from outcome.live_data import (
+    ContinuousVerifiedOutcomeSignalCollector,
     OutcomeIncompleteVerifiedSignal,
     OutcomeInvalidPublicSignal,
     OutcomeNoPublicFill,
@@ -318,21 +319,68 @@ async def run_hip4_outcome_collected_cycle(
     now_ms: int | None = None,
     wall_clock_ms: Callable[[], int] | None = None,
     trade_stream: AsyncIterator[OutcomeTradeStreamItem] | None = None,
+    continuous_collector: ContinuousVerifiedOutcomeSignalCollector | None = None,
 ) -> HyperliquidOutcomeCollectedCycle:
-    """Collect a verified HIP-4 signal and reconcile, or cancel managed quotes on silence."""
+    """Consume a verified HIP-4 signal and reconcile, or cancel managed quotes on silence.
+
+    Executing live loops should retain one ``continuous_collector`` across cycles so verified
+    zero-volume seconds advance while account reconciliation runs.  A one-shot executable call
+    clears managed quotes before its bounded bootstrap collection.
+    """
+
+    effective_archive = archive
+    effective_collector_session = collector_session
+    if continuous_collector is not None:
+        if continuous_collector.market != market:
+            raise ValueError("continuous outcome collector belongs to a different market")
+        if trade_stream is not None:
+            raise ValueError(
+                "continuous collector and one-shot trade stream are mutually exclusive"
+            )
+        if archive is not None and archive is not continuous_collector.archive:
+            raise ValueError("continuous collector owns a different outcome archive")
+        if (
+            collector_session is not None
+            and collector_session != continuous_collector.collector_session
+        ):
+            raise ValueError("continuous collector owns a different archive session")
+        effective_archive = continuous_collector.archive
+        effective_collector_session = continuous_collector.collector_session
+
+    if execute and (
+        continuous_collector is None or not continuous_collector.has_emitted_window
+    ):
+        bootstrap = await run_hip4_outcome_unavailable_cycle(
+            client,
+            market,
+            reason=OutcomePlanningUnavailableReason.INCOMPLETE_VERIFIED_SIGNAL,
+            execute=True,
+            now_ms=now_ms,
+            archive=effective_archive,
+            collector_session=effective_collector_session,
+        )
+        if bootstrap.lifecycle.state is not HyperliquidOutcomeLifecycleState.ACTIVE:
+            return HyperliquidOutcomeCollectedCycle(cycle=bootstrap, signal_window=None)
 
     try:
-        window = await collect_verified_hyperliquid_signal_window(
-            market,
-            min_observations=min_observations,
-            max_wait_seconds=max_wait_seconds,
-            delivery_lag_ms=delivery_lag_ms,
-            max_live_trade_lag_ms=max_live_trade_lag_ms,
-            wall_clock_ms=wall_clock_ms,
-            trade_stream=trade_stream,
-            archive=archive,
-            collector_session=collector_session,
-        )
+        if continuous_collector is None:
+            window = await collect_verified_hyperliquid_signal_window(
+                market,
+                min_observations=min_observations,
+                max_wait_seconds=max_wait_seconds,
+                delivery_lag_ms=delivery_lag_ms,
+                max_live_trade_lag_ms=max_live_trade_lag_ms,
+                wall_clock_ms=wall_clock_ms,
+                trade_stream=trade_stream,
+                archive=archive,
+                collector_session=collector_session,
+            )
+        else:
+            window = await continuous_collector.next_window(
+                min_observations=min_observations,
+                max_wait_seconds=max_wait_seconds,
+                max_signal_age_ms=DEFAULT_OUTCOME_MAX_SIGNAL_AGE_MS,
+            )
     except OutcomeNoPublicFill:
         cycle = await run_hip4_outcome_unavailable_cycle(
             client,
@@ -340,8 +388,8 @@ async def run_hip4_outcome_collected_cycle(
             reason=OutcomePlanningUnavailableReason.NO_PUBLIC_FILL,
             execute=execute,
             now_ms=now_ms,
-            archive=archive,
-            collector_session=collector_session,
+            archive=effective_archive,
+            collector_session=effective_collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
     except OutcomeIncompleteVerifiedSignal:
@@ -351,8 +399,8 @@ async def run_hip4_outcome_collected_cycle(
             reason=OutcomePlanningUnavailableReason.INCOMPLETE_VERIFIED_SIGNAL,
             execute=execute,
             now_ms=now_ms,
-            archive=archive,
-            collector_session=collector_session,
+            archive=effective_archive,
+            collector_session=effective_collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
     except (
@@ -368,8 +416,8 @@ async def run_hip4_outcome_collected_cycle(
             reason=OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED,
             execute=execute,
             now_ms=now_ms,
-            archive=archive,
-            collector_session=collector_session,
+            archive=effective_archive,
+            collector_session=effective_collector_session,
         )
         return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=None)
 
@@ -381,7 +429,7 @@ async def run_hip4_outcome_collected_cycle(
         execute=execute,
         now_ms=now_ms,
         wall_clock_ms=wall_clock_ms,
-        archive=archive,
-        collector_session=collector_session,
+        archive=effective_archive,
+        collector_session=effective_collector_session,
     )
     return HyperliquidOutcomeCollectedCycle(cycle=cycle, signal_window=window)

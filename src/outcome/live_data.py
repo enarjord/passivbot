@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 import time
 from typing import AsyncIterator, Callable, Sequence
@@ -64,6 +65,291 @@ class VerifiedOutcomeSignalWindow:
             <= trade.exchange_time_ms
             < self.coverage.end_ms
         )
+
+
+class ContinuousVerifiedOutcomeSignalCollector:
+    """Own one continuous public-fill stream and expose verified dense 1s snapshots.
+
+    The collector consumes the websocket outside reconciliation cycles.  Once an actual fill
+    establishes the canonical close, verified no-trade seconds advance the signal with flat,
+    zero-volume candles.  Stream failure stops that progression instead of fabricating coverage.
+    """
+
+    def __init__(
+        self,
+        market: NormalizedOutcomeMarket,
+        *,
+        delivery_lag_ms: int = 1_000,
+        max_live_trade_lag_ms: int = 2_000,
+        wall_clock_ms: Callable[[], int] | None = None,
+        trade_stream: AsyncIterator[OutcomeTradeStreamItem] | None = None,
+        archive: OutcomeTradeArchive | None = None,
+        collector_session: str | None = None,
+    ) -> None:
+        if market.venue not in {OutcomeVenue.HYPERLIQUID, OutcomeVenue.POLYMARKET}:
+            raise ValueError("unsupported venue for continuous outcome signal collection")
+        if delivery_lag_ms < 0:
+            raise ValueError("delivery_lag_ms must be non-negative")
+        if max_live_trade_lag_ms < 0:
+            raise ValueError("max_live_trade_lag_ms must be non-negative")
+        if archive is not None and not collector_session:
+            raise ValueError("archived outcome collection requires collector_session")
+        if archive is not None and market.venue is OutcomeVenue.POLYMARKET:
+            raise ValueError(
+                "continuous Polymarket archival requires an atomic identity-less segment writer"
+            )
+        self.market = market
+        self.delivery_lag_ms = delivery_lag_ms
+        self.max_live_trade_lag_ms = max_live_trade_lag_ms
+        self.verification_lag_ms = max(delivery_lag_ms, max_live_trade_lag_ms)
+        self._clock = wall_clock_ms or (lambda: int(time.time() * 1_000))
+        self._supplied_stream = trade_stream
+        self._stream: AsyncIterator[OutcomeTradeStreamItem] | None = None
+        self._archive = archive
+        self._collector_session = collector_session
+        self._condition = asyncio.Condition()
+        self._task: asyncio.Task[None] | None = None
+        self._trades: list[NormalizedOutcomeTrade] = []
+        self._rejected_trade_times_ms: list[int] = []
+        self._coverage_start_ms: int | None = None
+        self._last_returned_end_ms: int | None = None
+        self._last_archived_end_ms: int | None = None
+        self._failure: Exception | None = None
+
+    @property
+    def has_emitted_window(self) -> bool:
+        return self._last_returned_end_ms is not None
+
+    @property
+    def archive(self) -> OutcomeTradeArchive | None:
+        return self._archive
+
+    @property
+    def collector_session(self) -> str | None:
+        return self._collector_session
+
+    async def __aenter__(self) -> "ContinuousVerifiedOutcomeSignalCollector":
+        await self.start()
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        await self.aclose()
+
+    async def start(self) -> None:
+        if self._task is not None:
+            raise RuntimeError("continuous outcome collector is already started")
+        if self._archive is not None:
+            try:
+                self._archive.append_market_metadata(
+                    self.market,
+                    observed_at_ms=self._clock(),
+                    observation_source="continuous_live_fill_collection_start",
+                    collector_session=str(self._collector_session),
+                )
+            except ValueError as exc:
+                raise OutcomeInvalidPublicSignal(
+                    "outcome market metadata conflicted with retained live evidence"
+                ) from exc
+        self._stream = self._supplied_stream or (
+            stream_hyperliquid_public_trades((self.market,))
+            if self.market.venue is OutcomeVenue.HYPERLIQUID
+            else stream_polymarket_public_trades((self.market,))
+        )
+        self._task = asyncio.create_task(self._consume(), name="outcome-signal-collector")
+
+    async def aclose(self) -> None:
+        task = self._task
+        self._task = None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        stream = self._stream
+        self._stream = None
+        close = getattr(stream, "aclose", None)
+        if close is not None:
+            await close()
+
+    async def _consume(self) -> None:
+        assert self._stream is not None
+        try:
+            async for stream_item in self._stream:
+                batch = (
+                    (stream_item,)
+                    if isinstance(stream_item, NormalizedOutcomeTrade)
+                    else stream_item
+                )
+                self._accept_batch(batch)
+                async with self._condition:
+                    self._condition.notify_all()
+            raise ConnectionError("continuous outcome public trade stream ended")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._failure = exc
+            async with self._condition:
+                self._condition.notify_all()
+
+    def _accept_batch(self, batch: tuple[NormalizedOutcomeTrade, ...]) -> None:
+        if (
+            not isinstance(batch, tuple)
+            or not batch
+            or not all(isinstance(trade, NormalizedOutcomeTrade) for trade in batch)
+        ):
+            raise OutcomeInvalidPublicSignal(
+                "outcome public trade stream returned a malformed trade batch"
+            )
+        if len({trade.received_time_ms for trade in batch}) != 1:
+            raise OutcomeInvalidPublicSignal(
+                "outcome public trade batch does not share one receive timestamp"
+            )
+        for trade in batch:
+            if trade.market_id != self.market.market_id or trade.venue is not self.market.venue:
+                raise OutcomeInvalidPublicSignal(
+                    "outcome public trade stream returned a different market"
+                )
+            if trade.collector_sequence is None:
+                raise OutcomeInvalidPublicSignal(
+                    "outcome live trade omitted collector chronology"
+                )
+            if (
+                self._last_returned_end_ms is not None
+                and trade.exchange_time_ms < self._last_returned_end_ms
+            ):
+                raise OutcomeInvalidPublicSignal(
+                    "outcome fill arrived after its signal second was already emitted"
+                )
+            delivery_delay_ms = trade.received_time_ms - trade.exchange_time_ms
+            if not -1_000 <= delivery_delay_ms <= self.max_live_trade_lag_ms:
+                self._rejected_trade_times_ms.append(trade.exchange_time_ms)
+                continue
+            if self._archive is not None:
+                try:
+                    self._archive.append_trade(
+                        trade,
+                        collector_session=self._collector_session,
+                    )
+                except ValueError as exc:
+                    raise OutcomeInvalidPublicSignal(
+                        "outcome public trade conflicted with retained live evidence"
+                    ) from exc
+            self._trades.append(trade)
+            if self._coverage_start_ms is None:
+                self._coverage_start_ms = (
+                    (trade.received_time_ms + 999) // 1_000
+                ) * 1_000
+
+    def _verified_end_ms(self) -> int | None:
+        if self._coverage_start_ms is None:
+            return None
+        verified_through_ms = self._clock() - self.verification_lag_ms
+        verified_end_ms = max(
+            self._coverage_start_ms,
+            (verified_through_ms // 1_000) * 1_000,
+        )
+        trading_close_ms = self.market.lifecycle.trading_close_time_ms
+        return (
+            verified_end_ms
+            if trading_close_ms is None
+            else min(verified_end_ms, trading_close_ms)
+        )
+
+    async def next_window(
+        self,
+        *,
+        min_observations: int,
+        max_wait_seconds: float = 120.0,
+        max_signal_age_ms: int | None = None,
+    ) -> VerifiedOutcomeSignalWindow:
+        """Return the newest verified snapshot after at least one new completed second."""
+
+        if min_observations <= 0:
+            raise ValueError("min_observations must be positive")
+        if max_wait_seconds <= 0.0:
+            raise ValueError("max_wait_seconds must be positive")
+        if max_signal_age_ms is not None and max_signal_age_ms < 0:
+            raise ValueError("max_signal_age_ms must be non-negative")
+        if self._task is None:
+            raise RuntimeError("continuous outcome collector is not started")
+        loop = asyncio.get_running_loop()
+        effective_wait_seconds = max_wait_seconds
+        if self._last_returned_end_ms is not None and max_signal_age_ms is not None:
+            freshness_remaining_seconds = (
+                self._last_returned_end_ms + max_signal_age_ms - self._clock()
+            ) / 1_000
+            effective_wait_seconds = min(
+                effective_wait_seconds,
+                max(0.0, freshness_remaining_seconds),
+            )
+        deadline = loop.time() + effective_wait_seconds
+        while True:
+            if self._failure is not None:
+                raise self._failure
+            verified_end_ms = self._verified_end_ms()
+            if self._coverage_start_ms is not None and verified_end_ms is not None:
+                required_end_ms = (
+                    self._coverage_start_ms + min_observations * 1_000
+                    if self._last_returned_end_ms is None
+                    else self._last_returned_end_ms + 1_000
+                )
+                if verified_end_ms >= required_end_ms:
+                    coverage = VerifiedCoverage(self._coverage_start_ms, verified_end_ms)
+                    if any(
+                        coverage.start_ms <= timestamp_ms < coverage.end_ms
+                        for timestamp_ms in self._rejected_trade_times_ms
+                    ):
+                        raise OutcomeIncompleteVerifiedSignal(
+                            "outcome collection observed an in-window fill outside the "
+                            "allowed delivery lag"
+                        )
+                    try:
+                        window = build_verified_outcome_signal_window(
+                            self._trades,
+                            coverage,
+                            min_observations=min_observations,
+                        )
+                    except OutcomeIncompleteVerifiedSignal:
+                        raise
+                    except ValueError as exc:
+                        raise OutcomeInvalidPublicSignal(
+                            "outcome public fills could not produce a valid signal window"
+                        ) from exc
+                    self._archive_new_coverage(verified_end_ms)
+                    self._last_returned_end_ms = verified_end_ms
+                    return window
+            remaining = deadline - loop.time()
+            if remaining <= 0.0:
+                if self._coverage_start_ms is None:
+                    raise OutcomeNoPublicFill(
+                        "no outcome public fill arrived before the collection deadline"
+                    )
+                raise OutcomeIncompleteVerifiedSignal(
+                    "continuous outcome signal did not advance before the deadline"
+                )
+            poll_seconds = min(remaining, 0.25)
+            async with self._condition:
+                try:
+                    await asyncio.wait_for(self._condition.wait(), timeout=poll_seconds)
+                except asyncio.TimeoutError:
+                    pass
+
+    def _archive_new_coverage(self, verified_end_ms: int) -> None:
+        if self._archive is None:
+            return
+        start_ms = self._last_archived_end_ms or self._coverage_start_ms
+        assert start_ms is not None
+        if verified_end_ms <= start_ms:
+            return
+        coverage = VerifiedCoverage(start_ms, verified_end_ms)
+        for asset in (self.market.yes_asset, self.market.no_asset):
+            self._archive.record_verified_coverage(
+                self.market.venue,
+                self.market.market_id,
+                asset.asset_id,
+                coverage,
+                collector_session=str(self._collector_session),
+            )
+        self._last_archived_end_ms = verified_end_ms
 
 
 def build_verified_outcome_signal_window(
@@ -278,6 +564,7 @@ async def collect_verified_outcome_signal_window(
         raise OutcomeIncompleteVerifiedSignal(
             "outcome collection observed an in-window fill outside the allowed delivery lag"
         )
+
     def materialize_window() -> VerifiedOutcomeSignalWindow:
         try:
             return build_verified_outcome_signal_window(

@@ -70,6 +70,7 @@ def _window_market_spec(
     start_ms: int,
     end_ms: int,
     qty_step: float,
+    min_order_notional: float,
 ) -> dict:
     synthetic_market = replace(
         market,
@@ -81,7 +82,11 @@ def _window_market_spec(
             scheduled_event_time_ms=end_ms,
         ),
     )
-    return normalized_market_to_rust_spec(synthetic_market, qty_step=qty_step)
+    return normalized_market_to_rust_spec(
+        synthetic_market,
+        qty_step=qty_step,
+        min_order_notional=min_order_notional,
+    )
 
 
 def _add_constraint_arguments(parser: argparse.ArgumentParser) -> None:
@@ -90,6 +95,15 @@ def _add_constraint_arguments(parser: argparse.ArgumentParser) -> None:
         required=True,
         type=float,
         help="Explicit authoritative quantity step or clearly labeled experiment assumption",
+    )
+    parser.add_argument(
+        "--min-order-notional",
+        required=True,
+        type=float,
+        help=(
+            "Explicit authoritative minimum notional or clearly labeled experiment "
+            "assumption; pass 0 only when zero is intentional"
+        ),
     )
 
 
@@ -231,6 +245,7 @@ async def _main() -> int:
         start_ms=args.start_ms,
         end_ms=args.end_ms,
         qty_step=args.qty_step,
+        min_order_notional=args.min_order_notional,
     )
     strategy_params = {
         "ema_span_fast_seconds": args.ema_fast_seconds,

@@ -561,6 +561,12 @@ All notable user-facing changes will be documented in this file.
   batch, bounded evaluators seed initial no-trade seconds only from a preceding fill with proven
   continuous dual-book coverage, and portfolio pair completion pairs complementary buys only
   within the same outcome contract.
+  HIP-4 live cycles can now consume a continuously owned public-fill stream, advancing verified
+  one-second zero-volume signal candles during real market silence while account reconciliation
+  runs; stream failure still cancels managed quotes, and one-shot execution clears recovered
+  quotes before bootstrap collection. Outcome replay now expires GTD reservations before split or
+  merge actions, uses indexed post-fill mark lookup, and requires an explicit Polymarket minimum
+  notional assumption for bounded windows.
   Authenticated outcome mutations remain disabled by default.
 
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,

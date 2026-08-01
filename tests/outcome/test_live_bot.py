@@ -24,6 +24,7 @@ from outcome.live_bot import (
     run_hip4_outcome_cycle,
     run_hip4_outcome_unavailable_cycle,
 )
+from outcome.live_data import ContinuousVerifiedOutcomeSignalCollector
 from outcome.live_reconciliation import managed_outcome_client_order_id
 from outcome.models import (
     OutcomeOpenOrder,
@@ -408,6 +409,182 @@ async def test_collected_cycle_uses_verified_fill_seed_for_live_rust_plan():
     assert collected.cycle.planning_available is True
     assert collected.cycle.plan is not None
     assert len(collected.cycle.plan.intents) == 2
+
+
+@pytest.mark.asyncio
+async def test_collected_cycles_reuse_continuous_zero_candle_signal_progression():
+    outcome_market = market()
+    start_ms = outcome_market.lifecycle.trading_open_time_ms
+    assert start_ms is not None
+    clock = {"now_ms": start_ms + 4_100}
+    keep_open = asyncio.Event()
+
+    async def continuous_stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.5,
+            canonical_yes_price=0.5,
+            qty=1.0,
+            exchange_time_ms=start_ms + 900,
+            received_time_ms=start_ms + 950,
+            source_event_id="continuous-cycle-seed",
+            collector_sequence=1,
+        )
+        await keep_open.wait()
+
+    client = ReadOnlyClient(snapshot(clock["now_ms"]))
+    collector = ContinuousVerifiedOutcomeSignalCollector(
+        outcome_market,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: clock["now_ms"],
+        trade_stream=continuous_stream(),
+    )
+    async with collector:
+        first = await run_hip4_outcome_collected_cycle(
+            client,
+            outcome_market,
+            params(),
+            min_observations=3,
+            continuous_collector=collector,
+            now_ms=clock["now_ms"],
+        )
+        assert first.cycle.plan is not None
+        resting_orders = tuple(
+            OutcomeOpenOrder(
+                market_id=outcome_market.market_id,
+                order_id=str(index),
+                asset_id=(
+                    outcome_market.yes_asset.order_asset_id
+                    if intent.outcome is OutcomeSide.YES
+                    else outcome_market.no_asset.order_asset_id
+                ),
+                outcome=intent.outcome,
+                side=intent.side,
+                native_price=intent.native_price,
+                qty=intent.qty,
+                original_qty=intent.qty,
+                timestamp_ms=first.cycle.plan.observation_end_ms,
+                client_order_id=managed_outcome_client_order_id(
+                    outcome_market.market_id,
+                    slot=intent.slot,
+                    observation_end_ms=first.cycle.plan.observation_end_ms,
+                ),
+            )
+            for index, intent in enumerate(first.cycle.plan.intents, start=1)
+        )
+        clock["now_ms"] += 1_000
+        client.account = snapshot(clock["now_ms"], open_orders=resting_orders)
+        second = await run_hip4_outcome_collected_cycle(
+            client,
+            outcome_market,
+            params(),
+            min_observations=3,
+            continuous_collector=collector,
+            now_ms=clock["now_ms"],
+        )
+
+    assert first.signal_window is not None
+    assert len(first.signal_window.candles) == 3
+    assert second.signal_window is not None
+    assert len(second.signal_window.candles) == 4
+    assert second.signal_window.candles[-1].volume == 0.0
+    assert second.signal_window.candles[-1].carried_forward is True
+    assert second.cycle.planning_available is True
+    assert second.cycle.reconciliation.creates == ()
+    assert second.cycle.reconciliation.cancels == ()
+    assert len(second.cycle.reconciliation.kept) == len(resting_orders)
+
+
+@pytest.mark.asyncio
+async def test_continuous_stream_failure_targets_existing_managed_quotes_to_empty():
+    outcome_market = market()
+    start_ms = outcome_market.lifecycle.trading_open_time_ms
+    assert start_ms is not None
+    now_ms = start_ms + 4_100
+    disconnect = asyncio.Event()
+
+    async def disconnecting_stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.5,
+            canonical_yes_price=0.5,
+            qty=1.0,
+            exchange_time_ms=start_ms + 900,
+            received_time_ms=start_ms + 950,
+            source_event_id="continuous-disconnect-seed",
+            collector_sequence=1,
+        )
+        await disconnect.wait()
+
+    client = ReadOnlyClient(snapshot(now_ms))
+    collector = ContinuousVerifiedOutcomeSignalCollector(
+        outcome_market,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: now_ms,
+        trade_stream=disconnecting_stream(),
+    )
+    async with collector:
+        first = await run_hip4_outcome_collected_cycle(
+            client,
+            outcome_market,
+            params(),
+            min_observations=3,
+            continuous_collector=collector,
+            now_ms=now_ms,
+        )
+        assert first.cycle.plan is not None
+        intent = first.cycle.plan.intents[0]
+        cloid = managed_outcome_client_order_id(
+            outcome_market.market_id,
+            slot=intent.slot,
+            observation_end_ms=first.cycle.plan.observation_end_ms,
+        )
+        managed_order = OutcomeOpenOrder(
+            market_id=outcome_market.market_id,
+            order_id="7",
+            asset_id=(
+                outcome_market.yes_asset.order_asset_id
+                if intent.outcome is OutcomeSide.YES
+                else outcome_market.no_asset.order_asset_id
+            ),
+            outcome=intent.outcome,
+            side=intent.side,
+            native_price=intent.native_price,
+            qty=intent.qty,
+            original_qty=intent.qty,
+            timestamp_ms=first.cycle.plan.observation_end_ms,
+            client_order_id=cloid,
+        )
+        client.account = snapshot(now_ms, open_orders=(managed_order,))
+        disconnect.set()
+        await asyncio.sleep(0)
+        failed = await run_hip4_outcome_collected_cycle(
+            client,
+            outcome_market,
+            params(),
+            min_observations=3,
+            max_wait_seconds=0.1,
+            continuous_collector=collector,
+            now_ms=now_ms,
+        )
+
+    assert failed.signal_window is None
+    assert (
+        failed.cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.SIGNAL_COLLECTION_FAILED
+    )
+    assert len(failed.cycle.reconciliation.cancels) == 1
+    assert failed.cycle.reconciliation.creates == ()
 
 
 @pytest.mark.asyncio
@@ -827,6 +1004,8 @@ async def test_stream_disconnect_routes_to_executed_cancel_only_cycle():
             snapshot(now_ms, open_orders=(managed_order,)),
             snapshot(now_ms),
             snapshot(now_ms),
+            snapshot(now_ms),
+            snapshot(now_ms),
         )
     )
 
@@ -884,6 +1063,8 @@ async def test_malformed_public_signal_routes_to_executed_cancel_only_cycle():
     client = SafetyMutationClient(
         (
             snapshot(now_ms, open_orders=(managed_order,)),
+            snapshot(now_ms),
+            snapshot(now_ms),
             snapshot(now_ms),
             snapshot(now_ms),
         )

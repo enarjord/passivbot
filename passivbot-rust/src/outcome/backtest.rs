@@ -353,6 +353,7 @@ pub fn run_single_outcome_backtest(
                     {
                         return Err(OutcomeError::MarketNotTrading(*timestamp_ms));
                     }
+                    simulator.expire_orders(*timestamp_ms);
                     simulator.split(*qty, *yes_reference_price)?;
                 }
                 OutcomeBacktestAction::Merge { timestamp_ms, qty } => {
@@ -361,6 +362,7 @@ pub fn run_single_outcome_backtest(
                     {
                         return Err(OutcomeError::MarketNotTrading(*timestamp_ms));
                     }
+                    simulator.expire_orders(*timestamp_ms);
                     simulator.merge(*qty)?;
                 }
             },
@@ -406,13 +408,15 @@ pub fn run_single_outcome_backtest(
         .iter()
         .map(|fill| fill.fill.price * fill.fill.qty)
         .sum();
+    let mut mark_candles = input.candles.clone();
+    mark_candles.sort_by_key(|candle| candle.timestamp_ms);
     let post_fill_adverse_selection = calculate_post_fill_adverse_selection(
         &fills,
         input.market.payout_unit,
         INITIAL_POST_FILL_MARKOUT_HORIZONS_MS,
         |fill, mark_time_ms| {
             mark_price_from_execution_candles(
-                &input.candles,
+                &mark_candles,
                 input.market.capabilities.complementary_books_merged,
                 fill,
                 mark_time_ms,
@@ -884,10 +888,13 @@ fn mark_price_from_signal_candles(
     candles: &[OutcomeSignalCandle],
     mark_time_ms: u64,
 ) -> Result<Option<f64>, OutcomeError> {
+    let Some(candle_time_ms) = mark_time_ms.checked_sub(1_000) else {
+        return Ok(None);
+    };
     Ok(candles
-        .iter()
-        .find(|candle| candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms))
-        .map(|candle| candle.close))
+        .binary_search_by_key(&candle_time_ms, |candle| candle.timestamp_ms)
+        .ok()
+        .map(|index| candles[index].close))
 }
 
 fn mark_price_from_execution_candles(
@@ -896,12 +903,14 @@ fn mark_price_from_execution_candles(
     fill: &SimulatedOutcomeFill,
     mark_time_ms: u64,
 ) -> Result<Option<f64>, OutcomeError> {
-    let matches: Vec<f64> = candles
+    let Some(candle_time_ms) = mark_time_ms.checked_sub(1_000) else {
+        return Ok(None);
+    };
+    let first_index = candles.partition_point(|candle| candle.timestamp_ms < candle_time_ms);
+    let matches: Vec<f64> = candles[first_index..]
         .iter()
-        .filter(|candle| {
-            candle.timestamp_ms.checked_add(1_000) == Some(mark_time_ms)
-                && (complementary_books_merged || candle.outcome == fill.fill.outcome)
-        })
+        .take_while(|candle| candle.timestamp_ms == candle_time_ms)
+        .filter(|candle| complementary_books_merged || candle.outcome == fill.fill.outcome)
         .map(|candle| candle.close)
         .collect();
     let Some(&first) = matches.first() else {
@@ -1162,6 +1171,78 @@ mod tests {
         .unwrap();
         assert_eq!(output.fills_count, 0);
         assert_eq!(output.ending_collateral, 10.0);
+    }
+
+    #[test]
+    fn explicit_split_expires_prior_gtd_collateral_reservation() {
+        let mut reserved = order("reserved", Outcome::Yes, 0.5);
+        reserved.expires_at_ms = Some(2_000);
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 1.0,
+            actions: vec![
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: reserved,
+                },
+                OutcomeBacktestAction::Split {
+                    timestamp_ms: 2_500,
+                    qty: 1.0,
+                    yes_reference_price: 0.5,
+                },
+            ],
+            candles: vec![],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert!((output.pre_settlement_paired_qty - 1.0).abs() < 1e-12);
+        assert!((output.ending_collateral - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn explicit_merge_expires_prior_gtd_inventory_reservations() {
+        let mut sell_yes = order("sell-yes", Outcome::Yes, 0.5);
+        sell_yes.side = OutcomeOrderSide::Sell;
+        sell_yes.expires_at_ms = Some(2_000);
+        let mut sell_no = order("sell-no", Outcome::No, 0.5);
+        sell_no.side = OutcomeOrderSide::Sell;
+        sell_no.expires_at_ms = Some(2_000);
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 1.0,
+            actions: vec![
+                OutcomeBacktestAction::Split {
+                    timestamp_ms: 1_200,
+                    qty: 1.0,
+                    yes_reference_price: 0.5,
+                },
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: sell_yes,
+                },
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: sell_no,
+                },
+                OutcomeBacktestAction::Merge {
+                    timestamp_ms: 2_500,
+                    qty: 1.0,
+                },
+            ],
+            candles: vec![],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 0.0,
+        })
+        .unwrap();
+
+        assert!(output.pre_settlement_paired_qty.abs() < 1e-12);
+        assert!((output.ending_collateral - 1.0).abs() < 1e-12);
     }
 
     #[test]

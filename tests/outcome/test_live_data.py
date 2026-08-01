@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from outcome.archive import OutcomeTradeArchive
 from outcome.candles import VerifiedCoverage
 from outcome.live_data import (
+    ContinuousVerifiedOutcomeSignalCollector,
     OutcomeIncompleteVerifiedSignal,
     OutcomeInvalidPublicSignal,
     build_verified_outcome_signal_window,
@@ -102,6 +105,137 @@ def test_verified_live_window_rejects_insufficient_completed_seconds():
             VerifiedCoverage(2_000, 4_000),
             min_observations=3,
         )
+
+
+@pytest.mark.asyncio
+async def test_continuous_collector_advances_verified_zero_candles_without_new_fills():
+    outcome_market = polymarket_market()
+    clock = {"now_ms": 5_100}
+    keep_open = asyncio.Event()
+
+    async def stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id="continuous-seed",
+            collector_sequence=1,
+        )
+        await keep_open.wait()
+
+    collector = ContinuousVerifiedOutcomeSignalCollector(
+        outcome_market,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: clock["now_ms"],
+        trade_stream=stream(),
+    )
+    async with collector:
+        first = await collector.next_window(min_observations=3, max_wait_seconds=1.0)
+        clock["now_ms"] = 6_100
+        second = await collector.next_window(min_observations=3, max_wait_seconds=1.0)
+
+    assert first.coverage == VerifiedCoverage(2_000, 5_000)
+    assert [candle.timestamp_ms for candle in first.candles] == [2_000, 3_000, 4_000]
+    assert second.coverage == VerifiedCoverage(2_000, 6_000)
+    assert [candle.timestamp_ms for candle in second.candles] == [
+        2_000,
+        3_000,
+        4_000,
+        5_000,
+    ]
+    assert all(candle.volume == 0.0 for candle in second.candles)
+
+
+@pytest.mark.asyncio
+async def test_continuous_collector_stops_signal_progression_when_stream_ends():
+    outcome_market = polymarket_market()
+
+    async def ended_stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id="ended-seed",
+            collector_sequence=1,
+        )
+
+    collector = ContinuousVerifiedOutcomeSignalCollector(
+        outcome_market,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: 5_100,
+        trade_stream=ended_stream(),
+    )
+    async with collector:
+        with pytest.raises(ConnectionError, match="stream ended"):
+            await collector.next_window(min_observations=3, max_wait_seconds=1.0)
+
+
+@pytest.mark.asyncio
+async def test_continuous_collector_rejects_late_revision_of_emitted_second():
+    outcome_market = polymarket_market()
+    clock = {"now_ms": 5_100}
+    release_late_fill = asyncio.Event()
+
+    async def stream():
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.4,
+            canonical_yes_price=0.4,
+            qty=1.0,
+            exchange_time_ms=1_900,
+            received_time_ms=1_950,
+            source_event_id="revision-seed",
+            collector_sequence=1,
+        )
+        await release_late_fill.wait()
+        yield NormalizedOutcomeTrade(
+            venue=outcome_market.venue,
+            market_id=outcome_market.market_id,
+            asset_id=outcome_market.yes_asset.asset_id,
+            outcome=OutcomeSide.YES,
+            native_side=OutcomeOrderSide.BUY,
+            native_price=0.6,
+            canonical_yes_price=0.6,
+            qty=1.0,
+            exchange_time_ms=4_900,
+            received_time_ms=4_950,
+            source_event_id="late-revision",
+            collector_sequence=2,
+        )
+
+    collector = ContinuousVerifiedOutcomeSignalCollector(
+        outcome_market,
+        delivery_lag_ms=0,
+        max_live_trade_lag_ms=100,
+        wall_clock_ms=lambda: clock["now_ms"],
+        trade_stream=stream(),
+    )
+    async with collector:
+        await collector.next_window(min_observations=3, max_wait_seconds=1.0)
+        release_late_fill.set()
+        await asyncio.sleep(0)
+        with pytest.raises(OutcomeInvalidPublicSignal, match="already emitted"):
+            await collector.next_window(min_observations=3, max_wait_seconds=1.0)
 
 
 @pytest.mark.asyncio
