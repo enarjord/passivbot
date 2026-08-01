@@ -3,7 +3,11 @@ import sqlite3
 import numpy as np
 import pytest
 
-from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
+from backtest_dataset_materializer import (
+    BacktestDatasetMaterializer,
+    _write_time_major_frame_chunks,
+    materialize_frames,
+)
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_planner import plan_local_symbol_range
 from ohlcv_store import OhlcvStore, month_offset, month_start_ts, rows_in_month
@@ -772,6 +776,7 @@ def test_materialize_frames_fills_internal_sparse_gaps(tmp_path):
             dtype=np.float64,
         ),
     }
+    original_aligned = aligned_values_by_coin["ETH"].copy()
 
     handle = materialize_frames(
         output_root=tmp_path / "caches" / "ohlcvs" / "materialized",
@@ -791,6 +796,27 @@ def test_materialize_frames_fills_internal_sparse_gaps(tmp_path):
     assert handle.mss["ETH"]["source_first_valid_index"] == 0
     assert handle.mss["ETH"]["source_last_valid_index"] == 2
     assert handle.mss["ETH"]["synthetic_gap_fill_count"] == 1
+    np.testing.assert_array_equal(
+        aligned_values_by_coin["ETH"],
+        original_aligned,
+    )
+
+
+def test_write_time_major_frame_chunks_matches_direct_stack():
+    frames = [
+        np.arange(28, dtype=np.float64).reshape(7, 4) + coin_idx * 100.0
+        for coin_idx in range(3)
+    ]
+    destination = np.full((7, 3, 4), np.nan, dtype=np.float64)
+
+    chunk_count = _write_time_major_frame_chunks(
+        destination,
+        frames,
+        target_chunk_bytes=2 * 3 * 4 * np.dtype(np.float64).itemsize,
+    )
+
+    assert chunk_count == 4
+    np.testing.assert_array_equal(destination, np.stack(frames, axis=1))
 
 
 def test_chunk_checksum_matches_tobytes_reference(tmp_path):
