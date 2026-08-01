@@ -5176,6 +5176,116 @@ async def test_compact_replay_resets_flat_episode_when_historical_upnl_is_omitte
     assert symbol not in bot._runtime_forced_modes["long"]
 
 
+@pytest.mark.parametrize(
+    ("restart_policy", "cooldown_minutes", "should_raise"),
+    [
+        ("always", 5.0, False),
+        ("always", 20.0, True),
+        ("threshold", 5.0, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown_gap(
+    restart_policy, cooldown_minutes, should_raise
+):
+    """Old closed episodes must not strand an ``always`` held position.
+
+    GateIO exposes only a recent 1m window.  A held pair may therefore have
+    fill/PnL history for an old closed episode whose candles are no longer
+    fetchable, while its current episode has complete price history.  The old
+    episode is irrelevant only when a proven flat gap exceeds every possible
+    cooldown bridge.
+    """
+    import numpy as np
+
+    symbol = "UNI/USDT:USDT"
+    timestamps = np.arange(1, 21, dtype=np.int64) * 60_000
+    old_entry_ts = 60_001
+    old_flatten_ts = 120_001
+    current_entry_ts = 900_001
+    unrealized = np.zeros(len(timestamps), dtype=np.float64)
+    unrealized[0] = np.nan
+    unrealized[14:] = -1.0
+    history = {
+        "hsl_coin_compact_replay": {
+            "timestamps": timestamps,
+            "balances": np.full(len(timestamps), 100.0, dtype=np.float64),
+            "realized_pnl": np.zeros(len(timestamps), dtype=np.float64),
+            "pair_values": {
+                ("long", symbol): {
+                    "realized_pnl": np.zeros(
+                        len(timestamps), dtype=np.float64
+                    ),
+                    "unrealized_pnl": unrealized,
+                }
+            },
+        },
+        "panic_flatten_events": [],
+        "fill_events": [
+            {
+                "timestamp": old_entry_ts,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": old_flatten_ts,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": current_entry_ts,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+        ],
+    }
+    bot = make_coin_bot()
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.hsl["long"]["restart_after_red_policy"] = restart_policy
+    bot.hsl["long"]["cooldown_minutes_after_red"] = cooldown_minutes
+    bot.get_exchange_time = lambda: int(timestamps[-1])
+
+    async def current_upnl(pside=None, symbol=None):
+        return -1.0 if pside == "long" and symbol == "UNI/USDT:USDT" else 0.0
+
+    bot._calc_upnl_sum_strict = current_upnl
+
+    async def fake_history(current_balance=None, **kwargs):
+        return history
+
+    bot.get_balance_equity_history = fake_history
+
+    if should_raise:
+        with pytest.raises(
+            ValueError,
+            match="missing required unrealized_pnl_by_coin_pside value",
+        ):
+            await bot._equity_hard_stop_initialize_coin_from_history()
+        return
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["last_metrics"]["timestamp_ms"] == int(timestamps[-1])
+    assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-1.0)
+    assert state["pnl_reset_timestamp_ms"] is None
+
+
 @pytest.mark.asyncio
 async def test_compact_replay_keeps_held_and_ambiguous_pairs_dense():
     import numpy as np

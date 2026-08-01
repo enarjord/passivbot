@@ -3973,6 +3973,89 @@ def _equity_hard_stop_coin_replay_events(
     return replay_events, ambiguous
 
 
+def _equity_hard_stop_coin_bounded_required_replay_start_ts(
+    self,
+    pside: str,
+    symbol: str,
+    fill_events: list[Any],
+) -> Optional[int]:
+    """Return the earliest episode still relevant to an open ``always`` scope.
+
+    Coin HSL resets at every proven flatten. With ``restart_after_red_policy=always``,
+    episodes before the current one matter only while a possible RED cooldown can
+    chain across the intervening flat periods. Walk proven fill-derived episodes
+    backward from the authoritative current position and retain preceding episodes
+    only while each flatten falls inside the next episode's cooldown horizon.
+
+    ``None`` means the current episode boundary is not provable. Callers must then
+    preserve the strict full-lookback replay rather than guessing a boundary.
+    """
+    qty_step = _hsl_qty_step_for_symbol(self, symbol)
+    flat_epsilon = _hsl_flat_epsilon(qty_step)
+    current_size = abs(
+        float(
+            (self.positions or {})
+            .get(symbol, {})
+            .get(pside, {})
+            .get("size", 0.0)
+            or 0.0
+        )
+    )
+    if current_size <= flat_epsilon:
+        return None
+    replay_events, ambiguous = _equity_hard_stop_coin_replay_events(
+        fill_events,
+        pside,
+        symbol,
+        qty_step=qty_step,
+    )
+    if ambiguous:
+        return None
+
+    episodes: list[tuple[int, Optional[int]]] = []
+    replay_size = 0.0
+    episode_start_ts: Optional[int] = None
+    for event_ts, action, qty, _realized_delta in replay_events:
+        was_flat = replay_size <= flat_epsilon
+        if action == "increase":
+            replay_size += qty
+            if was_flat and replay_size > flat_epsilon:
+                episode_start_ts = int(event_ts)
+        else:
+            replay_size = max(0.0, replay_size - qty)
+            if not was_flat and replay_size <= flat_epsilon:
+                if episode_start_ts is None:
+                    return None
+                episodes.append((int(episode_start_ts), int(event_ts)))
+                episode_start_ts = None
+
+    size_tolerance = max(flat_epsilon, abs(current_size) * 1e-12, 1e-12)
+    if abs(replay_size - current_size) > size_tolerance:
+        return None
+    if episode_start_ts is None:
+        return None
+
+    required_start_ts = int(episode_start_ts)
+    cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
+    cooldown_ms = (
+        int(round(cooldown_minutes * 60_000.0))
+        if cooldown_minutes > 0.0
+        else 0
+    )
+    if cooldown_ms <= 0:
+        return required_start_ts
+
+    next_episode_start_ts = required_start_ts
+    for previous_start_ts, previous_flatten_ts in reversed(episodes):
+        if previous_flatten_ts is None:
+            return None
+        if int(previous_flatten_ts) + cooldown_ms <= next_episode_start_ts:
+            break
+        required_start_ts = int(previous_start_ts)
+        next_episode_start_ts = int(previous_start_ts)
+    return required_start_ts
+
+
 def _equity_hard_stop_coin_replay_size_at(
     replay_events: list[tuple[int, str, float, float]], row_ts_ms: int
 ) -> float:
@@ -5494,9 +5577,36 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     continue
                 pside = _equity_hard_stop_fill_pside(event)
                 symbols.add(symbol)
-                if (pside, symbol) in current_position_pairs:
-                    required_replay_pairs.add((pside, symbol))
-                    remember_required_replay_start(pside, symbol, ts)
+        bounded_held_replay_starts: dict[tuple[str, str], int] = {}
+        for pside, symbol in sorted(current_position_pairs):
+            pair_fill_events = fill_events_by_pair.get((pside, symbol), [])
+            restart_policy = normalize_hsl_restart_after_red_policy(
+                self.hsl[pside].get("restart_after_red_policy", "threshold"),
+                path=f"hsl.{pside}.restart_after_red_policy",
+            )
+            bounded_start_ts = None
+            if restart_policy == "always":
+                bounded_start_ts = (
+                    _equity_hard_stop_coin_bounded_required_replay_start_ts(
+                        self,
+                        pside,
+                        symbol,
+                        pair_fill_events,
+                    )
+                )
+            if bounded_start_ts is not None:
+                replay_ts = int(
+                    math.floor(int(bounded_start_ts) / 60_000) * 60_000
+                )
+                required_replay_start_ts[(pside, symbol)] = replay_ts
+                bounded_held_replay_starts[(pside, symbol)] = replay_ts
+            else:
+                for event in pair_fill_events:
+                    remember_required_replay_start(
+                        pside,
+                        symbol,
+                        _equity_hard_stop_fill_timestamp_ms(event),
+                    )
         if compact_replay is not None:
             for _pside, symbol in compact_pair_values:
                 if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
@@ -5549,7 +5659,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             symbols.add(symbol)
             panic_replay_pairs.add((pside, symbol))
             required_replay_pairs.add((pside, symbol))
-            remember_required_replay_start(pside, symbol, minute_ts)
+            bounded_start_ts = bounded_held_replay_starts.get((pside, symbol))
+            if bounded_start_ts is None or minute_ts >= bounded_start_ts:
+                remember_required_replay_start(pside, symbol, minute_ts)
             key = (pside, symbol, minute_ts)
             prev = latest_panic_by_coin_minute.get(key)
             if prev is None or stop_ts >= int(prev["timestamp"]):
@@ -5796,9 +5908,16 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
                     pside, symbol, pair_fill_events, now_ms
                 )
-                replay_start_boundary_ts = None
+                replay_start_boundary_ts = bounded_held_replay_starts.get(
+                    (pside, symbol)
+                )
                 if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
-                    replay_start_boundary_ts = int(contract["intervention_entry_ts"])
+                    intervention_boundary_ts = int(contract["intervention_entry_ts"])
+                    replay_start_boundary_ts = (
+                        intervention_boundary_ts
+                        if replay_start_boundary_ts is None
+                        else max(replay_start_boundary_ts, intervention_boundary_ts)
+                    )
                     self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                     self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
                     state = self._hsl_coin_state(pside, symbol)
@@ -6113,6 +6232,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             pair_started_s,
                         )
                     if replay_start_boundary_ts is not None and ts < replay_start_boundary_ts:
+                        # Advance fill-derived size state while intentionally
+                        # discarding pre-boundary episode transitions.
+                        replay_transitions_at(ts)
                         continue
                     if state["halted"]:
                         cooldown_until_ms = state["cooldown_until_ms"]
