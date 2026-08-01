@@ -17,6 +17,7 @@ import candlestick_manager
 from candlestick_manager import (
     CandlestickManager,
     CANDLE_DTYPE,
+    GAP_REASON_AUTO,
     GAP_REASON_FETCH_FAILED,
     GAP_REASON_NO_ARCHIVE,
     GAP_REASON_NO_TRADES,
@@ -2936,6 +2937,405 @@ def test_completed_candle_health_non_required_window_does_not_fail_overall(tmp_p
     assert report["timeframes"]["15m"]["required"] is False
     assert report["timeframes"]["15m"]["coverage_ok"] is False
     assert report["timeframes"]["15m"]["missing_candles"] == 1
+
+
+def test_completed_candle_health_distinguishes_verified_sparse_continuity(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="kucoin",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "SPARSE/USDT:USDT"
+    now_ms = 6 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (5 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._record_verified_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_NO_TRADES,
+    )
+
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 4}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["coverage_ok"] is False
+    assert report["missing_candles"] == 2
+    assert report["verified_no_trade_missing_candles"] == 2
+    assert report["deferred_missing_candles"] == 0
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
+
+
+def test_completed_candle_health_keeps_adjacent_unverified_minute_refreshable(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "PARTIALPROOF/USDT:USDT"
+    now_ms = 7 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (6 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._record_verified_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_NO_TRADES,
+    )
+    cm._add_known_gap(
+        symbol,
+        5 * ONE_MIN_MS,
+        5 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+        increment_retry=False,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["reason"]) for gap in gaps
+    ] == [
+        (3 * ONE_MIN_MS, 4 * ONE_MIN_MS, GAP_REASON_NO_TRADES),
+        (5 * ONE_MIN_MS, 5 * ONE_MIN_MS, GAP_REASON_AUTO),
+    ]
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 5}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["missing_candles"] == 3
+    assert report["verified_no_trade_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 1
+    assert report["refresh_needed"] is True
+
+
+def test_completed_candle_health_keeps_fresh_same_reason_suffix_refreshable(
+    tmp_path, monkeypatch
+):
+    now = {"ms": 7 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "FRESHEPOCH/USDT:USDT"
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (6 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now["ms"],
+    )
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+    now["ms"] += 1
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        5 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["retry_count"])
+        for gap in gaps
+    ] == [
+        (3 * ONE_MIN_MS, 4 * ONE_MIN_MS, _GAP_MAX_RETRIES),
+        (5 * ONE_MIN_MS, 5 * ONE_MIN_MS, 1),
+    ]
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 5}, now_ms=now["ms"]
+    )["timeframes"]["1m"]
+
+    assert report["missing_candles"] == 3
+    assert report["deferred_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 1
+    assert report["refresh_needed"] is True
+
+
+def test_gap_normalization_merges_only_matching_retry_epochs(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "RETRYEPISODES/USDT:USDT"
+    base_gap = {
+        "retry_count": _GAP_MAX_RETRIES,
+        "reason": GAP_REASON_AUTO,
+        "added_at": 1,
+        "last_retry_at": 1,
+        "last_contextual_retry_at": 0,
+    }
+    cm._save_known_gaps_enhanced(
+        symbol,
+        [
+            {
+                **base_gap,
+                "start_ts": ONE_MIN_MS,
+                "end_ts": ONE_MIN_MS,
+            },
+            {
+                **base_gap,
+                "start_ts": 2 * ONE_MIN_MS,
+                "end_ts": 2 * ONE_MIN_MS,
+            },
+            {
+                **base_gap,
+                "start_ts": 3 * ONE_MIN_MS,
+                "end_ts": 3 * ONE_MIN_MS,
+                "last_retry_at": 2,
+            },
+        ],
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [(gap["start_ts"], gap["end_ts"]) for gap in gaps] == [
+        (ONE_MIN_MS, 2 * ONE_MIN_MS),
+        (3 * ONE_MIN_MS, 3 * ONE_MIN_MS),
+    ]
+    assert [gap["last_retry_at"] for gap in gaps] == [1, 2]
+
+
+def test_gap_retry_update_is_scoped_to_attempted_overlap(tmp_path, monkeypatch):
+    now = {"ms": 10 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "PARTIALEPOCH/USDT:USDT"
+    cm._add_known_gap(
+        symbol,
+        ONE_MIN_MS,
+        3 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+    now["ms"] += 1
+    cm._add_known_gap(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["retry_count"])
+        for gap in gaps
+    ] == [
+        (ONE_MIN_MS, ONE_MIN_MS, 1),
+        (2 * ONE_MIN_MS, 2 * ONE_MIN_MS, 2),
+        (3 * ONE_MIN_MS, 3 * ONE_MIN_MS, 1),
+    ]
+
+
+def test_known_gap_normalization_scales_to_large_sparse_history(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MANYGAPS/USDT:USDT"
+    gap_count = 5_000
+    gaps = [
+        {
+            "start_ts": index * 2 * ONE_MIN_MS,
+            "end_ts": index * 2 * ONE_MIN_MS,
+            "retry_count": 1,
+            "reason": GAP_REASON_AUTO,
+            "added_at": 1,
+            "last_retry_at": 1,
+        }
+        for index in range(gap_count)
+    ]
+
+    started = time.perf_counter()
+    cm._save_known_gaps_enhanced(symbol, gaps, defer_index=True)
+    elapsed = time.perf_counter() - started
+
+    assert len(cm._get_known_gaps_enhanced(symbol)) == gap_count
+    assert elapsed < 2.0
+
+
+def test_completed_candle_health_scales_to_many_sparse_deferred_gaps(
+    tmp_path, monkeypatch
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MANYHEALTHGAPS/USDT:USDT"
+    gap_count = 5_000
+    end_ts = gap_count * 2 * ONE_MIN_MS
+    candles = np.array(
+        [
+            (ts, 1.0, 1.0, 1.0, 1.0, 1.0)
+            for ts in range(0, end_ts + 1, 2 * ONE_MIN_MS)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    gaps = [
+        {
+            "start_ts": index * 2 * ONE_MIN_MS + ONE_MIN_MS,
+            "end_ts": index * 2 * ONE_MIN_MS + ONE_MIN_MS,
+            "retry_count": 1,
+            "reason": GAP_REASON_AUTO,
+            "added_at": 1,
+            "last_retry_at": 1,
+        }
+        for index in range(gap_count)
+    ]
+    monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: candles)
+    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", lambda _symbol: gaps)
+    monkeypatch.setattr(cm, "_should_retry_gap", lambda *_args, **_kwargs: False)
+
+    started = time.perf_counter()
+    report = cm.get_completed_candle_health(
+        symbol,
+        {"1m": gap_count * 2 + 1},
+        now_ms=end_ts + ONE_MIN_MS,
+    )["timeframes"]["1m"]
+    elapsed = time.perf_counter() - started
+
+    assert report["missing_candles"] == gap_count
+    assert report["deferred_missing_candles"] == gap_count
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
+    assert elapsed < 2.0
+
+
+def test_completed_candle_health_scales_to_many_verified_sparse_gaps(
+    tmp_path, monkeypatch
+):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "MANYVERIFIEDGAPS/USDT:USDT"
+    gap_count = 5_000
+    end_ts = gap_count * 2 * ONE_MIN_MS
+    candles = np.array(
+        [
+            (ts, 1.0, 1.0, 1.0, 1.0, 1.0)
+            for ts in range(0, end_ts + 1, 2 * ONE_MIN_MS)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    gaps = [
+        {
+            "start_ts": index * 2 * ONE_MIN_MS + ONE_MIN_MS,
+            "end_ts": index * 2 * ONE_MIN_MS + ONE_MIN_MS,
+            "retry_count": 0,
+            "reason": GAP_REASON_NO_TRADES,
+            "added_at": 1,
+            "last_retry_at": 1,
+        }
+        for index in range(gap_count)
+    ]
+    monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: candles)
+    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", lambda _symbol: gaps)
+
+    started = time.perf_counter()
+    report = cm.get_completed_candle_health(
+        symbol,
+        {"1m": gap_count * 2 + 1},
+        now_ms=end_ts + ONE_MIN_MS,
+    )["timeframes"]["1m"]
+    elapsed = time.perf_counter() - started
+
+    assert report["missing_candles"] == gap_count
+    assert report["verified_no_trade_missing_candles"] == gap_count
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
+    assert elapsed < 2.0
+
+
+def test_completed_candle_health_defers_unknown_gap_until_retry_is_due(tmp_path):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(
+        exchange=_Ex(),
+        exchange_name="kucoin",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "DEFERRED/USDT:USDT"
+    now_ms = 6 * ONE_MIN_MS
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (5 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_FETCH_FAILED,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    gaps[0]["last_contextual_retry_at"] = now_ms
+    cm._save_known_gaps_enhanced(symbol, gaps)
+
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 4}, now_ms=now_ms
+    )["timeframes"]["1m"]
+
+    assert report["coverage_ok"] is False
+    assert report["verified_no_trade_missing_candles"] == 0
+    assert report["deferred_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 0
+    assert report["refresh_needed"] is False
 
 
 @pytest.mark.asyncio

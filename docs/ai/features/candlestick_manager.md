@@ -114,15 +114,24 @@
    keep discovered-but-unfetched stale surfaces pending, and charge one token immediately before
    each actual fetch attempt rather than reserving tokens for a batch which may be cut short by
    the wall-time cap. A timed-out candidate surface receives a short in-memory retry delay so one
-   blocked symbol cannot monopolize successive refresh cycles,
-   and prioritize never-attempted 1m fetches before native 1h backfills. Staleness targets count
+   blocked symbol cannot monopolize successive refresh cycles. Completed-candle health reports
+   whether missing minutes are currently refreshable separately
+   from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry
+   cooldown is active do not spend background REST budget. This scheduler classification never
+   turns an unresolved gap into tradable coverage: raw `coverage_ok` remains false, and a newly
+   finalized suffix outside the deferred range remains refreshable. Adjacent missing ranges with
+   different retry epochs remain separate, even when their reason matches, so fresh evidence never
+   inherits an older range's retry cooldown. Refresh scheduling prioritizes
+   never-attempted 1m fetches before native 1h backfills. Staleness targets count
    only surfaces handled by this background
    refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
    unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
    successful nonempty fetch which still proves the same requested leading-prefix gap; changed
    requirements, empty results, partial pagination failures, and other failed fetches remain
-   eligible for normal retry. A zero OHLCV network budget disables candidate fetches even when
-   entry slots are open.
+   eligible for normal retry. Dense post-listing history which is shorter than the configured 1h
+   warmup remains unavailable until enough real buckets exist; pre-listing hours are never
+   synthesized. A zero OHLCV network budget disables candidate fetches even when entry slots are
+   open.
    When enabled and supported by CCXT Pro, proven-final public 1m WebSocket rows for flat forager
    candidates are persisted through the same canonical candle path as REST rows. Because CCXT may
    repeat a sliding cache, the first nonempty snapshot of each watcher session only primes
@@ -141,7 +150,19 @@
    reconciler remains alive when the transport is configured but no side is yet in forager mode, so
    runtime mode transitions are handled without restart. Dynamic subscriptions include only sides
    currently using forager mode, follow their flat approved universe, and are removed when a symbol
-   enters the urgent active-candle universe.
+   enters the urgent active-candle universe. Removal requests the CCXT Pro unsubscribe while the
+   watcher still owns its pending `watch_ohlcv` future, lets that watcher consume the transport's
+   unsubscribe wake-up, and uses cancellation only as a bounded fallback. Restart cleanup awaits
+   this owner-managed teardown before closing exchange clients. An internal restart request only
+   unwinds to that cleanup owner; it does not pre-cancel maintainers and then cancel them again.
+   Removed watchers remain in the owner task map until retirement returns, so cancellation cannot
+   detach them from outer cleanup.
+   Bulk and singleton unsubscribe calls, the graceful watcher wait, and the post-cancellation wait
+   all use hard deadlines which do not await cancellation-resistant connector work. An uncooperative
+   unsubscribe task is cancelled, retained for exception consumption, and abandoned without
+   blocking teardown. A cancellation-resistant watcher is likewise abandoned without
+   blocking reconciliation and remains marked retiring until it actually terminates, preventing
+   it from resuming ingestion beside its replacement.
    A forced native higher-timeframe refresh bypasses in-memory range and complete-disk
    short-circuits so a partial cached range cannot consume budget without retrying the exchange.
    Fresh remote rows overwrite matching disk rows, but partial remote results retain any existing
@@ -212,9 +233,11 @@
     extending a 1m gap invalidates cached 1m EMA and open-tail projection values. An overlap refresh
     which retries a due gap
     stamps every unresolved remainder before later repair stages run, preventing a
-    second attempt in the same request. Historical pagination
-    flushes deferred partial-page index writes before propagating terminal-empty
-    failure.
+    second attempt in the same request. Historical pagination flushes deferred
+    partial-page index writes before propagating terminal-empty failure.
+    Gap normalization also preserves proof-specific subranges: verified terminal
+    reasons never expand into adjacent retryable minutes, and an overlap gives
+    terminal evidence authority only over the timestamps it actually covers.
     Repeated terminal empty-page failures and successful refreshes which make no
     open-tail progress for a forager candle surface use a bounded in-memory retry
     delay without converting missing data into candles. Expected background

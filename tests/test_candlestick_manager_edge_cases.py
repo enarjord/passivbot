@@ -252,35 +252,51 @@ class TestGapHandlingEdgeCases:
         assert summary["persistent_gaps"] == 1
         assert summary["retryable_gaps"] == 0
 
-    def test_gap_merge_overlapping(self, tmp_cache_dir):
-        """Overlapping gaps should be merged."""
+    def test_gap_overlap_preserves_retried_subrange_epoch(
+        self, tmp_cache_dir, monkeypatch
+    ):
+        """A repeated overlap updates only the minutes attempted again."""
+        now = {"ms": 10 * ONE_MIN_MS}
+        monkeypatch.setattr(time, "time", lambda: now["ms"] / 1000.0)
         cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
         symbol = "BTC/USDT:USDT"
 
-        # Add overlapping gaps
-        cm._add_known_gap(symbol, 1000000, 3000000)
-        cm._add_known_gap(symbol, 2000000, 4000000)
+        cm._add_known_gap(symbol, ONE_MIN_MS, 3 * ONE_MIN_MS)
+        now["ms"] += 1
+        cm._add_known_gap(symbol, 2 * ONE_MIN_MS, 4 * ONE_MIN_MS)
 
-        gaps = cm._get_known_gaps(symbol)
-        # Should be merged into one gap
-        assert len(gaps) == 1
-        assert gaps[0][0] == 1000000
-        assert gaps[0][1] == 4000000
+        gaps = cm._get_known_gaps_enhanced(symbol)
+        assert [
+            (gap["start_ts"], gap["end_ts"], gap["retry_count"])
+            for gap in gaps
+        ] == [
+            (ONE_MIN_MS, ONE_MIN_MS, 1),
+            (2 * ONE_MIN_MS, 3 * ONE_MIN_MS, 2),
+            (4 * ONE_MIN_MS, 4 * ONE_MIN_MS, 1),
+        ]
 
-    def test_gap_adjacent_merge(self, tmp_cache_dir):
-        """Adjacent gaps (touching at boundaries) should be merged."""
+    def test_gap_adjacent_distinct_retry_epochs_remain_separate(
+        self, tmp_cache_dir, monkeypatch
+    ):
+        """Later adjacent evidence must not inherit the first gap's epoch."""
+        now = {"ms": 10 * ONE_MIN_MS}
+        monkeypatch.setattr(time, "time", lambda: now["ms"] / 1000.0)
         cm = CandlestickManager(exchange=None, exchange_name="test", cache_dir=tmp_cache_dir)
         symbol = "BTC/USDT:USDT"
 
-        # Add adjacent gaps
-        cm._add_known_gap(symbol, 1000000, 2000000)
-        cm._add_known_gap(symbol, 2000000, 3000000)
+        cm._add_known_gap(symbol, ONE_MIN_MS, 2 * ONE_MIN_MS)
+        now["ms"] += 1
+        cm._add_known_gap(symbol, 3 * ONE_MIN_MS, 4 * ONE_MIN_MS)
 
-        gaps = cm._get_known_gaps(symbol)
-        # Should be merged
-        assert len(gaps) == 1
-        assert gaps[0][0] == 1000000
-        assert gaps[0][1] == 3000000
+        gaps = cm._get_known_gaps_enhanced(symbol)
+        assert [(gap["start_ts"], gap["end_ts"]) for gap in gaps] == [
+            (ONE_MIN_MS, 2 * ONE_MIN_MS),
+            (3 * ONE_MIN_MS, 4 * ONE_MIN_MS),
+        ]
+        assert [gap["added_at"] for gap in gaps] == [
+            10 * ONE_MIN_MS,
+            10 * ONE_MIN_MS + 1,
+        ]
 
 
 # ==============================================================================

@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import hashlib
+import heapq
 import inspect
 import json
 import logging
@@ -3083,12 +3084,100 @@ class CandlestickManager:
         *,
         defer_index: bool = False,
     ) -> None:
-        """Save gaps in enhanced format, merging overlapping ranges."""
-        # Sort by start_ts
-        gaps = sorted(gaps, key=lambda g: g["start_ts"])
+        """Save normalized gaps without broadening proof across reason boundaries.
+
+        A terminal reason such as ``no_trades`` is evidence about an exact
+        interval, not about an adjacent unresolved minute.  Normalize overlaps
+        into disjoint segments and merge only segments carrying the same
+        reason and retry epoch.  Terminal evidence wins an actual overlap with
+        retryable metadata, but neither proof nor cooldown state expands across
+        adjacency.
+        """
+        prepared = [
+            dict(gap)
+            for gap in gaps
+            if int(gap.get("start_ts", 0)) <= int(gap.get("end_ts", -1))
+        ]
+        boundaries = sorted(
+            {
+                boundary
+                for gap in prepared
+                for boundary in (
+                    int(gap["start_ts"]),
+                    int(gap["end_ts"]) + ONE_MIN_MS,
+                )
+            }
+        )
+        starts = sorted(
+            (int(gap["start_ts"]), index)
+            for index, gap in enumerate(prepared)
+        )
+        active: list[tuple[int, int]] = []
+        start_index = 0
+        normalized: List[GapEntry] = []
+        for segment_start, next_start in zip(boundaries, boundaries[1:]):
+            segment_end = int(next_start) - ONE_MIN_MS
+            if segment_start > segment_end:
+                continue
+            while (
+                start_index < len(starts)
+                and starts[start_index][0] <= segment_start
+            ):
+                _start_ts, gap_index = starts[start_index]
+                terminal = int(
+                    str(prepared[gap_index].get("reason", GAP_REASON_AUTO))
+                    in _GAP_NON_EXPIRING_REASONS
+                )
+                # Highest proof class wins; within one class the later input
+                # retains the legacy last-write-wins behavior.
+                heapq.heappush(active, (-terminal, -gap_index))
+                start_index += 1
+            while active:
+                winner_index = -active[0][1]
+                if int(prepared[winner_index]["end_ts"]) >= segment_end:
+                    break
+                heapq.heappop(active)
+            if not active:
+                continue
+            winner = prepared[-active[0][1]]
+            normalized.append(
+                {
+                    **winner,
+                    "start_ts": int(segment_start),
+                    "end_ts": int(segment_end),
+                }
+            )
+
+        gaps = sorted(normalized, key=lambda g: g["start_ts"])
         merged: List[GapEntry] = []
         for gap in gaps:
-            if not merged or gap["start_ts"] > merged[-1]["end_ts"] + ONE_MIN_MS:
+            previous = merged[-1] if merged else None
+            same_reason = bool(
+                previous
+                and str(gap.get("reason", GAP_REASON_AUTO))
+                == str(previous.get("reason", GAP_REASON_AUTO))
+            )
+            same_retry_epoch = bool(
+                previous
+                and int(gap.get("retry_count", 0))
+                == int(previous.get("retry_count", 0))
+                and int(gap.get("added_at", 0))
+                == int(previous.get("added_at", 0))
+                and int(gap.get("last_retry_at", gap.get("added_at", 0)))
+                == int(
+                    previous.get(
+                        "last_retry_at", previous.get("added_at", 0)
+                    )
+                )
+                and int(gap.get("last_contextual_retry_at", 0))
+                == int(previous.get("last_contextual_retry_at", 0))
+            )
+            if (
+                not merged
+                or gap["start_ts"] > merged[-1]["end_ts"] + ONE_MIN_MS
+                or not same_reason
+                or not same_retry_epoch
+            ):
                 merged.append(gap)
             else:
                 # Merge overlapping gaps, keeping max retry count and earliest added_at
@@ -3097,7 +3186,7 @@ class CandlestickManager:
                     "start_ts": prev["start_ts"],
                     "end_ts": max(prev["end_ts"], gap["end_ts"]),
                     "retry_count": max(prev.get("retry_count", 0), gap.get("retry_count", 0)),
-                    "reason": prev.get("reason", GAP_REASON_AUTO),  # Keep original reason
+                    "reason": prev.get("reason", GAP_REASON_AUTO),
                     "added_at": min(prev.get("added_at", 0), gap.get("added_at", 0)),
                     "last_retry_at": max(
                         prev.get("last_retry_at", prev.get("added_at", 0)),
@@ -3213,10 +3302,9 @@ class CandlestickManager:
     ) -> None:
         """Add or update a known gap with enhanced metadata.
 
-        If a gap overlapping with [start_ts, end_ts] already exists:
-        - Extends the gap to cover the full range
-        - Increments retry_count if increment_retry is True (unless retry_count is specified)
-        - Updates reason if provided
+        Existing overlap receives the requested retry update, while previously
+        unseen prefix/suffix minutes start a fresh retry epoch. Adjacent ranges
+        remain separate unless normalization proves all metadata identical.
 
         If retry_count reaches _GAP_MAX_RETRIES, the gap is considered persistent
         and will not be re-fetched unless force_refetch_gaps is used.
@@ -3227,99 +3315,128 @@ class CandlestickManager:
         """
         now_ms = self._now_ms()
         gaps = self._get_known_gaps_enhanced(symbol)
+        requested_start = int(start_ts)
+        requested_end = int(end_ts)
+        covered: List[Tuple[int, int]] = []
+        updates: List[GapEntry] = []
+        persistent_transitions = 0
 
-        # Check if we have an overlapping gap to update
-        updated = False
-        previous_retry_count = 0
+        # Update only exact overlaps with compatible evidence. The original gap
+        # remains in the input; later update segments win their overlap during
+        # normalization while preserving the original metadata on either side.
+        # Retryable reasons may evolve between auto/fetch classifications, but
+        # terminal proof must retain its exact range. Adjacency alone is not an
+        # update: a newly finalized minute starts a fresh retry epoch and must
+        # not inherit a neighboring gap's cooldown.
         for gap in gaps:
-            if gap["start_ts"] <= end_ts + ONE_MIN_MS and gap["end_ts"] >= start_ts - ONE_MIN_MS:
-                # Overlapping - extend and optionally increment retry
-                gap["start_ts"] = min(gap["start_ts"], int(start_ts))
-                gap["end_ts"] = max(gap["end_ts"], int(end_ts))
-                previous_retry_count = gap.get("retry_count", 0)
-                retry_due = self._should_retry_gap(gap, now_ms=now_ms)
-                if retry_count is not None:
-                    gap["retry_count"] = retry_count
-                    gap["last_retry_at"] = now_ms
-                    if retry_count >= _GAP_MAX_RETRIES and previous_retry_count < _GAP_MAX_RETRIES:
-                        gap["added_at"] = now_ms
-                elif increment_retry and retry_due:
-                    # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
-                    # without reverting a recent Hyperliquid gap to the ordinary
-                    # retry cadence. Other expired persistent gaps start a fresh
-                    # retry cycle under the existing retention contract.
-                    if previous_retry_count >= _GAP_MAX_RETRIES:
-                        new_retry_count = (
-                            _GAP_MAX_RETRIES
-                            if self._is_recent_hyperliquid_gap(
-                                gap, now_ms=now_ms
-                            )
-                            else 1
-                        )
-                    else:
-                        new_retry_count = previous_retry_count + 1
-                    gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
-                    gap["last_retry_at"] = now_ms
-                    if retry_due:
-                        gap["added_at"] = now_ms
-                    elif (
-                        gap["retry_count"] >= _GAP_MAX_RETRIES
-                        and previous_retry_count < _GAP_MAX_RETRIES
-                    ):
-                        gap["added_at"] = now_ms
-                if reason != GAP_REASON_AUTO:
-                    gap["reason"] = reason
-                updated = True
-                break
+            existing_reason = str(gap.get("reason", GAP_REASON_AUTO))
+            compatible_reason = existing_reason == reason or (
+                existing_reason not in _GAP_NON_EXPIRING_REASONS
+                and reason not in _GAP_NON_EXPIRING_REASONS
+            )
+            overlap_start = max(int(gap["start_ts"]), requested_start)
+            overlap_end = min(int(gap["end_ts"]), requested_end)
+            if not compatible_reason or overlap_start > overlap_end:
+                continue
+            covered.append((overlap_start, overlap_end))
 
-        if not updated:
-            initial_retry = retry_count if retry_count is not None else (1 if increment_retry else 0)
+            updated_gap: GapEntry = {
+                **gap,
+                "start_ts": overlap_start,
+                "end_ts": overlap_end,
+            }
+            previous_retry_count = int(gap.get("retry_count", 0))
+            retry_due = self._should_retry_gap(gap, now_ms=now_ms)
+            if retry_count is not None:
+                updated_gap["retry_count"] = retry_count
+                updated_gap["last_retry_at"] = now_ms
+                if (
+                    retry_count >= _GAP_MAX_RETRIES
+                    and previous_retry_count < _GAP_MAX_RETRIES
+                ):
+                    updated_gap["added_at"] = now_ms
+            elif increment_retry and retry_due:
+                # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
+                # without reverting a recent Hyperliquid gap to the ordinary
+                # retry cadence. Other expired persistent gaps start a fresh
+                # retry cycle under the existing retention contract.
+                if previous_retry_count >= _GAP_MAX_RETRIES:
+                    new_retry_count = (
+                        _GAP_MAX_RETRIES
+                        if self._is_recent_hyperliquid_gap(
+                            gap, now_ms=now_ms
+                        )
+                        else 1
+                    )
+                else:
+                    new_retry_count = previous_retry_count + 1
+                updated_gap["retry_count"] = min(
+                    new_retry_count, _GAP_MAX_RETRIES
+                )
+                updated_gap["last_retry_at"] = now_ms
+                updated_gap["added_at"] = now_ms
+            if reason != GAP_REASON_AUTO:
+                updated_gap["reason"] = reason
+            if (
+                int(updated_gap.get("retry_count", 0)) >= _GAP_MAX_RETRIES
+                and previous_retry_count < _GAP_MAX_RETRIES
+                and str(updated_gap.get("reason", GAP_REASON_AUTO))
+                != "pre_inception"
+            ):
+                persistent_transitions += 1
+            updates.append(updated_gap)
+
+        uncovered: List[Tuple[int, int]] = []
+        cursor = requested_start
+        for covered_start, covered_end in sorted(covered):
+            if covered_end < cursor:
+                continue
+            if covered_start > cursor:
+                uncovered.append(
+                    (cursor, min(requested_end, covered_start - ONE_MIN_MS))
+                )
+            cursor = max(cursor, covered_end + ONE_MIN_MS)
+            if cursor > requested_end:
+                break
+        if cursor <= requested_end:
+            uncovered.append((cursor, requested_end))
+
+        initial_retry = (
+            retry_count
+            if retry_count is not None
+            else (1 if increment_retry else 0)
+        )
+        fresh_gaps: List[GapEntry] = []
+        for fresh_start, fresh_end in uncovered:
             new_gap: GapEntry = {
-                "start_ts": int(start_ts),
-                "end_ts": int(end_ts),
+                "start_ts": fresh_start,
+                "end_ts": fresh_end,
                 "retry_count": initial_retry,
                 "reason": reason,
                 "added_at": now_ms,
                 "last_retry_at": now_ms,
             }
-            gaps.append(new_gap)
+            fresh_gaps.append(new_gap)
             self._log(
                 "debug",
                 "gap_added",
                 symbol=symbol,
-                start_ts=start_ts,
-                end_ts=end_ts,
+                start_ts=fresh_start,
+                end_ts=fresh_end,
                 reason=reason,
                 retry_count=new_gap["retry_count"],
             )
-        else:
-            # Log warning only when gap transitions from retryable to persistent
-            # (retry_count goes from <max to >=max). Use throttling to prevent spam
-            # in edge cases where the same gap is processed multiple times.
-            updated_gap = next(
-                (
-                    g
-                    for g in gaps
-                    if g["start_ts"] <= end_ts + ONE_MIN_MS and g["end_ts"] >= start_ts - ONE_MIN_MS
-                ),
-                None,
+
+        gaps.extend(updates)
+        gaps.extend(fresh_gaps)
+        if persistent_transitions:
+            # Track transitions for the existing throttled summary logger.
+            if not hasattr(self, "_persistent_gap_summary"):
+                self._persistent_gap_summary: Dict[str, int] = {}
+            self._persistent_gap_summary[symbol] = (
+                self._persistent_gap_summary.get(symbol, 0)
+                + persistent_transitions
             )
-            if updated_gap:
-                current_retry_count = updated_gap.get("retry_count", 0)
-                gap_reason = updated_gap.get("reason", GAP_REASON_AUTO)
-                # Only warn on transition to persistent status (skip pre_inception - expected behavior)
-                if (
-                    current_retry_count >= _GAP_MAX_RETRIES
-                    and previous_retry_count < _GAP_MAX_RETRIES
-                    and gap_reason != "pre_inception"
-                ):
-                    gap_minutes = (updated_gap["end_ts"] - updated_gap["start_ts"]) // ONE_MIN_MS + 1
-                    # Track persistent gaps for summary logging
-                    if not hasattr(self, "_persistent_gap_summary"):
-                        self._persistent_gap_summary: Dict[str, int] = {}
-                    self._persistent_gap_summary[symbol] = (
-                        self._persistent_gap_summary.get(symbol, 0) + 1
-                    )
 
         self._save_known_gaps_enhanced(symbol, gaps)
         # A newly recorded or expanded 1m gap changes whether EMA inputs are
@@ -4062,6 +4179,150 @@ class CandlestickManager:
                 )
             )
             missing_candles = int(sum((e - s) // step_ms + 1 for s, e in missing))
+            verified_no_trade_spans: List[Tuple[int, int]] = []
+            deferred_missing_spans: List[Tuple[int, int]] = []
+            refreshable_missing_spans: List[Tuple[int, int]] = list(missing)
+            if step_ms == ONE_MIN_MS and missing:
+                known_gaps = self._get_known_gaps_enhanced(symbol)
+
+                def merge_spans(
+                    spans: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    merged: List[Tuple[int, int]] = []
+                    for span_start, span_end in sorted(
+                        (int(a), int(b)) for a, b in spans if int(a) <= int(b)
+                    ):
+                        if merged and span_start <= merged[-1][1] + ONE_MIN_MS:
+                            merged[-1] = (
+                                merged[-1][0],
+                                max(merged[-1][1], span_end),
+                            )
+                        else:
+                            merged.append((span_start, span_end))
+                    return merged
+
+                def intersect_missing(
+                    masks: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    missing_sorted = merge_spans(missing)
+                    masks_sorted = merge_spans(masks)
+                    intersections: List[Tuple[int, int]] = []
+                    missing_index = 0
+                    mask_index = 0
+                    while (
+                        missing_index < len(missing_sorted)
+                        and mask_index < len(masks_sorted)
+                    ):
+                        missing_start, missing_end = missing_sorted[missing_index]
+                        mask_start, mask_end = masks_sorted[mask_index]
+                        overlap_start = max(missing_start, mask_start)
+                        overlap_end = min(missing_end, mask_end)
+                        if overlap_start <= overlap_end:
+                            intersections.append((overlap_start, overlap_end))
+                        if missing_end < mask_end:
+                            missing_index += 1
+                        else:
+                            mask_index += 1
+                    return intersections
+
+                def subtract_spans(
+                    source: Iterable[Tuple[int, int]],
+                    masks: Iterable[Tuple[int, int]],
+                ) -> List[Tuple[int, int]]:
+                    source_sorted = merge_spans(source)
+                    masks_sorted = merge_spans(masks)
+                    remaining: List[Tuple[int, int]] = []
+                    mask_index = 0
+                    for span_start, span_end in source_sorted:
+                        while (
+                            mask_index < len(masks_sorted)
+                            and masks_sorted[mask_index][1] < span_start
+                        ):
+                            mask_index += 1
+                        cursor = span_start
+                        scan_index = mask_index
+                        while (
+                            scan_index < len(masks_sorted)
+                            and masks_sorted[scan_index][0] <= span_end
+                        ):
+                            mask_start, mask_end = masks_sorted[scan_index]
+                            if mask_end < cursor:
+                                scan_index += 1
+                                continue
+                            if mask_start > cursor:
+                                remaining.append(
+                                    (cursor, min(span_end, mask_start - ONE_MIN_MS))
+                                )
+                            cursor = max(cursor, mask_end + ONE_MIN_MS)
+                            if cursor > span_end:
+                                break
+                            scan_index += 1
+                        if cursor <= span_end:
+                            remaining.append((cursor, span_end))
+                        mask_index = scan_index
+                    return remaining
+
+                verified_masks: List[Tuple[int, int]] = []
+                deferred_masks: List[Tuple[int, int]] = []
+                combined_ts = combined["ts"].astype(np.int64, copy=False)
+                for gap in known_gaps:
+                    gap_start = int(gap["start_ts"])
+                    gap_end = int(gap["end_ts"])
+                    if gap_end < start_ts or gap_start > end_ts:
+                        continue
+                    clipped_gap = (max(gap_start, start_ts), min(gap_end, end_ts))
+                    reason = str(gap.get("reason", GAP_REASON_AUTO))
+                    if reason == GAP_REASON_NO_TRADES:
+                        # A continuity candle needs real price on both sides.
+                        # Open tails remain unavailable so a delayed exchange
+                        # candle can replace them authoritatively.
+                        if gap_end >= end_ts:
+                            continue
+                        prior_index = int(
+                            np.searchsorted(combined_ts, gap_start, side="left")
+                        )
+                        if prior_index == 0:
+                            prior_ts = self._latest_cached_ts_before(
+                                symbol, gap_start, timeframe=tf_norm
+                            )
+                            if prior_ts is None:
+                                continue
+                        successor_index = int(
+                            np.searchsorted(combined_ts, gap_end, side="right")
+                        )
+                        if successor_index < combined_ts.size:
+                            verified_masks.append(clipped_gap)
+                        continue
+
+                    retry_due = self._should_retry_gap(gap, now_ms=ts_now)
+                    if (
+                        not retry_due
+                        and isinstance(self._ex_id, str)
+                        and "kucoin" in self._ex_id.lower()
+                        and reason in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
+                        and self._kucoin_contextual_retry_due(gap, now_ms=ts_now)
+                    ):
+                        retry_due = True
+                    if not retry_due:
+                        deferred_masks.append(clipped_gap)
+
+                verified_no_trade_spans = intersect_missing(verified_masks)
+                deferred_missing_spans = intersect_missing(deferred_masks)
+                refreshable_missing_spans = subtract_spans(
+                    missing,
+                    [*verified_no_trade_spans, *deferred_missing_spans],
+                )
+
+            def span_candle_count(spans: Iterable[Tuple[int, int]]) -> int:
+                return int(sum((e - s) // step_ms + 1 for s, e in spans))
+
+            verified_no_trade_missing_candles = span_candle_count(
+                verified_no_trade_spans
+            )
+            deferred_missing_candles = span_candle_count(deferred_missing_spans)
+            refreshable_missing_candles = span_candle_count(
+                refreshable_missing_spans
+            )
             last_cached_ts: Optional[int] = None
             if combined.size:
                 last_cached_ts = int(np.max(combined["ts"].astype(np.int64)))
@@ -4153,6 +4414,14 @@ class CandlestickManager:
                 "missing_spans": missing,
                 "missing_spans_preview": top_spans,
                 "missing_candles": int(missing_candles),
+                "verified_no_trade_missing_candles": int(
+                    verified_no_trade_missing_candles
+                ),
+                "deferred_missing_candles": int(deferred_missing_candles),
+                "refreshable_missing_candles": int(
+                    refreshable_missing_candles
+                ),
+                "refresh_needed": bool(refreshable_missing_candles > 0),
                 "open_tail_gap": bool(open_tail_gap),
                 "tail_gap_candles": int(tail_gap_candles),
                 "tail_gap_age_ms": (

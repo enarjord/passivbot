@@ -44,6 +44,30 @@ All notable user-facing changes will be documented in this file.
   streams cool down to REST-only maintenance before retrying automatically, and
   the subscription reconciler remains ready for runtime transitions into
   forager mode.
+- Dynamic candle WebSocket removal now lets the owning watcher consume CCXT
+  Pro's unsubscribe wake-up before cancellation, avoiding orphaned-future error
+  spam, and reconciliation retires a removed symbol batch with one supported
+  bulk unsubscribe. Bulk and singleton unsubscribe calls, watcher cancellation,
+  and post-cancellation waits are hard-bounded even when connector coroutines
+  suppress cancellation. Removed watchers remain owned until retirement returns,
+  and abandoned watchers remain marked retiring until they actually stop.
+  Internal bot restarts delegate the single maintainer cancellation to outer cleanup,
+  then await teardown and close event,
+  monitor, and exchange-client resources before constructing the replacement
+  bot; cancellation-resistant tasks cannot extend cleanup beyond the bounded
+  grace deadline, and an incomplete event-pipeline shutdown no longer permits a
+  blocking monitor-publisher close to stall replacement. Correlated private
+  incident records retain bounded full frame chains at normal log level while
+  excluding exception text, locals, source lines, and credentials; hostile
+  traceback accessors degrade only the optional diagnostic projection.
+  Background forager refresh
+  also distinguishes currently fetchable missing candles from verified
+  no-trade continuity and retry-deferred gaps, preventing sparse KuCoin markets
+  from repeatedly consuming REST budget while raw coverage remains honestly
+  unavailable where proof is incomplete. Gap normalization preserves those
+  proof- and retry-epoch-specific ranges so adjacent unverified or newly
+  finalized minutes remain refreshable, using log-linear sweep normalization
+  for large sparse histories.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then
