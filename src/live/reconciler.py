@@ -1044,9 +1044,10 @@ def _validate_rust_order_family_for_submitted_mode(
     order_type: str,
     input_mode: object,
     submitted_position_size: float,
+    submitted_symbol_side_eligible: bool,
     context: str,
 ) -> None:
-    """Reject order families which Rust cannot emit for the submitted mode."""
+    """Reject order families Rust cannot emit for the submitted mode and eligibility."""
     mode = "normal" if input_mode is None else input_mode
     is_entry = order_type.startswith("entry_")
     is_close = order_type.startswith("close_")
@@ -1059,13 +1060,18 @@ def _validate_rust_order_family_for_submitted_mode(
         or (mode != "panic" and is_panic_close)
         or (mode == "tp_only" and is_entry)
         or (
+            is_entry
+            and submitted_position_size == 0.0
+            and not submitted_symbol_side_eligible
+        )
+        or (
             mode == "graceful_stop"
             and submitted_position_size <= 1e-12
         )
     )
     if invalid:
         raise FatalBotException(
-            f"{context} has order family inconsistent with its submitted mode"
+            f"{context} has order family inconsistent with its submitted mode or eligibility"
         )
 
 
@@ -1330,6 +1336,7 @@ def validate_rust_orchestrator_output(
             order_type,
             submitted_input_modes[pair],
             submitted_position_sizes[pair],
+            submitted_symbol_side_eligibility[pair],
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("close_"):
@@ -1440,6 +1447,16 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has {pside} active "
                     "inconsistent with submitted eligibility"
+                )
+            if (
+                not side_state["active"]
+                and submitted_symbol_side_eligibility[(symbol_idx, pside)]
+                and submitted_position_sizes[(symbol_idx, pside)] != 0.0
+                and submitted_input_modes[(symbol_idx, pside)] != "manual"
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has {pside} inactive "
+                    "inconsistent with submitted managed position"
                 )
     if seen_symbol_idxs != expected_symbol_idxs:
         raise FatalBotException(
@@ -1721,6 +1738,10 @@ def _reject_duplicate_json_object_keys(
     return result
 
 
+def _reject_nonstandard_json_constant(constant: str) -> None:
+    raise ValueError(f"non-standard JSON numeric constant {constant!r}")
+
+
 def parse_and_validate_rust_orchestrator_output(
     out_json: object,
     idx_to_symbol: dict[int, str],
@@ -1731,6 +1752,7 @@ def parse_and_validate_rust_orchestrator_output(
         out = json.loads(
             out_json,
             object_pairs_hook=_reject_duplicate_json_object_keys,
+            parse_constant=_reject_nonstandard_json_constant,
         )
     except (TypeError, ValueError, RecursionError, OverflowError) as exc:
         raise FatalBotException("Rust orchestrator returned malformed JSON") from exc

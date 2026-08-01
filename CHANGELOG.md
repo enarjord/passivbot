@@ -20,15 +20,17 @@ All notable user-facing changes will be documented in this file.
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
 - Live Rust orchestrator output now fails fatally before diagnostics or reconciliation when its JSON
-  (including duplicate keys or decoder failures), required order batch, order fields, aggregate
+  (including duplicate keys, non-standard numeric constants, or decoder failures), required order
+  batch, order fields, aggregate
   close quantity relative to the submitted position, conversion identities, complete per-symbol
   mode state, or required consumed diagnostic collections are missing or malformed. Diagnostic
   validation rejects impossible realized-loss blocks. Order-field validation includes overflowing
   numeric values, execution type
   inconsistent with the submitted market policy, order book, and near-touch threshold, and priority
   inconsistent with Rust's order and submitted-mode rule. It also rejects order families forbidden
-  by the submitted mode and active-state diagnostics for non-tradable or zero-exposure sides, while
-  preserving held-position graceful-stop DCA and configured HSL panic market closes as explicit Rust
+  by the submitted mode or flat-side eligibility and validates active-state diagnostics in both
+  directions for ineligible sides and eligible managed positions, while preserving Rust's
+  held-position DCA and configured HSL panic market closes as explicit Rust
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED

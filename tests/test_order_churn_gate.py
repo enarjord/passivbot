@@ -995,6 +995,67 @@ def test_raw_rust_output_accepts_inactive_state_for_submitted_ineligible_side():
 
 
 @pytest.mark.parametrize(
+    "input_overrides",
+    [
+        {"tradable": False},
+        {"long_wallet_exposure_limit": 0.0},
+    ],
+    ids=["non-tradable", "zero-wallet-exposure-limit"],
+)
+def test_raw_rust_output_rejects_flat_entry_for_submitted_ineligible_side(
+    input_overrides,
+):
+    out = _raw_rust_output([_raw_rust_order()])
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    with pytest.raises(FatalBotException, match="submitted mode or eligibility"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0, **input_overrides),
+        )
+
+
+def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
+    order = _raw_rust_order(order_type="entry_grid_normal_long")
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(tradable=False, long_pos_size=1.0),
+    ) == [order]
+
+
+def test_raw_rust_output_rejects_inactive_state_for_eligible_managed_position():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    with pytest.raises(FatalBotException, match="inconsistent with submitted managed position"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=1.0),
+        )
+
+
+def test_raw_rust_output_accepts_inactive_state_for_manual_managed_position():
+    out = _raw_rust_output_for_long_mode([], "manual")
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(long_mode="manual", long_pos_size=1.0),
+    ) == []
+
+
+@pytest.mark.parametrize(
     "field",
     ["loss_gate_blocks", "min_effective_cost_blocks", "forager_selections"],
 )
@@ -1225,6 +1286,16 @@ def test_raw_rust_output_malformed_json_is_fatal():
 
 def test_raw_rust_output_duplicate_json_key_is_fatal():
     out_json = '{"orders":[{"malformed":true}],"orders":[]}'
+
+    with pytest.raises(FatalBotException, match="malformed JSON"):
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_raw_rust_output_nonstandard_json_numeric_constant_is_fatal(constant):
+    out_json = f'{{"diagnostics":{{"warnings":[{constant}]}}}}'
 
     with pytest.raises(FatalBotException, match="malformed JSON"):
         reconciler.parse_and_validate_rust_orchestrator_output(
