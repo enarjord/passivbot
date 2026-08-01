@@ -20,6 +20,8 @@ BACKTEST_OHLCV_FIELDS = ("high", "low", "close", "volume")
 
 def timeframe_to_interval_ms(timeframe: str) -> int:
     normalized = str(timeframe).strip().lower()
+    if normalized == "1s":
+        return 1_000
     if normalized == "1m":
         return 60_000
     if normalized == "1h":

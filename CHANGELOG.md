@@ -445,6 +445,168 @@ All notable user-facing changes will be documented in this file.
   exposure during pumps. CSV regeneration preserves all stored directions unless explicitly
   filtered with `--direction`.
 
+- Update CCXT from 4.5.66 to 4.5.68 after before/after account-contract snapshots, prediction
+  connector fixtures, supported-venue public endpoint probes, and exchange regression coverage.
+  Optional CCXT prediction clients now disable builder attribution by default so Hyperliquid
+  cannot implicitly approve a builder before its first outcome order. KuCoin Futures endpoint
+  probes now request its supported 20-level order-book minimum.
+
+- Add the first exchange-neutral binary-outcome foundation: one-second actual-fill candles,
+  strict-cross Rust simulation and settlement, portfolio orchestration, HIP-4 discovery/account
+  reconciliation and guarded dry-run planning, Polymarket reference adapters and ordered
+  historical ingestion, and an outcome-specific EMA-anchor strategy with pair-first inventory
+  controls, pre-close passive residual liquidation, and buy-path pair-completion metrics that do
+  not mistake same-token round trips for completed pairs. Missing verified public fills now produce
+  an observable cancel-only HIP-4 safety cycle that removes only Passivbot-namespaced quotes and
+  preserves unmanaged orders. Outcome fees now support per-fill versus inventory-reduction
+  incidence and payout-notional settlement charges; HIP-4 live planning requires current account
+  fee rates and applies a conservative maker-fee floor without replacing authoritative fill fees.
+  HIP-4 settlement fills are normalized and archived separately from market trades; expired and
+  settled markets fail closed to cancel-only reconciliation, with time-ranged account fills used
+  as a bounded settlement-recovery source. Outcome archives now retain fingerprinted market
+  metadata and stream ordered Hyperliquid node-fill files with cross-file block-continuity checks,
+  preventing expired contract terms from disappearing or conflicting IDs from mixing. Settled
+  full-contract archives can now build authoritative EMA-anchor jobs and compose those strategy
+  runs—not generic scripted simulations—against a shared collateral wallet. Standard Polymarket
+  history now imports on-chain CTF resolution vectors, retains actual `closedTime` across metadata
+  versions, and requires explicit collateral identity when Gamma omits it so USDC.e and pUSD eras
+  cannot silently mix. The existing perpetual backtest data path also accepts an explicit
+  `backtest.candle_interval_seconds`, including native one-second candles, without merging outcome
+  accounting into the perp simulator. Outcome strategy and shared-wallet reports now carry
+  cumulative complementary buys, pair completion, peak residual, and time-weighted residual and
+  total inventory through settlement. HIP-4 reconciliation now independently proves exact
+  Passivbot client-order IDs before every cancellation or creation and verifies the complete final
+  managed-order set, including bounded verified cleanup after ambiguous partial creation and
+  cancellation of managed orders that become visible only during cleanup verification. Public HIP-4
+  collection waits for both native-book subscription acknowledgements before establishing
+  coverage. Live replacement sizing reclaims only collateral reserved by the same market's
+  Passivbot-managed buy orders. Archived replay derives executable venue-grid bounds, requires an
+  explicit quantity step when retained metadata omits one, preserves representable venue fee
+  formulas, applies same-second grid changes before fills, and includes settlement fees in
+  worst-case equity. Polymarket full-contract replay independently requires verified price-grid
+  history and capital-release evidence, rather than treating fill coverage as tick history or
+  `ConditionResolution` as redemption. Regular backtest and optimizer suites now resolve candle
+  intervals in milliseconds, preserving native one-second datasets instead of silently preparing
+  minute bars. Source bars must be contiguous before interval aggregation;
+  one-sided pair completion can use its full remaining inventory headroom; mode summaries retain
+  peak paired and residual exposure. Portfolio peak residual now aggregates overlapping market
+  residuals on one chronological timeline. Final HIP-4 verification failures now trigger verified
+  cleanup of every surviving managed quote, including kept quotes partially filled during
+  reconciliation; live sell sizing excludes inventory reserved by unmanaged orders while
+  reclaiming managed reservations. Outcome sell constraints are checked after quantity rounding,
+  and the candle simulator rejects non-post-only orders until taker execution is modeled. Optimizer
+  candle pre-aggregation now converts per-coin validity indices to the aggregated interval and
+  supports second-based datasets before candidate evaluation.
+  Read-only HIP-4 state and dry-cycle probes now take an explicit public wallet address and never
+  load signing credentials. Ordered Hyperliquid block archives reject fill timestamps that move
+  backward across block/event order instead of silently sorting contradictory evidence. Partial
+  cancellation failures now recover every targeted managed order to verified absence, and
+  settlement re-import rejects contradictory economic evidence under the same source identity
+  while allowing endpoint provenance to differ. Full-contract replay rejects unmodeled
+  quantity/minimum constraint changes; HIP-4 evaluation requires explicit fee incidence,
+  fee-enabled Polymarket window evaluation fails closed, EMA spans require at least one second,
+  and Polygon log decoding verifies authoritative contract-address/topic pairs. The initial
+  normalized venue scope now explicitly requires one collateral unit of payout; bounded Polymarket
+  captures retain grid changes without fabricating unproven grid-stream coverage. Full-contract
+  replay now exposes and records explicit minimum-quantity and minimum-notional assumptions
+  alongside quantity step when opening metadata omits them, and rejects settlement evidence whose
+  payout unit or resolution timestamp disagrees with the market or other retained settlement
+  evidence. Bounded Polymarket replay validates the full pre-window price-grid transition chain
+  before deriving its opening grid. Outcome archive imports now reject contradictory trades
+  under the same source or sequence identity, attempted
+  quote cleanup continues through individual cancellation errors, Rust keeps order-entry
+  acceptance separate from market open and permits authoritative trading close after the scheduled
+  event, already-expired GTD orders are rejected at placement, and failed post-expiry settlement
+  recovery remains observable without blocking protective managed-order cancellation. Perpetual hard-stop flat
+  confirmation remains minute-scoped when backtests use sub-minute candles. Outcome results now
+  separate trading and settlement fees and report extensible horizon-indexed post-fill adverse
+  selection, initially at one second, through single-market, settlement-scenario, and portfolio
+  summaries. Portfolio residual changes sharing a timestamp are applied atomically, and skipped
+  jobs no longer dilute duration-weighted metrics. YES-only sizing uses the headroom and collateral
+  cost of its single inventory-increasing quote. HIP-4 account snapshots are conservatively aged
+  from the start of their concurrent reads, while malformed public signal data enters the
+  observable cancel-only safety path without hiding caller configuration errors. Current HIP-4
+  outcome metadata no longer fabricates quantity precision or order minima, so planning and order
+  construction fail closed until those constraints are authoritative. Repeated equal mirrored
+  fills remain distinct economic events, verified live coverage waits through the maximum accepted
+  trade lag, and agreeing merged-book closes provide one-second markout while conflicts remain
+  unavailable. Metadata history now preserves nonconsecutive state reversions, and bounded
+  Polymarket evaluations replay the archived start-window metadata and verified price-grid changes.
+  Out-of-order metadata imports now preserve intervening state reversions, bounded Polymarket
+  windows reject unmodeled in-window constraint or fee transitions and report their explicit
+  minimum-notional assumption, and retained HIP-4 settlement evidence remains authoritative after
+  venue fill-history expiry instead of regressing a restarted market to awaiting settlement.
+  Full-contract replay now requires metadata observed by trading open; bounded HIP-4 evaluations
+  use their requested synthetic lifecycle and settlement boundaries, with explicit close-phase
+  durations that default to disabled for short samples. Mutation validation rejects creates
+  targeting kept-order slots, rechecks signal freshness before each create, and drives managed
+  quotes to verified absence if the signal expires during execution. Historical source batches
+  now commit metadata, trades, settlements, and coverage atomically, and one-second replay rejects
+  grid changes whose intrasecond order against execution fills is unknowable. Strategy-mode
+  summaries retain settlement-scenario rebate ranges. Quote-asset changes remain versioned
+  metadata instead of conflicting immutable contract terms, trade identities are enforced across
+  both outcome assets, and Polymarket coverage waits for initial books from both subscriptions.
+  Missing HIP-4 order constraints now route live cycles to observable cancel-only handling;
+  bounded HIP-4 evaluation requires explicit reported constraint assumptions. Identity-less
+  Polymarket sessions reject overlapping verified coverage atomically, and complementary
+  tick-size events deduplicate as one normalized market-level transition. Full-contract replay
+  starts from the latest metadata state valid at trading open, settles at authoritative resolution
+  while keeping shared-wallet capital locked until authoritative release, preserves archived
+  zero-fee behavior regardless of exploratory CLI rates, rejects conflicting HIP-4 account-fill
+  duplicates, and retains deterministic intra-second residual peaks. The public Polymarket signal
+  probe now requires an explicit current Gamma market ID. Metadata fingerprint checks are
+  serialized with insertion, vault-targeted HIP-4 actions reconcile the vault's state and fee
+  tier, suite pre-aggregation and scenario slicing keep validity indices in target-bar units, and
+  active Polymarket evaluation windows apply their synthetic close before Rust translation.
+  HIP-4 creates now recheck market lifecycle after account/book preflight, while any create failure
+  drives kept and newly attempted managed quotes to verified absence.
+  Portfolio inventory-time metrics now end at the latest accepted settlement rather than delayed
+  redemption, and HIP-4 cancellation races drive kept managed quotes to verified absence.
+  Polymarket reconnects now discard
+  abandoned session fills, HIP-4 creates recheck signal expiry after their public preflight,
+  archived fee selection uses opening metadata and rejects unsupported later transitions, and the
+  HIP-4 evaluator requires an explicit minimum-notional assumption alongside quantity constraints.
+  Bounded outcome evaluators now round fractional EMA warmups up to enough whole observations to
+  cover the configured slow span.
+  Verified grid coverage now participates in outer archive transactions, grid changes between
+  trading open and delayed order acceptance replay successfully, pre-close risk reduction may sell
+  an explicitly verified full residual below minimum quantity while still meeting minimum
+  notional, and settled cycles cancel managed quotes before surfacing archive failures.
+  Optimizer resume validation now rejects incompatible one-second candle settings, including
+  adding the setting to an older result.
+  Cancel-only unavailable-signal cycles now apply the same settlement-archive ordering guarantee.
+  Hyperliquid block backfills exclude the first supplied block's entire second from verified
+  coverage, and HIP-4 order serialization canonicalizes harmless Rust floating-point residue
+  without accepting materially off-grid values.
+  Shared-wallet portfolio evaluation rejects mixed quote assets, and normalized trades reject
+  inconsistent native-to-canonical YES price mappings.
+  Reconciliation rejects duplicate kept orders in one managed quote slot before mutation, and the
+  bounded Polymarket evaluator requires an explicit quantity-step assumption.
+  Polygon fill and settlement import now requires explicit boolean non-removed log evidence.
+  Live collectors reject over-lag fills before archive writes, candle construction rejects
+  conflicting duplicate trade identities, and replay accepts execution candles from trading open
+  while keeping order placement gated until order-entry open. Verified live coverage is capped at
+  its scheduled collection deadline, and replayed price-grid transitions refresh executable price
+  bounds together with the tick size. HIP-4 collateral normalization now requires exactly one
+  maintenance-availability row for the quote token, live collectors drain each already-decoded
+  websocket trade batch before certifying coverage, and canonical signal candles reject
+  contradictory mirrored economic records before deduplication. Bounded Polymarket windows apply
+  the latest pre-window tick transition, identity-less signal seeds outside verified coverage stay
+  out of durable history, direct candle inputs enforce market-wide trade identities, stale HIP-4
+  account snapshots route to cancel-only safety, and Polygon fills and resolutions require exact
+  32-byte transaction hashes. Live HIP-4 settlement selection now rejects contradictory
+  resolution timestamps, Polymarket trade capture discards the complete initial-book transition
+  batch, bounded evaluators seed initial no-trade seconds only from a preceding fill with proven
+  continuous dual-book coverage, and portfolio pair completion pairs complementary buys only
+  within the same outcome contract.
+  HIP-4 live cycles can now consume a continuously owned public-fill stream, advancing verified
+  one-second zero-volume signal candles during real market silence while account reconciliation
+  runs; stream failure still cancels managed quotes, and one-shot execution clears recovered
+  quotes before bootstrap collection. Outcome replay now expires GTD reservations before split or
+  merge actions, uses indexed post-fill mark lookup, and requires an explicit Polymarket minimum
+  notional assumption for bounded windows.
+  Authenticated outcome mutations remain disabled by default.
+
 - Canonical live-event payloads now make a bounded JSON-compatible copy at construction time,
   revalidate that copy at persistence boundaries, redact sensitive keys before retention, and
   record aggregate truncation metadata only when a limit applies. Event identity, routing, monitor

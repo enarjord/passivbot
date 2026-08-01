@@ -124,10 +124,7 @@ fn calc_backtest_completion_ratio(
     backtest_params: &BacktestParams,
     n_timesteps: usize,
 ) -> f64 {
-    let interval_ms = backtest_params
-        .candle_interval_minutes
-        .max(1)
-        .saturating_mul(60_000);
+    let interval_ms = backtest_params.candle_interval_ms.max(1);
     let requested_start_ts = backtest_params.requested_start_timestamp_ms;
     let requested_end_ts = backtest_params
         .first_timestamp_ms
@@ -366,6 +363,16 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
 
     let requested = get_u64(dict, "requested_start_timestamp_ms")?;
     let effective = get_u64(dict, "effective_start_timestamp_ms")?;
+    let bar_interval_ms = dict
+        .get_item("bar_interval_ms")?
+        .map(|value| value.extract::<u64>())
+        .transpose()?
+        .unwrap_or(60_000);
+    if bar_interval_ms == 0 {
+        return Err(PyValueError::new_err(
+            "meta.bar_interval_ms must be greater than zero",
+        ));
+    }
     let warm_req = get_u64(dict, "warmup_minutes_requested")?;
     let warm_prov = get_u64(dict, "warmup_minutes_provided")?;
 
@@ -390,6 +397,7 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
     Ok(HlcvsMeta {
         requested_start_timestamp_ms: requested,
         effective_start_timestamp_ms: effective,
+        bar_interval_ms,
         warmup_minutes_requested: warm_req,
         warmup_minutes_provided: warm_prov,
         coins,
@@ -507,6 +515,7 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
         "effective_start_timestamp_ms",
         meta.effective_start_timestamp_ms,
     )?;
+    dict.set_item("bar_interval_ms", meta.bar_interval_ms)?;
     dict.set_item("warmup_minutes_requested", meta.warmup_minutes_requested)?;
     dict.set_item("warmup_minutes_provided", meta.warmup_minutes_provided)?;
     let coins = PyList::empty_bound(py);
@@ -2062,6 +2071,16 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         })
     };
     let hard_stop_cfg = parse_hsl_cfg(dict, "equity_hard_stop_loss")?;
+    let candle_interval_ms = dict
+        .get_item("candle_interval_ms")?
+        .map(|item| item.extract::<u64>())
+        .transpose()?
+        .unwrap_or(60_000);
+    if candle_interval_ms == 0 {
+        return Err(PyValueError::new_err(
+            "candle_interval_ms must be greater than zero",
+        ));
+    }
 
     Ok(BacktestParams {
         starting_balance: extract_value(dict, "starting_balance")?,
@@ -2137,11 +2156,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.02),
-        candle_interval_minutes: dict
-            .get_item("candle_interval_minutes")?
-            .map(|item| item.extract::<u64>())
-            .transpose()?
-            .unwrap_or(1), // default to 1m candles
+        candle_interval_ms,
     })
 }
 
@@ -4224,6 +4239,68 @@ pub fn get_order_id_type_from_string_alias(name: &str) -> PyResult<u16> {
 }
 
 // -------- Orchestrator JSON API --------
+
+#[pyfunction]
+pub fn run_single_outcome_backtest_json(input_json: &str) -> PyResult<String> {
+    let input: crate::outcome::backtest::SingleOutcomeBacktestInput =
+        serde_json::from_str(input_json).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to parse SingleOutcomeBacktestInput JSON: {error}"
+            ))
+        })?;
+    let output =
+        crate::outcome::backtest::run_single_outcome_backtest(&input).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "single outcome backtest failed: {error}"
+            ))
+        })?;
+    serde_json::to_string(&output).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "failed to serialize SingleOutcomeBacktestOutput JSON: {error}"
+        ))
+    })
+}
+
+#[pyfunction]
+pub fn run_outcome_ema_anchor_backtest_json(input_json: &str) -> PyResult<String> {
+    let input: crate::outcome::backtest::OutcomeEmaAnchorBacktestInput =
+        serde_json::from_str(input_json).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to parse OutcomeEmaAnchorBacktestInput JSON: {error}"
+            ))
+        })?;
+    let output =
+        crate::outcome::backtest::run_outcome_ema_anchor_backtest(&input).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "EMA-anchor outcome backtest failed: {error}"
+            ))
+        })?;
+    serde_json::to_string(&output).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "failed to serialize EMA-anchor outcome output JSON: {error}"
+        ))
+    })
+}
+
+#[pyfunction]
+pub fn plan_outcome_ema_anchor_json(input_json: &str) -> PyResult<String> {
+    let input: crate::outcome::strategy::OutcomeEmaAnchorPlanInput =
+        serde_json::from_str(input_json).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to parse OutcomeEmaAnchorPlanInput JSON: {error}"
+            ))
+        })?;
+    let output = crate::outcome::strategy::plan_outcome_ema_anchor(&input).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "EMA-anchor outcome planning failed: {error}"
+        ))
+    })?;
+    serde_json::to_string(&output).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "failed to serialize EMA-anchor outcome plan JSON: {error}"
+        ))
+    })
+}
 
 #[pyfunction]
 pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {

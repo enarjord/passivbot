@@ -138,13 +138,15 @@ async def prepare_suite_contexts(
     base_config["backtest"]["coins"] = {}
     base_config["backtest"]["coin_sources"] = suite_coin_sources
 
-    candle_interval = int(base_config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
+    from backtest import resolve_backtest_candle_interval_ms
+
+    candle_interval_ms = resolve_backtest_candle_interval_ms(base_config)
     datasets = await prepare_master_datasets(
         base_config,
         exchanges_list,
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
-        candle_interval_minutes=candle_interval,
+        candle_interval_ms=candle_interval_ms,
         scenarios=scenarios,
     )
     available_coins = set()
@@ -170,8 +172,10 @@ async def prepare_suite_contexts(
         ts_window: Optional[np.ndarray],
     ) -> Dict[str, Any]:
         total_steps = max(1, int(end_idx - start_idx))
-        interval = int(dataset.mss.get("__meta__", {}).get("data_interval_minutes", 1) or 1)
-        total_steps_1m = total_steps * interval
+        interval_ms = int(
+            dataset.mss.get("__meta__", {}).get("data_interval_ms", 60_000)
+            or 60_000
+        )
         mss_slice: Dict[str, Any] = {
             coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
         }
@@ -179,17 +183,17 @@ async def prepare_suite_contexts(
         warmup_map = compute_optimizer_per_coin_warmup_minutes(scenario_config)
         for coin, meta in mss_slice.items():
             first_idx = int(meta.get("first_valid_index", 0))
-            last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))
-            first_idx = first_idx - start_idx * interval
-            last_idx = last_idx - start_idx * interval
+            last_idx = int(meta.get("last_valid_index", total_steps - 1))
+            first_idx = first_idx - start_idx
+            last_idx = last_idx - start_idx
             if first_idx < 0:
                 first_idx = 0
             if last_idx < 0:
                 last_idx = 0
-            if first_idx >= total_steps_1m:
-                first_idx = total_steps_1m
-            if last_idx >= total_steps_1m:
-                last_idx = total_steps_1m - 1
+            if first_idx >= total_steps:
+                first_idx = total_steps
+            if last_idx >= total_steps:
+                last_idx = total_steps - 1
             if "first_valid_index" not in meta or "last_valid_index" not in meta:
                 try:
                     coin_idx = dataset.coin_index.get(coin)
@@ -198,13 +202,18 @@ async def prepare_suite_contexts(
                         finite = np.isfinite(close_series)
                         if finite.any():
                             valid_indices = np.where(finite)[0]
-                            first_idx = int(valid_indices[0]) * interval
-                            last_idx = int(valid_indices[-1]) * interval + (interval - 1)
+                            first_idx = int(valid_indices[0])
+                            last_idx = int(valid_indices[-1])
                 except Exception:
                     pass
             meta["first_valid_index"] = first_idx
             meta["last_valid_index"] = last_idx
-        stamp_warmup_metadata(mss_slice, selected_coins, warmup_map)
+        stamp_warmup_metadata(
+            mss_slice,
+            selected_coins,
+            warmup_map,
+            bar_interval_ms=interval_ms,
+        )
 
         # Meta window details (matches _prepare_dataset_subset semantics without hlcvs copies).
         start_value = require_config_value(scenario_config, "backtest.start_date")

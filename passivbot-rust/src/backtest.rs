@@ -1892,13 +1892,9 @@ impl<'a> Backtest<'a> {
             }
             first_valid_idx[i] = first;
             last_valid_idx[i] = last;
-            let warm = warmup_minutes.get(i).copied().unwrap_or(0);
-            let interval = backtest_params.candle_interval_minutes.max(1) as usize;
-            let warm_bars = if interval > 1 {
-                (warm + interval - 1) / interval
-            } else {
-                warm
-            };
+            let warm = warmup_minutes.get(i).copied().unwrap_or(0) as f64;
+            let interval_minutes = backtest_params.candle_interval_minutes();
+            let warm_bars = (warm / interval_minutes).ceil().max(0.0) as usize;
             let provided_trade_idx = trade_start_idx[i];
             let trade_idx = first
                 .saturating_add(warm_bars)
@@ -2031,7 +2027,7 @@ impl<'a> Backtest<'a> {
             .collect();
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
-        let interval = backtest_params.candle_interval_minutes;
+        let interval = backtest_params.candle_interval_minutes();
         let ema_alphas: Vec<EmaAlphas> = bot_params
             .iter()
             .zip(strategy_params_parsed.iter())
@@ -2039,7 +2035,8 @@ impl<'a> Backtest<'a> {
             .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
-            warmup_bars = calc_warmup_bars(&bot_params, &strategy_params_parsed);
+            let warmup_minutes = calc_warmup_minutes(&bot_params, &strategy_params_parsed);
+            warmup_bars = (warmup_minutes / interval).ceil().max(1.0) as usize;
         }
 
         let trailing_enabled: Vec<TrailingEnabled> = strategy_params_parsed
@@ -2081,7 +2078,7 @@ impl<'a> Backtest<'a> {
             hlcvs,
             btc_usd_prices,
             active_coin_indices,
-            interval_ms: backtest_params.candle_interval_minutes * 60_000,
+            interval_ms: backtest_params.candle_interval_ms,
             bot_params_master: bot_params_master.clone(),
             bot_params: bot_params.clone(),
             bot_params_original,
@@ -2134,7 +2131,7 @@ impl<'a> Backtest<'a> {
                 usize::MAX
             } else {
                 let minutes = backtest_params.pnls_max_lookback_days * 24.0 * 60.0;
-                (minutes / backtest_params.candle_interval_minutes.max(1) as f64)
+                (minutes / backtest_params.candle_interval_minutes())
                     .ceil()
                     .max(1.0) as usize
             },
@@ -3609,8 +3606,15 @@ impl<'a> Backtest<'a> {
                 runtime.flat_confirmations = 0;
                 runtime.pending_stop = None;
             } else {
-                runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
-                if runtime.flat_confirmations == 1 {
+                let current_minute = timestamp_ms / 60_000;
+                let advances_confirmation = runtime
+                    .pending_stop
+                    .map(|snapshot| snapshot.timestamp_ms / 60_000 < current_minute)
+                    .unwrap_or(true);
+                if advances_confirmation {
+                    runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
+                }
+                if advances_confirmation && runtime.flat_confirmations == 1 {
                     runtime.pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: strategy_equity,
@@ -3619,7 +3623,7 @@ impl<'a> Backtest<'a> {
                         drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
-                if runtime.flat_confirmations >= 2 {
+                if advances_confirmation && runtime.flat_confirmations >= 2 {
                     let stop_snapshot = runtime.pending_stop.unwrap_or(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: strategy_equity,
@@ -3795,8 +3799,15 @@ impl<'a> Backtest<'a> {
                 runtime.flat_confirmations = 0;
                 runtime.pending_stop = None;
             } else {
-                runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
-                if runtime.flat_confirmations == 1 {
+                let current_minute = timestamp_ms / 60_000;
+                let advances_confirmation = runtime
+                    .pending_stop
+                    .map(|snapshot| snapshot.timestamp_ms / 60_000 < current_minute)
+                    .unwrap_or(true);
+                if advances_confirmation {
+                    runtime.flat_confirmations = runtime.flat_confirmations.saturating_add(1);
+                }
+                if advances_confirmation && runtime.flat_confirmations == 1 {
                     runtime.pending_stop = Some(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: synthetic_equity,
@@ -3805,7 +3816,7 @@ impl<'a> Backtest<'a> {
                         drawdown_ema: step.drawdown_ema.max(0.0),
                     });
                 }
-                if runtime.flat_confirmations >= 2 {
+                if advances_confirmation && runtime.flat_confirmations >= 2 {
                     let stop_snapshot = runtime.pending_stop.unwrap_or(HardStopStopSnapshot {
                         timestamp_ms,
                         equity: synthetic_equity,
@@ -6011,9 +6022,9 @@ fn daily_worst_positive_drawdowns(
 fn calc_ema_alphas(
     bot_params_pair: &BotParamsPair,
     strategy_params_pair: &StrategyParamsPair,
-    interval: u64,
+    interval_minutes: f64,
 ) -> EmaAlphas {
-    let interval_f = interval as f64;
+    let interval_f = interval_minutes;
     let clamp_alpha = |alpha: f64| {
         if !alpha.is_finite() {
             0.0
@@ -6207,7 +6218,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6281,7 +6292,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6345,7 +6356,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6413,7 +6424,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6487,7 +6498,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6556,7 +6567,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6650,7 +6661,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6732,7 +6743,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6813,7 +6824,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6903,7 +6914,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -6981,7 +6992,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7082,7 +7093,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
         let exchange = ExchangeParams {
             qty_step: 0.01,
@@ -7207,7 +7218,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
         let exchange = ExchangeParams {
             qty_step: 0.01,
@@ -7315,7 +7326,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7391,7 +7402,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7459,7 +7470,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7528,7 +7539,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7607,7 +7618,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7713,7 +7724,7 @@ mod tests {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
                 forager_score_hysteresis_pct: 0.0,
-                candle_interval_minutes: 1,
+                candle_interval_ms: 60_000,
             };
 
             let mut bt = Backtest::new(
@@ -7803,7 +7814,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -7919,7 +7930,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8030,7 +8041,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8126,7 +8137,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8204,7 +8215,7 @@ mod tests {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
                 forager_score_hysteresis_pct: 0.0,
-                candle_interval_minutes: 1,
+                candle_interval_ms: 60_000,
             };
 
             let mut bt = Backtest::new(
@@ -8285,7 +8296,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8369,7 +8380,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8446,7 +8457,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8520,7 +8531,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8615,7 +8626,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8712,7 +8723,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -8767,7 +8778,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_flat_confirmation_ignores_open_panic_close_orders() {
+    fn hard_stop_flat_confirmation_ignores_panic_orders_and_is_minute_scoped() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -8807,7 +8818,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 1_000,
         };
 
         let mut bp_pair = BotParamsPair::default();
@@ -8852,6 +8863,20 @@ mod tests {
 
         assert_eq!(bt.hard_stop_flat_confirmations, 1);
         assert!(bt.hard_stop_pending_stop.is_some());
+
+        bt.equities.timestamps_ms.push(61_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        assert_eq!(bt.hard_stop_flat_confirmations, 1);
+        assert!(!bt.hard_stop_halted);
+
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(0).unwrap();
+
+        assert_eq!(bt.hard_stop_flat_confirmations, 2);
+        assert!(bt.hard_stop_halted);
     }
 
     #[test]
@@ -8971,7 +8996,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bp_pair = BotParamsPair::default();
@@ -9117,7 +9142,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bp_pair = BotParamsPair::default();
@@ -9209,7 +9234,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9311,7 +9336,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9413,7 +9438,7 @@ mod tests {
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9504,7 +9529,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9561,7 +9586,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9619,7 +9644,7 @@ mod tests {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
                 forager_score_hysteresis_pct: 0.0,
-                candle_interval_minutes: 1,
+                candle_interval_ms: 60_000,
             };
 
             let mut bt = Backtest::new(
@@ -9693,7 +9718,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9764,7 +9789,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9840,7 +9865,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9910,7 +9935,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -9988,7 +10013,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10081,7 +10106,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10179,7 +10204,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_ms: 24 * 60 * 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10254,7 +10279,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_ms: 24 * 60 * 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10363,7 +10388,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_ms: 24 * 60 * 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10442,7 +10467,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_ms: 24 * 60 * 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10523,7 +10548,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 24 * 60,
+            candle_interval_ms: 24 * 60 * 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10609,7 +10634,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10705,7 +10730,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10772,7 +10797,7 @@ mod tests {
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
             forager_score_hysteresis_pct: 0.0,
-            candle_interval_minutes: 1,
+            candle_interval_ms: 60_000,
         };
 
         let mut bt = Backtest::new(
@@ -10816,7 +10841,7 @@ mod tests {
         bp.short.filter_volatility_ema_span_1m = 600.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
-        let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
+        let alphas = calc_ema_alphas(&bp, &strategy_pair, 1.0);
 
         // span2 = sqrt(100*200) = 141.42..., sorted: [100, 141.42, 200]
         let span2_long = (100.0f64 * 200.0).sqrt();
@@ -10852,7 +10877,7 @@ mod tests {
         bp.short.ema_span_1 = 60.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
-        let alphas = calc_ema_alphas(&bp, &strategy_pair, 5);
+        let alphas = calc_ema_alphas(&bp, &strategy_pair, 5.0);
 
         let expected = 2.0 / (60.0 / 5.0 + 1.0); // 2/13
         for i in 0..3 {
@@ -10863,6 +10888,19 @@ mod tests {
                 expected,
                 alphas.long.alphas[i]
             );
+        }
+    }
+
+    #[test]
+    fn test_ema_alpha_interval_one_second_preserves_minute_spans() {
+        let mut bp = BotParamsPair::default();
+        bp.long.ema_span_0 = 60.0;
+        bp.long.ema_span_1 = 60.0;
+        let strategy_pair = strategy_pair_for_ema_tests(&bp);
+        let alphas = calc_ema_alphas(&bp, &strategy_pair, 1.0 / 60.0);
+        let expected = 2.0 / (60.0 * 60.0 + 1.0);
+        for alpha in alphas.long.alphas {
+            assert!((alpha - expected).abs() < 1e-12);
         }
     }
 
@@ -10939,8 +10977,8 @@ mod tests {
         bp.short.entry_volatility_ema_span_1h = 48.0;
         let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
-        let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
-        let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);
+        let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1.0);
+        let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5.0);
 
         assert!(
             (alphas_1.volatility_ema_1h_alpha_long - alphas_5.volatility_ema_1h_alpha_long).abs()
@@ -10973,14 +11011,17 @@ mod tests {
             }),
         };
 
-        let alphas = calc_ema_alphas(&BotParamsPair::default(), &strategy_pair, 1);
+        let alphas = calc_ema_alphas(&BotParamsPair::default(), &strategy_pair, 1.0);
 
         assert_eq!(alphas.volatility_ema_1h_alpha_long, 1.0);
         assert_eq!(alphas.volatility_ema_1h_alpha_short, 1.0);
     }
 }
 
-fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyParamsPair]) -> usize {
+fn calc_warmup_minutes(
+    bot_params: &[BotParamsPair],
+    strategy_params: &[StrategyParamsPair],
+) -> f64 {
     let mut max_span_minutes = 0.0f64;
 
     for (pair, strategy_pair) in bot_params.iter().zip(strategy_params.iter()) {
@@ -11007,5 +11048,5 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         }
     }
 
-    max_span_minutes.ceil() as usize
+    max_span_minutes
 }

@@ -14,6 +14,7 @@ from live.smoke_report import _redact_log_text
 from tools.probe_ticker_capabilities import (
     create_exchange,
     is_active_linear_swap,
+    order_book_probe_limit,
     resolve_symbols,
     split_csv,
     summarize_order_book,
@@ -1753,21 +1754,25 @@ async def _fetch_ticker_concurrent(exchange, symbols: list[str]) -> dict[str, An
 async def _fetch_order_books_sequential(exchange, symbols: list[str]) -> dict[str, Any]:
     started_ms = utc_ms()
     results = {}
+    limit = order_book_probe_limit(exchange)
     for symbol in symbols:
-        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=5))
+        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=limit))
         if outcome["ok"]:
             outcome["value"] = summarize_order_book(outcome["value"])
         results[symbol] = outcome
     return {
         "ok": all(bool(result["ok"]) for result in results.values()),
         "elapsed_ms": int(max(0, utc_ms() - started_ms)),
+        "limit": limit,
         "symbols": results,
     }
 
 
 async def _fetch_order_books_concurrent(exchange, symbols: list[str]) -> dict[str, Any]:
+    limit = order_book_probe_limit(exchange)
+
     async def _one(symbol: str) -> tuple[str, dict[str, Any]]:
-        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=5))
+        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=limit))
         if outcome["ok"]:
             outcome["value"] = summarize_order_book(outcome["value"])
         return symbol, outcome
@@ -1778,6 +1783,7 @@ async def _fetch_order_books_concurrent(exchange, symbols: list[str]) -> dict[st
     return {
         "ok": all(bool(result["ok"]) for result in results.values()),
         "elapsed_ms": int(max(0, utc_ms() - started_ms)),
+        "limit": limit,
         "symbols": results,
     }
 

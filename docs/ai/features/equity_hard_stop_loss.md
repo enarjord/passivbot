@@ -30,7 +30,10 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    outcomes. They retain only a bounded exception type in diagnostics and fall back to authoritative
    replay when reuse is unavailable. Coin replay failures retain the same bounded classification
    without changing exception propagation or held-pair protection and flat-pair entry blocking.
-8. For an open coin scope using `restart_after_red_policy=always`, a fill-proven current episode
+8. Backtest flat-state confirmation is minute-scoped. Sub-minute candle intervals may update other
+   simulation state every bar, but repeated bars within one hard-stop minute cannot satisfy multiple
+   flat confirmations or start cooldown earlier than the next distinct minute observation.
+9. For an open coin scope using `restart_after_red_policy=always`, a fill-proven current episode
    may discard older closed episodes after a flat gap longer than the configured RED cooldown.
    Replay retains preceding episodes while their cooldown horizons overlap the next episode, so a
    chain of possible cooldown interventions remains strict. An ambiguous fill sequence, a position

@@ -11,6 +11,7 @@ from ohlcv_store import OhlcvStore, month_offset, month_start_ts, rows_in_month
 
 def test_month_offset_and_rows_for_april_2026():
     start_ts = month_start_ts(2026, 4)
+    assert rows_in_month(2026, 4, "1s") == 30 * 24 * 60 * 60
     assert rows_in_month(2026, 4, "1m") == 30 * 24 * 60
     assert month_offset(start_ts, 2026, 4, "1m") == 0
     assert month_offset(start_ts + 60_000, 2026, 4, "1m") == 1

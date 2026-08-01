@@ -144,6 +144,12 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "hyperliquid-balance-probe" in out
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
+    assert "outcome-hip4-dry-cycle" in out
+    assert "outcome-hip4-state" in out
+    assert "outcome-hip4-evaluate" in out
+    assert "outcome-polymarket-backfill" in out
+    assert "outcome-polymarket-evaluate" in out
+    assert "outcome-polymarket-signal" in out
     assert "inspect-ohlcvs" in out
     assert "live-event-query" in out
     assert "log-secret-inventory" in out
@@ -180,6 +186,40 @@ def test_trailing_inspect_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "passivbot tool trailing-inspect",
         "--position-price",
         "20",
+    ]
+
+
+def test_outcome_hip4_dry_cycle_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+
+    assert (
+        cli_main.main(
+            [
+                "tool",
+                "outcome-hip4-dry-cycle",
+                "--address",
+                "0xoutcome",
+                "--max-wait-seconds",
+                "3",
+            ]
+        )
+        == 0
+    )
+
+    assert captured["module_name"] == "tools.probe_hyperliquid_outcome_dry_cycle"
+    assert captured["argv"] == [
+        "passivbot tool outcome-hip4-dry-cycle",
+        "--address",
+        "0xoutcome",
+        "--max-wait-seconds",
+        "3",
     ]
 
 

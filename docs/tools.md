@@ -688,6 +688,10 @@ one-off scripts.
   snapshots balance changes, then cancels it.
 - `passivbot tool hyperliquid-position-probe` is mutating. It can open/flatten a tiny position and
   optionally place resting entry or reduce-only close orders to inspect live state transitions.
+- `passivbot tool outcome-hip4-state --address 0x...` reads HIP-4 market, account, inventory,
+  fill, and book state using only the public wallet address.
+- `passivbot tool outcome-hip4-dry-cycle --address 0x...` runs the HIP-4 public-fill collection,
+  planning, and reconciliation dry cycle without loading signing credentials.
 
 The mutating probes require `--yes` and are intended for test wallets or deliberately tiny live
 positions only.

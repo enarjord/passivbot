@@ -16,6 +16,7 @@ Open only the contract for the subsystem being changed.
 | Structured live events | `live_events.md` and `../generated/live_event_registry.md` |
 | Trailing diagnostics tool | `trailing_diagnostics.md` |
 | Strategy schema and Rust runtime | `strategy_runtime.md` |
+| Binary outcome markets | `outcome_markets.md` |
 
 Feature contracts contain current invariants, failure semantics, non-obvious edge cases,
 validation, and code/test locations. They do not carry progress ledgers or generic coding advice.

@@ -1316,6 +1316,24 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Backtest candle interval in minutes.",
     },
+    "backtest.candle_interval_seconds": {
+        "visible": ["--candle-interval-seconds", "-cis"],
+        "hidden": [
+            "--backtest.candle_interval_seconds",
+            "--backtest_candle_interval_seconds",
+        ],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Date Range",
+        },
+        "help": (
+            "Backtest candle interval in seconds. Leave unset to use "
+            "backtest.candle_interval_minutes."
+        ),
+    },
     "backtest.hlcvs_data_dir": {
         "visible": ["--hlcvs-data-dir"],
         "hidden": ["--backtest.hlcvs_data_dir", "--backtest_hlcvs_data_dir"],
@@ -1762,6 +1780,7 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.btc_collateral_cap",
         "backtest.btc_collateral_ltv_cap",
         "backtest.candle_interval_minutes",
+        "backtest.candle_interval_seconds",
         "backtest.compress_cache",
         "backtest.dynamic_wel_by_tradability",
         "backtest.filter_by_min_effective_cost",
@@ -1799,6 +1818,7 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.end_date",
         "backtest.start_date",
         "backtest.candle_interval_minutes",
+        "backtest.candle_interval_seconds",
     }
     optimizer = {
         "optimize.iters",

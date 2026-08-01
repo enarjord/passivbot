@@ -59,6 +59,8 @@ from backtest import (
     build_backtest_payload,
     execute_backtest,
     get_backtest_execution_settings,
+    resolve_backtest_candle_interval_ms,
+    _resolve_source_interval_ms,
 )
 import asyncio
 import multiprocessing
@@ -159,7 +161,7 @@ from pareto_store import ParetoStore
 import msgpack
 from typing import Sequence, Tuple, List, Dict, Any, Mapping, Optional
 from shared_arrays import SharedArrayManager, attach_shared_array
-from ohlcv_utils import align_and_aggregate_hlcvs
+from ohlcv_utils import align_and_aggregate_hlcvs_ms
 from optimize_suite import (
     ScenarioEvalContext,
     prepare_suite_contexts,
@@ -266,23 +268,71 @@ def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
 
 
 def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, config):
-    candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
-    if candle_interval <= 1:
+    meta = mss.setdefault("__meta__", {})
+    source_interval_ms = _resolve_source_interval_ms(meta, timestamps)
+    target_interval_ms = resolve_backtest_candle_interval_ms(config)
+    if target_interval_ms == source_interval_ms:
         return hlcvs, timestamps, btc_usd_prices
     n_before = hlcvs.shape[0]
-    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-        hlcvs, timestamps, btc_usd_prices, candle_interval
+    hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs_ms(
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        source_interval_ms=source_interval_ms,
+        target_interval_ms=target_interval_ms,
     )
+    candle_interval = target_interval_ms // source_interval_ms
     logging.debug(
-        "[optimize] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
-        candle_interval,
+        "[optimize] aggregated %dms candles to %dms: %d bars -> %d bars "
+        "(trimmed %d for alignment)",
+        source_interval_ms,
+        target_interval_ms,
         n_before,
         hlcvs.shape[0],
         offset_bars,
     )
-    meta = mss.setdefault("__meta__", {})
-    meta["data_interval_minutes"] = candle_interval
-    meta["candle_interval_offset_bars"] = int(offset_bars)
+    target_steps = hlcvs.shape[0]
+    source_steps = target_steps * candle_interval
+    for coin, coin_meta in mss.items():
+        if coin == "__meta__" or not isinstance(coin_meta, dict):
+            continue
+        first_source = max(
+            0,
+            min(
+                source_steps,
+                int(coin_meta.get("first_valid_index", 0)) - int(offset_bars),
+            ),
+        )
+        last_source = max(
+            0,
+            min(
+                source_steps - 1,
+                int(coin_meta.get("last_valid_index", n_before - 1))
+                - int(offset_bars),
+            ),
+        )
+        first_target = int(math.ceil(first_source / candle_interval))
+        last_target = int(((last_source + 1) // candle_interval) - 1)
+        if first_target >= target_steps:
+            first_target = target_steps
+        if last_target >= target_steps:
+            last_target = target_steps - 1
+        if last_target < 0:
+            first_target = target_steps
+            last_target = 0
+        coin_meta["first_valid_index"] = first_target
+        coin_meta["last_valid_index"] = last_target
+    meta["data_interval_ms"] = target_interval_ms
+    if target_interval_ms % 1_000 == 0:
+        meta["data_interval_seconds"] = target_interval_ms // 1_000
+    else:
+        meta.pop("data_interval_seconds", None)
+    if target_interval_ms % 60_000 == 0:
+        meta["data_interval_minutes"] = target_interval_ms // 60_000
+    else:
+        meta.pop("data_interval_minutes", None)
+    meta["source_candle_interval_offset_bars"] = int(offset_bars)
+    meta["candle_interval_offset_bars"] = 0
     if timestamps is not None and len(timestamps) > 0:
         meta["effective_start_ts"] = int(timestamps[0])
         meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
@@ -310,7 +360,15 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     reads ``mss``.
     """
     warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
-    stamped = stamp_warmup_metadata(mss, coins, warmup_map)
+    interval_ms = int(
+        mss.get("__meta__", {}).get("data_interval_ms", 60_000) or 60_000
+    )
+    stamped = stamp_warmup_metadata(
+        mss,
+        coins,
+        warmup_map,
+        bar_interval_ms=interval_ms,
+    )
     if stamped:
         summary = ", ".join(
             f"{count}x(warmup={w},start={s})" for (w, s), count in stamped.items()
@@ -730,6 +788,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "btc_collateral_cap",
             "btc_collateral_ltv_cap",
             "candle_interval_minutes",
+            "candle_interval_seconds",
             "coins",
             "dynamic_wel_by_tradability",
             "end_date",
@@ -746,6 +805,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "volume_normalization",
         },
     )
+    old_bt_compare.setdefault("candle_interval_seconds", None)
     new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
     if is_suite_result:
         # Suite result entries omit top-level backtest.coins because the

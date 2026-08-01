@@ -326,6 +326,137 @@ def test_build_backtest_payload_rejects_fractional_candle_interval():
         )
 
 
+def _one_second_payload_inputs(n_seconds: int = 120):
+    from config_utils import get_template_config
+
+    config = get_template_config()
+    config["backtest"]["exchanges"] = ["binance"]
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["backtest"]["candle_interval_seconds"] = 1
+    config["backtest"]["filter_by_min_effective_cost"] = False
+    config["backtest"]["start_date"] = "2021-01-01"
+    config["backtest"]["end_date"] = "2021-01-02"
+    config["live"]["warmup_ratio"] = 0.0
+    config["live"]["max_warmup_minutes"] = 0
+    config["live"]["hedge_mode"] = False
+    start_ts = 1609459200000
+    timestamps = np.arange(
+        start_ts, start_ts + n_seconds * 1_000, 1_000, dtype=np.int64
+    )
+    hlcvs = np.zeros((n_seconds, 1, 4), dtype=np.float64)
+    for i in range(n_seconds):
+        base = 100.0 + i * 0.01
+        hlcvs[i, 0, :] = [base + 0.5, base - 0.5, base, 1.0]
+    btc_usd_prices = np.full(n_seconds, 20_000.0, dtype=np.float64)
+    mss = {
+        "BTC": {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+            "warmup_minutes_provided": 0,
+            "data_interval_ms": 1_000,
+        },
+    }
+    return config, hlcvs, btc_usd_prices, timestamps, mss
+
+
+def test_build_backtest_payload_accepts_native_one_second_bars():
+    from backtest import build_backtest_payload
+
+    config, hlcvs, btc_usd_prices, timestamps, mss = _one_second_payload_inputs()
+    payload = build_backtest_payload(
+        hlcvs, mss, config, "binance", btc_usd_prices, timestamps
+    )
+
+    assert payload.backtest_params["candle_interval_ms"] == 1_000
+    assert payload.bundle.meta["bar_interval_ms"] == 1_000
+    assert payload.bundle.hlcvs.shape[0] == len(timestamps)
+    assert np.all(np.diff(np.asarray(payload.bundle.timestamps)) == 1_000)
+
+
+def test_build_backtest_payload_aggregates_one_second_bars_to_five_seconds():
+    from backtest import build_backtest_payload
+
+    config, hlcvs, btc_usd_prices, timestamps, mss = _one_second_payload_inputs(20)
+    config["backtest"]["candle_interval_seconds"] = 5
+    payload = build_backtest_payload(
+        hlcvs, mss, config, "binance", btc_usd_prices, timestamps
+    )
+
+    aggregated = np.asarray(payload.bundle.hlcvs)
+    assert payload.backtest_params["candle_interval_ms"] == 5_000
+    assert aggregated.shape == (4, 1, 4)
+    assert aggregated[0, 0].tolist() == pytest.approx(
+        [100.54, 99.5, 100.04, 5.0]
+    )
+    assert np.all(np.diff(np.asarray(payload.bundle.timestamps)) == 5_000)
+
+
+def test_second_bar_aggregation_rejects_source_gap_hidden_inside_output_bucket():
+    from ohlcv_utils import align_and_aggregate_hlcvs_ms
+
+    hlcvs = np.ones((10, 1, 4), dtype=np.float64)
+    timestamps = np.asarray(
+        [0, 1_000, 3_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000],
+        dtype=np.int64,
+    )
+
+    with pytest.raises(ValueError, match="strictly contiguous"):
+        align_and_aggregate_hlcvs_ms(
+            hlcvs,
+            timestamps,
+            None,
+            source_interval_ms=1_000,
+            target_interval_ms=5_000,
+        )
+
+
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+def test_perp_rust_backtester_executes_native_one_second_bars():
+    from backtest import build_backtest_payload, execute_backtest
+
+    config, hlcvs, btc_usd_prices, timestamps, mss = _one_second_payload_inputs()
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc_usd_prices,
+        timestamps,
+    )
+
+    _fills, equities_array, analysis = execute_backtest(payload, config)
+
+    assert payload.backtest_params["candle_interval_ms"] == 1_000
+    assert equities_array.shape[1] == 4
+    assert analysis["liquidated"] is False
+    assert np.isfinite(analysis["fills_per_day"])
+
+
+def test_seconds_interval_rejects_nondefault_minutes_interval():
+    from backtest import resolve_backtest_candle_interval_ms
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_backtest_candle_interval_ms(
+            {
+                "backtest": {
+                    "candle_interval_minutes": 2,
+                    "candle_interval_seconds": 1,
+                }
+            }
+        )
+
+
 def test_backtest_rejects_invalid_liquidation_threshold():
     from backtest import build_backtest_payload
     from config_utils import load_config

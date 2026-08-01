@@ -280,19 +280,68 @@ def align_and_aggregate_hlcvs(
 
     Returns aggregated HLCVs, timestamps, BTC/USD prices, and number of 1m bars trimmed.
     """
+    return align_and_aggregate_hlcvs_ms(
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        source_interval_ms=60_000,
+        target_interval_ms=int(interval) * 60_000,
+    )
+
+
+def align_and_aggregate_hlcvs_ms(
+    hlcvs: np.ndarray,
+    timestamps: np.ndarray | None,
+    btc_usd_prices: np.ndarray | None,
+    *,
+    source_interval_ms: int,
+    target_interval_ms: int,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, int]:
+    """
+    Align uniformly spaced bars to a target boundary and aggregate them.
+
+    Both intervals are milliseconds so the same path supports 1-second outcome/perp bars and
+    legacy minute candles. The target must be an integer multiple of the source interval.
+    """
+    source_interval_ms = int(source_interval_ms)
+    target_interval_ms = int(target_interval_ms)
+    if source_interval_ms <= 0 or target_interval_ms <= 0:
+        raise ValueError("source_interval_ms and target_interval_ms must be positive")
+    if target_interval_ms < source_interval_ms:
+        raise ValueError(
+            f"target interval {target_interval_ms}ms is finer than source {source_interval_ms}ms"
+        )
+    if target_interval_ms % source_interval_ms != 0:
+        raise ValueError(
+            f"target interval {target_interval_ms}ms is not a whole multiple of "
+            f"source {source_interval_ms}ms"
+        )
+    if timestamps is not None:
+        if len(timestamps) != hlcvs.shape[0]:
+            raise ValueError("timestamps and HLCVs must contain the same number of bars")
+        if len(timestamps) > 1 and np.any(np.diff(timestamps) != source_interval_ms):
+            raise ValueError(
+                f"source timestamps must be strictly contiguous at {source_interval_ms}ms"
+            )
+    interval = target_interval_ms // source_interval_ms
     if interval <= 1:
         return hlcvs, timestamps, btc_usd_prices, 0
     offset_bars = 0
     if timestamps is not None and len(timestamps) > 0:
-        interval_ms = interval * 60_000
         first_ts = int(timestamps[0])
-        remainder = first_ts % interval_ms
+        remainder = first_ts % target_interval_ms
         if remainder != 0:
-            offset_ms = interval_ms - remainder
-            offset_bars = int(offset_ms // 60_000)
+            offset_ms = target_interval_ms - remainder
+            if offset_ms % source_interval_ms != 0:
+                raise ValueError(
+                    f"first timestamp {first_ts} cannot align {source_interval_ms}ms source "
+                    f"bars to {target_interval_ms}ms boundaries"
+                )
+            offset_bars = int(offset_ms // source_interval_ms)
             if offset_bars >= hlcvs.shape[0]:
                 raise ValueError(
-                    f"Not enough candles to align to interval {interval} (offset {offset_bars})"
+                    f"Not enough candles to align to {target_interval_ms}ms "
+                    f"(offset {offset_bars})"
                 )
             hlcvs = hlcvs[offset_bars:]
             timestamps = timestamps[offset_bars:]
@@ -320,5 +369,6 @@ __all__ = [
     "fill_gaps_in_ohlcvs",
     "format_end_date",
     "get_days_in_between",
+    "align_and_aggregate_hlcvs_ms",
     "load_ohlcv_data",
 ]

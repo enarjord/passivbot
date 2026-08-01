@@ -1,0 +1,1565 @@
+use super::simulator::{OutcomeCandle, SimulatedOutcomeFill, SingleOutcomeSimulator};
+use super::strategy::{
+    OutcomeEmaAnchorParams, OutcomeEmaAnchorState, OutcomeInventorySnapshot,
+    OutcomeNativeOrderIntent,
+};
+use super::{
+    BinaryOutcomeMarketSpec, Outcome, OutcomeError, OutcomeFeeSchedule, OutcomeLimitOrder,
+    OutcomeOrderSide, OutcomePriceGrid, OutcomeSettlement,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
+
+const INITIAL_POST_FILL_MARKOUT_HORIZONS_MS: &[u64] = &[1_000];
+const MARKOUT_PRICE_EPSILON: f64 = 1e-12;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutcomeBacktestAction {
+    PlaceOrder {
+        timestamp_ms: u64,
+        order: OutcomeLimitOrder,
+    },
+    CancelOrder {
+        timestamp_ms: u64,
+        order_id: String,
+    },
+    Split {
+        timestamp_ms: u64,
+        qty: f64,
+        yes_reference_price: f64,
+    },
+    Merge {
+        timestamp_ms: u64,
+        qty: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomePriceGridChange {
+    pub timestamp_ms: u64,
+    pub old_grid: OutcomePriceGrid,
+    pub new_grid: OutcomePriceGrid,
+}
+
+impl OutcomeBacktestAction {
+    fn timestamp_ms(&self) -> u64 {
+        match self {
+            Self::PlaceOrder { timestamp_ms, .. }
+            | Self::CancelOrder { timestamp_ms, .. }
+            | Self::Split { timestamp_ms, .. }
+            | Self::Merge { timestamp_ms, .. } => *timestamp_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingleOutcomeBacktestInput {
+    pub market: BinaryOutcomeMarketSpec,
+    pub fee_schedule: OutcomeFeeSchedule,
+    pub starting_collateral: f64,
+    pub actions: Vec<OutcomeBacktestAction>,
+    pub candles: Vec<OutcomeCandle>,
+    #[serde(default)]
+    pub price_grid_changes: Vec<OutcomePriceGridChange>,
+    pub settlement_time_ms: u64,
+    pub yes_fraction: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeSignalCandle {
+    pub timestamp_ms: u64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+impl OutcomeSignalCandle {
+    fn validate(&self, payout_unit: f64) -> Result<(), OutcomeError> {
+        OutcomeCandle {
+            timestamp_ms: self.timestamp_ms,
+            outcome: super::Outcome::Yes,
+            open: self.open,
+            high: self.high,
+            low: self.low,
+            close: self.close,
+            volume: self.volume,
+        }
+        .validate(payout_unit)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeEmaAnchorBacktestInput {
+    pub market: BinaryOutcomeMarketSpec,
+    pub fee_schedule: OutcomeFeeSchedule,
+    pub starting_collateral: f64,
+    pub strategy_params: OutcomeEmaAnchorParams,
+    pub signal_candles: Vec<OutcomeSignalCandle>,
+    pub execution_candles: Vec<OutcomeCandle>,
+    #[serde(default)]
+    pub price_grid_changes: Vec<OutcomePriceGridChange>,
+    pub settlement_time_ms: u64,
+    pub yes_fraction: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomePostFillAdverseSelection {
+    pub horizon_ms: u64,
+    pub total_fills_count: usize,
+    pub observed_fills_count: usize,
+    pub total_fill_qty: f64,
+    pub observed_fill_qty: f64,
+    pub fill_qty_coverage_ratio: Option<f64>,
+    /// Signed quote-currency markout. Positive values mean price moved against the fills.
+    pub total_adverse_selection_quote: Option<f64>,
+    /// Quantity-weighted signed markout per share. Positive values are adverse.
+    pub mean_adverse_selection_per_share: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingleOutcomeBacktestOutput {
+    pub strategy_kind: String,
+    pub market_id: String,
+    pub trading_open_time_ms: u64,
+    pub settlement_time_ms: u64,
+    pub starting_collateral: f64,
+    pub ending_collateral: f64,
+    pub fills: Vec<SimulatedOutcomeFill>,
+    pub orders_placed_count: usize,
+    pub fills_count: usize,
+    pub maker_fills_count: usize,
+    pub traded_notional: f64,
+    pub trading_fees_paid: f64,
+    pub settlement_fees_paid: f64,
+    pub fees_paid: f64,
+    pub rebates_earned: f64,
+    pub gross_spread_pnl: f64,
+    pub settlement_pnl: f64,
+    pub pre_settlement_yes_qty: f64,
+    pub pre_settlement_no_qty: f64,
+    pub pre_settlement_yes_cost: f64,
+    pub pre_settlement_no_cost: f64,
+    pub pre_settlement_paired_qty: f64,
+    pub pre_settlement_net_yes_exposure: f64,
+    pub pre_settlement_worst_case_equity: f64,
+    pub max_paired_qty: f64,
+    pub max_abs_residual_qty: f64,
+    pub cumulative_yes_buy_qty: f64,
+    pub cumulative_no_buy_qty: f64,
+    pub pair_completion_ratio: f64,
+    pub time_weighted_abs_residual_qty: f64,
+    pub time_weighted_total_inventory_qty: f64,
+    pub worst_case_settlement_equity_min: f64,
+    pub post_fill_adverse_selection: Vec<OutcomePostFillAdverseSelection>,
+    pub settlement: OutcomeSettlement,
+    pub fill_model: String,
+}
+
+enum TimelineEvent<'a> {
+    PriceGridChange(usize, &'a OutcomePriceGridChange),
+    Action(usize, &'a OutcomeBacktestAction),
+    Candle(usize, &'a OutcomeCandle),
+}
+
+impl TimelineEvent<'_> {
+    fn timestamp_ms(&self) -> u64 {
+        match self {
+            Self::PriceGridChange(_, change) => change.timestamp_ms,
+            Self::Action(_, action) => action.timestamp_ms(),
+            Self::Candle(_, candle) => candle.timestamp_ms,
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        match self {
+            Self::PriceGridChange(_, _) => 0,
+            Self::Action(_, _) => 1,
+            Self::Candle(_, _) => 2,
+        }
+    }
+
+    fn sequence(&self) -> usize {
+        match self {
+            Self::PriceGridChange(sequence, _)
+            | Self::Action(sequence, _)
+            | Self::Candle(sequence, _) => *sequence,
+        }
+    }
+}
+
+fn validate_price_grid_change(
+    market: &BinaryOutcomeMarketSpec,
+    change: &OutcomePriceGridChange,
+) -> Result<(), OutcomeError> {
+    if change.timestamp_ms < market.trading_opens_ms
+        || change.timestamp_ms >= market.trading_closes_ms
+    {
+        return Err(OutcomeError::MarketNotTrading(change.timestamp_ms));
+    }
+    change.old_grid.validate()?;
+    change.new_grid.validate()?;
+    if change.old_grid == change.new_grid {
+        return Err(OutcomeError::InvalidMarket(
+            "outcome price-grid change must change the grid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_grid_change_execution_bucket_ordering(
+    changes: &[OutcomePriceGridChange],
+    candles: &[OutcomeCandle],
+) -> Result<(), OutcomeError> {
+    for change in changes {
+        if candles.iter().any(|candle| {
+            candle.timestamp_ms < change.timestamp_ms
+                && change.timestamp_ms < candle.timestamp_ms.saturating_add(1_000)
+        }) {
+            return Err(OutcomeError::InvalidMarket(
+                "intrasecond outcome price-grid change cannot be ordered against ".to_string()
+                    + "a one-second execution candle",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_price_grid_changes_before(
+    simulator: &mut SingleOutcomeSimulator,
+    current_market: &mut BinaryOutcomeMarketSpec,
+    changes: &[OutcomePriceGridChange],
+    next_change: &mut usize,
+    boundary_ms: u64,
+) -> Result<(), OutcomeError> {
+    while *next_change < changes.len() && changes[*next_change].timestamp_ms < boundary_ms {
+        let change = changes[*next_change];
+        if change.old_grid != current_market.price_grid {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome price-grid change does not continue the prior grid".to_string(),
+            ));
+        }
+        simulator.update_price_grid(change.new_grid, change.timestamp_ms)?;
+        current_market.replace_price_grid(change.new_grid)?;
+        *next_change += 1;
+    }
+    Ok(())
+}
+
+pub fn run_single_outcome_backtest(
+    input: &SingleOutcomeBacktestInput,
+) -> Result<SingleOutcomeBacktestOutput, OutcomeError> {
+    input.market.validate()?;
+    input.fee_schedule.validate()?;
+    if input.settlement_time_ms < input.market.trading_closes_ms {
+        return Err(OutcomeError::InvalidMarket(
+            "settlement_time_ms must be no earlier than trading close".to_string(),
+        ));
+    }
+    let mut simulator = SingleOutcomeSimulator::new(
+        input.market.clone(),
+        input.fee_schedule,
+        input.starting_collateral,
+    )?;
+    let mut timeline: Vec<TimelineEvent<'_>> = input
+        .price_grid_changes
+        .iter()
+        .enumerate()
+        .map(|(sequence, change)| TimelineEvent::PriceGridChange(sequence, change))
+        .chain(
+            input
+                .actions
+                .iter()
+                .enumerate()
+                .map(|(sequence, action)| TimelineEvent::Action(sequence, action)),
+        )
+        .chain(
+            input
+                .candles
+                .iter()
+                .enumerate()
+                .map(|(sequence, candle)| TimelineEvent::Candle(sequence, candle)),
+        )
+        .collect();
+    for change in &input.price_grid_changes {
+        validate_price_grid_change(&input.market, change)?;
+    }
+    validate_grid_change_execution_bucket_ordering(&input.price_grid_changes, &input.candles)?;
+    timeline.sort_by_key(|event| (event.timestamp_ms(), event.priority(), event.sequence()));
+
+    let mut current_price_grid = input.market.price_grid;
+    let mut max_paired_qty: f64 = 0.0;
+    let mut max_abs_residual_qty: f64 = 0.0;
+    let mut worst_case_settlement_equity_min = input.starting_collateral;
+    let mut residual_qty_time_area_ms = 0.0;
+    let mut total_inventory_time_area_ms = 0.0;
+    let mut last_inventory_time_ms = input.market.trading_opens_ms;
+    for event in timeline {
+        if event.timestamp_ms() >= input.settlement_time_ms {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome actions and candles must precede settlement".to_string(),
+            ));
+        }
+        if event.timestamp_ms() < last_inventory_time_ms {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome timeline event predates trading open".to_string(),
+            ));
+        }
+        accumulate_inventory_time(
+            &simulator,
+            last_inventory_time_ms,
+            event.timestamp_ms(),
+            &mut residual_qty_time_area_ms,
+            &mut total_inventory_time_area_ms,
+        );
+        last_inventory_time_ms = event.timestamp_ms();
+        match event {
+            TimelineEvent::PriceGridChange(_, change) => {
+                if change.old_grid != current_price_grid {
+                    return Err(OutcomeError::InvalidMarket(
+                        "outcome price-grid change does not continue the prior grid".to_string(),
+                    ));
+                }
+                simulator.update_price_grid(change.new_grid, change.timestamp_ms)?;
+                current_price_grid = change.new_grid;
+            }
+            TimelineEvent::Action(_, action) => match action {
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms,
+                    order,
+                } => simulator.place_order(order.clone(), *timestamp_ms)?,
+                OutcomeBacktestAction::CancelOrder {
+                    timestamp_ms,
+                    order_id,
+                } => {
+                    simulator.expire_orders(*timestamp_ms);
+                    simulator.cancel_order(order_id)?;
+                }
+                OutcomeBacktestAction::Split {
+                    timestamp_ms,
+                    qty,
+                    yes_reference_price,
+                } => {
+                    if *timestamp_ms < input.market.trading_opens_ms
+                        || *timestamp_ms >= input.market.trading_closes_ms
+                    {
+                        return Err(OutcomeError::MarketNotTrading(*timestamp_ms));
+                    }
+                    simulator.expire_orders(*timestamp_ms);
+                    simulator.split(*qty, *yes_reference_price)?;
+                }
+                OutcomeBacktestAction::Merge { timestamp_ms, qty } => {
+                    if *timestamp_ms < input.market.trading_opens_ms
+                        || *timestamp_ms >= input.market.trading_closes_ms
+                    {
+                        return Err(OutcomeError::MarketNotTrading(*timestamp_ms));
+                    }
+                    simulator.expire_orders(*timestamp_ms);
+                    simulator.merge(*qty)?;
+                }
+            },
+            TimelineEvent::Candle(_, candle) => {
+                simulator.process_candle(candle)?;
+            }
+        }
+        max_paired_qty = max_paired_qty.max(simulator.ledger().paired_qty());
+        max_abs_residual_qty =
+            max_abs_residual_qty.max(simulator.ledger().net_yes_exposure().abs());
+        worst_case_settlement_equity_min =
+            worst_case_settlement_equity_min.min(simulator.worst_case_settlement_equity()?);
+    }
+    accumulate_inventory_time(
+        &simulator,
+        last_inventory_time_ms,
+        input.settlement_time_ms,
+        &mut residual_qty_time_area_ms,
+        &mut total_inventory_time_area_ms,
+    );
+
+    let paired_locked_pnl = locked_pair_pnl(
+        input.market.payout_unit,
+        simulator.ledger().yes_qty(),
+        simulator.ledger().yes_cost(),
+        simulator.ledger().no_qty(),
+        simulator.ledger().no_cost(),
+    );
+    let pre_settlement_trading_pnl = simulator.ledger().realized_trading_pnl();
+    let pre_settlement_merge_pnl = simulator.ledger().realized_merge_pnl();
+    let pre_settlement_yes_qty = simulator.ledger().yes_qty();
+    let pre_settlement_no_qty = simulator.ledger().no_qty();
+    let pre_settlement_yes_cost = simulator.ledger().yes_cost();
+    let pre_settlement_no_cost = simulator.ledger().no_cost();
+    let pre_settlement_paired_qty = simulator.ledger().paired_qty();
+    let pre_settlement_net_yes_exposure = simulator.ledger().net_yes_exposure();
+    let pre_settlement_worst_case_equity = simulator.worst_case_settlement_equity()?;
+    let fills = simulator.fills().to_vec();
+    let (cumulative_yes_buy_qty, cumulative_no_buy_qty) = cumulative_buy_qty(&fills);
+    let pair_completion_ratio = completion_ratio(cumulative_yes_buy_qty, cumulative_no_buy_qty);
+    let lifecycle_duration_ms = (input.settlement_time_ms - input.market.trading_opens_ms) as f64;
+    let traded_notional = fills
+        .iter()
+        .map(|fill| fill.fill.price * fill.fill.qty)
+        .sum();
+    let mut mark_candles = input.candles.clone();
+    mark_candles.sort_by_key(|candle| candle.timestamp_ms);
+    let post_fill_adverse_selection = calculate_post_fill_adverse_selection(
+        &fills,
+        input.market.payout_unit,
+        INITIAL_POST_FILL_MARKOUT_HORIZONS_MS,
+        |fill, mark_time_ms| {
+            mark_price_from_execution_candles(
+                &mark_candles,
+                input.market.capabilities.complementary_books_merged,
+                fill,
+                mark_time_ms,
+            )
+        },
+    )?;
+    let trading_fees_paid = simulator.ledger().fees_paid();
+    let settlement = simulator.settle(input.settlement_time_ms, input.yes_fraction)?;
+    let ending_collateral = simulator.ledger().collateral();
+    let fees_paid = simulator.ledger().fees_paid();
+    let settlement_fees_paid = settlement_fee_component(fees_paid, trading_fees_paid)?;
+    let rebates_earned = simulator.ledger().rebates_earned();
+
+    Ok(SingleOutcomeBacktestOutput {
+        strategy_kind: "explicit_actions".to_string(),
+        market_id: input.market.market_id.clone(),
+        trading_open_time_ms: input.market.trading_opens_ms,
+        settlement_time_ms: input.settlement_time_ms,
+        starting_collateral: input.starting_collateral,
+        ending_collateral,
+        orders_placed_count: input
+            .actions
+            .iter()
+            .filter(|action| matches!(action, OutcomeBacktestAction::PlaceOrder { .. }))
+            .count(),
+        fills_count: fills.len(),
+        maker_fills_count: fills.len(),
+        traded_notional,
+        trading_fees_paid,
+        settlement_fees_paid,
+        fees_paid,
+        rebates_earned,
+        gross_spread_pnl: pre_settlement_trading_pnl + pre_settlement_merge_pnl + paired_locked_pnl,
+        settlement_pnl: settlement.realized_settlement_pnl - paired_locked_pnl,
+        pre_settlement_yes_qty,
+        pre_settlement_no_qty,
+        pre_settlement_yes_cost,
+        pre_settlement_no_cost,
+        pre_settlement_paired_qty,
+        pre_settlement_net_yes_exposure,
+        pre_settlement_worst_case_equity,
+        max_paired_qty,
+        max_abs_residual_qty,
+        cumulative_yes_buy_qty,
+        cumulative_no_buy_qty,
+        pair_completion_ratio,
+        time_weighted_abs_residual_qty: residual_qty_time_area_ms / lifecycle_duration_ms,
+        time_weighted_total_inventory_qty: total_inventory_time_area_ms / lifecycle_duration_ms,
+        worst_case_settlement_equity_min,
+        post_fill_adverse_selection,
+        fills,
+        settlement,
+        fill_model: "trade_derived_1s_strict_cross_no_volume_cap".to_string(),
+    })
+}
+
+pub fn run_outcome_ema_anchor_backtest(
+    input: &OutcomeEmaAnchorBacktestInput,
+) -> Result<SingleOutcomeBacktestOutput, OutcomeError> {
+    input.market.validate()?;
+    input.fee_schedule.validate()?;
+    input.strategy_params.validate()?;
+    if input.settlement_time_ms < input.market.trading_closes_ms {
+        return Err(OutcomeError::InvalidMarket(
+            "settlement_time_ms must be no earlier than trading close".to_string(),
+        ));
+    }
+    if input.signal_candles.is_empty() {
+        return Err(OutcomeError::InvalidMarket(
+            "EMA-anchor outcome backtest requires signal candles".to_string(),
+        ));
+    }
+    let mut signals = input.signal_candles.clone();
+    signals.sort_by_key(|candle| candle.timestamp_ms);
+    for (index, candle) in signals.iter().enumerate() {
+        candle.validate(input.market.payout_unit)?;
+        if candle.timestamp_ms % 1_000 != 0 {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome signal candles must be second-aligned".to_string(),
+            ));
+        }
+        if index > 0 && candle.timestamp_ms != signals[index - 1].timestamp_ms + 1_000 {
+            return Err(OutcomeError::InvalidMarket(
+                "outcome signal candles must be contiguous; collector gaps are unavailable"
+                    .to_string(),
+            ));
+        }
+        if candle.timestamp_ms < input.market.trading_opens_ms
+            || candle.timestamp_ms >= input.market.trading_closes_ms
+        {
+            return Err(OutcomeError::MarketNotTrading(candle.timestamp_ms));
+        }
+    }
+    let signal_times: HashSet<u64> = signals.iter().map(|candle| candle.timestamp_ms).collect();
+    let mut price_grid_changes = input.price_grid_changes.clone();
+    for change in &price_grid_changes {
+        validate_price_grid_change(&input.market, change)?;
+    }
+    price_grid_changes.sort_by_key(|change| change.timestamp_ms);
+    let mut executions_by_time: BTreeMap<u64, Vec<OutcomeCandle>> = BTreeMap::new();
+    for candle in &input.execution_candles {
+        candle.validate(input.market.payout_unit)?;
+        if !signal_times.contains(&candle.timestamp_ms) {
+            return Err(OutcomeError::InvalidMarket(
+                "execution candle has no corresponding canonical signal candle".to_string(),
+            ));
+        }
+        executions_by_time
+            .entry(candle.timestamp_ms)
+            .or_default()
+            .push(candle.clone());
+    }
+    validate_grid_change_execution_bucket_ordering(&price_grid_changes, &input.execution_candles)?;
+
+    let mut simulator = SingleOutcomeSimulator::new(
+        input.market.clone(),
+        input.fee_schedule,
+        input.starting_collateral,
+    )?;
+    let mut state = OutcomeEmaAnchorState::default();
+    let mut max_paired_qty: f64 = 0.0;
+    let mut max_abs_residual_qty: f64 = 0.0;
+    let mut worst_case_settlement_equity_min = input.starting_collateral;
+    let mut residual_qty_time_area_ms = 0.0;
+    let mut total_inventory_time_area_ms = 0.0;
+    let mut last_inventory_time_ms = input.market.trading_opens_ms;
+    let mut next_order_sequence = 0_u64;
+    let mut orders_placed_count = 0_usize;
+    let mut current_market = input.market.clone();
+    let mut next_price_grid_change = 0_usize;
+
+    for signal in &signals {
+        accumulate_inventory_time(
+            &simulator,
+            last_inventory_time_ms,
+            signal.timestamp_ms,
+            &mut residual_qty_time_area_ms,
+            &mut total_inventory_time_area_ms,
+        );
+        // A grid change stamped at the bucket boundary is authoritative for every fill in that
+        // second. Intrasecond changes sharing an execution bucket were rejected above; changes
+        // in no-fill buckets apply after that bucket and before quotes for the next one.
+        apply_price_grid_changes_before(
+            &mut simulator,
+            &mut current_market,
+            &price_grid_changes,
+            &mut next_price_grid_change,
+            signal.timestamp_ms.saturating_add(1),
+        )?;
+        if let Some(execution_candles) = executions_by_time.get(&signal.timestamp_ms) {
+            for execution_candle in execution_candles {
+                simulator.process_candle(execution_candle)?;
+            }
+        }
+        let resting_ids: Vec<String> = simulator
+            .open_orders()
+            .iter()
+            .map(|resting| resting.order.order_id.clone())
+            .collect();
+        for order_id in resting_ids {
+            simulator.cancel_order(&order_id)?;
+        }
+        let signal_second_end_ms = signal.timestamp_ms.saturating_add(1_000);
+        apply_price_grid_changes_before(
+            &mut simulator,
+            &mut current_market,
+            &price_grid_changes,
+            &mut next_price_grid_change,
+            signal_second_end_ms,
+        )?;
+        update_risk_extrema(
+            &simulator,
+            &mut max_paired_qty,
+            &mut max_abs_residual_qty,
+            &mut worst_case_settlement_equity_min,
+        )?;
+
+        state.update(
+            signal.close,
+            input.market.payout_unit,
+            &input.strategy_params,
+        )?;
+        let ledger = simulator.ledger();
+        let inventory = OutcomeInventorySnapshot {
+            yes_qty: ledger.yes_qty(),
+            no_qty: ledger.no_qty(),
+            yes_available_qty: Some(simulator.available_inventory(Outcome::Yes)),
+            no_available_qty: Some(simulator.available_inventory(Outcome::No)),
+            yes_average_cost: average_cost(ledger.yes_cost(), ledger.yes_qty()),
+            no_average_cost: average_cost(ledger.no_cost(), ledger.no_qty()),
+            free_collateral: simulator.available_collateral(),
+        };
+        let quotes = state.quote(
+            signal_second_end_ms,
+            signal.close,
+            &current_market,
+            &input.strategy_params,
+            &inventory,
+        )?;
+        for intent in [quotes.canonical_bid, quotes.canonical_ask]
+            .into_iter()
+            .flatten()
+        {
+            next_order_sequence = next_order_sequence.saturating_add(1);
+            simulator.place_order(
+                limit_order_from_intent(intent, format!("ema-outcome-{next_order_sequence}")),
+                signal_second_end_ms,
+            )?;
+            orders_placed_count += 1;
+        }
+        let signal_second_end_ms = signal.timestamp_ms.saturating_add(1_000);
+        accumulate_inventory_time(
+            &simulator,
+            signal.timestamp_ms,
+            signal_second_end_ms,
+            &mut residual_qty_time_area_ms,
+            &mut total_inventory_time_area_ms,
+        );
+        last_inventory_time_ms = signal_second_end_ms;
+    }
+    accumulate_inventory_time(
+        &simulator,
+        last_inventory_time_ms,
+        input.settlement_time_ms,
+        &mut residual_qty_time_area_ms,
+        &mut total_inventory_time_area_ms,
+    );
+    update_risk_extrema(
+        &simulator,
+        &mut max_paired_qty,
+        &mut max_abs_residual_qty,
+        &mut worst_case_settlement_equity_min,
+    )?;
+
+    let pre_settlement_worst_case_equity = simulator.worst_case_settlement_equity()?;
+    let ledger = simulator.ledger();
+    let paired_locked_pnl = locked_pair_pnl(
+        input.market.payout_unit,
+        ledger.yes_qty(),
+        ledger.yes_cost(),
+        ledger.no_qty(),
+        ledger.no_cost(),
+    );
+    let pre_settlement_trading_pnl = ledger.realized_trading_pnl();
+    let pre_settlement_merge_pnl = ledger.realized_merge_pnl();
+    let pre_settlement_yes_qty = ledger.yes_qty();
+    let pre_settlement_no_qty = ledger.no_qty();
+    let pre_settlement_yes_cost = ledger.yes_cost();
+    let pre_settlement_no_cost = ledger.no_cost();
+    let pre_settlement_paired_qty = ledger.paired_qty();
+    let pre_settlement_net_yes_exposure = ledger.net_yes_exposure();
+    let fills = simulator.fills().to_vec();
+    let (cumulative_yes_buy_qty, cumulative_no_buy_qty) = cumulative_buy_qty(&fills);
+    let pair_completion_ratio = completion_ratio(cumulative_yes_buy_qty, cumulative_no_buy_qty);
+    let lifecycle_duration_ms = (input.settlement_time_ms - input.market.trading_opens_ms) as f64;
+    let traded_notional = fills
+        .iter()
+        .map(|fill| fill.fill.price * fill.fill.qty)
+        .sum();
+    let post_fill_adverse_selection = calculate_post_fill_adverse_selection(
+        &fills,
+        input.market.payout_unit,
+        INITIAL_POST_FILL_MARKOUT_HORIZONS_MS,
+        |_fill, mark_time_ms| mark_price_from_signal_candles(&signals, mark_time_ms),
+    )?;
+    let trading_fees_paid = simulator.ledger().fees_paid();
+    let settlement = simulator.settle(input.settlement_time_ms, input.yes_fraction)?;
+    let ending_collateral = simulator.ledger().collateral();
+    let fees_paid = simulator.ledger().fees_paid();
+    let settlement_fees_paid = settlement_fee_component(fees_paid, trading_fees_paid)?;
+    let rebates_earned = simulator.ledger().rebates_earned();
+
+    Ok(SingleOutcomeBacktestOutput {
+        strategy_kind: "ema_anchor_outcome".to_string(),
+        market_id: input.market.market_id.clone(),
+        trading_open_time_ms: input.market.trading_opens_ms,
+        settlement_time_ms: input.settlement_time_ms,
+        starting_collateral: input.starting_collateral,
+        ending_collateral,
+        orders_placed_count,
+        fills_count: fills.len(),
+        maker_fills_count: fills.len(),
+        traded_notional,
+        trading_fees_paid,
+        settlement_fees_paid,
+        fees_paid,
+        rebates_earned,
+        gross_spread_pnl: pre_settlement_trading_pnl + pre_settlement_merge_pnl + paired_locked_pnl,
+        settlement_pnl: settlement.realized_settlement_pnl - paired_locked_pnl,
+        pre_settlement_yes_qty,
+        pre_settlement_no_qty,
+        pre_settlement_yes_cost,
+        pre_settlement_no_cost,
+        pre_settlement_paired_qty,
+        pre_settlement_net_yes_exposure,
+        pre_settlement_worst_case_equity,
+        max_paired_qty,
+        max_abs_residual_qty,
+        cumulative_yes_buy_qty,
+        cumulative_no_buy_qty,
+        pair_completion_ratio,
+        time_weighted_abs_residual_qty: residual_qty_time_area_ms / lifecycle_duration_ms,
+        time_weighted_total_inventory_qty: total_inventory_time_area_ms / lifecycle_duration_ms,
+        worst_case_settlement_equity_min,
+        post_fill_adverse_selection,
+        fills,
+        settlement,
+        fill_model: "trade_derived_1s_strict_cross_no_volume_cap".to_string(),
+    })
+}
+
+fn limit_order_from_intent(
+    intent: OutcomeNativeOrderIntent,
+    order_id: String,
+) -> OutcomeLimitOrder {
+    OutcomeLimitOrder {
+        order_id,
+        outcome: intent.outcome,
+        side: intent.side,
+        price: intent.native_price,
+        qty: intent.qty,
+        close_all: intent.close_all,
+        post_only: true,
+        expires_at_ms: None,
+    }
+}
+
+fn average_cost(cost: f64, qty: f64) -> f64 {
+    if qty > 1e-12 {
+        cost / qty
+    } else {
+        0.0
+    }
+}
+
+fn locked_pair_pnl(
+    payout_unit: f64,
+    yes_qty: f64,
+    yes_cost: f64,
+    no_qty: f64,
+    no_cost: f64,
+) -> f64 {
+    let paired_qty = yes_qty.min(no_qty);
+    paired_qty * (payout_unit - average_cost(yes_cost, yes_qty) - average_cost(no_cost, no_qty))
+}
+
+fn update_risk_extrema(
+    simulator: &SingleOutcomeSimulator,
+    max_paired_qty: &mut f64,
+    max_abs_residual_qty: &mut f64,
+    worst_case_settlement_equity_min: &mut f64,
+) -> Result<(), OutcomeError> {
+    *max_paired_qty = max_paired_qty.max(simulator.ledger().paired_qty());
+    *max_abs_residual_qty = max_abs_residual_qty.max(simulator.ledger().net_yes_exposure().abs());
+    *worst_case_settlement_equity_min =
+        worst_case_settlement_equity_min.min(simulator.worst_case_settlement_equity()?);
+    Ok(())
+}
+
+fn accumulate_inventory_time(
+    simulator: &SingleOutcomeSimulator,
+    start_ms: u64,
+    end_ms: u64,
+    residual_qty_time_area_ms: &mut f64,
+    total_inventory_time_area_ms: &mut f64,
+) {
+    let duration_ms = end_ms.saturating_sub(start_ms) as f64;
+    *residual_qty_time_area_ms += simulator.ledger().net_yes_exposure().abs() * duration_ms;
+    *total_inventory_time_area_ms +=
+        (simulator.ledger().yes_qty() + simulator.ledger().no_qty()) * duration_ms;
+}
+
+fn cumulative_buy_qty(fills: &[SimulatedOutcomeFill]) -> (f64, f64) {
+    let mut yes = 0.0;
+    let mut no = 0.0;
+    for simulated in fills {
+        if simulated.fill.side != OutcomeOrderSide::Buy {
+            continue;
+        }
+        match simulated.fill.outcome {
+            Outcome::Yes => yes += simulated.fill.qty,
+            Outcome::No => no += simulated.fill.qty,
+        }
+    }
+    (yes, no)
+}
+
+fn completion_ratio(yes_buy_qty: f64, no_buy_qty: f64) -> f64 {
+    let larger = yes_buy_qty.max(no_buy_qty);
+    if larger > 0.0 {
+        yes_buy_qty.min(no_buy_qty) / larger
+    } else {
+        0.0
+    }
+}
+
+fn settlement_fee_component(
+    total_fees_paid: f64,
+    trading_fees_paid: f64,
+) -> Result<f64, OutcomeError> {
+    let settlement_fees_paid = total_fees_paid - trading_fees_paid;
+    if settlement_fees_paid < -1e-12 {
+        return Err(OutcomeError::InvalidMarket(
+            "settlement reduced cumulative outcome fees".to_string(),
+        ));
+    }
+    Ok(settlement_fees_paid.max(0.0))
+}
+
+fn calculate_post_fill_adverse_selection<F>(
+    fills: &[SimulatedOutcomeFill],
+    payout_unit: f64,
+    horizons_ms: &[u64],
+    mut mark_price: F,
+) -> Result<Vec<OutcomePostFillAdverseSelection>, OutcomeError>
+where
+    F: FnMut(&SimulatedOutcomeFill, u64) -> Result<Option<f64>, OutcomeError>,
+{
+    let mut seen_horizons = HashSet::new();
+    let total_fill_qty: f64 = fills.iter().map(|fill| fill.fill.qty).sum();
+    let mut metrics = Vec::with_capacity(horizons_ms.len());
+    for &horizon_ms in horizons_ms {
+        if horizon_ms == 0 || !seen_horizons.insert(horizon_ms) {
+            return Err(OutcomeError::InvalidMarket(
+                "post-fill markout horizons must be unique and positive".to_string(),
+            ));
+        }
+        let mut observed_fills_count = 0_usize;
+        let mut observed_fill_qty = 0.0;
+        let mut total_adverse_selection_quote = 0.0;
+        for fill in fills {
+            let mark_time_ms = fill
+                .fill
+                .timestamp_ms
+                .checked_add(horizon_ms)
+                .ok_or_else(|| {
+                    OutcomeError::InvalidMarket(
+                        "post-fill markout timestamp overflowed".to_string(),
+                    )
+                })?;
+            let Some(mark_price) = mark_price(fill, mark_time_ms)? else {
+                continue;
+            };
+            let canonical_fill_price = fill.fill.canonical_yes_price(payout_unit)?;
+            let exposure_direction = fill.fill.canonical_yes_exposure_delta().signum();
+            let adverse_per_share = exposure_direction * (canonical_fill_price - mark_price);
+            observed_fills_count += 1;
+            observed_fill_qty += fill.fill.qty;
+            total_adverse_selection_quote += adverse_per_share * fill.fill.qty;
+        }
+        metrics.push(OutcomePostFillAdverseSelection {
+            horizon_ms,
+            total_fills_count: fills.len(),
+            observed_fills_count,
+            total_fill_qty,
+            observed_fill_qty,
+            fill_qty_coverage_ratio: (total_fill_qty > 0.0)
+                .then_some(observed_fill_qty / total_fill_qty),
+            total_adverse_selection_quote: (observed_fill_qty > 0.0)
+                .then_some(total_adverse_selection_quote),
+            mean_adverse_selection_per_share: (observed_fill_qty > 0.0)
+                .then_some(total_adverse_selection_quote / observed_fill_qty),
+        });
+    }
+    Ok(metrics)
+}
+
+fn mark_price_from_signal_candles(
+    candles: &[OutcomeSignalCandle],
+    mark_time_ms: u64,
+) -> Result<Option<f64>, OutcomeError> {
+    let Some(candle_time_ms) = mark_time_ms.checked_sub(1_000) else {
+        return Ok(None);
+    };
+    Ok(candles
+        .binary_search_by_key(&candle_time_ms, |candle| candle.timestamp_ms)
+        .ok()
+        .map(|index| candles[index].close))
+}
+
+fn mark_price_from_execution_candles(
+    candles: &[OutcomeCandle],
+    complementary_books_merged: bool,
+    fill: &SimulatedOutcomeFill,
+    mark_time_ms: u64,
+) -> Result<Option<f64>, OutcomeError> {
+    let Some(candle_time_ms) = mark_time_ms.checked_sub(1_000) else {
+        return Ok(None);
+    };
+    let first_index = candles.partition_point(|candle| candle.timestamp_ms < candle_time_ms);
+    let matches: Vec<f64> = candles[first_index..]
+        .iter()
+        .take_while(|candle| candle.timestamp_ms == candle_time_ms)
+        .filter(|candle| complementary_books_merged || candle.outcome == fill.fill.outcome)
+        .map(|candle| candle.close)
+        .collect();
+    let Some(&first) = matches.first() else {
+        return Ok(None);
+    };
+    if (!complementary_books_merged && matches.len() > 1)
+        || matches
+            .iter()
+            .skip(1)
+            .any(|close| (close - first).abs() > MARKOUT_PRICE_EPSILON)
+    {
+        return Err(OutcomeError::InvalidMarket(
+            "post-fill markout has conflicting canonical closes for one second".to_string(),
+        ));
+    }
+    Ok(Some(first))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outcome::simulator::OutcomeCandle;
+    use crate::outcome::strategy::{OutcomeEmaAnchorExecutionMode, OutcomeEmaAnchorParams};
+    use crate::outcome::{
+        Outcome, OutcomeFeeFormula, OutcomeOrderSide, OutcomePriceGrid, OutcomeVenueCapabilities,
+    };
+
+    fn fixture_market() -> BinaryOutcomeMarketSpec {
+        BinaryOutcomeMarketSpec {
+            venue: "fixture".to_string(),
+            market_id: "binary-1".to_string(),
+            yes_asset_id: "yes".to_string(),
+            no_asset_id: "no".to_string(),
+            payout_unit: 1.0,
+            min_price: 0.001,
+            max_price: 0.999,
+            price_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+            qty_step: 0.1,
+            min_qty: 0.1,
+            min_notional: 0.0,
+            trading_opens_ms: 1_000,
+            order_entry_opens_ms: 1_000,
+            trading_closes_ms: 5_000,
+            scheduled_event_ms: 5_000,
+            capabilities: OutcomeVenueCapabilities {
+                complementary_books_merged: false,
+                supports_split: true,
+                supports_merge: true,
+                supports_redeem: true,
+                supports_post_only: true,
+                supports_gtd: true,
+                sell_requires_inventory: true,
+            },
+        }
+    }
+
+    fn order(id: &str, outcome: Outcome, price: f64) -> OutcomeLimitOrder {
+        OutcomeLimitOrder {
+            order_id: id.to_string(),
+            outcome,
+            side: OutcomeOrderSide::Buy,
+            price,
+            qty: 1.0,
+            close_all: false,
+            post_only: true,
+            expires_at_ms: None,
+        }
+    }
+
+    fn outcome_strategy_params() -> OutcomeEmaAnchorParams {
+        OutcomeEmaAnchorParams {
+            ema_span_fast_seconds: 2.0,
+            ema_span_slow_seconds: 4.0,
+            ema_warmup_seconds: 0,
+            quote_offset: 0.01,
+            inventory_skew: 0.0,
+            clip_qty: 1.0,
+            max_total_inventory_qty: 10.0,
+            max_abs_residual_qty: 5.0,
+            min_locked_pair_edge: 0.005,
+            estimated_fee_per_share: 0.0,
+            risk_reduction_only_ms_before_close: 0,
+            entry_cutoff_ms_before_close: 0,
+            execution_mode: OutcomeEmaAnchorExecutionMode::AccumulatePairs,
+        }
+    }
+
+    #[test]
+    fn explicit_single_market_run_fills_both_books_and_settles() {
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule {
+                maker_rate: 0.01,
+                taker_rate: 0.02,
+                formula: OutcomeFeeFormula::Notional,
+                incidence: crate::outcome::OutcomeFeeIncidence::EveryFill,
+                settlement_rate: 0.0,
+            },
+            starting_collateral: 10.0,
+            actions: vec![
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: order("yes", Outcome::Yes, 0.4),
+                },
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: order("no", Outcome::No, 0.5),
+                },
+            ],
+            candles: vec![
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::Yes,
+                    open: 0.42,
+                    high: 0.45,
+                    low: 0.399,
+                    close: 0.42,
+                    volume: 0.1,
+                },
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::No,
+                    open: 0.48,
+                    high: 0.501,
+                    low: 0.45,
+                    close: 0.48,
+                    volume: 0.1,
+                },
+            ],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 2);
+        assert_eq!(
+            output.fill_model,
+            "trade_derived_1s_strict_cross_no_volume_cap"
+        );
+        assert!((output.ending_collateral - 10.091).abs() < 1e-12);
+        assert!((output.trading_fees_paid - 0.009).abs() < 1e-12);
+        assert!(output.settlement_fees_paid.abs() < 1e-12);
+        assert!((output.fees_paid - 0.009).abs() < 1e-12);
+        assert!((output.max_paired_qty - 1.0).abs() < 1e-12);
+        assert!((output.max_abs_residual_qty - 1.0).abs() < 1e-12);
+        assert!((output.cumulative_yes_buy_qty - 1.0).abs() < 1e-12);
+        assert!((output.cumulative_no_buy_qty - 1.0).abs() < 1e-12);
+        assert!((output.pair_completion_ratio - 1.0).abs() < 1e-12);
+        assert!(output.time_weighted_abs_residual_qty.abs() < 1e-12);
+        assert!((output.time_weighted_total_inventory_qty - 1.5).abs() < 1e-12);
+        assert_eq!(output.post_fill_adverse_selection.len(), 1);
+        let markout = &output.post_fill_adverse_selection[0];
+        assert_eq!(markout.horizon_ms, 1_000);
+        assert_eq!(markout.observed_fills_count, 2);
+        assert!((markout.fill_qty_coverage_ratio.unwrap() - 1.0).abs() < 1e-12);
+        assert!((markout.total_adverse_selection_quote.unwrap() + 0.04).abs() < 1e-12);
+        assert!((markout.mean_adverse_selection_per_share.unwrap() + 0.02).abs() < 1e-12);
+
+        let expanded = calculate_post_fill_adverse_selection(
+            &output.fills,
+            1.0,
+            &[1_000, 5_000],
+            |_fill, mark_time_ms| Ok((mark_time_ms == 3_000).then_some(0.5)),
+        )
+        .unwrap();
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(expanded[0].fill_qty_coverage_ratio, Some(1.0));
+        assert_eq!(expanded[1].fill_qty_coverage_ratio, Some(0.0));
+        assert!(expanded[1].total_adverse_selection_quote.is_none());
+    }
+
+    #[test]
+    fn merged_book_markout_accepts_agreeing_mirrored_closes() {
+        let mut market = fixture_market();
+        market.capabilities.complementary_books_merged = true;
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule {
+                maker_rate: 0.0,
+                taker_rate: 0.0,
+                formula: OutcomeFeeFormula::Notional,
+                incidence: crate::outcome::OutcomeFeeIncidence::EveryFill,
+                settlement_rate: 0.0,
+            },
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_500,
+                order: order("yes", Outcome::Yes, 0.4),
+            }],
+            candles: vec![
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::Yes,
+                    open: 0.42,
+                    high: 0.45,
+                    low: 0.399,
+                    close: 0.42,
+                    volume: 0.1,
+                },
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::No,
+                    open: 0.42,
+                    high: 0.45,
+                    low: 0.399,
+                    close: 0.42,
+                    volume: 0.1,
+                },
+            ],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 1);
+        assert_eq!(
+            output.post_fill_adverse_selection[0].observed_fills_count,
+            1
+        );
+    }
+
+    #[test]
+    fn zero_volume_and_exact_touch_do_not_fill_in_full_runner() {
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_500,
+                order: order("yes", Outcome::Yes, 0.4),
+            }],
+            candles: vec![
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::Yes,
+                    open: 0.45,
+                    high: 0.5,
+                    low: 0.39,
+                    close: 0.45,
+                    volume: 0.0,
+                },
+                OutcomeCandle {
+                    timestamp_ms: 3_000,
+                    outcome: Outcome::Yes,
+                    open: 0.45,
+                    high: 0.5,
+                    low: 0.4,
+                    close: 0.45,
+                    volume: 1.0,
+                },
+            ],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 0.0,
+        })
+        .unwrap();
+        assert_eq!(output.fills_count, 0);
+        assert_eq!(output.ending_collateral, 10.0);
+    }
+
+    #[test]
+    fn explicit_split_expires_prior_gtd_collateral_reservation() {
+        let mut reserved = order("reserved", Outcome::Yes, 0.5);
+        reserved.expires_at_ms = Some(2_000);
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 1.0,
+            actions: vec![
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: reserved,
+                },
+                OutcomeBacktestAction::Split {
+                    timestamp_ms: 2_500,
+                    qty: 1.0,
+                    yes_reference_price: 0.5,
+                },
+            ],
+            candles: vec![],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert!((output.pre_settlement_paired_qty - 1.0).abs() < 1e-12);
+        assert!((output.ending_collateral - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn explicit_merge_expires_prior_gtd_inventory_reservations() {
+        let mut sell_yes = order("sell-yes", Outcome::Yes, 0.5);
+        sell_yes.side = OutcomeOrderSide::Sell;
+        sell_yes.expires_at_ms = Some(2_000);
+        let mut sell_no = order("sell-no", Outcome::No, 0.5);
+        sell_no.side = OutcomeOrderSide::Sell;
+        sell_no.expires_at_ms = Some(2_000);
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 1.0,
+            actions: vec![
+                OutcomeBacktestAction::Split {
+                    timestamp_ms: 1_200,
+                    qty: 1.0,
+                    yes_reference_price: 0.5,
+                },
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: sell_yes,
+                },
+                OutcomeBacktestAction::PlaceOrder {
+                    timestamp_ms: 1_500,
+                    order: sell_no,
+                },
+                OutcomeBacktestAction::Merge {
+                    timestamp_ms: 2_500,
+                    qty: 1.0,
+                },
+            ],
+            candles: vec![],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 0.0,
+        })
+        .unwrap();
+
+        assert!(output.pre_settlement_paired_qty.abs() < 1e-12);
+        assert!((output.ending_collateral - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn backtest_reports_trading_and_settlement_fees_separately() {
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule {
+                maker_rate: 0.0,
+                taker_rate: 0.0,
+                formula: OutcomeFeeFormula::Notional,
+                incidence: crate::outcome::OutcomeFeeIncidence::EveryFill,
+                settlement_rate: 0.1,
+            },
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_500,
+                order: order("yes", Outcome::Yes, 0.4),
+            }],
+            candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.42,
+                high: 0.45,
+                low: 0.399,
+                close: 0.42,
+                volume: 0.1,
+            }],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert!(output.trading_fees_paid.abs() < 1e-12);
+        assert!((output.settlement_fees_paid - 0.1).abs() < 1e-12);
+        assert!((output.fees_paid - 0.1).abs() < 1e-12);
+        assert!((output.ending_collateral - 10.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn price_grid_changes_are_replayed_before_later_orders() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.01 };
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 1_600,
+                order: order("yes", Outcome::Yes, 0.495),
+            }],
+            candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.494,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 1_500,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 1);
+    }
+
+    #[test]
+    fn price_grid_change_before_delayed_order_entry_is_replayed() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.01 };
+        market.order_entry_opens_ms = 3_000;
+        let output = run_single_outcome_backtest(&SingleOutcomeBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            actions: vec![OutcomeBacktestAction::PlaceOrder {
+                timestamp_ms: 3_000,
+                order: order("yes", Outcome::Yes, 0.495),
+            }],
+            candles: vec![OutcomeCandle {
+                timestamp_ms: 4_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.494,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_000,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 1);
+    }
+
+    #[test]
+    fn ema_anchor_replays_execution_candles_before_delayed_order_entry() {
+        let mut market = fixture_market();
+        market.order_entry_opens_ms = 3_000;
+        let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.51,
+                low: 0.49,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.strategy_kind, "ema_anchor_outcome");
+        assert_eq!(output.fills_count, 0);
+    }
+
+    #[test]
+    fn ema_anchor_outcome_uses_current_signal_to_quote_for_next_second() {
+        let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::Yes,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.489,
+                    close: 0.5,
+                    volume: 0.01,
+                },
+                OutcomeCandle {
+                    timestamp_ms: 2_000,
+                    outcome: Outcome::No,
+                    open: 0.5,
+                    high: 0.511,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: 0.01,
+                },
+            ],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.strategy_kind, "ema_anchor_outcome");
+        assert_eq!(output.fills_count, 2);
+        assert!((output.ending_collateral - 10.02).abs() < 1e-12);
+        assert!((output.gross_spread_pnl - 0.02).abs() < 1e-12);
+        assert!(output.settlement_pnl.abs() < 1e-12);
+        assert_eq!(output.max_paired_qty, 1.0);
+        assert_eq!(output.pair_completion_ratio, 1.0);
+        assert!(output.time_weighted_abs_residual_qty.abs() < 1e-12);
+        assert!((output.time_weighted_total_inventory_qty - 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ema_grid_change_at_bucket_start_precedes_same_second_fills() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.001 };
+        let mut params = outcome_strategy_params();
+        params.quote_offset = 0.005;
+        let output = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: params,
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.494,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_000,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        })
+        .unwrap();
+
+        assert_eq!(output.fills_count, 0);
+    }
+
+    #[test]
+    fn ema_anchor_outcome_rejects_intrasecond_grid_change_in_execution_bucket() {
+        let mut market = fixture_market();
+        market.price_grid = OutcomePriceGrid::FixedStep { step: 0.001 };
+        let result = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market,
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: (1..5)
+                .map(|second| OutcomeSignalCandle {
+                    timestamp_ms: second * 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: if second == 1 { 1.0 } else { 0.0 },
+                })
+                .collect(),
+            execution_candles: vec![OutcomeCandle {
+                timestamp_ms: 2_000,
+                outcome: Outcome::Yes,
+                open: 0.5,
+                high: 0.5,
+                low: 0.489,
+                close: 0.5,
+                volume: 1.0,
+            }],
+            price_grid_changes: vec![OutcomePriceGridChange {
+                timestamp_ms: 2_500,
+                old_grid: OutcomePriceGrid::FixedStep { step: 0.001 },
+                new_grid: OutcomePriceGrid::FixedStep { step: 0.01 },
+            }],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        });
+
+        assert!(matches!(
+            result,
+            Err(OutcomeError::InvalidMarket(message))
+                if message.contains("intrasecond outcome price-grid change")
+        ));
+    }
+
+    #[test]
+    fn ema_anchor_outcome_rejects_unknown_signal_gaps() {
+        let result = run_outcome_ema_anchor_backtest(&OutcomeEmaAnchorBacktestInput {
+            market: fixture_market(),
+            fee_schedule: OutcomeFeeSchedule::zero(),
+            starting_collateral: 10.0,
+            strategy_params: outcome_strategy_params(),
+            signal_candles: vec![
+                OutcomeSignalCandle {
+                    timestamp_ms: 1_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: 1.0,
+                },
+                OutcomeSignalCandle {
+                    timestamp_ms: 3_000,
+                    open: 0.5,
+                    high: 0.5,
+                    low: 0.5,
+                    close: 0.5,
+                    volume: 1.0,
+                },
+            ],
+            execution_candles: vec![],
+            price_grid_changes: vec![],
+            settlement_time_ms: 5_000,
+            yes_fraction: 1.0,
+        });
+        assert!(matches!(result, Err(OutcomeError::InvalidMarket(_))));
+    }
+}

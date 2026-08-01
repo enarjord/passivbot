@@ -4,6 +4,32 @@ import sys
 import pytest
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "tools.probe_hyperliquid_outcome_state",
+        "tools.probe_hyperliquid_outcome_dry_cycle",
+    ],
+)
+async def test_read_only_outcome_probes_expose_only_public_address_identity(
+    module_name,
+    monkeypatch,
+    capsys,
+):
+    mod = importlib.import_module(module_name)
+    monkeypatch.setattr(sys, "argv", [module_name, "--help"])
+
+    with pytest.raises(SystemExit) as exc:
+        await mod._main()
+
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--address" in help_text
+    assert "--user" not in help_text
+    assert "--api-keys" not in help_text
+
+
 class _DummySession:
     def __init__(self):
         self.cancelled = []

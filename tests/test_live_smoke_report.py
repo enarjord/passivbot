@@ -9601,7 +9601,11 @@ def test_live_smoke_report_samples_process_state_recovery_and_persistence(
     )
     sleeps = []
     monkeypatch.setattr(smoke_report_module, "_ps_process_rows", lambda: next(scans))
-    monkeypatch.setattr(smoke_report_module.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_sleep_between_process_samples",
+        sleeps.append,
+    )
 
     report = build_live_smoke_report(
         tmp_path / "monitor",

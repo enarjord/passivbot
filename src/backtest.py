@@ -115,7 +115,10 @@ from hlcvs_manifest import (
     write_hlcvs_manifest,
 )
 from hlcvs_override import load_hlcvs_data_override
-from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
+from ohlcv_utils import (
+    aggregate_hlcvs,
+    align_and_aggregate_hlcvs_ms,
+)
 from warmup_utils import (
     compute_backtest_warmup_minutes,
     compute_per_coin_warmup_minutes,
@@ -230,6 +233,84 @@ set_windows_event_loop_policy()
 
 def aggregate_candles(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     return aggregate_hlcvs(candles_1m, interval)
+
+
+def _positive_integral_interval(value, *, path: str) -> int:
+    unit_description = (
+        "an integer number of minutes"
+        if path.endswith("minutes")
+        else "an integer number of seconds"
+        if path.endswith("seconds")
+        else "a positive integer number of milliseconds"
+    )
+    if not isinstance(value, numbers.Real):
+        raise TypeError(
+            f"{path} must be {unit_description}, got {type(value).__name__}"
+        )
+    as_float = float(value)
+    if not as_float.is_integer():
+        raise ValueError(f"{path} must be {unit_description}, got {value!r}")
+    as_int = int(as_float)
+    if as_int < 1:
+        raise ValueError(f"{path} must be >= 1, got {as_int}")
+    return as_int
+
+
+def resolve_backtest_candle_interval_ms(config: dict) -> int:
+    backtest_cfg = config.get("backtest", {})
+    seconds = backtest_cfg.get("candle_interval_seconds")
+    minutes = backtest_cfg.get("candle_interval_minutes", 1)
+    if seconds is not None:
+        seconds = _positive_integral_interval(
+            seconds, path="backtest.candle_interval_seconds"
+        )
+        normalized_minutes = _positive_integral_interval(
+            minutes, path="backtest.candle_interval_minutes"
+        )
+        if normalized_minutes != 1:
+            raise ValueError(
+                "backtest.candle_interval_seconds cannot be combined with a non-default "
+                "backtest.candle_interval_minutes"
+            )
+        return seconds * 1_000
+    return (
+        _positive_integral_interval(
+            minutes, path="backtest.candle_interval_minutes"
+        )
+        * 60_000
+    )
+
+
+def _resolve_source_interval_ms(meta: dict, timestamps) -> int:
+    if meta.get("data_interval_ms") is not None:
+        return _positive_integral_interval(
+            meta["data_interval_ms"], path="mss.__meta__.data_interval_ms"
+        )
+    if meta.get("data_interval_seconds") is not None:
+        return (
+            _positive_integral_interval(
+                meta["data_interval_seconds"],
+                path="mss.__meta__.data_interval_seconds",
+            )
+            * 1_000
+        )
+    if meta.get("data_interval_minutes") is not None:
+        return (
+            _positive_integral_interval(
+                meta["data_interval_minutes"],
+                path="mss.__meta__.data_interval_minutes",
+            )
+            * 60_000
+        )
+    if timestamps is not None and len(timestamps) >= 2:
+        diffs = np.diff(np.asarray(timestamps, dtype=np.int64))
+        if np.all(diffs == diffs[0]) and int(diffs[0]) > 0:
+            return int(diffs[0])
+        raise ValueError(
+            "input timestamps are not uniformly spaced and no explicit data_interval_ms "
+            "metadata is available"
+        )
+    return 60_000
 
 
 def _looks_like_bool_token(value: str) -> bool:
@@ -789,54 +870,53 @@ def build_backtest_payload(
         coins_order,
     )
 
-    # Read candle interval from config (default to 1m)
-    candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
-    if isinstance(candle_interval, numbers.Real):
-        candle_interval_float = float(candle_interval)
-        if not candle_interval_float.is_integer():
-            raise ValueError(
-                "candle_interval_minutes must be an integer number of minutes, "
-                f"got {candle_interval!r}"
-            )
-        candle_interval = int(candle_interval_float)
-    else:
-        raise TypeError(
-            "candle_interval_minutes must be an integer number of minutes, "
-            f"got {type(candle_interval).__name__}"
-        )
-    if candle_interval < 1:
-        raise ValueError(f"candle_interval_minutes must be >= 1, got {candle_interval}")
-    backtest_params["candle_interval_minutes"] = candle_interval
+    target_interval_ms = resolve_backtest_candle_interval_ms(config)
+    backtest_params["candle_interval_ms"] = target_interval_ms
+    if target_interval_ms % 60_000 == 0:
+        backtest_params["candle_interval_minutes"] = target_interval_ms // 60_000
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    data_interval = int(meta.get("data_interval_minutes", 1) or 1)
+    source_interval_ms = _resolve_source_interval_ms(meta, timestamps)
     offset_bars = int(meta.get("candle_interval_offset_bars", 0) or 0)
-    if data_interval < 1:
-        data_interval = 1
-    if candle_interval == 1 and data_interval != 1:
+    if target_interval_ms < source_interval_ms:
         raise ValueError(
-            f"Input data is already aggregated at {data_interval}m but candle_interval_minutes=1"
+            f"Input data interval {source_interval_ms}ms is coarser than requested "
+            f"candle interval {target_interval_ms}ms"
         )
-    if data_interval != 1 and data_interval != candle_interval:
+    if target_interval_ms % source_interval_ms != 0:
         raise ValueError(
-            f"Input data interval {data_interval} does not match candle_interval_minutes={candle_interval}"
+            f"Requested candle interval {target_interval_ms}ms is not a whole multiple of "
+            f"input interval {source_interval_ms}ms"
         )
+    aggregation_ratio = target_interval_ms // source_interval_ms
 
-    # Aggregate candles if using coarser interval and data is still 1m
-    if candle_interval > 1 and data_interval == 1:
+    if aggregation_ratio > 1:
         n_before = hlcvs.shape[0]
-        hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
+        hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs_ms(
             hlcvs,
             timestamps,
             btc_usd_prices,
-            candle_interval,
+            source_interval_ms=source_interval_ms,
+            target_interval_ms=target_interval_ms,
         )
         logging.debug(
-            "[backtest] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
-            candle_interval,
+            "[backtest] aggregated %dms source bars to %dms: %d bars -> %d bars "
+            "(trimmed %d for alignment)",
+            source_interval_ms,
+            target_interval_ms,
             n_before,
             hlcvs.shape[0],
             offset_bars,
         )
+
+    if timestamps is not None and len(timestamps) >= 2:
+        timestamp_diffs = np.diff(np.asarray(timestamps, dtype=np.int64))
+        if not np.all(timestamp_diffs == target_interval_ms):
+            bad_index = int(np.flatnonzero(timestamp_diffs != target_interval_ms)[0])
+            raise ValueError(
+                "backtest timestamps do not match resolved candle interval: "
+                f"k={bad_index} observed_ms={int(timestamp_diffs[bad_index])} "
+                f"expected_ms={target_interval_ms}"
+            )
 
     # Inject first timestamp (ms) into backtest params; default to 0 if unknown
     try:
@@ -849,17 +929,17 @@ def build_backtest_payload(
         first_ts_ms = 0
 
     # Ensure timestamp alignment for aggregated data
-    if candle_interval > 1 and first_ts_ms > 0:
-        interval_ms = candle_interval * 60_000
-        remainder = first_ts_ms % interval_ms
+    if aggregation_ratio > 1 and first_ts_ms > 0:
+        remainder = first_ts_ms % target_interval_ms
         if remainder != 0:
             raise ValueError(
-                f"First timestamp {first_ts_ms} is not aligned to {candle_interval}m interval"
+                f"First timestamp {first_ts_ms} is not aligned to "
+                f"{target_interval_ms}ms interval"
             )
     backtest_params["first_timestamp_ms"] = first_ts_ms
 
     total_steps = hlcvs.shape[0]
-    source_steps_1m = total_steps * (candle_interval if candle_interval > 1 else 1)
+    source_steps = total_steps * aggregation_ratio
     bundle_meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = bundle_meta.get(
         "effective_requested_start_ts",
@@ -882,9 +962,8 @@ def build_backtest_payload(
                 np.searchsorted(np.asarray(timestamps), requested_start_ts, side="left")
             )
         except Exception:
-            interval_ms = max(1, candle_interval) * 60_000
             requested_start_idx = int(
-                math.ceil((requested_start_ts - first_ts_ms) / interval_ms)
+                math.ceil((requested_start_ts - first_ts_ms) / target_interval_ms)
             )
         requested_start_idx = max(0, min(total_steps, requested_start_idx))
 
@@ -897,25 +976,25 @@ def build_backtest_payload(
     trade_start_indices = []
     for idx, coin in enumerate(coins_order):
         coin_meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
-        # Metadata indices are based on 1m candles; adjust for aggregated interval
-        first_idx_1m = int(coin_meta.get("first_valid_index", 0)) - offset_bars
-        last_idx_1m = (
-            int(coin_meta.get("last_valid_index", source_steps_1m - 1)) - offset_bars
+        # Metadata indices are based on source bars; adjust for any target aggregation.
+        first_idx_source = int(coin_meta.get("first_valid_index", 0)) - offset_bars
+        last_idx_source = (
+            int(coin_meta.get("last_valid_index", source_steps - 1)) - offset_bars
         )
-        if first_idx_1m < 0:
-            first_idx_1m = 0
-        if last_idx_1m < 0:
-            last_idx_1m = 0
-        if first_idx_1m >= source_steps_1m:
-            first_idx_1m = source_steps_1m
-        if last_idx_1m >= source_steps_1m:
-            last_idx_1m = source_steps_1m - 1
-        if candle_interval > 1:
-            first_idx = int(math.ceil(first_idx_1m / candle_interval))
-            last_idx = int(((last_idx_1m + 1) // candle_interval) - 1)
+        if first_idx_source < 0:
+            first_idx_source = 0
+        if last_idx_source < 0:
+            last_idx_source = 0
+        if first_idx_source >= source_steps:
+            first_idx_source = source_steps
+        if last_idx_source >= source_steps:
+            last_idx_source = source_steps - 1
+        if aggregation_ratio > 1:
+            first_idx = int(math.ceil(first_idx_source / aggregation_ratio))
+            last_idx = int(((last_idx_source + 1) // aggregation_ratio) - 1)
         else:
-            first_idx = int(first_idx_1m)
-            last_idx = int(last_idx_1m)
+            first_idx = int(first_idx_source)
+            last_idx = int(last_idx_source)
         if first_idx >= total_steps:
             first_idx = total_steps
         if last_idx >= total_steps:
@@ -925,16 +1004,13 @@ def build_backtest_payload(
             last_idx = 0
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
-        # warmup_minutes stay in minutes (Rust adjusts based on interval)
+        # Warmup horizons remain in minutes; bar counts use the resolved millisecond interval.
         warm = max(
             int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm))),
             int(global_warmup_minutes),
         )
         warmup_minutes.append(warm)
-        # trade_start_idx is in candle units, adjust warm from minutes to candle periods
-        warm_bars = (
-            int(math.ceil(warm / candle_interval)) if candle_interval > 1 else int(warm)
-        )
+        warm_bars = int(math.ceil(warm * 60_000 / target_interval_ms))
         if first_idx > last_idx:
             trade_idx = max(first_idx, requested_start_idx)
         elif requested_start_idx > last_idx:
@@ -946,10 +1022,9 @@ def build_backtest_payload(
     backtest_params["last_valid_indices"] = last_valid_indices
     backtest_params["warmup_minutes"] = warmup_minutes
     backtest_params["trade_start_indices"] = trade_start_indices
-    if candle_interval > 1:
-        global_warmup_bars = int(math.ceil(global_warmup_minutes / candle_interval))
-    else:
-        global_warmup_bars = int(global_warmup_minutes)
+    global_warmup_bars = int(
+        math.ceil(global_warmup_minutes * 60_000 / target_interval_ms)
+    )
     backtest_params["global_warmup_bars"] = global_warmup_bars
 
     warmup_requested = int(
@@ -972,6 +1047,7 @@ def build_backtest_payload(
         "effective_start_timestamp_ms": effective_start_ts,
         "warmup_minutes_requested": warmup_requested,
         "warmup_minutes_provided": warmup_provided,
+        "bar_interval_ms": target_interval_ms,
     }
 
     bundle = _build_hlcvs_bundle(
@@ -1083,8 +1159,7 @@ def calc_backtest_completion_ratio(equities_array, config: dict) -> float | None
     last_equity_ts = int(equities[-1, 0])
     if last_equity_ts < first_equity_ts:
         return 0.0
-    candle_interval_minutes = int(backtest_cfg.get("candle_interval_minutes", 1) or 1)
-    final_covered_ts = last_equity_ts + max(1, candle_interval_minutes) * 60_000
+    final_covered_ts = last_equity_ts + resolve_backtest_candle_interval_ms(config)
     covered_end_ts = min(requested_end_ts, final_covered_ts)
     covered_span = max(0, covered_end_ts - requested_start_ts)
     return float(np.clip(covered_span / requested_span, 0.0, 1.0))
@@ -2130,9 +2205,6 @@ def prep_backtest_args(
         pside: set(side_coins)
         for pside, side_coins in effective_backtest_approved_coins_by_side(config).items()
     }
-    candle_interval = int(
-        config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
-    )
     bot_params_list = []
     strategy_params_list = []
     bot_params_template = deepcopy(require_config_value(config, "bot"))

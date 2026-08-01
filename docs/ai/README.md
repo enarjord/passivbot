@@ -23,7 +23,7 @@ current task.
 | Strategy schema, order logic, risk, unstuck | `architecture.md`, `error_contract.md`, `features/strategy_runtime.md` |
 | Equity Hard Stop Loss episodes, replay, flattening, cooldown | `error_contract.md`, `features/equity_hard_stop_loss.md`, `features/fill_events_manager.md` |
 | Candles, OHLCV coverage, gaps, projections | `error_contract.md`, `features/candlestick_manager.md`; add `features/exchange_integrations.md` for remote fetch behavior |
-| Fill/PnL ingestion, fees, coverage | `error_contract.md`, `features/fill_events_manager.md`, relevant exchange contract |
+| Fill/PnL ingestion, fees, coverage, binary outcomes | `error_contract.md`, `features/fill_events_manager.md`, `features/outcome_markets.md`, relevant exchange contract |
 | Historical runtime/fill attribution | `features/runtime_attribution.md`, `features/fill_events_manager.md`, `features/live_events.md` |
 | Commands, tests, backtests, optimizer, execution safety | `runbooks/commands.md` |
 | Autonomous PR review | `runbooks/pr_review.md` |

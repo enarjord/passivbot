@@ -147,6 +147,9 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         "candle_interval_minutes": get_optional_config_value(
             config, "backtest.candle_interval_minutes", 1
         ),
+        "candle_interval_seconds": get_optional_config_value(
+            config, "backtest.candle_interval_seconds"
+        ),
     }
 
 
