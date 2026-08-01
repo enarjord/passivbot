@@ -1357,7 +1357,7 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
         ):
             if tf == "1h":
                 return 0.01
-            return float("nan")
+            raise TimeoutError("m1 log range unavailable")
 
         async def get_latest_cached_ema_metrics(
             self,

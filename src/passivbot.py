@@ -18764,6 +18764,8 @@ class Passivbot:
                             sym, sorted(need_close_spans[sym]), log_on_missing=False
                         )
                     except MissingCloseEma as exc:
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = projection_contexts.get(
                             sym
                         ) or refresh_open_tail_projection_context(sym)
@@ -18814,10 +18816,10 @@ class Passivbot:
                     except Exception as exc:
                         if not isinstance(exc, MissingRequiredEma):
                             raise
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
-                            if exc.contains_non_finite:
-                                raise
                             log_ema_issue(
                                 ("required_missing", sym, "m1_log_range"),
                                 required_ema_log_level(sym),
@@ -18844,8 +18846,6 @@ class Passivbot:
                                     )
                                 )
                             except Exception as projection_exc:
-                                if exc.contains_non_finite:
-                                    raise exc
                                 if not collect_input_unavailability(projection_exc):
                                     raise
                                 lr1m = {}

@@ -2043,7 +2043,7 @@ async def test_open_tail_projection_precedes_previous_close_ema_fallback():
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_recovers_required_close_ema(caplog):
+async def test_late_open_tail_projection_does_not_mask_nonfinite_close_ema():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2062,38 +2062,18 @@ async def test_late_open_tail_projection_recovers_required_close_ema(caplog):
     )
     bot.projected_open_tail_called = False
 
-    with caplog.at_level(logging.WARNING):
-        (
-            m1_close_emas,
-            m1_volume_emas,
-            m1_log_range_emas,
-            _h1_log_range_emas,
-            volumes_long,
-            log_ranges_long,
-        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+    with pytest.raises(RuntimeError, match="non-finite close EMA value"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], bot.PB_modes
         )
 
     assert bot.completed_candle_health_calls >= 2
-    assert bot.projected_open_tail_called is True
-    got = m1_close_emas[symbol]
-    assert got[span0] == pytest.approx(projected[span0])
-    assert got[span1] == pytest.approx(projected[span1])
-    assert got[span2] == pytest.approx(projected[span2])
-    assert m1_volume_emas[symbol][10.0] == pytest.approx(250000.0)
-    assert m1_log_range_emas[symbol][10.0] == pytest.approx(0.0015)
-    assert volumes_long[symbol] == pytest.approx(250000.0)
-    assert log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot.projected_open_tail_called is False
     assert bot._orchestrator_close_ema_fallback_counts == {}
-    assert bot._orchestrator_ema_projection_details[symbol]["tail_gap_age_ms"] == 60_000
-    warning_messages = [
-        record.message for record in caplog.records if record.levelno >= logging.WARNING
-    ]
-    assert not any("missing required close EMA" in message for message in warning_messages)
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_precedes_available_previous_close_ema():
+async def test_nonfinite_close_ema_is_fatal_before_projection_or_previous_fallback():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2114,25 +2094,18 @@ async def test_late_open_tail_projection_precedes_available_previous_close_ema()
     )
     bot.projected_open_tail_called = False
 
-    (
-        m1_close_emas,
-        _m1_volume_emas,
-        _m1_log_range_emas,
-        _h1_log_range_emas,
-        _volumes_long,
-        _log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot, [symbol], bot.PB_modes
-    )
+    with pytest.raises(RuntimeError, match="non-finite close EMA value"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
 
     assert bot.completed_candle_health_calls >= 2
-    assert bot.projected_open_tail_called is True
-    assert m1_close_emas[symbol] == pytest.approx(projected)
+    assert bot.projected_open_tail_called is False
     assert bot._orchestrator_close_ema_fallback_counts == {}
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_recovers_required_m1_log_range():
+async def test_late_open_tail_projection_does_not_mask_nonfinite_m1_log_range():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2153,21 +2126,13 @@ async def test_late_open_tail_projection_recovers_required_m1_log_range():
     )
     bot.projected_open_tail_called = False
 
-    (
-        m1_close_emas,
-        _m1_volume_emas,
-        m1_log_range_emas,
-        _h1_log_range_emas,
-        _volumes_long,
-        log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    with pytest.raises(RuntimeError, match="non-finite m1_log_range value"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
 
-    assert bot.completed_candle_health_calls >= 2
-    assert bot.projected_open_tail_called is True
-    assert m1_close_emas[symbol][span0] == pytest.approx(201.0)
-    assert m1_log_range_emas[symbol][60.0] == pytest.approx(0.0042)
-    assert log_ranges_long[symbol] == pytest.approx(0.0015)
-    assert bot._orchestrator_ema_projection_details[symbol]["tail_gap_age_ms"] == 60_000
+    assert bot.completed_candle_health_calls == 1
+    assert bot.projected_open_tail_called is False
 
 
 @pytest.mark.asyncio

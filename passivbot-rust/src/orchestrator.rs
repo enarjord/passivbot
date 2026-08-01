@@ -45,10 +45,11 @@ mod core {
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
         strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-        strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
-        EmaGateMode, NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest,
-        StrategySide,
+        strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1h_for_request, strategy_needs_log_range_1m,
+        strategy_needs_log_range_1m_for_request, strategy_offset_volatility_span_minutes,
+        strategy_requires_sequential_entry_staging, EmaGateMode, NextStepHint, PeekBehavior,
+        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -2517,10 +2518,24 @@ mod core {
         } else {
             EMABands::default()
         };
-        let volatility_ema_1h =
-            cached_volatility_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?;
-        let volatility_ema_1m =
-            cached_volatility_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?;
+        let volatility_ema_1h = if strategy_needs_log_range_1h_for_request(
+            &strategy_params,
+            wants_entries,
+            wants_closes,
+        ) {
+            cached_volatility_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            0.0
+        };
+        let volatility_ema_1m = if strategy_needs_log_range_1m_for_request(
+            &strategy_params,
+            wants_entries,
+            wants_closes,
+        ) {
+            cached_volatility_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            0.0
+        };
         let state = StateParams {
             balance: input.balance,
             order_book: symbol.order_book,

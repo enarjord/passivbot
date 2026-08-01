@@ -565,6 +565,38 @@ def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
     ]
 
 
+def test_trailing_grid_v7_close_only_ignores_entry_only_h1_volatility():
+    import passivbot_rust as pbr
+
+    strategy = trailing_grid_v7_strategy_params(
+        grid_spacing_volatility_weight=1.0,
+        volatility_ema_span_hours=4.0,
+    )
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="tp_only",
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(h1_log_range=[]),
+    )
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="trailing_grid_v7",
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+
+    assert any(
+        order["pside"] == "long" and order["order_type"] == "close_grid_long"
+        for order in out["orders"]
+    )
+
+
 def test_live_authorization_does_not_tolerate_malformed_ema_values():
     import passivbot_rust as pbr
 
