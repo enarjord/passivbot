@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 import hashlib
 import json
+import math
 from pathlib import Path
 import sqlite3
 import threading
@@ -57,6 +58,48 @@ class OutcomeVerifiedCoverageOverlap(ValueError):
     """An identity-less collector attempted to certify an already-covered interval."""
 
 
+def authoritative_settlement_evidence(
+    settlements: Iterable[OutcomeSettlementEvidence],
+    *,
+    market_id: str,
+    payout_unit: float,
+) -> OutcomeSettlementEvidence:
+    retained = list(settlements)
+    if not retained:
+        raise ValueError(f"outcome archive has no settlement evidence for {market_id}")
+    yes_fractions = {settlement.yes_fraction for settlement in retained}
+    payout_units = {settlement.payout_unit for settlement in retained}
+    settlement_times = {settlement.settlement_time_ms for settlement in retained}
+    if (
+        len(yes_fractions) != 1
+        or len(payout_units) != 1
+        or len(settlement_times) != 1
+    ):
+        raise ValueError(
+            f"outcome archive has conflicting settlement evidence for {market_id}"
+        )
+    settlement_payout_unit = next(iter(payout_units))
+    if not math.isclose(
+        settlement_payout_unit,
+        payout_unit,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"outcome settlement payout unit {settlement_payout_unit} disagrees with "
+            f"market payout unit {payout_unit} for {market_id}"
+        )
+    return max(
+        retained,
+        key=lambda settlement: (
+            settlement.capital_release_time_ms is not None,
+            settlement.capital_release_time_ms or settlement.settlement_time_ms,
+            settlement.received_time_ms,
+            settlement.source_event_id,
+        ),
+    )
+
+
 def _market_payload(market: NormalizedOutcomeMarket) -> dict:
     return {
         "venue": market.venue.value,
@@ -107,6 +150,17 @@ def _market_from_payload(payload: dict) -> NormalizedOutcomeMarket:
         fee_metadata=OutcomeFeeMetadata(**payload["fee_metadata"]),
         native_metadata=payload["native_metadata"],
     )
+
+
+def _markets_from_chronological_rows(rows: Iterable[sqlite3.Row]) -> list[NormalizedOutcomeMarket]:
+    """Return state transitions while retaining raw observations in the archive."""
+
+    transitions: list[NormalizedOutcomeMarket] = []
+    for row in rows:
+        market = _market_from_payload(json.loads(row["normalized_market_json"]))
+        if not transitions or transitions[-1] != market:
+            transitions.append(market)
+    return transitions
 
 
 def _contract_fingerprint(market: NormalizedOutcomeMarket) -> str:
@@ -521,20 +575,22 @@ class OutcomeTradeArchive:
                     f"outcome market {market.venue.value}:{market.market_id} "
                     "has conflicting immutable metadata"
                 )
-            predecessor = connection.execute(
+            duplicate = connection.execute(
                 """
-                SELECT payload_sha256
+                SELECT 1
                 FROM outcome_market_metadata
-                WHERE venue = ? AND market_id = ? AND observed_at_ms <= ?
-                ORDER BY observed_at_ms DESC, record_id DESC
+                WHERE venue = ? AND market_id = ? AND observed_at_ms = ?
+                      AND payload_sha256 = ?
                 LIMIT 1
                 """,
-                (market.venue.value, market.market_id, int(observed_at_ms)),
+                (
+                    market.venue.value,
+                    market.market_id,
+                    int(observed_at_ms),
+                    payload_sha256,
+                ),
             ).fetchone()
-            if (
-                predecessor is not None
-                and predecessor["payload_sha256"] == payload_sha256
-            ):
+            if duplicate is not None:
                 return False
             cursor = connection.execute(
                 """
@@ -572,10 +628,7 @@ class OutcomeTradeArchive:
             """,
             (venue.value, str(market_id)),
         ).fetchall()
-        return [
-            _market_from_payload(json.loads(row["normalized_market_json"]))
-            for row in rows
-        ]
+        return _markets_from_chronological_rows(rows)
 
     def load_market_metadata_observed_after(
         self,
@@ -595,10 +648,36 @@ class OutcomeTradeArchive:
             """,
             (venue.value, str(market_id), int(observed_after_ms)),
         ).fetchall()
-        return [
-            _market_from_payload(json.loads(row["normalized_market_json"]))
-            for row in rows
-        ]
+        return _markets_from_chronological_rows(rows)
+
+    def load_market_metadata_observed_between(
+        self,
+        venue: OutcomeVenue,
+        market_id: str,
+        *,
+        observed_after_ms: int,
+        observed_before_ms: int,
+    ) -> list[NormalizedOutcomeMarket]:
+        """Load state transitions in the open interval `(after, before)`."""
+
+        if observed_after_ms < 0 or observed_before_ms <= observed_after_ms:
+            raise ValueError("market metadata interval must be non-empty and non-negative")
+        rows = self._connect().execute(
+            """
+            SELECT normalized_market_json
+            FROM outcome_market_metadata
+            WHERE venue = ? AND market_id = ? AND observed_at_ms > ?
+                  AND observed_at_ms < ?
+            ORDER BY observed_at_ms, record_id
+            """,
+            (
+                venue.value,
+                str(market_id),
+                int(observed_after_ms),
+                int(observed_before_ms),
+            ),
+        ).fetchall()
+        return _markets_from_chronological_rows(rows)
 
     def load_market_metadata_at(
         self,

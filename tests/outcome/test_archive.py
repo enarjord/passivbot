@@ -183,7 +183,7 @@ def test_market_metadata_archive_round_trips_versions_and_rejects_id_reuse(tmp_p
         observed_at_ms=1_000,
         observation_source="outcomeMeta",
     )
-    assert not archive.append_market_metadata(
+    assert archive.append_market_metadata(
         original,
         observed_at_ms=2_000,
         observation_source="outcomeMeta",
@@ -226,6 +226,40 @@ def test_market_metadata_archive_round_trips_versions_and_rejects_id_reuse(tmp_p
             observed_at_ms=4_000,
             observation_source="outcomeMeta",
         )
+
+
+def test_market_metadata_retains_out_of_order_state_reversion(tmp_path):
+    archive = OutcomeTradeArchive(tmp_path / "outcomes.sqlite")
+    original = market()
+    updated_constraints = replace(original, min_order_qty=50.0)
+
+    assert archive.append_market_metadata(
+        original,
+        observed_at_ms=1_000,
+        observation_source="initial",
+    )
+    assert archive.append_market_metadata(
+        original,
+        observed_at_ms=3_000,
+        observation_source="later_reversion",
+    )
+    assert archive.append_market_metadata(
+        updated_constraints,
+        observed_at_ms=2_000,
+        observation_source="late_backfill",
+    )
+
+    assert archive.load_market_metadata(original.venue, original.market_id) == [
+        original,
+        updated_constraints,
+        original,
+    ]
+    assert archive.load_market_metadata_observed_between(
+        original.venue,
+        original.market_id,
+        observed_after_ms=1_000,
+        observed_before_ms=3_001,
+    ) == [updated_constraints, original]
 
 
 def test_market_metadata_versions_quote_asset_as_mutable_transport_state(tmp_path):

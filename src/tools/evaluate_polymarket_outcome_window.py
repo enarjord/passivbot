@@ -64,6 +64,30 @@ def _require_fee_free_market(market) -> None:
         )
 
 
+def _unsupported_window_contract(market: NormalizedOutcomeMarket) -> dict:
+    """Replay-critical metadata not modeled as a timestamped window event."""
+
+    return {
+        "quote_asset": market.quote_asset,
+        "qty_step": market.qty_step,
+        "min_order_qty": market.min_order_qty,
+        "min_order_notional": market.min_order_notional,
+        "fee_metadata": market.fee_metadata,
+        "capabilities": market.capabilities,
+    }
+
+
+def _evaluation_assumptions(*, qty_step: float, min_order_notional: float) -> dict:
+    return {
+        "qty_step": qty_step,
+        "min_order_notional": min_order_notional,
+        "maker_rate": 0.0,
+        "fee_incidence": "every_fill",
+        "settlement_rate": 0.0,
+        "synthetic_settlement_at_window_end": True,
+    }
+
+
 def _window_market_spec(
     market: NormalizedOutcomeMarket,
     *,
@@ -134,6 +158,22 @@ def _load_archived_market_and_grid_window(
     if market.min_order_qty is None:
         raise ValueError("Polymarket evaluation requires a minimum order quantity")
     _require_fee_free_market(market)
+    opening_contract = _unsupported_window_contract(market)
+    for later_market in archive.load_market_metadata_observed_between(
+        market.venue,
+        market.market_id,
+        observed_after_ms=start_ms,
+        observed_before_ms=end_ms,
+    ):
+        later_contract = _unsupported_window_contract(later_market)
+        changed_fields = sorted(
+            key for key, value in later_contract.items() if value != opening_contract[key]
+        )
+        if changed_fields:
+            raise ValueError(
+                "Polymarket window contains unsupported market metadata transitions: "
+                + ", ".join(changed_fields)
+            )
     grid_coverage = archive.load_verified_price_grid_coverage(
         market.venue,
         market.market_id,
@@ -301,13 +341,10 @@ async def _main() -> int:
                 "price_grid_changes": len(price_grid_changes),
                 "signal_candles": len(payload["signal_candles"]),
                 "execution_candles": len(payload["execution_candles"]),
-                "assumptions": {
-                    "qty_step": args.qty_step,
-                    "maker_rate": 0.0,
-                    "fee_incidence": "every_fill",
-                    "settlement_rate": 0.0,
-                    "synthetic_settlement_at_window_end": True,
-                },
+                "assumptions": _evaluation_assumptions(
+                    qty_step=args.qty_step,
+                    min_order_notional=args.min_order_notional,
+                ),
                 "strategy_params": strategy_params,
                 "mode_summaries": [asdict(summary) for summary in summaries],
             },

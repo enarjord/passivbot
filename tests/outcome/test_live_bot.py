@@ -722,6 +722,47 @@ async def test_settled_cycle_persists_authoritative_evidence(tmp_path):
     ]
 
 
+@pytest.mark.asyncio
+async def test_expired_cycle_restores_retained_settlement_after_fill_history_expires(
+    tmp_path,
+):
+    signal_candles = candles()
+    now_ms = market().lifecycle.scheduled_event_time_ms + 3_000
+    retained = lifecycle_snapshot(
+        now_ms - 1_000,
+        state=HyperliquidOutcomeLifecycleState.SETTLED,
+    ).settlement
+    assert retained is not None
+    archive = OutcomeTradeArchive(tmp_path / "retained-live-settlement.sqlite")
+    archive.append_settlement(retained, collector_session="earlier-cycle")
+    client = ReadOnlyClient(
+        snapshot(now_ms),
+        lifecycle=lifecycle_snapshot(
+            now_ms,
+            state=HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT,
+        ),
+    )
+
+    cycle = await run_hip4_outcome_cycle(
+        client,
+        market(),
+        params(),
+        signal_candles,
+        now_ms=now_ms,
+        archive=archive,
+        collector_session="restart-cycle",
+    )
+
+    assert cycle.plan is None
+    assert cycle.lifecycle.state is HyperliquidOutcomeLifecycleState.SETTLED
+    assert cycle.lifecycle.settlement == retained
+    assert (
+        cycle.planning_unavailable_reason
+        is OutcomePlanningUnavailableReason.MARKET_SETTLED
+    )
+    assert cycle.reconciliation.creates == ()
+
+
 class SafetyMutationClient:
     def __init__(self, snapshots, *, lifecycle=None):
         self.snapshots = list(snapshots)

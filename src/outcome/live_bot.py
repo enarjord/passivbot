@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import sqlite3
 import time
@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Callable, Mapping, Sequence
 
 import aiohttp
 
-from outcome.archive import OutcomeTradeArchive
+from outcome.archive import OutcomeTradeArchive, authoritative_settlement_evidence
 from outcome.hyperliquid_live import (
     HyperliquidOutcomeAccountSnapshot,
     HyperliquidOutcomeLifecycleSnapshot,
@@ -114,6 +114,12 @@ async def run_hip4_outcome_cycle(
             reason=lifecycle_reason,
             execute=execute,
             planned_at_ms=planned_at_ms,
+        )
+        lifecycle = _restore_retained_settlement(market, lifecycle, archive=archive)
+        cycle = replace(
+            cycle,
+            lifecycle=lifecycle,
+            planning_unavailable_reason=_planning_reason_for_lifecycle(lifecycle),
         )
         _persist_lifecycle_settlement(
             lifecycle,
@@ -227,6 +233,14 @@ async def run_hip4_outcome_unavailable_cycle(
         execute=execute,
         planned_at_ms=planned_at_ms,
     )
+    lifecycle = _restore_retained_settlement(market, lifecycle, archive=archive)
+    cycle = replace(
+        cycle,
+        lifecycle=lifecycle,
+        planning_unavailable_reason=(
+            _planning_reason_for_lifecycle(lifecycle) or reason
+        ),
+    )
     _persist_lifecycle_settlement(
         lifecycle,
         archive=archive,
@@ -269,6 +283,44 @@ def _persist_lifecycle_settlement(
             lifecycle.settlement,
             collector_session=collector_session,
         )
+
+
+def _restore_retained_settlement(
+    market: NormalizedOutcomeMarket,
+    lifecycle: HyperliquidOutcomeLifecycleSnapshot,
+    *,
+    archive: OutcomeTradeArchive | None,
+) -> HyperliquidOutcomeLifecycleSnapshot:
+    """Keep settlement monotonic after venue fill-history retention expires."""
+
+    if (
+        archive is None
+        or lifecycle.state
+        is not HyperliquidOutcomeLifecycleState.EXPIRED_AWAITING_SETTLEMENT
+    ):
+        return lifecycle
+    settlements = archive.load_settlements(market.venue, market.market_id)
+    if not settlements:
+        return lifecycle
+    settlement = authoritative_settlement_evidence(
+        settlements,
+        market_id=market.market_id,
+        payout_unit=market.payout_unit,
+    )
+    scheduled_event_time_ms = market.lifecycle.scheduled_event_time_ms
+    if (
+        scheduled_event_time_ms is not None
+        and settlement.settlement_time_ms < scheduled_event_time_ms
+    ):
+        raise ValueError(
+            f"retained HIP-4 settlement predates scheduled event for {market.market_id}"
+        )
+    return replace(
+        lifecycle,
+        state=HyperliquidOutcomeLifecycleState.SETTLED,
+        settlement=settlement,
+        settlement_recovery_error=None,
+    )
 
 
 async def _finish_unavailable_cycle(

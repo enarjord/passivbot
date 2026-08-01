@@ -498,6 +498,10 @@ All notable user-facing changes will be documented in this file.
   trade lag, and agreeing merged-book closes provide one-second markout while conflicts remain
   unavailable. Metadata history now preserves nonconsecutive state reversions, and bounded
   Polymarket evaluations replay the archived start-window metadata and verified price-grid changes.
+  Out-of-order metadata imports now preserve intervening state reversions, bounded Polymarket
+  windows reject unmodeled in-window constraint or fee transitions and report their explicit
+  minimum-notional assumption, and retained HIP-4 settlement evidence remains authoritative after
+  venue fill-history expiry instead of regressing a restarted market to awaiting settlement.
   Full-contract replay now requires metadata observed by trading open; bounded HIP-4 evaluations
   use their requested synthetic lifecycle and settlement boundaries, with explicit close-phase
   durations that default to disabled for short samples. Mutation validation rejects creates

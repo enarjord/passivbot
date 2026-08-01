@@ -34,6 +34,7 @@ from tools.evaluate_hip4_outcome_window import (
 )
 from tools.evaluate_polymarket_outcome_window import (
     _add_constraint_arguments as _add_polymarket_constraint_arguments,
+    _evaluation_assumptions as _polymarket_evaluation_assumptions,
     _load_archived_market_and_grid_window,
     _require_fee_free_market,
     _window_market_spec as _polymarket_window_market_spec,
@@ -294,6 +295,72 @@ def test_polymarket_window_uses_start_metadata_and_archived_grid_changes(tmp_pat
 
     assert market.price_grid == start_market.price_grid
     assert changes == [change]
+
+
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value"),
+    (
+        ("min_order_qty", 99.0),
+        (
+            "fee_metadata",
+            OutcomeFeeMetadata(
+                formula="notional",
+                maker_rate=0.001,
+                taker_rate=0.002,
+            ),
+        ),
+    ),
+)
+def test_polymarket_window_rejects_unmodeled_metadata_transitions(
+    tmp_path,
+    changed_field,
+    changed_value,
+):
+    discovered = polymarket.normalize_market(fixture("polymarket_binary.json"))
+    opening_market = replace(
+        discovered,
+        fee_metadata=OutcomeFeeMetadata(
+            formula="venue_reported_zero",
+            maker_rate=0.0,
+            taker_rate=0.0,
+        ),
+    )
+    changed_market = replace(opening_market, **{changed_field: changed_value})
+    archive = OutcomeTradeArchive(tmp_path / f"polymarket-{changed_field}.sqlite")
+    archive.append_market_metadata(
+        opening_market,
+        observed_at_ms=1_000,
+        observation_source="gamma",
+    )
+    archive.append_market_metadata(
+        changed_market,
+        observed_at_ms=3_000,
+        observation_source="gamma",
+    )
+    archive.record_verified_price_grid_coverage(
+        opening_market.venue,
+        opening_market.market_id,
+        VerifiedCoverage(1_000, 5_000),
+        collector_session="grid",
+    )
+
+    with pytest.raises(ValueError, match=f"metadata transitions: {changed_field}"):
+        _load_archived_market_and_grid_window(
+            archive,
+            changed_market,
+            start_ms=2_000,
+            end_ms=5_000,
+        )
+
+
+def test_polymarket_window_reports_all_explicit_constraint_assumptions():
+    assumptions = _polymarket_evaluation_assumptions(
+        qty_step=0.25,
+        min_order_notional=2.5,
+    )
+
+    assert assumptions["qty_step"] == 0.25
+    assert assumptions["min_order_notional"] == 2.5
 
 
 def test_polymarket_window_applies_latest_pre_window_grid_change(tmp_path):

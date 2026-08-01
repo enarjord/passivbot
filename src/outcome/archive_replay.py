@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-import math
 from typing import Any, Mapping
 
-from outcome.archive import OutcomeTradeArchive
+from outcome.archive import OutcomeTradeArchive, authoritative_settlement_evidence
 from outcome.backtest_input import build_trade_derived_ema_anchor_input
 from outcome.candles import VerifiedCoverage
 from outcome.models import (
@@ -109,47 +108,6 @@ def load_verified_trade_window(
             trades = [*seed, *trades]
             coverage_start_ms = seed_start_ms
     return trades, VerifiedCoverage(coverage_start_ms, end_ms)
-
-
-def _authoritative_settlement(
-    settlements: list[OutcomeSettlementEvidence],
-    *,
-    market_id: str,
-    payout_unit: float,
-) -> OutcomeSettlementEvidence:
-    if not settlements:
-        raise ValueError(f"outcome archive has no settlement evidence for {market_id}")
-    yes_fractions = {settlement.yes_fraction for settlement in settlements}
-    payout_units = {settlement.payout_unit for settlement in settlements}
-    settlement_times = {
-        settlement.settlement_time_ms for settlement in settlements
-    }
-    if (
-        len(yes_fractions) != 1
-        or len(payout_units) != 1
-        or len(settlement_times) != 1
-    ):
-        raise ValueError(f"outcome archive has conflicting settlement evidence for {market_id}")
-    settlement_payout_unit = next(iter(payout_units))
-    if not math.isclose(
-        settlement_payout_unit,
-        payout_unit,
-        rel_tol=0.0,
-        abs_tol=1e-12,
-    ):
-        raise ValueError(
-            f"outcome settlement payout unit {settlement_payout_unit} disagrees with "
-            f"market payout unit {payout_unit} for {market_id}"
-        )
-    return max(
-        settlements,
-        key=lambda settlement: (
-            settlement.capital_release_time_ms is not None,
-            settlement.capital_release_time_ms or settlement.settlement_time_ms,
-            settlement.received_time_ms,
-            settlement.source_event_id,
-        ),
-    )
 
 
 def consolidated_archived_market(
@@ -282,7 +240,7 @@ def build_archived_ema_anchor_replay(
     end_ms = market.lifecycle.trading_close_time_ms
     if end_ms is None or end_ms <= start_ms:
         raise ValueError(f"outcome market {market_id} has no complete trading lifecycle")
-    settlement = _authoritative_settlement(
+    settlement = authoritative_settlement_evidence(
         archive.load_settlements(venue, market_id),
         market_id=market_id,
         payout_unit=market.payout_unit,

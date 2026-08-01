@@ -7,9 +7,8 @@ from pathlib import Path
 import pytest
 
 from outcome.adapters import hyperliquid
-from outcome.archive import OutcomeTradeArchive
+from outcome.archive import OutcomeTradeArchive, authoritative_settlement_evidence
 from outcome.archive_replay import (
-    _authoritative_settlement,
     build_archived_ema_anchor_replay,
     consolidated_archived_market,
 )
@@ -202,7 +201,7 @@ def test_authoritative_settlement_must_match_market_payout_unit():
     )
 
     with pytest.raises(ValueError, match="settlement payout unit.*disagrees"):
-        _authoritative_settlement(
+        authoritative_settlement_evidence(
             [settlement],
             market_id=settlement.market_id,
             payout_unit=1.0,
@@ -236,7 +235,7 @@ def test_authoritative_settlement_requires_one_resolution_timestamp():
     )
 
     with pytest.raises(ValueError, match="conflicting settlement evidence"):
-        _authoritative_settlement(
+        authoritative_settlement_evidence(
             [settlement, contradictory],
             market_id=settlement.market_id,
             payout_unit=1.0,

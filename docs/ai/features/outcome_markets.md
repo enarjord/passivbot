@@ -245,7 +245,8 @@ change without replacing the retained contract. Quote-asset identity is versione
 metadata rather than an immutable contract fingerprint field. This is required because expired HIP-4
 price-binary rows disappear from `outcomeMeta`. Retain the chronological sequence of distinct
 metadata states, including a later return to an earlier state; suppress only a consecutive
-duplicate observation.
+duplicate state when reading the chronological history. Raw observations at different timestamps
+remain retained so a later out-of-order import cannot erase an intervening transition.
 
 Settlement source-event identity is immutable as well. Re-importing the same venue, market, and
 source event may differ in observation metadata such as receive time or endpoint provenance, but
@@ -478,6 +479,9 @@ gates, settlement, and inventory-time metrics use synthetic open and close bound
 requested sample; the result is not presented as a full-contract replay. Window-specific
 risk-reduction and entry-cutoff durations are explicit inputs and default to disabled, so a short
 sample does not silently suppress every entry.
+Any in-window quantity, minimum-order, fee, quote-asset, or capability transition fails closed
+until that transition has an explicit timestamped simulation model. Price-grid transitions are
+the supported exception because the window replay models them independently.
 
 Required aggregate metrics include gross spread capture, fees, rebates, settlement PnL, paired and
 residual inventory, worst-case settlement equity, time-weighted exposure, capital utilization,
@@ -554,6 +558,9 @@ availability is unavailable; it must not fall back to the full unheld balance.
 
 An active lifecycle may create or replace managed quotes. An expired or settled lifecycle targets
 an empty managed-order set and reports the exact state and settlement evidence, if any. Protective
+cancellation happens before archive failures are surfaced. After cancellation, authoritative
+settlement evidence already retained for that market makes settlement monotonic across restarts
+even when the venue's bounded account-fill history no longer returns the settlement fill. Protective
 cancellation is allowed after expiry only for an order proven by the fresh account snapshot to
 belong to the retained market, outcome side, and exact expected client-order ID. The mutation
 executor independently validates every cancellation and creation against the deterministic
