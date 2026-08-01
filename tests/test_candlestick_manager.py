@@ -3034,6 +3034,141 @@ def test_completed_candle_health_keeps_adjacent_unverified_minute_refreshable(tm
     assert report["refresh_needed"] is True
 
 
+def test_completed_candle_health_keeps_fresh_same_reason_suffix_refreshable(
+    tmp_path, monkeypatch
+):
+    now = {"ms": 7 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "FRESHEPOCH/USDT:USDT"
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [
+                (2 * ONE_MIN_MS, 10.0, 10.0, 10.0, 10.0, 1.0),
+                (6 * ONE_MIN_MS, 11.0, 11.0, 11.0, 11.0, 2.0),
+            ],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now["ms"],
+    )
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        4 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+        retry_count=_GAP_MAX_RETRIES,
+    )
+    now["ms"] += 1
+    cm._add_known_gap(
+        symbol,
+        3 * ONE_MIN_MS,
+        5 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["retry_count"])
+        for gap in gaps
+    ] == [
+        (3 * ONE_MIN_MS, 4 * ONE_MIN_MS, _GAP_MAX_RETRIES),
+        (5 * ONE_MIN_MS, 5 * ONE_MIN_MS, 1),
+    ]
+    report = cm.get_completed_candle_health(
+        symbol, {"1m": 5}, now_ms=now["ms"]
+    )["timeframes"]["1m"]
+
+    assert report["missing_candles"] == 3
+    assert report["deferred_missing_candles"] == 2
+    assert report["refreshable_missing_candles"] == 1
+    assert report["refresh_needed"] is True
+
+
+def test_gap_normalization_merges_only_matching_retry_epochs(tmp_path):
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "RETRYEPISODES/USDT:USDT"
+    base_gap = {
+        "retry_count": _GAP_MAX_RETRIES,
+        "reason": GAP_REASON_AUTO,
+        "added_at": 1,
+        "last_retry_at": 1,
+        "last_contextual_retry_at": 0,
+    }
+    cm._save_known_gaps_enhanced(
+        symbol,
+        [
+            {
+                **base_gap,
+                "start_ts": ONE_MIN_MS,
+                "end_ts": ONE_MIN_MS,
+            },
+            {
+                **base_gap,
+                "start_ts": 2 * ONE_MIN_MS,
+                "end_ts": 2 * ONE_MIN_MS,
+            },
+            {
+                **base_gap,
+                "start_ts": 3 * ONE_MIN_MS,
+                "end_ts": 3 * ONE_MIN_MS,
+                "last_retry_at": 2,
+            },
+        ],
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [(gap["start_ts"], gap["end_ts"]) for gap in gaps] == [
+        (ONE_MIN_MS, 2 * ONE_MIN_MS),
+        (3 * ONE_MIN_MS, 3 * ONE_MIN_MS),
+    ]
+    assert [gap["last_retry_at"] for gap in gaps] == [1, 2]
+
+
+def test_gap_retry_update_is_scoped_to_attempted_overlap(tmp_path, monkeypatch):
+    now = {"ms": 10 * ONE_MIN_MS}
+    monkeypatch.setattr("time.time", lambda: now["ms"] / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    symbol = "PARTIALEPOCH/USDT:USDT"
+    cm._add_known_gap(
+        symbol,
+        ONE_MIN_MS,
+        3 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+    now["ms"] += 1
+    cm._add_known_gap(
+        symbol,
+        2 * ONE_MIN_MS,
+        2 * ONE_MIN_MS,
+        reason=GAP_REASON_AUTO,
+    )
+
+    gaps = cm._get_known_gaps_enhanced(symbol)
+    assert [
+        (gap["start_ts"], gap["end_ts"], gap["retry_count"])
+        for gap in gaps
+    ] == [
+        (ONE_MIN_MS, ONE_MIN_MS, 1),
+        (2 * ONE_MIN_MS, 2 * ONE_MIN_MS, 2),
+        (3 * ONE_MIN_MS, 3 * ONE_MIN_MS, 1),
+    ]
+
+
 def test_known_gap_normalization_scales_to_large_sparse_history(tmp_path):
     cm = CandlestickManager(
         exchange=None,

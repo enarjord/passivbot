@@ -119,7 +119,9 @@
    from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry
    cooldown is active do not spend background REST budget. This scheduler classification never
    turns an unresolved gap into tradable coverage: raw `coverage_ok` remains false, and a newly
-   finalized suffix outside the deferred range remains refreshable. Refresh scheduling prioritizes
+   finalized suffix outside the deferred range remains refreshable. Adjacent missing ranges with
+   different retry epochs remain separate, even when their reason matches, so fresh evidence never
+   inherits an older range's retry cooldown. Refresh scheduling prioritizes
    never-attempted 1m fetches before native 1h backfills. Staleness targets count
    only surfaces handled by this background
    refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an

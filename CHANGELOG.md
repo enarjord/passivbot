@@ -60,8 +60,9 @@ All notable user-facing changes will be documented in this file.
   no-trade continuity and retry-deferred gaps, preventing sparse KuCoin markets
   from repeatedly consuming REST budget while raw coverage remains honestly
   unavailable where proof is incomplete. Gap normalization preserves those
-  proof-specific ranges so adjacent unverified minutes remain refreshable, using
-  log-linear sweep normalization for large sparse histories.
+  proof- and retry-epoch-specific ranges so adjacent unverified or newly
+  finalized minutes remain refreshable, using log-linear sweep normalization
+  for large sparse histories.
 - Bitget UTA private order updates now use the native `holdSide` field for
   hedge position attribution. Hyperliquid briefly retries a sparse order-open
   event when a concurrent local create is still awaiting its exchange ID, then
