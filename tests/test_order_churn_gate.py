@@ -83,6 +83,10 @@ def _raw_rust_input(
     short_total_wallet_exposure_limit=1.0,
     bid=100.0,
     ask=100.0,
+    qty_step=0.001,
+    min_qty=0.001,
+    min_cost=1.0,
+    c_mult=1.0,
     **global_overrides,
 ) -> dict:
     global_input = {
@@ -119,6 +123,12 @@ def _raw_rust_input(
             {
                 "symbol_idx": 0,
                 "order_book": {"bid": bid, "ask": ask},
+                "exchange": {
+                    "qty_step": qty_step,
+                    "min_qty": min_qty,
+                    "min_cost": min_cost,
+                    "c_mult": c_mult,
+                },
                 "tradable": tradable,
                 "long": {
                     "mode": long_mode,
@@ -1293,6 +1303,38 @@ def test_raw_rust_output_rejects_competing_protective_reducers():
             {0: SYMBOL},
             _raw_rust_input(long_pos_size=1.0),
         )
+
+
+@pytest.mark.parametrize(
+    ("order_overrides", "input_overrides", "error"),
+    [
+        ({"qty": 0.05}, {"qty_step": 0.01, "min_qty": 0.1}, "entry minimum"),
+        ({"qty": 0.1}, {"min_cost": 20.0}, "entry minimum"),
+        ({"qty": 1.05}, {"qty_step": 0.1}, "qty_step"),
+    ],
+    ids=["min-qty", "min-cost", "qty-step"],
+)
+def test_raw_rust_output_rejects_entry_quantity_outside_exchange_constraints(
+    order_overrides,
+    input_overrides,
+    error,
+):
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(**order_overrides)]),
+            {0: SYMBOL},
+            _raw_rust_input(**input_overrides),
+        )
+
+
+def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([_raw_rust_order(qty=1.1)]),
+        {0: SYMBOL},
+        _raw_rust_input(qty_step=0.1, min_qty=0.1, min_cost=105.0),
+    ) == [
+        _raw_rust_order(qty=1.1),
+    ]
 
 
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():

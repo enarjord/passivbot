@@ -31,9 +31,10 @@ All notable user-facing changes will be documented in this file.
   by the submitted mode or flat-side eligibility, rejects all orders for globally disabled sides,
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
-  protective reducers, requires order-type names to round-trip through Rust's canonical ID
-  mapping, and validates active-state diagnostics in both directions for ineligible sides and
-  eligible managed positions, while preserving Rust's
+  protective reducers, rejects entry quantities below the submitted effective exchange minimum or
+  outside the submitted quantity step, requires order-type names to round-trip through Rust's
+  canonical ID mapping, and validates active-state diagnostics in both directions for ineligible
+  sides and eligible managed positions, while preserving Rust's
   held-position DCA and configured HSL panic market closes as explicit Rust
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal

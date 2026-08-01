@@ -1091,6 +1091,31 @@ def _validate_rust_order_family_for_submitted_strategy(
         )
 
 
+def _validate_rust_entry_exchange_constraints(
+    qty: float,
+    price: float,
+    exchange: tuple[float, float, float, float],
+    context: str,
+) -> None:
+    """Reject entry quantities impossible under the submitted exchange constraints."""
+    qty_step, min_qty, min_cost, c_mult = exchange
+    qty_abs = abs(qty)
+    qty_steps = qty_abs / qty_step
+    entry_cost = qty_abs * price * c_mult
+    if not math.isfinite(qty_steps) or not math.isfinite(entry_cost):
+        raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
+    rounded_qty = round(qty_steps) * qty_step
+    qty_tolerance = max(qty_step * 1e-8, 1e-12)
+    if not math.isclose(qty_abs, rounded_qty, rel_tol=0.0, abs_tol=qty_tolerance):
+        raise FatalBotException(
+            f"{context} quantity is inconsistent with submitted qty_step"
+        )
+    if qty_abs + qty_tolerance < min_qty or entry_cost + 1e-9 < min_cost:
+        raise FatalBotException(
+            f"{context} quantity is below submitted effective entry minimum"
+        )
+
+
 def _expected_rust_panic_execution_type(
     global_input: dict, order_type: str, pside: str
 ) -> str | None:
@@ -1157,6 +1182,7 @@ def _submitted_rust_input_context(
     dict[str, int],
     bool,
     str,
+    dict[int, tuple[float, float, float, float]],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1168,6 +1194,7 @@ def _submitted_rust_input_context(
     order_books: dict[int, tuple[float, float]] = {}
     position_sizes: dict[tuple[int, str], float] = {}
     symbol_side_eligibility: dict[tuple[int, str], bool] = {}
+    exchange_constraints: dict[int, tuple[float, float, float, float]] = {}
     global_input = orchestrator_input.get("global")
     if not isinstance(global_input, dict):
         raise FatalBotException(
@@ -1246,6 +1273,32 @@ def _submitted_rust_input_context(
                 f"Rust orchestrator symbol input {input_idx} has invalid order_book"
             )
         order_books[symbol_idx] = (bid, ask)
+        exchange = row.get("exchange")
+        if not isinstance(exchange, dict):
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid exchange"
+            )
+        qty_step = _validated_rust_finite_number(
+            exchange.get("qty_step"),
+            f"symbol input {input_idx} has invalid exchange qty_step",
+        )
+        min_qty = _validated_rust_finite_number(
+            exchange.get("min_qty"),
+            f"symbol input {input_idx} has invalid exchange min_qty",
+        )
+        min_cost = _validated_rust_finite_number(
+            exchange.get("min_cost"),
+            f"symbol input {input_idx} has invalid exchange min_cost",
+        )
+        c_mult = _validated_rust_finite_number(
+            exchange.get("c_mult"),
+            f"symbol input {input_idx} has invalid exchange c_mult",
+        )
+        if qty_step <= 0.0 or min_qty < 0.0 or min_cost < 0.0 or c_mult <= 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid exchange"
+            )
+        exchange_constraints[symbol_idx] = (qty_step, min_qty, min_cost, c_mult)
         tradable = row.get("tradable")
         if not isinstance(tradable, bool):
             raise FatalBotException(
@@ -1300,6 +1353,7 @@ def _submitted_rust_input_context(
         global_side_n_positions,
         hedge_mode,
         strategy_kind,
+        exchange_constraints,
     )
 
 
@@ -1351,6 +1405,7 @@ def validate_rust_orchestrator_output(
         submitted_global_side_n_positions,
         submitted_hedge_mode,
         submitted_strategy_kind,
+        submitted_exchange_constraints,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -1429,6 +1484,13 @@ def validate_rust_orchestrator_output(
             submitted_strategy_kind,
             f"Rust orchestrator order {order_idx}",
         )
+        if order_type.startswith("entry_"):
+            _validate_rust_entry_exchange_constraints(
+                qty,
+                price,
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
+            )
         if order_type.startswith("entry_") and submitted_position_sizes[pair] == 0.0:
             flat_entry_pairs.add(pair)
         if _rust_order_requires_risk_critical_priority(order_type):
