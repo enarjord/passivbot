@@ -1866,8 +1866,47 @@ def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
     reconciler.validate_rust_orchestrator_output(
         out, {0: "BTC/USDT:USDT"}, inp
     )
-    entry = next(order for order in out["orders"] if order["order_type"].startswith("entry_"))
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
     assert abs(entry["qty"]) == expected_qty
+
+
+def test_positive_sub_step_effective_minimum_emits_one_contract():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=1e9,
+        ask=1e9,
+        long_bp={
+            "wallet_exposure_limit": 2.0,
+            "total_wallet_exposure_limit": 2.0,
+            "entry_initial_qty_pct": 0.1,
+        },
+    )
+    symbol["exchange"].update(
+        {"qty_step": 1.0, "min_qty": 0.0, "min_cost": 1.0}
+    )
+    inp = make_input(
+        balance=1e9,
+        global_bp=bot_params_pair(
+            long_overrides={
+                "wallet_exposure_limit": 2.0,
+                "total_wallet_exposure_limit": 2.0,
+            }
+        ),
+        symbols=[symbol],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
+    assert abs(entry["qty"]) == 1.0
 
 
 def test_panic_close_order_type_is_side_local():

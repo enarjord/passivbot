@@ -1144,7 +1144,9 @@ def _rust_effective_min_qty(
     if not math.isfinite(raw_min_steps):
         return math.inf
     nearest_step = round(round(raw_min_steps) * qty_step, 10)
-    if abs(raw_min - nearest_step) <= qty_step * 1e-8:
+    if raw_min == 0.0:
+        return 0.0
+    if nearest_step > 0.0 and abs(raw_min - nearest_step) <= qty_step * 1e-8:
         return nearest_step
     return round(math.ceil(raw_min_steps) * qty_step, 10)
 
@@ -1977,6 +1979,28 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator loss_gate_block {block_idx} panic order_type "
                 "bypasses the realized-loss gate"
             )
+        pair = (symbol_idx, pside)
+        if not submitted_global_side_enablement[pside]:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} is inconsistent "
+                f"with globally disabled {pside}"
+            )
+        if submitted_position_sizes[pair] == 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} requires a submitted position"
+            )
+        _validate_rust_order_family_for_submitted_mode(
+            order_type,
+            submitted_input_modes[pair],
+            submitted_position_sizes[pair],
+            False,
+            f"Rust orchestrator loss_gate_block {block_idx}",
+        )
+        _validate_rust_order_family_for_submitted_strategy(
+            order_type,
+            submitted_strategy_kind,
+            f"Rust orchestrator loss_gate_block {block_idx}",
+        )
         finite_values: dict[str, float] = {}
         for field in finite_fields:
             value = _validated_rust_finite_number(

@@ -81,7 +81,11 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
         ),
     );
     let nearest_step = round_(raw_min, exchange_params.qty_step);
-    if (raw_min - nearest_step).abs() <= exchange_params.qty_step * 1e-8 {
+    if raw_min == 0.0 {
+        0.0
+    } else if nearest_step > 0.0
+        && (raw_min - nearest_step).abs() <= exchange_params.qty_step * 1e-8
+    {
         nearest_step
     } else {
         round_up(raw_min, exchange_params.qty_step)
@@ -1167,6 +1171,15 @@ mod tests {
             ..exchange
         };
         assert_eq!(calc_min_entry_qty(100.0, &aligned_exchange), 0.07);
+
+        let sub_step_exchange = ExchangeParams {
+            qty_step: 1.0,
+            min_qty: 0.0,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(calc_min_entry_qty(1e9, &sub_step_exchange), 1.0);
     }
 
     #[test]

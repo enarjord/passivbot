@@ -45,11 +45,13 @@ All notable user-facing changes will be documented in this file.
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
   supervisors no longer swallow fatal producer failures. Impossible loss-gate blocks are rejected
   when Rust bypasses that gate for panic reducers, the submitted policy disables the gate, or the
-  block reports a different loss percentage than the submitted policy. Rust now also
-  quantizes effective minimum quantities to the submitted quantity step without overshooting
-  already aligned floating-point values, quantizes EMA Anchor touch prices in the protective
-  direction, and keeps panic limit prices valid when the submitted top-of-book quote itself is off
-  tick, including low-priced books at or near one price step, without skipping a tick because of
+  block reports a different loss percentage than the submitted policy, and when the submitted
+  side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
+  also quantizes effective minimum quantities to the submitted quantity step without overshooting
+  already aligned floating-point values or collapsing a positive sub-step minimum to zero,
+  quantizes EMA Anchor touch prices in the protective direction, and keeps panic limit prices
+  valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
+  near one price step, without skipping a tick because of
   ordinary floating-point noise. The complete serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position

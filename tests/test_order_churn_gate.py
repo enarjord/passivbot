@@ -1365,6 +1365,13 @@ def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
     ]
 
 
+def test_rust_effective_min_qty_rounds_positive_sub_step_minimum_up():
+    assert reconciler._rust_effective_min_qty(
+        1e9,
+        (1.0, 0.01, 0.0, 1.0, 1.0),
+    ) == 1.0
+
+
 def test_raw_rust_output_rejects_limit_price_off_submitted_price_step():
     with pytest.raises(FatalBotException, match="price_step"):
         reconciler.validate_rust_orchestrator_output(
@@ -1594,6 +1601,59 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     assert reconciler.validate_rust_orchestrator_output(
         out, {0: SYMBOL}, _raw_rust_input()
     ) == []
+
+
+def test_raw_rust_output_rejects_loss_gate_block_for_flat_side():
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
+
+    with pytest.raises(FatalBotException, match="requires a submitted position"):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input(long_pos_size=0.0)
+        )
+
+
+@pytest.mark.parametrize("long_mode", ["manual", "panic"])
+def test_raw_rust_output_rejects_loss_gate_block_for_non_gateable_mode(long_mode):
+    out = _raw_rust_output_for_long_mode([], long_mode)
+    if long_mode == "manual":
+        out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+        out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+    out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
+
+    with pytest.raises(FatalBotException, match="submitted mode or eligibility"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_mode=long_mode),
+        )
+
+
+def test_raw_rust_output_rejects_loss_gate_block_for_globally_disabled_side():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "manual"
+    out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
+
+    with pytest.raises(FatalBotException, match="globally disabled long"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_total_wallet_exposure_limit=0.0),
+        )
+
+
+def test_raw_rust_output_rejects_loss_gate_block_from_another_strategy():
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(order_type="close_ema_anchor_long")
+    ]
+
+    with pytest.raises(FatalBotException, match="inconsistent with submitted strategy"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(strategy_kind="trailing_martingale"),
+        )
 
 
 @pytest.mark.parametrize(
