@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -5,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from passivbot import Passivbot, shutdown_bot
+from passivbot_exceptions import RestartBotException
 
 
 class _Task:
@@ -70,6 +72,146 @@ def test_stop_data_maintainers_keeps_cancellation_failures_at_error(caplog):
     assert "websocket-secret" not in caplog.text
     assert "private.invalid" not in caplog.text
     assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_restart_request_defers_maintainer_cancellation_to_outer_cleanup():
+    bot = Passivbot.__new__(Passivbot)
+    stop_calls = []
+    bot.stop_data_maintainers = lambda: stop_calls.append("stop")
+
+    with pytest.raises(RestartBotException, match="Bot will restart"):
+        await bot.restart_bot()
+
+    assert stop_calls == []
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_awaits_ws_owner_before_closing_resources():
+    bot = Passivbot.__new__(Passivbot)
+    calls = []
+    child = None
+
+    async def child_watcher():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            calls.append("watcher_stopped")
+
+    async def ws_owner():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            child.cancel()
+            await asyncio.gather(child, return_exceptions=True)
+            calls.append("owner_stopped")
+
+    class _Client:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            calls.append(self.label)
+
+    class _Publisher:
+        def close(self):
+            calls.append("publisher")
+
+    child = asyncio.create_task(child_watcher())
+    owner = asyncio.create_task(ws_owner())
+    await asyncio.sleep(0)
+    bot.maintainers = {"maintain_forager_ws_candles": owner}
+    bot.WS_ohlcvs_1m_tasks = {"BTC": child}
+    bot.ccp = _Client("public")
+    bot.cca = _Client("private")
+    bot.monitor_publisher = _Publisher()
+    bot._close_live_event_pipeline = lambda **_kwargs: calls.append("pipeline") or True
+
+    await bot.cleanup_for_restart(timeout_seconds=1.0)
+
+    assert calls == [
+        "watcher_stopped",
+        "owner_stopped",
+        "public",
+        "private",
+        "pipeline",
+        "publisher",
+    ]
+    assert bot.ccp is None
+    assert bot.cca is None
+    assert bot.monitor_publisher is None
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_abandons_cancellation_resistant_maintainer(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    release = asyncio.Event()
+    cancellation_count = 0
+
+    async def resistant_maintainer():
+        nonlocal cancellation_count
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                cancellation_count += 1
+
+    class _Client:
+        async def close(self):
+            return None
+
+    task = asyncio.create_task(resistant_maintainer())
+    await asyncio.sleep(0)
+    bot.maintainers = {"resistant": task}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Client()
+    bot.cca = _Client()
+    bot.monitor_publisher = None
+    bot._close_live_event_pipeline = lambda **_kwargs: True
+
+    try:
+        with caplog.at_level(logging.WARNING):
+            await asyncio.wait_for(
+                bot.cleanup_for_restart(timeout_seconds=0.0), timeout=1.5
+            )
+        assert cancellation_count >= 1
+        assert "maintainer cancellation grace expired" in caplog.text
+        assert bot.ccp is None
+        assert bot.cca is None
+    finally:
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_restart_cleanup_skips_publisher_close_after_pipeline_timeout(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    closed_clients = []
+
+    class _Client:
+        def __init__(self, label):
+            self.label = label
+
+        async def close(self):
+            closed_clients.append(self.label)
+
+    class _Publisher:
+        def close(self):
+            raise AssertionError("publisher close must be skipped")
+
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Client("public")
+    bot.cca = _Client("private")
+    bot.monitor_publisher = _Publisher()
+    bot._close_live_event_pipeline = lambda **_kwargs: False
+
+    with caplog.at_level(logging.WARNING):
+        await bot.cleanup_for_restart()
+
+    assert closed_clients == ["public", "private"]
+    assert bot.monitor_publisher is None
+    assert "monitor publisher close skipped" in caplog.text
 
 
 @pytest.mark.asyncio

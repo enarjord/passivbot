@@ -504,13 +504,127 @@ def order_has_match(order, orders, tolerance_qty=0.01, tolerance_price=0.002):
     return False
 
 
+def _bounded_traceback_origin(exc: BaseException) -> str:
+    """Return the innermost traceback location without exception text or paths."""
+    try:
+        tb = exc.__traceback__
+        if tb is None:
+            return "unknown"
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        filename = os.path.basename(str(tb.tb_frame.f_code.co_filename))
+        function = str(tb.tb_frame.f_code.co_name)
+        line = int(tb.tb_lineno)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", filename):
+            return "unknown"
+        if not re.fullmatch(r"[A-Za-z0-9_<>.-]{1,64}", function):
+            return "unknown"
+        return f"{filename}:{function}:{line}"
+    except BaseException:
+        return "unknown"
+
+
+def _bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
+    """Return a durable frame chain without exception text, locals, or source lines."""
+    exceptions: list[dict[str, Any]] = []
+    visited: set[int] = set()
+    current: BaseException | None = exc
+    relation = "raised"
+    total_frames = 0
+    truncated = False
+    source_root = Path(__file__).resolve().parent.parent
+    while current is not None and id(current) not in visited:
+        if len(exceptions) >= 8:
+            truncated = True
+            break
+        visited.add(id(current))
+        frames: list[dict[str, Any]] = []
+        tb = current.__traceback__
+        while tb is not None:
+            if total_frames >= 64:
+                truncated = True
+                break
+            raw_filename = str(tb.tb_frame.f_code.co_filename)
+            try:
+                resolved = Path(raw_filename).resolve()
+                relative = resolved.relative_to(source_root)
+                filename = relative.as_posix()
+            except (OSError, RuntimeError, ValueError):
+                filename = os.path.basename(raw_filename)
+            if not re.fullmatch(r"[A-Za-z0-9_./<>-]{1,240}", filename):
+                filename = os.path.basename(raw_filename)
+            if not re.fullmatch(r"[A-Za-z0-9_./<>-]{1,240}", filename):
+                filename = "unknown"
+            function = str(tb.tb_frame.f_code.co_name)
+            if not re.fullmatch(r"[A-Za-z0-9_<>.-]{1,96}", function):
+                function = "unknown"
+            frames.append(
+                {
+                    "file": filename,
+                    "function": function,
+                    "line": max(0, int(tb.tb_lineno)),
+                }
+            )
+            total_frames += 1
+            tb = tb.tb_next
+        exceptions.append(
+            {
+                "relation": relation,
+                "error_type": bounded_exception_type(current),
+                "frames": frames,
+            }
+        )
+        if current.__cause__ is not None:
+            current = current.__cause__
+            relation = "cause"
+        elif current.__context__ is not None and not current.__suppress_context__:
+            current = current.__context__
+            relation = "context"
+        else:
+            current = None
+    return {
+        "exceptions": exceptions,
+        "frame_count": total_frames,
+        "truncated": truncated,
+        "includes_exception_text": False,
+        "includes_locals": False,
+    }
+
+
+def _bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
+    """Isolate optional traceback projection from the execution failure policy."""
+    try:
+        return _bounded_traceback_detail_inner(exc)
+    except BaseException:
+        return {
+            "exceptions": [],
+            "frame_count": 0,
+            "truncated": True,
+            "unavailable_reason": "projection_failed",
+            "includes_exception_text": False,
+            "includes_locals": False,
+        }
+
+
+def _bounded_runtime_stage(bot: Any) -> str:
+    """Return the current lifecycle stage as a safe diagnostic token."""
+    try:
+        stage = str(getattr(bot, "_log_silence_watchdog_stage", "unknown"))
+    except BaseException:
+        return "unknown"
+    return stage if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", stage) else "unknown"
+
+
 def _log_process_failure(label: str, exc: BaseException) -> None:
+    current_bot = globals().get("bot")
     logging.error(
-        "%s | error_type=%s status=%s code=%s",
+        "%s | error_type=%s status=%s code=%s stage=%s origin=%s",
         label,
         bounded_exception_type(exc),
         bounded_exception_status(exc) or "-",
         bounded_exception_code(exc) or "-",
+        _bounded_runtime_stage(current_bot),
+        _bounded_traceback_origin(exc),
     )
 
 
@@ -5874,6 +5988,8 @@ class Passivbot:
             "status": bounded_exception_status(exc) or "-",
             "code": bounded_exception_code(exc) or "-",
             "endpoint": self._execution_loop_error_endpoint(exc),
+            "stage": _bounded_runtime_stage(self),
+            "origin": _bounded_traceback_origin(exc),
         }
 
     def _execution_loop_error_endpoint(self, exc: BaseException) -> str:
@@ -5975,6 +6091,11 @@ class Passivbot:
             return True
         self._health_errors += 1
         fields = self._execution_loop_error_fields(exc)
+        incident_sequence = int(
+            getattr(self, "_execution_loop_incident_sequence", 0) or 0
+        ) + 1
+        self._execution_loop_incident_sequence = incident_sequence
+        incident_id = f"exec-{utc_ms()}-{incident_sequence}"
         incident_action = "record_error_restart_backoff"
         incident_cycle = "abandoned"
         self._monitor_record_event(
@@ -5982,25 +6103,37 @@ class Passivbot:
             ("error", "bot"),
             {
                 "source": "run_execution_loop",
+                "incident_id": incident_id,
                 **fields,
                 "action": incident_action,
                 "cycle": incident_cycle,
             },
         )
+        self._monitor_record_event(
+            "error.bot.detail",
+            ("error", "bot", "diagnostic"),
+            {
+                "source": "run_execution_loop",
+                "incident_id": incident_id,
+                **fields,
+                "action": incident_action,
+                "cycle": incident_cycle,
+                "traceback": _bounded_traceback_detail(exc),
+            },
+        )
         logging.error(
-            "[error] operation=run_execution_loop error_type=%s status=%s code=%s endpoint=%s action=%s cycle=%s",
+            "[error] operation=run_execution_loop incident=%s error_type=%s status=%s code=%s endpoint=%s stage=%s origin=%s action=%s cycle=%s",
+            incident_id,
             fields["error_type"],
             fields["status"],
             fields["code"],
             fields["endpoint"],
+            fields["stage"],
+            fields["origin"],
             incident_action,
             incident_cycle,
         )
         self._log_execution_loop_error_burst(fields)
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            stack_frames = "".join(traceback.format_tb(exc.__traceback__))
-            if stack_frames:
-                logging.debug("[error] execution loop stack frames:\n%s", stack_frames)
         await self.restart_bot_on_too_many_errors()
         await asyncio.sleep(1.0)
         return True
@@ -7092,7 +7225,7 @@ class Passivbot:
             try:
                 try:
                     maintainer_grace = float(
-                        getattr(self, "_shutdown_maintainer_grace_seconds", 5.0)
+                        getattr(self, "_shutdown_maintainer_grace_seconds", 10.0)
                     )
                 except Exception:
                     maintainer_grace = 5.0
@@ -8115,6 +8248,12 @@ class Passivbot:
                 )
                 return {
                     "coverage_ok": bool(report.get("coverage_ok")),
+                    "refresh_needed": bool(
+                        report.get(
+                            "refresh_needed",
+                            not bool(report.get("coverage_ok")),
+                        )
+                    ),
                     "age_ms": (
                         int(now)
                         if no_basis
@@ -8126,6 +8265,16 @@ class Passivbot:
                         else int(last_cached_ts)
                     ),
                     "missing_candles": missing_candles,
+                    "verified_no_trade_missing_candles": int(
+                        report.get("verified_no_trade_missing_candles", 0) or 0
+                    ),
+                    "deferred_missing_candles": int(
+                        report.get("deferred_missing_candles", 0) or 0
+                    ),
+                    "refreshable_missing_candles": int(
+                        report.get("refreshable_missing_candles", missing_candles)
+                        or 0
+                    ),
                     "tail_gap_candles": tail_gap_candles,
                     "tail_only": bool(report.get("open_tail_gap"))
                     and missing_candles > 0
@@ -8147,6 +8296,7 @@ class Passivbot:
             if tf != "1m":
                 return {
                     "coverage_ok": False,
+                    "refresh_needed": True,
                     "age_ms": int(now),
                     "missing_candles": max(1, int(required_candles)),
                     "tail_gap_candles": max(1, int(required_candles)),
@@ -8158,6 +8308,7 @@ class Passivbot:
         age_ms = Passivbot._candle_staleness_ms(self, symbol, now_ms=now)
         return {
             "coverage_ok": age_ms <= 0,
+            "refresh_needed": age_ms > 0,
             "age_ms": int(age_ms),
             "missing_candles": 0 if age_ms <= 0 else 1,
             "tail_gap_candles": 0 if age_ms <= 0 else 1,
@@ -8248,7 +8399,12 @@ class Passivbot:
                     key,
                     bounded_exception_type(e),
                 )
-        if hasattr(self, "WS_ohlcvs_1m_tasks"):
+        ws_owner = self.maintainers.get("maintain_forager_ws_candles")
+        owner_done = getattr(ws_owner, "done", None)
+        ws_owner_active = ws_owner is not None and (
+            not callable(owner_done) or not owner_done()
+        )
+        if hasattr(self, "WS_ohlcvs_1m_tasks") and not ws_owner_active:
             res0s = {}
             for key in self.WS_ohlcvs_1m_tasks:
                 try:
@@ -8266,6 +8422,92 @@ class Passivbot:
         if verbose:
             logging.debug(f"stopped data maintainers: {res}")
         return res
+
+    async def cleanup_for_restart(self, *, timeout_seconds: float = 10.0) -> None:
+        """Close process-local resources before constructing a replacement bot."""
+        task_maps = (
+            getattr(self, "maintainers", None),
+            getattr(self, "WS_ohlcvs_1m_tasks", None),
+        )
+        self.stop_data_maintainers(verbose=False)
+        tasks: list[asyncio.Task] = []
+        seen: set[int] = set()
+        for task_map in task_maps:
+            if not isinstance(task_map, dict):
+                continue
+            for task in task_map.values():
+                if not isinstance(task, asyncio.Task) or id(task) in seen:
+                    continue
+                seen.add(id(task))
+                tasks.append(task)
+        if tasks:
+            try:
+                done, pending = await asyncio.wait(
+                    tasks, timeout=max(0.0, float(timeout_seconds))
+                )
+                for task in done:
+                    if not task.cancelled():
+                        task.exception()
+                if pending:
+                    logging.warning(
+                        "[restart] maintainer cleanup timed out | task_count=%d action=cancel_remaining",
+                        len(pending),
+                    )
+                    for task in pending:
+                        task.cancel()
+                    cancelled, still_pending = await asyncio.wait(pending, timeout=1.0)
+                    for task in cancelled:
+                        if not task.cancelled():
+                            task.exception()
+                    if still_pending:
+                        logging.warning(
+                            "[restart] maintainer cancellation grace expired | task_count=%d action=abandon_pending",
+                            len(still_pending),
+                        )
+            except asyncio.CancelledError:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                raise
+            except Exception as exc:
+                logging.warning(
+                    "[restart] maintainer cleanup failed | error_type=%s action=continue_cleanup",
+                    bounded_exception_type(exc),
+                )
+
+        for attr, label in (("ccp", "public"), ("cca", "private")):
+            client = getattr(self, attr, None)
+            if client is None:
+                continue
+            try:
+                await client.close()
+            except Exception as exc:
+                logging.warning(
+                    "[restart] %s session close failed | error_type=%s action=continue_cleanup",
+                    label,
+                    bounded_exception_type(exc),
+                )
+            finally:
+                setattr(self, attr, None)
+
+        pipeline_closed = self._close_live_event_pipeline(timeout=2.0)
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is not None:
+            try:
+                if pipeline_closed:
+                    publisher.close()
+                else:
+                    logging.warning(
+                        "[restart] monitor publisher close skipped "
+                        "| reason=event_pipeline_close_incomplete action=abandon_publisher"
+                    )
+            except Exception as exc:
+                logging.warning(
+                    "[restart] monitor publisher close failed | error_type=%s",
+                    bounded_exception_type(exc),
+                )
+            finally:
+                self.monitor_publisher = None
 
     def has_position(self, pside=None, symbol=None):
         """Return True if the bot currently holds a position for the given side and symbol."""
@@ -19825,15 +20067,15 @@ class Passivbot:
     # Legacy get_ohlcvs_1m_file_mods removed
 
     async def restart_bot(self):
-        """Stop all tasks and raise to trigger an external bot restart."""
+        """Request replacement by the outer lifecycle loop."""
         logging.info("Initiating bot restart...")
         # Note: Do NOT set stop_signal_received=True here - that would cause
         # the main loop to exit instead of restart. The flag is only for
         # user-initiated stops (SIGINT/SIGTERM).
-        self.stop_data_maintainers()
-        await self.cca.close()
-        if self.ccp is not None:
-            await self.ccp.close()
+        # The outer lifecycle finally block owns maintainer cancellation and
+        # awaits owner-managed teardown exactly once before closing clients.
+        # Cancelling here as well can inject a second CancelledError while the
+        # WebSocket owner is already retiring its child watchers.
         raise RestartBotException("Bot will restart.")
 
     def _forager_refresh_budget(
@@ -20315,6 +20557,15 @@ class Passivbot:
                 surface_health,
                 now_ms=now,
             )
+            refresh_needed = bool(
+                surface_health.get(
+                    "refresh_needed",
+                    not bool(surface_health.get("coverage_ok")),
+                )
+            )
+            if not refresh_needed and not ws_rest_audit_due:
+                surface_checks[surface_key] = checked_ms
+                continue
             if age_ms <= target_age_ms and (
                 bool(surface_health.get("coverage_ok")) or tail_only
             ) and not ws_rest_audit_due:
@@ -21807,15 +22058,9 @@ async def main():
                     else:
                         await bot.shutdown_gracefully()
                 else:
-                    bot.stop_data_maintainers()
-                if bot.ccp is not None:
-                    await bot.ccp.close()
-                    bot.ccp = None
-                if bot.cca is not None:
-                    await bot.cca.close()
-                    bot.cca = None
-            except:
-                pass
+                    await bot.cleanup_for_restart()
+            except Exception as exc:
+                _log_process_failure("passivbot cleanup error", exc)
             if bot is not None and getattr(bot, "_shutdown_in_progress", False):
                 logging.info(
                     "[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?")
