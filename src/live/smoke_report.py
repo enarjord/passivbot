@@ -125,6 +125,12 @@ PROCESS_SAMPLING_FIELDS = (
     "uninterruptible_active_count",
     "state_observations",
 )
+
+
+def _sleep_between_process_samples(interval_s: float) -> None:
+    time.sleep(interval_s)
+
+
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "attention",
@@ -7559,7 +7565,7 @@ def _build_process_report(
     running_scans: list[dict[str, Any]] = []
     for sample_index in range(process_samples):
         if sample_index > 0 and process_sample_interval_s > 0.0:
-            time.sleep(process_sample_interval_s)
+            _sleep_between_process_samples(process_sample_interval_s)
         running_scans.append(
             _running_live_processes(command_match=process_command_match)
         )
