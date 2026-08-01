@@ -33,6 +33,26 @@ fn calc_offset_multiplier(state: &StateParams, params: &EmaAnchorParams) -> f64 
 }
 
 #[inline]
+fn tolerant_round_dn(value: f64, step: f64) -> f64 {
+    let nearest = round_(value, step);
+    if (value - nearest).abs() <= step * 1e-8 {
+        nearest
+    } else {
+        round_dn(value, step)
+    }
+}
+
+#[inline]
+fn tolerant_round_up(value: f64, step: f64) -> f64 {
+    let nearest = round_(value, step);
+    if (value - nearest).abs() <= step * 1e-8 {
+        nearest
+    } else {
+        round_up(value, step)
+    }
+}
+
+#[inline]
 pub fn calc_bid_price(
     state: &StateParams,
     exchange: &ExchangeParams,
@@ -50,7 +70,8 @@ pub fn calc_bid_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
-    round_dn(f64::min(state.order_book.bid, target), exchange.price_step).max(exchange.price_step)
+    tolerant_round_dn(f64::min(state.order_book.bid, target), exchange.price_step)
+        .max(exchange.price_step)
 }
 
 #[inline]
@@ -71,7 +92,7 @@ pub fn calc_ask_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
-    round_up(f64::max(state.order_book.ask, target), exchange.price_step)
+    tolerant_round_up(f64::max(state.order_book.ask, target), exchange.price_step)
 }
 
 #[inline]
@@ -487,6 +508,47 @@ mod tests {
         };
 
         assert_eq!(calc_bid_price(&state, &exchange, &params, -1.0, 1.0), 0.01);
+    }
+
+    #[test]
+    fn aligned_touch_prices_survive_binary_float_noise() {
+        let bid_state = StateParams {
+            order_book: OrderBook {
+                bid: 0.29,
+                ask: 0.30,
+            },
+            ema_bands: EMABands {
+                lower: 1.0,
+                upper: 1.0,
+            },
+            ..base_state()
+        };
+        let ask_state = StateParams {
+            order_book: OrderBook {
+                bid: 0.06,
+                ask: 0.07,
+            },
+            ema_bands: EMABands {
+                lower: 0.01,
+                upper: 0.01,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(
+            calc_bid_price(&bid_state, &exchange, &params, 0.0, 1.0),
+            0.29
+        );
+        assert_eq!(
+            calc_ask_price(&ask_state, &exchange, &params, 0.0, 1.0),
+            0.07
+        );
     }
 
     #[test]

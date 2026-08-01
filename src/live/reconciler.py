@@ -1166,12 +1166,13 @@ def _rust_effective_min_qty(
     raw_min_steps = raw_min / qty_step
     if not math.isfinite(raw_min_steps):
         return math.inf
-    nearest_step = round(round(raw_min_steps) * qty_step, 10)
+    nearest_step_count = round(raw_min_steps)
+    nearest_step = nearest_step_count * qty_step
     if raw_min == 0.0:
         return 0.0
-    if nearest_step > 0.0 and abs(raw_min - nearest_step) <= qty_step * 1e-8:
+    if nearest_step_count > 0 and abs(raw_min_steps - nearest_step_count) <= 1e-8:
         return nearest_step
-    return round(math.ceil(raw_min_steps) * qty_step, 10)
+    return math.ceil(raw_min_steps) * qty_step
 
 
 def _validate_rust_close_exchange_constraints(

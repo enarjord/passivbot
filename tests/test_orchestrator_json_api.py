@@ -372,6 +372,12 @@ def test_live_validator_accepts_complete_rust_output():
     assert "loss_gate_blocks" in out["diagnostics"]
 
 
+def test_real_rust_preserves_tiny_aligned_exchange_minimum():
+    import passivbot_rust as pbr
+
+    assert pbr.calc_min_entry_qty_py(100.0, 1.0, 1e-12, 1e-12, 0.0) == 1e-12
+
+
 def test_live_validator_accepts_rust_market_execution_policy():
     import passivbot_rust as pbr
 

@@ -50,8 +50,9 @@ All notable user-facing changes will be documented in this file.
   block reports a different loss percentage than the submitted policy, and when the submitted
   side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
-  already aligned floating-point values or collapsing a positive sub-step minimum to zero,
-  quantizes EMA Anchor touch prices in the protective direction and clamps bids to the lowest
+  already aligned floating-point values, including valid quantities below ten decimal places, or
+  collapsing a positive sub-step minimum to zero, quantizes EMA Anchor touch prices in the
+  protective direction without moving float-noisy aligned touches and clamps bids to the lowest
   positive tick, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step, without skipping a tick because of

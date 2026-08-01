@@ -1417,6 +1417,13 @@ def test_rust_effective_min_qty_rounds_positive_sub_step_minimum_up():
     ) == 1.0
 
 
+def test_rust_effective_min_qty_preserves_tiny_aligned_exchange_minimum():
+    assert reconciler._rust_effective_min_qty(
+        100.0,
+        (1e-12, 0.01, 1e-12, 0.0, 1.0),
+    ) == 1e-12
+
+
 def test_raw_rust_output_rejects_limit_price_off_submitted_price_step():
     with pytest.raises(FatalBotException, match="price_step"):
         reconciler.validate_rust_orchestrator_output(
