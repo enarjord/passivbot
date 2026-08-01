@@ -473,6 +473,7 @@ def test_raw_rust_output_requires_orders_field():
     ("overrides", "error"),
     [
         ({"pside": "both"}, "invalid pside"),
+        ({"pside": []}, "invalid pside"),
         ({"qty": 0.0}, "invalid qty"),
         ({"qty": float("nan")}, "invalid qty"),
         ({"qty": 10**400}, "invalid qty"),
@@ -482,7 +483,9 @@ def test_raw_rust_output_requires_orders_field():
         ({"order_type": "not_an_order_long"}, "invalid order_type"),
         ({"qty": -1.0}, "qty sign disagrees"),
         ({"execution_type": "stop"}, "invalid execution_type"),
+        ({"execution_type": {}}, "invalid execution_type"),
         ({"execution_priority": "optional"}, "invalid execution_priority"),
+        ({"execution_priority": []}, "invalid execution_priority"),
     ],
 )
 def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
@@ -1020,6 +1023,20 @@ def test_raw_rust_output_requires_explicit_input_mode():
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [("input_mode", []), ("effective_mode", {})],
+)
+def test_raw_rust_output_rejects_unhashable_symbol_state_modes(field, value):
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"][field] = value
+
+    with pytest.raises(FatalBotException, match=rf"invalid long {field}"):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+@pytest.mark.parametrize(
     "input_overrides",
     [
         {"tradable": False},
@@ -1417,6 +1434,18 @@ def test_raw_rust_output_accepts_exact_remaining_off_step_full_close():
     ) == [order]
 
 
+def test_raw_rust_output_accepts_aligned_partial_close_at_exchange_minimum():
+    order = _raw_rust_order(
+        qty=-0.07,
+        order_type="close_grid_long",
+    )
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=0.2, qty_step=0.01, min_qty=0.07),
+    ) == [order]
+
+
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
     order = _raw_rust_order(order_type="entry_grid_normal_long")
     out = _raw_rust_output([order])
@@ -1465,6 +1494,18 @@ def test_raw_rust_output_accepts_held_graceful_stop_effective_normal_mode():
         {0: SYMBOL},
         _raw_rust_input(long_mode="graceful_stop", long_pos_size=1.0),
     ) == []
+
+
+def test_raw_rust_output_accepts_tiny_nonzero_graceful_stop_position_order():
+    order = _raw_rust_order(order_type="entry_grid_normal_long")
+    out = _raw_rust_output_for_long_mode([order], "graceful_stop")
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = "normal"
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(long_mode="graceful_stop", long_pos_size=1e-13),
+    ) == [order]
 
 
 def test_raw_rust_output_rejects_inactive_state_for_eligible_managed_position():

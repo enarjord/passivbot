@@ -1066,7 +1066,7 @@ def _validate_rust_order_family_for_submitted_mode(
         )
         or (
             mode == "graceful_stop"
-            and submitted_position_size <= 1e-12
+            and submitted_position_size == 0.0
         )
     )
     if invalid:
@@ -1139,9 +1139,13 @@ def _rust_effective_min_qty(
 ) -> float:
     """Mirror Rust's compact effective-minimum calculation for boundary checks."""
     qty_step, _price_step, min_qty, min_cost, c_mult = exchange
-    raw_min_steps = max(min_qty, min_cost / price / c_mult) / qty_step
+    raw_min = max(min_qty, min_cost / price / c_mult)
+    raw_min_steps = raw_min / qty_step
     if not math.isfinite(raw_min_steps):
         return math.inf
+    nearest_step = round(round(raw_min_steps) * qty_step, 10)
+    if abs(raw_min - nearest_step) <= qty_step * 1e-8:
+        return nearest_step
     return round(math.ceil(raw_min_steps) * qty_step, 10)
 
 
@@ -1305,7 +1309,7 @@ def _submitted_rust_input_context(
     if not isinstance(hedge_mode, bool):
         raise FatalBotException("Rust orchestrator global input has invalid hedge_mode")
     strategy_kind = global_input.get("strategy_kind", "trailing_martingale")
-    if strategy_kind not in {
+    if not isinstance(strategy_kind, str) or strategy_kind not in {
         "trailing_martingale",
         "trailing_grid_v7",
         "ema_anchor",
@@ -1399,13 +1403,13 @@ def _submitted_rust_input_context(
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} input"
                 )
-            if "mode" not in side_input or side_input["mode"] not in valid_modes | {
-                None
-            }:
+            mode = side_input.get("mode") if "mode" in side_input else object()
+            if mode is not None and (
+                not isinstance(mode, str) or mode not in valid_modes
+            ):
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} mode"
                 )
-            mode = side_input["mode"]
             modes[(symbol_idx, pside)] = mode
             position = side_input.get("position")
             if not isinstance(position, dict):
@@ -1515,7 +1519,7 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} has unknown symbol_idx {symbol_idx}"
             )
         pside = order.get("pside")
-        if pside not in {"long", "short"}:
+        if not isinstance(pside, str) or pside not in {"long", "short"}:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid pside"
             )
@@ -1605,7 +1609,10 @@ def validate_rust_orchestrator_output(
                     f"{pside} exceeds submitted position"
                 )
         execution_type = order.get("execution_type")
-        if execution_type not in {"limit", "market"}:
+        if not isinstance(execution_type, str) or execution_type not in {
+            "limit",
+            "market",
+        }:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
             )
@@ -1629,7 +1636,10 @@ def validate_rust_orchestrator_output(
                 "inconsistent with its submitted input"
             )
         execution_priority = order.get("execution_priority")
-        if execution_priority not in {"ordinary", "risk_critical"}:
+        if not isinstance(execution_priority, str) or execution_priority not in {
+            "ordinary",
+            "risk_critical",
+        }:
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_priority"
             )
@@ -1684,20 +1694,24 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} state"
                 )
-            if (
-                "input_mode" not in side_state
-                or side_state["input_mode"] not in valid_modes | {None}
+            input_mode = (
+                side_state.get("input_mode")
+                if "input_mode" in side_state
+                else object()
+            )
+            if input_mode is not None and (
+                not isinstance(input_mode, str) or input_mode not in valid_modes
             ):
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} input_mode"
                 )
-            if side_state["input_mode"] != submitted_input_modes[(symbol_idx, pside)]:
+            if input_mode != submitted_input_modes[(symbol_idx, pside)]:
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has {pside} input_mode "
                     "inconsistent with its submitted input"
                 )
             effective_mode = side_state.get("effective_mode")
-            if effective_mode not in valid_modes:
+            if not isinstance(effective_mode, str) or effective_mode not in valid_modes:
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} effective_mode"
                 )
@@ -1854,7 +1868,7 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid symbol_idx"
             )
         pside = block.get("pside")
-        if pside not in {"long", "short"}:
+        if not isinstance(pside, str) or pside not in {"long", "short"}:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid pside"
             )
@@ -1945,7 +1959,7 @@ def validate_rust_orchestrator_output(
             )
 
     def validate_diagnostic_pside(value: object, context: str) -> None:
-        if value not in {"long", "short"}:
+        if not isinstance(value, str) or value not in {"long", "short"}:
             raise FatalBotException(f"Rust orchestrator {context} has invalid pside")
 
     def validate_diagnostic_finite_fields(

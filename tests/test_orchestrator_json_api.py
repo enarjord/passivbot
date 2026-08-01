@@ -1801,12 +1801,18 @@ def test_off_step_full_panic_close_passes_live_validation():
     assert out["orders"][0]["qty"] == -1.005
 
 
-def test_unaligned_exchange_min_qty_is_quantized_before_live_validation():
+@pytest.mark.parametrize(
+    ("min_qty", "expected_qty"),
+    [(0.015, 0.02), (0.07, 0.07)],
+)
+def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
+    min_qty, expected_qty
+):
     import passivbot_rust as pbr
 
     symbol = make_symbol(0, bid=100.0, ask=100.0)
     symbol["exchange"].update(
-        {"qty_step": 0.01, "min_qty": 0.015, "min_cost": 0.0}
+        {"qty_step": 0.01, "min_qty": min_qty, "min_cost": 0.0}
     )
     inp = make_input(balance=10.0, symbols=[symbol])
     out = compute(pbr, inp)
@@ -1815,7 +1821,7 @@ def test_unaligned_exchange_min_qty_is_quantized_before_live_validation():
         out, {0: "BTC/USDT:USDT"}, inp
     )
     entry = next(order for order in out["orders"] if order["order_type"].startswith("entry_"))
-    assert abs(entry["qty"]) == 0.02
+    assert abs(entry["qty"]) == expected_qty
 
 
 def test_panic_close_order_type_is_side_local():
@@ -1981,6 +1987,27 @@ def test_graceful_stop_blocks_initial_entries_only():
         == "graceful_stop"
     )
     assert any(o["order_type"].startswith("close_") for o in out_gs["orders"])
+
+    # Rust treats every exactly nonzero position as held, including sub-epsilon
+    # exchange dust, so graceful stop still uses effective normal generation.
+    tiny_sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="graceful_stop",
+        long_pos_size=1e-13,
+        long_pos_price=100.0,
+    )
+    tiny_inp = make_input(balance=1_000.0, symbols=[tiny_sym])
+    tiny_out = compute(pbr, tiny_inp)
+    reconciler.validate_rust_orchestrator_output(
+        tiny_out, {0: "BTC/USDT:USDT"}, tiny_inp
+    )
+    assert (
+        tiny_out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"]
+        == "normal"
+    )
+    assert any(order["order_type"].startswith("entry_") for order in tiny_out["orders"])
 
 
 def test_forager_respects_n_positions_selects_one_coin():

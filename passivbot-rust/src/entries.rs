@@ -72,17 +72,20 @@ pub fn calc_initial_entry_qty(
 }
 
 pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
-    round_up(
-        f64::max(
-            exchange_params.min_qty,
-            cost_to_qty(
-                exchange_params.min_cost,
-                entry_price,
-                exchange_params.c_mult,
-            ),
+    let raw_min = f64::max(
+        exchange_params.min_qty,
+        cost_to_qty(
+            exchange_params.min_cost,
+            entry_price,
+            exchange_params.c_mult,
         ),
-        exchange_params.qty_step,
-    )
+    );
+    let nearest_step = round_(raw_min, exchange_params.qty_step);
+    if (raw_min - nearest_step).abs() <= exchange_params.qty_step * 1e-8 {
+        nearest_step
+    } else {
+        round_up(raw_min, exchange_params.qty_step)
+    }
 }
 
 fn calc_entry_distance_multiplier(
@@ -1148,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn test_min_entry_qty_quantizes_unaligned_exchange_minimum() {
+    fn test_min_entry_qty_quantizes_without_overshooting_aligned_minimum() {
         let exchange = ExchangeParams {
             qty_step: 0.01,
             min_qty: 0.015,
@@ -1158,6 +1161,12 @@ mod tests {
         };
 
         assert_eq!(calc_min_entry_qty(100.0, &exchange), 0.02);
+
+        let aligned_exchange = ExchangeParams {
+            min_qty: 0.07,
+            ..exchange
+        };
+        assert_eq!(calc_min_entry_qty(100.0, &aligned_exchange), 0.07);
     }
 
     #[test]
