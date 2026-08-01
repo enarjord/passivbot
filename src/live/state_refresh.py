@@ -109,7 +109,12 @@ async def refresh_authoritative_state_staged(bot) -> bool:
         bot._last_authoritative_degraded_pnl_count = int(
             snapshot.get("degraded_pnl_count", 0) or 0
         )
-        if bot._live_risk_uses_authoritative_pnl():
+        fill_refresh_block_reason = getattr(
+            bot, "_last_fill_refresh_block_reason", None
+        )
+        if fill_refresh_block_reason == "fill_history_coverage":
+            bot._last_authoritative_block_reason = fill_refresh_block_reason
+        elif bot._live_risk_uses_authoritative_pnl():
             if bot._last_authoritative_degraded_pnl_count:
                 bot._last_authoritative_block_reason = "degraded_pnl"
             elif bot._last_authoritative_pending_pnl_count:

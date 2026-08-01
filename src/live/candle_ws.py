@@ -21,6 +21,10 @@ _SUBSCRIPTION_RECONCILE_SECONDS = 5.0
 _MAX_RECONNECT_DELAY_SECONDS = 30.0
 _FAILURES_BEFORE_COOLDOWN = 5
 _UNSTABLE_COOLDOWN_SECONDS = 300.0
+_UNWATCH_TIMEOUT_SECONDS = 2.0
+_UNWATCH_MANY_TIMEOUT_SECONDS = 3.0
+_WATCHER_RETIRE_GRACE_SECONDS = 3.0
+_WATCHER_CANCEL_GRACE_SECONDS = 1.0
 
 
 def reconnect_delay_seconds(consecutive_failures: int) -> float:
@@ -99,26 +103,211 @@ async def _sleep_unless_shutdown(bot: Any, delay_s: float, *, stage: str) -> Non
         await asyncio.sleep(delay_s)
 
 
-async def _best_effort_unwatch(bot: Any, symbol: str) -> None:
+def _abandoned_unsubscribe_tasks(bot: Any) -> set[asyncio.Future]:
+    tasks = getattr(bot, "_forager_ws_abandoned_unsubscribe_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        bot._forager_ws_abandoned_unsubscribe_tasks = tasks
+    return tasks
+
+
+def _consume_abandoned_unsubscribe(bot: Any, task: asyncio.Future) -> None:
+    _abandoned_unsubscribe_tasks(bot).discard(task)
+    if task.done() and not task.cancelled():
+        try:
+            task.exception()
+        except BaseException:
+            pass
+
+
+def _cancel_and_track_unsubscribe(bot: Any, task: asyncio.Future) -> None:
+    task.cancel()
+    abandoned = _abandoned_unsubscribe_tasks(bot)
+    abandoned.add(task)
+    task.add_done_callback(
+        lambda done_task: _consume_abandoned_unsubscribe(bot, done_task)
+    )
+
+
+async def _run_unsubscribe_with_hard_timeout(
+    bot: Any, awaitable: Any, *, timeout: float
+) -> bool:
+    """Bound connector unsubscribe without awaiting cancellation-resistant work."""
+    try:
+        task = asyncio.ensure_future(awaitable)
+    except Exception:
+        return False
+    try:
+        done, _pending = await asyncio.wait(
+            {task}, timeout=max(0.0, float(timeout))
+        )
+    except asyncio.CancelledError:
+        _cancel_and_track_unsubscribe(bot, task)
+        raise
+    if task not in done:
+        _cancel_and_track_unsubscribe(bot, task)
+        return False
+    try:
+        task.result()
+        return True
+    except asyncio.CancelledError:
+        return False
+    except Exception:
+        return False
+
+
+async def _best_effort_unwatch(bot: Any, symbol: str) -> bool:
     ccp = getattr(bot, "ccp", None)
     unwatch = getattr(ccp, "un_watch_ohlcv", None)
     if not callable(unwatch):
-        return
+        return False
     try:
-        await asyncio.wait_for(unwatch(symbol, "1m"), timeout=2.0)
-    except (asyncio.CancelledError, TimeoutError):
-        return
+        awaitable = unwatch(symbol, "1m")
+    except asyncio.CancelledError:
+        raise
     except Exception:
+        return False
+    return await _run_unsubscribe_with_hard_timeout(
+        bot,
+        awaitable,
+        timeout=_UNWATCH_TIMEOUT_SECONDS,
+    )
+
+
+async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
+    ccp = getattr(bot, "ccp", None)
+    unwatch = getattr(ccp, "un_watch_ohlcv_for_symbols", None)
+    if not callable(unwatch) or not symbols:
+        return False
+    subscriptions = [[symbol, "1m"] for symbol in symbols]
+    try:
+        awaitable = unwatch(subscriptions)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return False
+    return await _run_unsubscribe_with_hard_timeout(
+        bot,
+        awaitable,
+        timeout=_UNWATCH_MANY_TIMEOUT_SECONDS,
+    )
+
+
+def _retiring_watcher_tasks(bot: Any) -> dict[str, set[asyncio.Task]]:
+    retiring = getattr(bot, "_forager_ws_retiring_watchers", None)
+    if not isinstance(retiring, dict):
+        retiring = {}
+        bot._forager_ws_retiring_watchers = retiring
+    return retiring
+
+
+def _watcher_is_retiring(bot: Any, symbol: str, task: asyncio.Task | None) -> bool:
+    if task is None:
+        return False
+    return task in _retiring_watcher_tasks(bot).get(symbol, set())
+
+
+def _mark_watcher_retiring(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    _retiring_watcher_tasks(bot).setdefault(symbol, set()).add(task)
+
+
+def _clear_watcher_retiring(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    retiring = _retiring_watcher_tasks(bot)
+    symbol_tasks = retiring.get(symbol)
+    if not symbol_tasks:
         return
+    symbol_tasks.discard(task)
+    if not symbol_tasks:
+        retiring.pop(symbol, None)
+
+
+async def _retire_watcher(bot: Any, symbol: str, task: asyncio.Task) -> None:
+    """Unsubscribe while the watcher still owns CCXT's subscription future.
+
+    CCXT Pro uses ``UnsubscribeError`` to wake outstanding ``watch_ohlcv``
+    futures after an unsubscribe acknowledgement.  Cancelling Passivbot's
+    awaiting task first leaves that future orphaned, which asyncio later logs
+    as ``Future exception was never retrieved``.  Mark retirement first, ask
+    CCXT to unsubscribe, and let the watcher consume the wake-up exception.
+    Cancellation remains the bounded fallback for transports which do not wake
+    the watcher.
+    """
+    await _retire_watchers(bot, {symbol: task})
+
+
+async def _retire_watchers(bot: Any, tasks: dict[str, asyncio.Task]) -> None:
+    """Retire a watcher set through one bulk unsubscribe where available."""
+    active = {symbol: task for symbol, task in tasks.items() if task is not None}
+    if not active:
+        return
+    symbols = sorted(active)
+    for symbol, task in active.items():
+        _mark_watcher_retiring(bot, symbol, task)
+    abandoned_tasks: dict[str, asyncio.Task] = {}
+
+    def consume_done(done_tasks) -> None:
+        for done_task in done_tasks:
+            if done_task.done() and not done_task.cancelled():
+                try:
+                    done_task.exception()
+                except BaseException:
+                    pass
+
+    try:
+        unwatched = await _best_effort_unwatch_many(bot, symbols)
+        if not unwatched:
+            await asyncio.gather(
+                *(_best_effort_unwatch(bot, symbol) for symbol in symbols),
+                return_exceptions=True,
+            )
+        consume_done(task for task in active.values() if task.done())
+        pending = [task for task in active.values() if not task.done()]
+        if pending:
+            done, still_pending = await asyncio.wait(
+                pending, timeout=_WATCHER_RETIRE_GRACE_SECONDS
+            )
+            consume_done(done)
+            for task in still_pending:
+                task.cancel()
+            if still_pending:
+                cancelled, resistant = await asyncio.wait(
+                    still_pending, timeout=_WATCHER_CANCEL_GRACE_SECONDS
+                )
+                consume_done(cancelled)
+                resistant_set = set(resistant)
+                abandoned_tasks = {
+                    symbol: task
+                    for symbol, task in active.items()
+                    if task in resistant_set
+                }
+                if abandoned_tasks:
+                    logging.warning(
+                        "[candle] websocket watcher cancellation grace expired "
+                        "| symbols=%d action=abandon_pending",
+                        len(abandoned_tasks),
+                    )
+                    for symbol, task in abandoned_tasks.items():
+                        task.add_done_callback(
+                            lambda done_task, symbol=symbol: _clear_watcher_retiring(
+                                bot, symbol, done_task
+                            )
+                        )
+    finally:
+        for symbol, task in active.items():
+            if abandoned_tasks.get(symbol) is not task:
+                _clear_watcher_retiring(bot, symbol, task)
 
 
 async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
     """Watch one symbol and pass only validated finalized rows to the manager."""
     consecutive_failures = 0
+    watcher_task = asyncio.current_task()
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
+                if _watcher_is_retiring(bot, symbol, watcher_task):
+                    break
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
                     # Some venues return hundreds of cached rows on every
@@ -133,6 +322,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if _watcher_is_retiring(bot, symbol, watcher_task):
+                    break
                 consecutive_failures += 1
                 delay_s = reconnect_delay_seconds(consecutive_failures)
                 clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
@@ -164,7 +355,8 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                     stage="forager_ws_candle_reconnect",
                 )
     finally:
-        await _best_effort_unwatch(bot, symbol)
+        if not _watcher_is_retiring(bot, symbol, watcher_task):
+            await _best_effort_unwatch(bot, symbol)
 
 
 async def reconcile_forager_ws_tasks(
@@ -175,13 +367,12 @@ async def reconcile_forager_ws_tasks(
     existing = set(tasks)
     removed = existing - desired
     added = desired - existing
-    removed_tasks = []
-    for symbol in sorted(removed):
-        task = tasks.pop(symbol)
-        task.cancel()
-        removed_tasks.append(task)
+    removed_tasks = {symbol: tasks[symbol] for symbol in sorted(removed)}
     if removed_tasks:
-        await asyncio.gather(*removed_tasks, return_exceptions=True)
+        await _retire_watchers(bot, removed_tasks)
+        for symbol, retired_task in removed_tasks.items():
+            if tasks.get(symbol) is retired_task:
+                tasks.pop(symbol, None)
     clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
     if callable(clear_state):
         for symbol in sorted(removed):
@@ -213,9 +404,5 @@ async def maintain_forager_ws_candles(bot: Any) -> None:
     except asyncio.CancelledError:
         raise
     finally:
-        pending = list(tasks.values())
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        await _retire_watchers(bot, dict(tasks))
         tasks.clear()
