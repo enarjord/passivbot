@@ -6019,9 +6019,22 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
     assert bot.monitor_publisher.events[-1]["kind"] == "bot.stop"
     assert bot.monitor_publisher.events[-1]["payload"]["reason"] == "startup_error"
     assert bot.monitor_publisher.events[-1]["payload"]["stage"] == "start_data_maintainers"
-    assert bot.monitor_publisher.errors[-1]["kind"] == "error.bot"
-    assert bot.monitor_publisher.errors[-1]["payload"]["source"] == "start_bot"
-    assert bot.monitor_publisher.errors[-1]["payload"]["stage"] == "start_data_maintainers"
+    incident_events = [
+        event
+        for event in bot.monitor_publisher.events
+        if event["kind"] in {"error.bot", "error.bot.detail"}
+    ]
+    assert [event["kind"] for event in incident_events] == [
+        "error.bot",
+        "error.bot.detail",
+    ]
+    assert incident_events[0]["payload"]["source"] == "start_bot"
+    assert incident_events[0]["payload"]["stage"] == "start_data_maintainers"
+    assert (
+        incident_events[0]["payload"]["incident_id"]
+        == incident_events[1]["payload"]["incident_id"]
+    )
+    assert incident_events[1]["payload"]["traceback"]["frame_count"] >= 1
 
 
 def test_maybe_log_silence_watchdog_emits_phase_and_stage(monkeypatch, caplog):

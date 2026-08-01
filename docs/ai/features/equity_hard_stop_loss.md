@@ -30,6 +30,15 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    outcomes. They retain only a bounded exception type in diagnostics and fall back to authoritative
    replay when reuse is unavailable. Coin replay failures retain the same bounded classification
    without changing exception propagation or held-pair protection and flat-pair entry blocking.
+8. For an open coin scope using `restart_after_red_policy=always`, a fill-proven current episode
+   may discard older closed episodes after a flat gap longer than the configured RED cooldown.
+   Replay retains preceding episodes while their cooldown horizons overlap the next episode, so a
+   chain of possible cooldown interventions remains strict. An ambiguous fill sequence, a position
+   size mismatch, `threshold`/`never`, or a missing current-episode boundary preserves full-lookback
+   replay. The cumulative realized PnL of discarded episodes becomes the new replay baseline, so
+   their gains, losses, and fees cannot affect the retained episode. Unavailable candles before the
+   resulting boundary cannot strand an otherwise provable held episode; unavailable required
+   candles at or after it still fail closed.
 
 ## Failure Semantics
 
