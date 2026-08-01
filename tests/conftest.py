@@ -230,11 +230,21 @@ def _install_passivbot_rust_stub():
         "close_ema_anchor_short": 29,
         "empty": 65535,
     }
-    stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
-    stub.order_type_id_to_snake = lambda type_id: {v: k for k, v in _order_map.items()}.get(
-        type_id, "other"
-    )
-    stub.order_type_snake_to_id = lambda name: _order_map.get(name, 0)
+    _order_id_map = {v: k for k, v in _order_map.items()}
+
+    def _order_type_snake_to_id(name):
+        if name not in _order_map:
+            raise ValueError("unknown order type name")
+        return _order_map[name]
+
+    def _order_type_id_to_snake(type_id):
+        if type_id not in _order_id_map:
+            raise ValueError("unknown order type id")
+        return _order_id_map[type_id]
+
+    stub.get_order_id_type_from_string = _order_type_snake_to_id
+    stub.order_type_id_to_snake = _order_type_id_to_snake
+    stub.order_type_snake_to_id = _order_type_snake_to_id
 
     stub.run_backtest = lambda *args, **kwargs: {}
     stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
@@ -246,15 +256,43 @@ def _install_passivbot_rust_stub():
         import json
 
         payload = json.loads(input_json)
+        global_bot_params = payload.get("global", {}).get("global_bot_params", {})
         symbol_states = []
         for symbol in payload.get("symbols", []):
             row = {"symbol_idx": symbol["symbol_idx"]}
             for pside in ("long", "short"):
                 input_mode = symbol[pside].get("mode")
-                effective_mode = input_mode or "normal"
-                active = (
+                position_size = float(
+                    symbol[pside].get("position", {}).get("size", 0.0)
+                )
+                has_position = position_size != 0.0
+                effective_mode = (
+                    "normal"
+                    if input_mode is None
+                    or (input_mode == "graceful_stop" and has_position)
+                    else input_mode
+                )
+                wallet_exposure_limit = float(
+                    symbol[pside].get("bot_params", {}).get(
+                        "wallet_exposure_limit", 0.0
+                    )
+                )
+                side_params = global_bot_params.get(pside, {})
+                global_side_enabled = (
+                    float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                    and int(side_params.get("n_positions", 0)) > 0
+                )
+                symbol_side_eligible = (
                     bool(symbol.get("tradable", False))
-                    and effective_mode != "manual"
+                    and wallet_exposure_limit != 0.0
+                )
+                active = symbol_side_eligible and (
+                    (has_position and effective_mode != "manual")
+                    or (
+                        not has_position
+                        and global_side_enabled
+                        and effective_mode == "normal"
+                    )
                 )
                 row[pside] = {
                     "input_mode": input_mode,

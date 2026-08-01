@@ -17,13 +17,38 @@ def _active_market() -> dict:
 
 def _empty_orchestrator_output(input_json: str) -> str:
     payload = json.loads(input_json)
+    global_bot_params = payload.get("global", {}).get("global_bot_params", {})
     symbol_states = []
     for symbol in payload.get("symbols", []):
         row = {"symbol_idx": symbol["symbol_idx"]}
         for pside in ("long", "short"):
             input_mode = symbol[pside].get("mode")
-            effective_mode = input_mode or "normal"
-            active = bool(symbol.get("tradable", False)) and effective_mode != "manual"
+            position_size = float(symbol[pside]["position"]["size"])
+            has_position = position_size != 0.0
+            effective_mode = (
+                "normal"
+                if input_mode is None
+                or (input_mode == "graceful_stop" and has_position)
+                else input_mode
+            )
+            side_params = global_bot_params[pside]
+            global_side_enabled = (
+                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                and int(side_params["n_positions"]) > 0
+            )
+            symbol_side_eligible = (
+                bool(symbol.get("tradable", False))
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"])
+                != 0.0
+            )
+            active = symbol_side_eligible and (
+                (has_position and effective_mode != "manual")
+                or (
+                    not has_position
+                    and global_side_enabled
+                    and effective_mode == "normal"
+                )
+            )
             row[pside] = {
                 "input_mode": input_mode,
                 "effective_mode": effective_mode,
@@ -61,8 +86,8 @@ def _single_symbol_orchestrator_output(
                 "short": {
                     "input_mode": None,
                     "effective_mode": "normal",
-                    "active": True,
-                    "allow_initial": True,
+                    "active": False,
+                    "allow_initial": False,
                 },
             }
         ],
@@ -3279,6 +3304,15 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
         pbr,
         "order_type_snake_to_id",
         fake_order_type_snake_to_id,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pbr,
+        "order_type_id_to_snake",
+        lambda order_type_id: {
+            1: "entry_initial_normal_long",
+            2: "close_unstuck_long",
+        }[order_type_id],
         raising=False,
     )
 

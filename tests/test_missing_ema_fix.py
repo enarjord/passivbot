@@ -91,7 +91,11 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def live_value(self, key):
             return False
@@ -144,7 +148,11 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def live_value(self, key):
             return False
@@ -198,7 +206,11 @@ async def test_snapshot_orchestrator_rejects_unknown_rust_symbol_before_conversi
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def live_value(self, key):
             return False
@@ -273,7 +285,11 @@ async def test_snapshot_orchestrator_rejects_malformed_output_envelope(
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def live_value(self, key):
             return False

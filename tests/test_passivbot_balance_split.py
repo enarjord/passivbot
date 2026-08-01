@@ -72,13 +72,38 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 
 
 def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -> str:
+    global_bot_params = payload.get("global", {}).get("global_bot_params", {})
     symbol_states = []
     for symbol in payload.get("symbols", []):
         row = {"symbol_idx": symbol["symbol_idx"]}
         for pside in ("long", "short"):
             input_mode = symbol[pside].get("mode")
-            effective_mode = input_mode or "normal"
-            active = bool(symbol.get("tradable", False)) and effective_mode != "manual"
+            position_size = float(symbol[pside]["position"]["size"])
+            has_position = position_size != 0.0
+            effective_mode = (
+                "normal"
+                if input_mode is None
+                or (input_mode == "graceful_stop" and has_position)
+                else input_mode
+            )
+            side_params = global_bot_params[pside]
+            global_side_enabled = (
+                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                and int(side_params["n_positions"]) > 0
+            )
+            symbol_side_eligible = (
+                bool(symbol.get("tradable", False))
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"])
+                != 0.0
+            )
+            active = symbol_side_eligible and (
+                (has_position and effective_mode != "manual")
+                or (
+                    not has_position
+                    and global_side_enabled
+                    and effective_mode == "normal"
+                )
+            )
             row[pside] = {
                 "input_mode": input_mode,
                 "effective_mode": effective_mode,
@@ -8888,7 +8913,11 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -8973,7 +9002,11 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -9116,7 +9149,11 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
             raise AssertionError("protective panic path must not load EMA bundles")
 
         def _bot_params_to_rust_dict(self, pside, sym):
-            return {"wallet_exposure_limit": 1.0}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, sym):
             return {}
@@ -9227,7 +9264,11 @@ async def test_orchestrator_snapshot_payload_does_not_require_backtest_config(mo
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -9327,7 +9368,11 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {"wallet_exposure_limit": 1.0}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}

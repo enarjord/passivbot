@@ -28,8 +28,10 @@ All notable user-facing changes will be documented in this file.
   numeric values, execution type
   inconsistent with the submitted market policy, order book, and near-touch threshold, and priority
   inconsistent with Rust's order and submitted-mode rule. It also rejects order families forbidden
-  by the submitted mode or flat-side eligibility and validates active-state diagnostics in both
-  directions for ineligible sides and eligible managed positions, while preserving Rust's
+  by the submitted mode or flat-side eligibility, including global side position/exposure caps,
+  requires order-type names to round-trip through Rust's canonical ID mapping, and validates
+  active-state diagnostics in both directions for ineligible sides and eligible managed
+  positions, while preserving Rust's
   held-position DCA and configured HSL panic market closes as explicit Rust
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal

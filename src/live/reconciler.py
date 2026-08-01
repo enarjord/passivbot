@@ -1044,7 +1044,7 @@ def _validate_rust_order_family_for_submitted_mode(
     order_type: str,
     input_mode: object,
     submitted_position_size: float,
-    submitted_symbol_side_eligible: bool,
+    submitted_flat_side_eligible: bool,
     context: str,
 ) -> None:
     """Reject order families Rust cannot emit for the submitted mode and eligibility."""
@@ -1062,7 +1062,7 @@ def _validate_rust_order_family_for_submitted_mode(
         or (
             is_entry
             and submitted_position_size == 0.0
-            and not submitted_symbol_side_eligible
+            and not submitted_flat_side_eligible
         )
         or (
             mode == "graceful_stop"
@@ -1137,6 +1137,7 @@ def _submitted_rust_input_context(
     dict[int, tuple[float, float]],
     dict[tuple[int, str], float],
     dict[tuple[int, str], bool],
+    dict[str, bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1148,6 +1149,37 @@ def _submitted_rust_input_context(
     order_books: dict[int, tuple[float, float]] = {}
     position_sizes: dict[tuple[int, str], float] = {}
     symbol_side_eligibility: dict[tuple[int, str], bool] = {}
+    global_input = orchestrator_input.get("global")
+    if not isinstance(global_input, dict):
+        raise FatalBotException(
+            "Rust orchestrator validation missing corresponding global input"
+        )
+    global_bot_params = global_input.get("global_bot_params")
+    if not isinstance(global_bot_params, dict):
+        raise FatalBotException("Rust orchestrator global input has invalid bot params")
+    global_side_enablement: dict[str, bool] = {}
+    for pside in ("long", "short"):
+        side_params = global_bot_params.get(pside)
+        if not isinstance(side_params, dict):
+            raise FatalBotException(
+                f"Rust orchestrator global input has invalid {pside} bot params"
+            )
+        total_wallet_exposure_limit = _validated_rust_finite_number(
+            side_params.get("total_wallet_exposure_limit"),
+            f"global input has invalid {pside} total_wallet_exposure_limit",
+        )
+        n_positions = side_params.get("n_positions")
+        if (
+            isinstance(n_positions, bool)
+            or not isinstance(n_positions, int)
+            or n_positions < 0
+        ):
+            raise FatalBotException(
+                f"global input has invalid {pside} n_positions"
+            )
+        global_side_enablement[pside] = (
+            total_wallet_exposure_limit > 0.0 and n_positions > 0
+        )
     seen_symbol_idxs: set[int] = set()
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
@@ -1228,7 +1260,13 @@ def _submitted_rust_input_context(
         raise FatalBotException(
             "Rust orchestrator symbol inputs do not cover the requested symbols"
         )
-    return modes, order_books, position_sizes, symbol_side_eligibility
+    return (
+        modes,
+        order_books,
+        position_sizes,
+        symbol_side_eligibility,
+        global_side_enablement,
+    )
 
 
 def rust_order_conversion_identity(
@@ -1275,6 +1313,7 @@ def validate_rust_orchestrator_output(
         submitted_order_books,
         submitted_position_sizes,
         submitted_symbol_side_eligibility,
+        submitted_global_side_enablement,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -1317,7 +1356,9 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} has invalid order_type"
             )
         try:
-            _pb_attr("pbr").order_type_snake_to_id(order_type)
+            order_type_id = _pb_attr("pbr").order_type_snake_to_id(order_type)
+            if _pb_attr("pbr").order_type_id_to_snake(order_type_id) != order_type:
+                raise ValueError("order type lookup did not round-trip")
             order_side = determine_side_from_order_tuple((qty, price, order_type))
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
             raise FatalBotException(
@@ -1336,7 +1377,8 @@ def validate_rust_orchestrator_output(
             order_type,
             submitted_input_modes[pair],
             submitted_position_sizes[pair],
-            submitted_symbol_side_eligibility[pair],
+            submitted_symbol_side_eligibility[pair]
+            and submitted_global_side_enablement[pside],
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("close_"):
@@ -1442,7 +1484,13 @@ def validate_rust_orchestrator_output(
                     )
             if (
                 side_state["active"]
-                and not submitted_symbol_side_eligibility[(symbol_idx, pside)]
+                and (
+                    not submitted_symbol_side_eligibility[(symbol_idx, pside)]
+                    or (
+                        submitted_position_sizes[(symbol_idx, pside)] == 0.0
+                        and not submitted_global_side_enablement[pside]
+                    )
+                )
             ):
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has {pside} active "

@@ -76,6 +76,10 @@ def _raw_rust_input(
     tradable=True,
     long_wallet_exposure_limit=1.0,
     short_wallet_exposure_limit=1.0,
+    long_n_positions=1,
+    short_n_positions=1,
+    long_total_wallet_exposure_limit=1.0,
+    short_total_wallet_exposure_limit=1.0,
     bid=100.0,
     ask=100.0,
     **global_overrides,
@@ -86,16 +90,26 @@ def _raw_rust_input(
         "panic_close_market": False,
         "global_bot_params": {
             "long": {
+                "n_positions": long_n_positions,
+                "total_wallet_exposure_limit": long_total_wallet_exposure_limit,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
             "short": {
+                "n_positions": short_n_positions,
+                "total_wallet_exposure_limit": short_total_wallet_exposure_limit,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
         },
     }
+    global_bot_params_override = global_overrides.pop("global_bot_params", None)
     global_input.update(global_overrides)
+    if global_bot_params_override is not None:
+        for pside in ("long", "short"):
+            global_input["global_bot_params"][pside].update(
+                global_bot_params_override.get(pside, {})
+            )
     return {
         "global": global_input,
         "symbols": [
@@ -176,6 +190,13 @@ def test_passivbot_rust_stub_emits_required_diagnostic_collections():
         "forager_selections",
     ):
         assert out["diagnostics"][field] == []
+
+    with pytest.raises(ValueError, match="unknown order type"):
+        pbr.order_type_snake_to_id("entry_bogus_long")
+
+    stub_input = _raw_rust_input(long_pos_size=0.0, long_wallet_exposure_limit=0.0)
+    stub_out = json.loads(pbr.compute_ideal_orders_json(json.dumps(stub_input)))
+    assert stub_out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
 
 
 def _raw_loss_gate_block(**overrides) -> dict:
@@ -453,6 +474,26 @@ def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([_raw_rust_order(**overrides)]),
+            {0: SYMBOL},
+            _raw_rust_input(),
+        )
+
+
+def test_raw_rust_output_rejects_unknown_order_type_when_lookup_is_permissive(
+    monkeypatch,
+):
+    import passivbot_rust as pbr
+
+    monkeypatch.setattr(pbr, "order_type_snake_to_id", lambda _name: 0)
+    monkeypatch.setattr(
+        pbr, "order_type_id_to_snake", lambda _type_id: "entry_initial_normal_long"
+    )
+
+    with pytest.raises(FatalBotException, match="invalid order_type"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(
+                [_raw_rust_order(order_type="entry_bogus_long")]
+            ),
             {0: SYMBOL},
             _raw_rust_input(),
         )
@@ -982,6 +1023,25 @@ def test_raw_rust_output_rejects_active_state_for_submitted_ineligible_side(
         )
 
 
+@pytest.mark.parametrize(
+    "input_overrides",
+    [
+        {"long_n_positions": 0},
+        {"long_total_wallet_exposure_limit": 0.0},
+    ],
+    ids=["zero-global-position-cap", "zero-global-wallet-exposure-limit"],
+)
+def test_raw_rust_output_rejects_active_state_for_flat_globally_disabled_side(
+    input_overrides,
+):
+    with pytest.raises(FatalBotException, match="inconsistent with submitted eligibility"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0, **input_overrides),
+        )
+
+
 def test_raw_rust_output_accepts_inactive_state_for_submitted_ineligible_side():
     out = _raw_rust_output()
     out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
@@ -1017,6 +1077,29 @@ def test_raw_rust_output_rejects_flat_entry_for_submitted_ineligible_side(
         )
 
 
+@pytest.mark.parametrize(
+    "input_overrides",
+    [
+        {"long_n_positions": 0},
+        {"long_total_wallet_exposure_limit": 0.0},
+    ],
+    ids=["zero-global-position-cap", "zero-global-wallet-exposure-limit"],
+)
+def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
+    input_overrides,
+):
+    out = _raw_rust_output([_raw_rust_order()])
+    out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
+    out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
+
+    with pytest.raises(FatalBotException, match="submitted mode or eligibility"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0, **input_overrides),
+        )
+
+
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
     order = _raw_rust_order(order_type="entry_grid_normal_long")
     out = _raw_rust_output([order])
@@ -1028,6 +1111,18 @@ def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
         {0: SYMBOL},
         _raw_rust_input(tradable=False, long_pos_size=1.0),
     ) == [order]
+
+
+def test_raw_rust_output_keeps_active_held_side_when_globally_disabled():
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output(),
+        {0: SYMBOL},
+        _raw_rust_input(
+            long_pos_size=1.0,
+            long_n_positions=0,
+            long_total_wallet_exposure_limit=0.0,
+        ),
+    ) == []
 
 
 def test_raw_rust_output_rejects_inactive_state_for_eligible_managed_position():
