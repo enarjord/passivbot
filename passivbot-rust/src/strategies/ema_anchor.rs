@@ -2,7 +2,10 @@ use super::{EmaAnchorParams, GeneratedOrders, StrategyParams, StrategyRequest, S
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
-use crate::utils::{cost_to_qty, qty_to_cost, round_, round_dn, round_up};
+use crate::utils::{
+    cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
+    tolerant_round_up_preserve_step,
+};
 
 #[inline]
 fn calc_signed_wallet_exposure_ratio(
@@ -33,26 +36,6 @@ fn calc_offset_multiplier(state: &StateParams, params: &EmaAnchorParams) -> f64 
 }
 
 #[inline]
-fn tolerant_round_dn(value: f64, step: f64) -> f64 {
-    let nearest = round_(value, step);
-    if (value - nearest).abs() <= step * 1e-8 {
-        nearest
-    } else {
-        round_dn(value, step)
-    }
-}
-
-#[inline]
-fn tolerant_round_up(value: f64, step: f64) -> f64 {
-    let nearest = round_(value, step);
-    if (value - nearest).abs() <= step * 1e-8 {
-        nearest
-    } else {
-        round_up(value, step)
-    }
-}
-
-#[inline]
 pub fn calc_bid_price(
     state: &StateParams,
     exchange: &ExchangeParams,
@@ -70,8 +53,13 @@ pub fn calc_bid_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
-    tolerant_round_dn(f64::min(state.order_book.bid, target), exchange.price_step)
-        .max(exchange.price_step)
+    let selected_price = f64::min(state.order_book.bid, target);
+    if selected_price <= 0.0 {
+        selected_price
+    } else {
+        tolerant_round_dn_preserve_step(selected_price, exchange.price_step)
+            .max(exchange.price_step)
+    }
 }
 
 #[inline]
@@ -92,7 +80,8 @@ pub fn calc_ask_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
-    tolerant_round_up(f64::max(state.order_book.ask, target), exchange.price_step)
+    let selected_price = f64::max(state.order_book.ask, target);
+    tolerant_round_up_preserve_step(selected_price, exchange.price_step).max(exchange.price_step)
 }
 
 #[inline]
@@ -508,6 +497,53 @@ mod tests {
         };
 
         assert_eq!(calc_bid_price(&state, &exchange, &params, -1.0, 1.0), 0.01);
+    }
+
+    #[test]
+    fn nonpositive_bid_target_is_not_converted_into_an_entry_price() {
+        let state = StateParams {
+            balance: 1.0,
+            order_book: OrderBook { bid: 1.0, ask: 1.0 },
+            ema_bands: EMABands {
+                lower: 1.0,
+                upper: 1.0,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 2.0,
+            ..base_params()
+        };
+
+        assert!(calc_bid_price(&state, &exchange, &params, 1.0, 1.0) <= 0.0);
+    }
+
+    #[test]
+    fn tiny_ask_quote_preserves_lowest_positive_tick() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 1e-12,
+                ask: 1e-12,
+            },
+            ema_bands: EMABands {
+                lower: 1e-12,
+                upper: 1e-12,
+            },
+            ..base_state()
+        };
+        let exchange = ExchangeParams {
+            price_step: 1e-12,
+            ..base_exchange()
+        };
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_ask_price(&state, &exchange, &params, 0.0, 1.0), 1e-12);
     }
 
     #[test]

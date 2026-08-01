@@ -10,6 +10,58 @@ fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
     (value * multiplier).round() / multiplier
 }
 
+fn step_decimal_places(step: f64) -> Option<usize> {
+    let mut multiplier = 1.0;
+    for decimal_places in 0..=15 {
+        let scaled = step.abs() * multiplier;
+        let rounded = scaled.round();
+        if rounded >= 1.0 && (scaled - rounded).abs() <= scaled.abs().max(1.0) * 1e-12 {
+            return Some(decimal_places.max(10));
+        }
+        multiplier *= 10.0;
+    }
+    None
+}
+
+fn round_to_step_decimal_places(value: f64, step: f64) -> f64 {
+    match step_decimal_places(step) {
+        Some(decimal_places) => round_to_decimal_places(value, decimal_places),
+        None => value,
+    }
+}
+
+/// Directionally quantize without truncating valid increments below ten decimals.
+pub fn round_dn_preserve_step(value: f64, step: f64) -> f64 {
+    round_to_step_decimal_places((value / step).floor() * step, step)
+}
+
+/// Directionally quantize without truncating valid increments below ten decimals.
+pub fn round_up_preserve_step(value: f64, step: f64) -> f64 {
+    round_to_step_decimal_places((value / step).ceil() * step, step)
+}
+
+/// Snap ordinary binary noise at an aligned increment before rounding down.
+pub fn tolerant_round_dn_preserve_step(value: f64, step: f64) -> f64 {
+    let step_count = value / step;
+    let nearest_count = step_count.round();
+    if (step_count - nearest_count).abs() <= 1e-8 {
+        round_to_step_decimal_places(nearest_count * step, step)
+    } else {
+        round_dn_preserve_step(value, step)
+    }
+}
+
+/// Snap ordinary binary noise at an aligned increment before rounding up.
+pub fn tolerant_round_up_preserve_step(value: f64, step: f64) -> f64 {
+    let step_count = value / step;
+    let nearest_count = step_count.round();
+    if (step_count - nearest_count).abs() <= 1e-8 {
+        round_to_step_decimal_places(nearest_count * step, step)
+    } else {
+        round_up_preserve_step(value, step)
+    }
+}
+
 /// Rounds up a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_up(n: f64, step: f64) -> f64 {

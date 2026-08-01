@@ -57,7 +57,7 @@ mod core {
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
         calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, qty_to_cost, round_,
-        round_dn, round_up,
+        round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -2252,30 +2252,15 @@ mod core {
             PositionSide::Long => -pos.size.abs(),
             PositionSide::Short => pos.size.abs(),
         };
-        let tolerant_round_dn = |value: f64| {
-            let nearest = round_(value, exchange.price_step);
-            if (value - nearest).abs() <= exchange.price_step * 1e-8 {
-                nearest
-            } else {
-                round_dn(value, exchange.price_step)
-            }
-        };
-        let tolerant_round_up = |value: f64| {
-            let nearest = round_(value, exchange.price_step);
-            if (value - nearest).abs() <= exchange.price_step * 1e-8 {
-                nearest
-            } else {
-                round_up(value, exchange.price_step)
-            }
-        };
         let price = match pside {
             PositionSide::Long => {
-                let touch = tolerant_round_dn(ob.ask);
-                round_(touch - exchange.price_step, exchange.price_step).max(exchange.price_step)
+                let touch = tolerant_round_dn_preserve_step(ob.ask, exchange.price_step);
+                tolerant_round_dn_preserve_step(touch - exchange.price_step, exchange.price_step)
+                    .max(exchange.price_step)
             }
             PositionSide::Short => {
-                let touch = tolerant_round_up(ob.bid);
-                round_(touch + exchange.price_step, exchange.price_step)
+                let touch = tolerant_round_up_preserve_step(ob.bid, exchange.price_step);
+                tolerant_round_up_preserve_step(touch + exchange.price_step, exchange.price_step)
             }
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
@@ -4526,6 +4511,38 @@ mod core {
             .unwrap();
 
             assert_eq!(long.price, 0.01);
+        }
+
+        #[test]
+        fn panic_close_preserves_tiny_tick_short_price() {
+            for price_step in [1e-12, 1e-16] {
+                let exchange = ExchangeParams {
+                    qty_step: 1e-12,
+                    price_step,
+                    min_qty: 1e-12,
+                    min_cost: 0.0,
+                    c_mult: 1.0,
+                    ..Default::default()
+                };
+                let order_book = OrderBook {
+                    bid: price_step,
+                    ask: price_step,
+                };
+
+                let short = calc_panic_close(
+                    0,
+                    PositionSide::Short,
+                    &Position {
+                        size: -1e-12,
+                        price: price_step,
+                    },
+                    &order_book,
+                    &exchange,
+                )
+                .unwrap();
+
+                assert_eq!(short.price, 2.0 * price_step);
+            }
         }
 
         #[test]

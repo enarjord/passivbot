@@ -1128,7 +1128,7 @@ def _validate_rust_entry_exchange_constraints(
     if not math.isfinite(qty_steps) or not math.isfinite(entry_cost):
         raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
     rounded_qty = round(qty_steps) * qty_step
-    qty_tolerance = max(qty_step * 1e-8, 1e-12)
+    qty_tolerance = qty_step * 1e-8
     if not math.isclose(qty_abs, rounded_qty, rel_tol=0.0, abs_tol=qty_tolerance):
         raise FatalBotException(
             f"{context} quantity is inconsistent with submitted qty_step"
@@ -1192,7 +1192,7 @@ def _validate_rust_close_exchange_constraints(
         )
     market_price = order_book[1] if qty < 0.0 else order_book[0]
     effective_min_qty = _rust_effective_min_qty(market_price, exchange)
-    qty_tolerance = max(qty_step * 1e-8, 1e-12)
+    qty_tolerance = qty_step * 1e-8
     closes_exact_remaining_position = math.isclose(
         qty_abs, position_abs, rel_tol=0.0, abs_tol=qty_tolerance
     )

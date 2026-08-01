@@ -52,11 +52,14 @@ All notable user-facing changes will be documented in this file.
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
   collapsing a positive sub-step minimum to zero, quantizes EMA Anchor touch prices in the
-  protective direction without moving float-noisy aligned touches and clamps bids to the lowest
-  positive tick, and keeps panic limit prices
+  protective direction without moving float-noisy aligned touches, preserves positive bid and ask
+  ticks below ten decimal places, clamps only positive sub-tick bids instead of turning nonpositive
+  targets into entries, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
-  near one price step, without skipping a tick because of
-  ordinary floating-point noise. Close validation rejects positions at or below Rust's final
+  near one price step and valid tiny increments, without skipping a tick because of ordinary
+  floating-point noise. Quantity-step validation scales its tolerance to the submitted increment,
+  so malformed quantities cannot hide inside a fixed absolute tolerance. Close validation rejects
+  positions at or below Rust's final
   close-trimming dust threshold before applying the exact-position exception. The complete
   serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
