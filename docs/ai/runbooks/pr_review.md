@@ -53,6 +53,9 @@ Before recommending a trading-critical fix or fallback:
    whether selection would favor whichever symbols refreshed first.
 5. Fix a hypothetical producer defect at its producer boundary. Do not add consumer-side trading
    policy without evidence of the failure and an explicit contract authorizing that policy.
+6. Distinguish bounded schema/cross-field validation from replaying the trading engine. Do not
+   recommend duplicating Rust strategy, sizing, realized-loss, or exposure calculations in Python
+   merely to detect a hypothetical internally consistent Rust decision.
 
 When a new head only incorporates the target branch or resolves a mechanical conflict, prior
 semantic approval may be carried forward after a focused delta review only when:

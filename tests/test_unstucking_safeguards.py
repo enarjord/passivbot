@@ -569,7 +569,60 @@ def _make_mock_pbr():
         return mapping.get(type_id, "other")
 
     module.get_order_id_type_from_string = _get_order_id_type_from_string
-    module.order_type_id_to_snake = _order_type_id_to_snake
+    _canonical_order_types = [
+        "entry_initial_normal_long",
+        "entry_initial_partial_long",
+        "entry_trailing_normal_long",
+        "entry_trailing_cropped_long",
+        "entry_grid_normal_long",
+        "entry_grid_cropped_long",
+        "entry_grid_inflated_long",
+        "close_grid_long",
+        "close_trailing_long",
+        "close_unstuck_long",
+        "close_auto_reduce_twel_long",
+        "entry_initial_normal_short",
+        "entry_initial_partial_short",
+        "entry_trailing_normal_short",
+        "entry_trailing_cropped_short",
+        "entry_grid_normal_short",
+        "entry_grid_cropped_short",
+        "entry_grid_inflated_short",
+        "close_grid_short",
+        "close_trailing_short",
+        "close_unstuck_short",
+        "close_auto_reduce_twel_short",
+        "close_panic_long",
+        "close_panic_short",
+        "close_auto_reduce_wel_long",
+        "close_auto_reduce_wel_short",
+        "entry_ema_anchor_long",
+        "close_ema_anchor_long",
+        "entry_ema_anchor_short",
+        "close_ema_anchor_short",
+    ]
+    _canonical_order_type_id_base = 0x2000
+    _canonical_order_type_ids = {
+        name: _canonical_order_type_id_base + type_id
+        for type_id, name in enumerate(_canonical_order_types)
+    }
+
+    def _order_type_snake_to_id(name: str) -> int:
+        if name not in _canonical_order_type_ids:
+            raise ValueError("unknown order type name")
+        return _canonical_order_type_ids[name]
+
+    def _canonical_order_type_id_to_snake(type_id: int) -> str:
+        legacy_name = _order_type_id_to_snake(type_id)
+        if legacy_name != "other":
+            return legacy_name
+        canonical_idx = type_id - _canonical_order_type_id_base
+        if not 0 <= canonical_idx < len(_canonical_order_types):
+            raise ValueError("unknown order type id")
+        return _canonical_order_types[canonical_idx]
+
+    module.order_type_snake_to_id = _order_type_snake_to_id
+    module.order_type_id_to_snake = _canonical_order_type_id_to_snake
     return module
 
 
@@ -3288,6 +3341,8 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
 ):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
+    bot._bot_value_defaults["n_positions"] = 1
+    bot._bot_value_defaults["total_wallet_exposure_limit"] = 1.0
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 

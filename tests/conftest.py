@@ -257,8 +257,66 @@ def _install_passivbot_rust_stub():
 
         payload = json.loads(input_json)
         global_bot_params = payload.get("global", {}).get("global_bot_params", {})
+        symbols = payload.get("symbols", [])
+        hedge_mode = payload.get("global", {}).get("hedge_mode", True)
+        active_indices = {"long": set(), "short": set()}
+        for pside in ("long", "short"):
+            side_params = global_bot_params.get(pside, {})
+            global_side_enabled = (
+                float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                and int(side_params.get("n_positions", 0)) > 0
+            )
+            eligible_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if bool(symbol.get("tradable", False))
+                and float(
+                    symbol[pside]
+                    .get("bot_params", {})
+                    .get("wallet_exposure_limit", 0.0)
+                )
+                != 0.0
+            ]
+            held_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if float(symbol[pside].get("position", {}).get("size", 0.0)) != 0.0
+                and symbol[pside].get("mode") != "manual"
+            ]
+            forced_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if symbol["symbol_idx"] in eligible_indices
+                and symbol[pside].get("mode") == "normal"
+            ]
+            effective_n_positions = max(
+                min(int(side_params.get("n_positions", 0)), len(eligible_indices)),
+                len(forced_indices),
+            )
+            active_indices[pside].update(held_indices)
+            if global_side_enabled:
+                candidates = forced_indices + [
+                    symbol_idx
+                    for symbol_idx in eligible_indices
+                    if symbol_idx not in forced_indices
+                ]
+                for symbol_idx in candidates:
+                    if len(active_indices[pside]) >= effective_n_positions:
+                        break
+                    symbol = symbols[symbol_idx]
+                    opposite = "short" if pside == "long" else "long"
+                    if (
+                        not hedge_mode
+                        and float(
+                            symbol[opposite].get("position", {}).get("size", 0.0)
+                        )
+                        != 0.0
+                    ):
+                        continue
+                    if symbol[pside].get("mode") in (None, "normal"):
+                        active_indices[pside].add(symbol_idx)
         symbol_states = []
-        for symbol in payload.get("symbols", []):
+        for symbol in symbols:
             row = {"symbol_idx": symbol["symbol_idx"]}
             for pside in ("long", "short"):
                 input_mode = symbol[pside].get("mode")
@@ -286,19 +344,32 @@ def _install_passivbot_rust_stub():
                     bool(symbol.get("tradable", False))
                     and wallet_exposure_limit != 0.0
                 )
-                active = symbol_side_eligible and (
-                    (has_position and effective_mode != "manual")
+                active = (
+                    symbol_side_eligible
+                    and symbol["symbol_idx"] in active_indices[pside]
+                )
+                if not global_side_enabled:
+                    effective_mode = "manual"
+                opposite = "short" if pside == "long" else "long"
+                one_way_blocked = not hedge_mode and (
+                    float(symbol[opposite].get("position", {}).get("size", 0.0))
+                    != 0.0
                     or (
                         not has_position
-                        and global_side_enabled
-                        and effective_mode == "normal"
+                        and pside == "short"
+                        and symbol["symbol_idx"] in active_indices["long"]
                     )
                 )
                 row[pside] = {
                     "input_mode": input_mode,
                     "effective_mode": effective_mode,
                     "active": active,
-                    "allow_initial": active and effective_mode == "normal",
+                    "allow_initial": (
+                        active
+                        and global_side_enabled
+                        and effective_mode == "normal"
+                        and not one_way_blocked
+                    ),
                 }
             symbol_states.append(row)
         return json.dumps(

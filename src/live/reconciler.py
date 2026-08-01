@@ -1075,6 +1075,22 @@ def _validate_rust_order_family_for_submitted_mode(
         )
 
 
+def _validate_rust_order_family_for_submitted_strategy(
+    order_type: str, strategy_kind: str, context: str
+) -> None:
+    """Reject ordinary strategy families the submitted Rust strategy cannot emit."""
+    if _rust_order_requires_risk_critical_priority(order_type):
+        return
+    is_ema_anchor_order = order_type.rsplit("_", 1)[0] in {
+        "entry_ema_anchor",
+        "close_ema_anchor",
+    }
+    if (strategy_kind == "ema_anchor") != is_ema_anchor_order:
+        raise FatalBotException(
+            f"{context} has order family inconsistent with submitted strategy"
+        )
+
+
 def _expected_rust_panic_execution_type(
     global_input: dict, order_type: str, pside: str
 ) -> str | None:
@@ -1138,6 +1154,9 @@ def _submitted_rust_input_context(
     dict[tuple[int, str], float],
     dict[tuple[int, str], bool],
     dict[str, bool],
+    dict[str, int],
+    bool,
+    str,
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1158,6 +1177,7 @@ def _submitted_rust_input_context(
     if not isinstance(global_bot_params, dict):
         raise FatalBotException("Rust orchestrator global input has invalid bot params")
     global_side_enablement: dict[str, bool] = {}
+    global_side_n_positions: dict[str, int] = {}
     for pside in ("long", "short"):
         side_params = global_bot_params.get(pside)
         if not isinstance(side_params, dict):
@@ -1180,6 +1200,17 @@ def _submitted_rust_input_context(
         global_side_enablement[pside] = (
             total_wallet_exposure_limit > 0.0 and n_positions > 0
         )
+        global_side_n_positions[pside] = n_positions
+    hedge_mode = global_input.get("hedge_mode", True)
+    if not isinstance(hedge_mode, bool):
+        raise FatalBotException("Rust orchestrator global input has invalid hedge_mode")
+    strategy_kind = global_input.get("strategy_kind", "trailing_martingale")
+    if strategy_kind not in {
+        "trailing_martingale",
+        "trailing_grid_v7",
+        "ema_anchor",
+    }:
+        raise FatalBotException("Rust orchestrator global input has invalid strategy_kind")
     seen_symbol_idxs: set[int] = set()
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
@@ -1266,6 +1297,9 @@ def _submitted_rust_input_context(
         position_sizes,
         symbol_side_eligibility,
         global_side_enablement,
+        global_side_n_positions,
+        hedge_mode,
+        strategy_kind,
     )
 
 
@@ -1314,9 +1348,14 @@ def validate_rust_orchestrator_output(
         submitted_position_sizes,
         submitted_symbol_side_eligibility,
         submitted_global_side_enablement,
+        submitted_global_side_n_positions,
+        submitted_hedge_mode,
+        submitted_strategy_kind,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
+    protective_reducer_order_indices: dict[tuple[int, str], int] = {}
+    flat_entry_pairs: set[tuple[int, str]] = set()
     for order_idx, order in enumerate(orders):
         if not isinstance(order, dict):
             raise FatalBotException(
@@ -1373,6 +1412,10 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
         pair = (symbol_idx, pside)
+        if not submitted_global_side_enablement[pside]:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} is inconsistent with globally disabled {pside}"
+            )
         _validate_rust_order_family_for_submitted_mode(
             order_type,
             submitted_input_modes[pair],
@@ -1381,6 +1424,21 @@ def validate_rust_orchestrator_output(
             and submitted_global_side_enablement[pside],
             f"Rust orchestrator order {order_idx}",
         )
+        _validate_rust_order_family_for_submitted_strategy(
+            order_type,
+            submitted_strategy_kind,
+            f"Rust orchestrator order {order_idx}",
+        )
+        if order_type.startswith("entry_") and submitted_position_sizes[pair] == 0.0:
+            flat_entry_pairs.add(pair)
+        if _rust_order_requires_risk_critical_priority(order_type):
+            if pair in protective_reducer_order_indices:
+                previous_idx = protective_reducer_order_indices[pair]
+                raise FatalBotException(
+                    "Rust orchestrator orders "
+                    f"{previous_idx} and {order_idx} contain competing protective reducers"
+                )
+            protective_reducer_order_indices[pair] = order_idx
         if order_type.startswith("close_"):
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
             if aggregate_close_qty[pair] > submitted_position_sizes[pair] + 1e-12:
@@ -1438,6 +1496,7 @@ def validate_rust_orchestrator_output(
     if not isinstance(symbol_states, list):
         raise FatalBotException("Rust orchestrator symbol_states must be a list")
     seen_symbol_idxs: set[int] = set()
+    submitted_symbol_states: dict[tuple[int, str], dict] = {}
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     for state_idx, row in enumerate(symbol_states):
         if not isinstance(row, dict):
@@ -1482,6 +1541,7 @@ def validate_rust_orchestrator_output(
                     raise FatalBotException(
                         f"Rust orchestrator symbol_state {state_idx} has invalid {pside} {field}"
                     )
+            submitted_symbol_states[(symbol_idx, pside)] = side_state
             if (
                 side_state["active"]
                 and (
@@ -1510,6 +1570,67 @@ def validate_rust_orchestrator_output(
         raise FatalBotException(
             "Rust orchestrator symbol_states do not cover the requested symbols"
         )
+
+    for pside in ("long", "short"):
+        eligible_count = sum(
+            submitted_symbol_side_eligibility[(symbol_idx, pside)]
+            for symbol_idx in expected_symbol_idxs
+        )
+        forced_normal_count = sum(
+            submitted_symbol_side_eligibility[(symbol_idx, pside)]
+            and submitted_input_modes[(symbol_idx, pside)] == "normal"
+            for symbol_idx in expected_symbol_idxs
+        )
+        effective_n_positions = max(
+            min(submitted_global_side_n_positions[pside], eligible_count),
+            forced_normal_count,
+        )
+        held_workspace_count = sum(
+            submitted_position_sizes[(symbol_idx, pside)] != 0.0
+            and submitted_input_modes[(symbol_idx, pside)] != "manual"
+            for symbol_idx in expected_symbol_idxs
+        )
+        max_flat_active = max(effective_n_positions - held_workspace_count, 0)
+        flat_active_count = sum(
+            submitted_position_sizes[(symbol_idx, pside)] == 0.0
+            and submitted_symbol_states[(symbol_idx, pside)]["active"]
+            for symbol_idx in expected_symbol_idxs
+        )
+        if flat_active_count > max_flat_active:
+            raise FatalBotException(
+                f"Rust orchestrator {pside} flat active set exceeds submitted position cap"
+            )
+
+    for pair in flat_entry_pairs:
+        symbol_idx, pside = pair
+        side_state = submitted_symbol_states[pair]
+        if not side_state["active"] or not side_state["allow_initial"]:
+            raise FatalBotException(
+                f"Rust orchestrator flat {pside} entry for symbol_idx {symbol_idx} "
+                "contradicts submitted symbol state"
+            )
+
+    if not submitted_hedge_mode:
+        for symbol_idx in expected_symbol_idxs:
+            long_allow_initial = submitted_symbol_states[(symbol_idx, "long")][
+                "allow_initial"
+            ]
+            short_allow_initial = submitted_symbol_states[(symbol_idx, "short")][
+                "allow_initial"
+            ]
+            if long_allow_initial and (
+                submitted_position_sizes[(symbol_idx, "short")] != 0.0
+                or short_allow_initial
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state for symbol_idx {symbol_idx} "
+                    "violates submitted one-way position-side exclusion"
+                )
+            if short_allow_initial and submitted_position_sizes[(symbol_idx, "long")] != 0.0:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state for symbol_idx {symbol_idx} "
+                    "violates submitted one-way position-side exclusion"
+                )
 
     for order_idx, order in enumerate(orders):
         order_type = str(order["order_type"])

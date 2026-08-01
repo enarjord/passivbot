@@ -9,6 +9,9 @@ Canonical repository-wide invariants; task documents link here instead of restat
 - A Rust ideal-order result is atomic current intent. Validate the complete result before
   reconciliation. Malformed output is fatal; Python must not substitute prior ideals, actual
   orders, or a usable-looking subset.
+- Producer-boundary validation may enforce schema and compact deterministic invariants, but it must
+  not reimplement Rust's strategy, sizing, or risk engines in Python to second-guess otherwise
+  valid intent. Suspected semantic producer defects belong in Rust with Rust-side regressions.
 - Python owns orchestration, exchange I/O, configuration, data plumbing, caching, reconciliation,
   and execution gating.
 - Live and backtest behavior must implement equivalent trading and risk contracts, not identical

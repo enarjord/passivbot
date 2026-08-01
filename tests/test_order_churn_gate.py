@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from copy import deepcopy
 
 import pytest
 
@@ -85,6 +86,8 @@ def _raw_rust_input(
     **global_overrides,
 ) -> dict:
     global_input = {
+        "hedge_mode": True,
+        "strategy_kind": "trailing_martingale",
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
         "panic_close_market": False,
@@ -1092,11 +1095,203 @@ def test_raw_rust_output_rejects_flat_entry_for_globally_disabled_side(
     out["diagnostics"]["symbol_states"][0]["long"]["active"] = False
     out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] = False
 
-    with pytest.raises(FatalBotException, match="submitted mode or eligibility"):
+    with pytest.raises(FatalBotException, match="globally disabled long"):
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
             _raw_rust_input(long_pos_size=0.0, **input_overrides),
+        )
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        _raw_rust_order(order_type="entry_grid_normal_long"),
+        _raw_rust_order(qty=-1.0, order_type="close_grid_long"),
+    ],
+    ids=["entry", "close"],
+)
+def test_raw_rust_output_rejects_orders_for_globally_disabled_held_side(order):
+    with pytest.raises(FatalBotException, match="globally disabled long"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=1.0,
+                long_total_wallet_exposure_limit=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_rejects_flat_entry_contradicted_by_symbol_state():
+    out = _raw_rust_output([_raw_rust_order()])
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        active=False,
+        allow_initial=False,
+    )
+
+    with pytest.raises(FatalBotException, match="contradicts submitted symbol state"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0),
+        )
+
+
+def _two_flat_long_symbol_inputs(*, forced_normal: bool = False):
+    orchestrator_input = _raw_rust_input(
+        long_pos_size=0.0,
+        long_mode="normal" if forced_normal else None,
+    )
+    second_symbol = deepcopy(orchestrator_input["symbols"][0])
+    second_symbol["symbol_idx"] = 1
+    orchestrator_input["symbols"].append(second_symbol)
+    symbol_states = []
+    for symbol_idx in (0, 1):
+        symbol_states.append(
+            {
+                "symbol_idx": symbol_idx,
+                "long": {
+                    "input_mode": "normal" if forced_normal else None,
+                    "effective_mode": "normal",
+                    "active": True,
+                    "allow_initial": True,
+                },
+                "short": {
+                    "input_mode": "manual",
+                    "effective_mode": "manual",
+                    "active": False,
+                    "allow_initial": False,
+                },
+            }
+        )
+    return orchestrator_input, _raw_rust_output(symbol_states=symbol_states)
+
+
+def test_raw_rust_output_rejects_flat_active_set_above_submitted_position_cap():
+    orchestrator_input, out = _two_flat_long_symbol_inputs()
+
+    with pytest.raises(FatalBotException, match="exceeds submitted position cap"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL, 1: "ETH/USDT:USDT"},
+            orchestrator_input,
+        )
+
+
+def test_raw_rust_output_allows_forced_normal_position_cap_expansion():
+    orchestrator_input, out = _two_flat_long_symbol_inputs(forced_normal=True)
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL, 1: "ETH/USDT:USDT"},
+        orchestrator_input,
+    ) == []
+
+
+def test_raw_rust_output_rejects_one_way_initial_against_opposite_position():
+    out = _raw_rust_output(
+        [
+            _raw_rust_order(
+                pside="short",
+                qty=-1.0,
+                order_type="entry_initial_normal_short",
+            )
+        ]
+    )
+    out["diagnostics"]["symbol_states"][0]["short"].update(
+        input_mode=None,
+        effective_mode="normal",
+        active=True,
+        allow_initial=True,
+    )
+
+    with pytest.raises(FatalBotException, match="one-way position-side exclusion"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=1.0,
+                short_pos_size=0.0,
+                short_mode=None,
+                hedge_mode=False,
+            ),
+        )
+
+
+def test_raw_rust_output_rejects_two_one_way_initial_sides():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        active=True,
+        allow_initial=True,
+    )
+    out["diagnostics"]["symbol_states"][0]["short"].update(
+        input_mode=None,
+        effective_mode="normal",
+        active=True,
+        allow_initial=True,
+    )
+
+    with pytest.raises(FatalBotException, match="one-way position-side exclusion"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=0.0,
+                short_pos_size=0.0,
+                short_mode=None,
+                hedge_mode=False,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "order_type"),
+    [
+        ("trailing_martingale", "entry_ema_anchor_long"),
+        ("trailing_grid_v7", "close_ema_anchor_long"),
+        ("ema_anchor", "entry_initial_normal_long"),
+        ("ema_anchor", "close_grid_long"),
+    ],
+)
+def test_raw_rust_output_rejects_order_family_from_another_strategy(
+    strategy_kind,
+    order_type,
+):
+    is_close = order_type.startswith("close_")
+    order = _raw_rust_order(
+        qty=-1.0 if is_close else 1.0,
+        order_type=order_type,
+    )
+
+    with pytest.raises(FatalBotException, match="inconsistent with submitted strategy"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(strategy_kind=strategy_kind),
+        )
+
+
+def test_raw_rust_output_rejects_competing_protective_reducers():
+    orders = [
+        _raw_rust_order(
+            qty=-0.4,
+            order_type="close_unstuck_long",
+            execution_priority="risk_critical",
+        ),
+        _raw_rust_order(
+            qty=-0.5,
+            price=101.0,
+            order_type="close_auto_reduce_wel_long",
+            execution_priority="risk_critical",
+        ),
+    ]
+
+    with pytest.raises(FatalBotException, match="competing protective reducers"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=1.0),
         )
 
 
