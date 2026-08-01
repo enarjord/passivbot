@@ -77,6 +77,7 @@ def _single_symbol_orchestrator_output(
     *, orders=None, include_loss_gate_blocks=True, **diagnostics
 ) -> str:
     diagnostics_payload = {
+        "warnings": [],
         "symbol_states": [
             {
                 "symbol_idx": 0,

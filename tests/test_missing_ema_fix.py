@@ -261,7 +261,7 @@ async def test_snapshot_orchestrator_rejects_unknown_rust_symbol_before_conversi
     ("rust_output", "error"),
     [
         ({"diagnostics": {}}, "missing required orders field"),
-        ({"orders": [], "diagnostics": {}}, "missing required symbol_states"),
+        ({"orders": [], "diagnostics": {}}, "missing required warnings"),
     ],
 )
 async def test_snapshot_orchestrator_rejects_malformed_output_envelope(

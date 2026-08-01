@@ -1662,6 +1662,76 @@ def validate_rust_orchestrator_output(
     diagnostics = out.get("diagnostics")
     if not isinstance(diagnostics, dict):
         raise FatalBotException("Rust orchestrator output missing valid diagnostics")
+    if "warnings" not in diagnostics:
+        raise FatalBotException("Rust orchestrator diagnostics missing required warnings")
+    warnings = diagnostics["warnings"]
+    if not isinstance(warnings, list):
+        raise FatalBotException("Rust orchestrator warnings must be a list")
+    warning_shapes = {
+        "disabled_pside_has_position": {"symbol_idx", "pside"},
+        "non_tradable_has_position": {"symbol_idx", "pside"},
+        "twel_repair_blocked_by_loss_gate": {
+            "pside",
+            "current_twe",
+            "twel_repair_target",
+            "policy",
+            "candidate_count",
+            "blocked_order_count",
+            "projected_twe_after_allowed_reductions",
+        },
+    }
+    for warning_idx, warning in enumerate(warnings):
+        context = f"warning {warning_idx}"
+        if not isinstance(warning, dict) or len(warning) != 1:
+            raise FatalBotException(
+                f"Rust orchestrator {context} must contain exactly one warning variant"
+            )
+        variant, details = next(iter(warning.items()))
+        if variant not in warning_shapes or not isinstance(details, dict):
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid warning variant"
+            )
+        if set(details) != warning_shapes[variant]:
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid warning fields"
+            )
+        pside = details.get("pside")
+        if not isinstance(pside, str) or pside not in {"long", "short"}:
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid pside"
+            )
+        if variant in {
+            "disabled_pside_has_position",
+            "non_tradable_has_position",
+        }:
+            symbol_idx = details.get("symbol_idx")
+            if (
+                isinstance(symbol_idx, bool)
+                or not isinstance(symbol_idx, int)
+                or symbol_idx not in expected_symbol_idxs
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator {context} has invalid symbol_idx"
+                )
+            continue
+        for field in (
+            "current_twe",
+            "twel_repair_target",
+            "projected_twe_after_allowed_reductions",
+        ):
+            _validated_rust_finite_number(
+                details.get(field), f"{context} has invalid {field}"
+            )
+        if details.get("policy") not in {"reduce_overweight", "reduce_portfolio"}:
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid policy"
+            )
+        for field in ("candidate_count", "blocked_order_count"):
+            value = details.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise FatalBotException(
+                    f"Rust orchestrator {context} has invalid {field}"
+                )
     if "symbol_states" not in diagnostics:
         raise FatalBotException(
             "Rust orchestrator diagnostics missing required symbol_states"

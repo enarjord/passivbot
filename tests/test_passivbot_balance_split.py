@@ -115,6 +115,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
             }
         symbol_states.append(row)
     out_diagnostics = dict(diagnostics or {})
+    out_diagnostics.setdefault("warnings", [])
     out_diagnostics["symbol_states"] = symbol_states
     out_diagnostics.setdefault("loss_gate_blocks", [])
     out_diagnostics.setdefault("min_effective_cost_blocks", [])

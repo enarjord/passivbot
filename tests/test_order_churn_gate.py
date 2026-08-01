@@ -175,6 +175,7 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
     return {
         "orders": orders,
         "diagnostics": {
+            "warnings": [],
             "symbol_states": symbol_states,
             "loss_gate_blocks": [],
             "min_effective_cost_blocks": [],
@@ -1749,6 +1750,100 @@ def test_raw_rust_output_accepts_complete_consumed_diagnostics():
             "forager_selections": [_raw_forager_selection()],
         }
     )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: SYMBOL}, _raw_rust_input()
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("warnings", "error"),
+    [
+        (None, "warnings must be a list"),
+        ({}, "warnings must be a list"),
+        (["bad"], "exactly one warning variant"),
+        ([{}], "exactly one warning variant"),
+        ([{"unknown": {}}], "invalid warning variant"),
+        (
+            [{"disabled_pside_has_position": {"symbol_idx": 0}}],
+            "invalid warning fields",
+        ),
+        (
+            [
+                {
+                    "non_tradable_has_position": {
+                        "symbol_idx": 0,
+                        "pside": [],
+                    }
+                }
+            ],
+            "invalid pside",
+        ),
+        (
+            [
+                {
+                    "twel_repair_blocked_by_loss_gate": {
+                        "pside": "long",
+                        "current_twe": 0.6,
+                        "twel_repair_target": 0.5,
+                        "policy": "unknown",
+                        "candidate_count": 1,
+                        "blocked_order_count": 1,
+                        "projected_twe_after_allowed_reductions": 0.6,
+                    }
+                }
+            ],
+            "invalid policy",
+        ),
+    ],
+)
+def test_raw_rust_output_rejects_malformed_warnings(warnings, error):
+    out = _raw_rust_output()
+    out["diagnostics"]["warnings"] = warnings
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+def test_raw_rust_output_requires_warnings_collection():
+    out = _raw_rust_output()
+    del out["diagnostics"]["warnings"]
+
+    with pytest.raises(FatalBotException, match="missing required warnings"):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+def test_raw_rust_output_accepts_each_warning_variant():
+    out = _raw_rust_output()
+    out["diagnostics"]["warnings"] = [
+        {
+            "disabled_pside_has_position": {
+                "symbol_idx": 0,
+                "pside": "long",
+            }
+        },
+        {
+            "non_tradable_has_position": {
+                "symbol_idx": 0,
+                "pside": "short",
+            }
+        },
+        {
+            "twel_repair_blocked_by_loss_gate": {
+                "pside": "long",
+                "current_twe": 0.6,
+                "twel_repair_target": 0.5,
+                "policy": "reduce_portfolio",
+                "candidate_count": 1,
+                "blocked_order_count": 1,
+                "projected_twe_after_allowed_reductions": 0.6,
+            }
+        },
+    ]
 
     assert reconciler.validate_rust_orchestrator_output(
         out, {0: SYMBOL}, _raw_rust_input()

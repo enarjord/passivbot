@@ -2257,10 +2257,8 @@ mod core {
                 let one_step_below = round_dn(ob.ask - exchange.price_step, exchange.price_step);
                 if one_step_below > 0.0 {
                     one_step_below
-                } else if ob.ask > exchange.price_step {
-                    exchange.price_step
                 } else {
-                    0.0
+                    exchange.price_step
                 }
             }
             PositionSide::Short => round_up(ob.bid + exchange.price_step, exchange.price_step),
@@ -4429,6 +4427,36 @@ mod core {
             let order_book = OrderBook {
                 bid: 0.01,
                 ask: 0.015,
+            };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.02,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.01);
+        }
+
+        #[test]
+        fn panic_close_keeps_minimum_tick_long_price_positive() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 0.01,
+                ask: 0.01,
             };
 
             let long = calc_panic_close(

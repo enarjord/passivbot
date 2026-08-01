@@ -47,8 +47,9 @@ All notable user-facing changes will be documented in this file.
   quantities to the submitted quantity step without overshooting already aligned floating-point
   values, quantizes EMA Anchor touch prices in the protective direction, and keeps panic limit
   prices valid when the submitted top-of-book quote itself is off tick, including low-priced books
-  near one price step. Enum-shaped producer fields fail fatally even when malformed as JSON arrays
-  or objects, and graceful-stop mode uses Rust's exact nonzero-position rule.
+  at or near one price step. The complete serialized diagnostic envelope now requires and validates
+  every Rust warning variant. Enum-shaped producer fields fail fatally even when malformed as JSON
+  arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position rule.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
