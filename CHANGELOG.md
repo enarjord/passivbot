@@ -33,7 +33,7 @@ All notable user-facing changes will be documented in this file.
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects entry quantities below the submitted effective exchange minimum or
   outside the submitted quantity step, rejects close quantities below their effective minimum or
-  outside the submitted quantity step except for an exact remaining dust position, rejects limit
+  outside the submitted quantity step except for an exact remaining position, rejects limit
   prices outside the submitted price step, requires diagnostic effective modes to match Rust's
   submitted mode/position/global-enable rule,
   requires order-type names to round-trip through Rust's
@@ -44,8 +44,9 @@ All notable user-facing changes will be documented in this file.
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
   supervisors no longer swallow fatal producer failures. Rust now also quantizes effective minimum
-  quantities to the submitted quantity step and protective panic limit prices when the submitted
-  top-of-book quote itself is off tick, including low-priced books near one price step.
+  quantities to the submitted quantity step, quantizes EMA Anchor touch prices in the protective
+  direction, and keeps panic limit prices valid when the submitted top-of-book quote itself is off
+  tick, including low-priced books near one price step.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

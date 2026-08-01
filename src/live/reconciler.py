@@ -1162,10 +1162,7 @@ def _validate_rust_close_exchange_constraints(
     closes_exact_remaining_position = math.isclose(
         qty_abs, position_abs, rel_tol=0.0, abs_tol=qty_tolerance
     )
-    if (
-        position_abs < effective_min_qty - 1e-12
-        and closes_exact_remaining_position
-    ):
+    if closes_exact_remaining_position:
         return
     qty_steps = qty_abs / qty_step
     if not math.isfinite(qty_steps):

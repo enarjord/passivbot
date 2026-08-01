@@ -50,7 +50,7 @@ pub fn calc_bid_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
-    f64::min(state.order_book.bid, round_dn(target, exchange.price_step))
+    round_dn(f64::min(state.order_book.bid, target), exchange.price_step)
 }
 
 #[inline]
@@ -71,7 +71,7 @@ pub fn calc_ask_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
-    f64::max(state.order_book.ask, round_up(target, exchange.price_step))
+    round_up(f64::max(state.order_book.ask, target), exchange.price_step)
 }
 
 #[inline]
@@ -438,6 +438,32 @@ mod tests {
         assert!(ask >= state.order_book.ask);
         assert_eq!(bid, 99.0);
         assert_eq!(ask, 101.0);
+    }
+
+    #[test]
+    fn off_tick_touch_prices_are_quantized_away_from_the_book() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 98.003,
+                ask: 102.007,
+            },
+            ema_bands: EMABands {
+                lower: 100.0,
+                upper: 100.0,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        let (bid, ask) = calc_quote_prices(&state, &exchange, &params, 0.0, 1.0);
+
+        assert_eq!(bid, 98.0);
+        assert_eq!(ask, 102.01);
     }
 
     #[test]

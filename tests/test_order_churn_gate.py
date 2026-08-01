@@ -1405,6 +1405,18 @@ def test_raw_rust_output_accepts_exact_remaining_below_minimum_dust_close():
     ) == [order]
 
 
+def test_raw_rust_output_accepts_exact_remaining_off_step_full_close():
+    order = _raw_rust_order(
+        qty=-1.005,
+        order_type="close_grid_long",
+    )
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=1.005, qty_step=0.01, min_qty=0.01),
+    ) == [order]
+
+
 def test_raw_rust_output_keeps_held_entry_for_submitted_nontradable_side():
     order = _raw_rust_order(order_type="entry_grid_normal_long")
     out = _raw_rust_output([order])

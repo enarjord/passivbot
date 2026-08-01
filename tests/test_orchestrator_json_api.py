@@ -1169,6 +1169,51 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
     ]
 
 
+def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        symbols=[
+            make_symbol(
+                0,
+                bid=98.003,
+                ask=102.007,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=strategy,
+                short_strategy=strategy,
+                emas=ema_bundle(
+                    m1_close=[
+                        [10.0, 100.0],
+                        [20.0, 100.0],
+                        [math.sqrt(10.0 * 20.0), 100.0],
+                    ],
+                    m1_volume=[[10.0, 1_000.0]],
+                    m1_log_range=[[10.0, 0.01]],
+                ),
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    prices = {order["order_type"]: order["price"] for order in out["orders"]}
+    assert prices["entry_ema_anchor_long"] == 98.0
+    assert prices["close_ema_anchor_long"] == 102.01
+
+
 def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     import passivbot_rust as pbr
 
@@ -1729,6 +1774,31 @@ def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation
     assert len(out["orders"]) == 1
     assert out["orders"][0]["execution_type"] == "limit"
     assert out["orders"][0]["price"] == 0.01
+
+
+def test_off_step_full_panic_close_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_mode="panic",
+                long_pos_size=1.005,
+                long_pos_price=100.0,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["qty"] == -1.005
 
 
 def test_unaligned_exchange_min_qty_is_quantized_before_live_validation():
