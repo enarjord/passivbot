@@ -71,6 +71,8 @@ def _raw_rust_input(
     *,
     long_mode=None,
     short_mode="manual",
+    long_pos_size=1.0,
+    short_pos_size=0.0,
     bid=100.0,
     ask=100.0,
     **global_overrides,
@@ -97,8 +99,14 @@ def _raw_rust_input(
             {
                 "symbol_idx": 0,
                 "order_book": {"bid": bid, "ask": ask},
-                "long": {"mode": long_mode},
-                "short": {"mode": short_mode},
+                "long": {
+                    "mode": long_mode,
+                    "position": {"size": long_pos_size, "price": 100.0},
+                },
+                "short": {
+                    "mode": short_mode,
+                    "position": {"size": short_pos_size, "price": 100.0},
+                },
             }
         ],
     }
@@ -158,9 +166,9 @@ def _raw_loss_gate_block(**overrides) -> dict:
         "order_type": "close_auto_reduce_wel_long",
         "qty": -1.0,
         "price": 100.0,
-        "projected_pnl": -1.0,
+        "projected_pnl": -110.0,
         "balance_before": 1_000.0,
-        "projected_balance_after": 999.0,
+        "projected_balance_after": 890.0,
         "balance_peak": 1_000.0,
         "balance_floor": 900.0,
         "max_realized_loss_pct": 0.1,
@@ -429,6 +437,46 @@ def test_raw_rust_output_rejects_every_malformed_order_field(overrides, error):
             {0: SYMBOL},
             _raw_rust_input(),
         )
+
+
+@pytest.mark.parametrize(
+    "orders",
+    [
+        [_raw_rust_order(qty=-1.01, order_type="close_grid_long")],
+        [
+            _raw_rust_order(qty=-0.6, order_type="close_grid_long"),
+            _raw_rust_order(
+                qty=-0.5,
+                price=101.0,
+                order_type="close_trailing_long",
+            ),
+        ],
+    ],
+)
+def test_raw_rust_output_rejects_close_wave_exceeding_submitted_position(orders):
+    with pytest.raises(FatalBotException, match="exceeds submitted position"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=1.0),
+        )
+
+
+def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
+    orders = [
+        _raw_rust_order(qty=-0.6, order_type="close_grid_long"),
+        _raw_rust_order(
+            qty=-0.4,
+            price=101.0,
+            order_type="close_trailing_long",
+        ),
+    ]
+
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output(orders),
+        {0: SYMBOL},
+        _raw_rust_input(long_pos_size=1.0),
+    ) == orders
 
 
 @pytest.mark.parametrize(
@@ -862,6 +910,41 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
     ]
 
     with pytest.raises(FatalBotException, match="invalid qty"):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+def test_raw_rust_output_accepts_consistent_loss_gate_block():
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: SYMBOL}, _raw_rust_input()
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"order_type": "entry_initial_normal_long"}, "must be a close order"),
+        ({"qty": 1.0}, "qty sign disagrees"),
+        ({"projected_pnl": 0.0}, "negative projected_pnl"),
+        ({"projected_balance_after": 891.0}, "inconsistent projected balance"),
+        ({"balance_floor": 899.0}, "inconsistent balance floor"),
+        (
+            {"projected_pnl": -100.0, "projected_balance_after": 900.0},
+            "does not cross balance floor",
+        ),
+    ],
+)
+def test_raw_rust_output_rejects_impossible_loss_gate_block(overrides, error):
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(**overrides)
+    ]
+
+    with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
             out, {0: SYMBOL}, _raw_rust_input()
         )

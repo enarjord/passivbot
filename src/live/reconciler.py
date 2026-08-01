@@ -1097,7 +1097,11 @@ def _expected_rust_execution_type(
 
 def _submitted_rust_input_context(
     orchestrator_input: dict, expected_symbol_idxs: set[int]
-) -> tuple[dict[tuple[int, str], object], dict[int, tuple[float, float]]]:
+) -> tuple[
+    dict[tuple[int, str], object],
+    dict[int, tuple[float, float]],
+    dict[tuple[int, str], float],
+]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
         raise FatalBotException(
@@ -1106,6 +1110,7 @@ def _submitted_rust_input_context(
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     modes: dict[tuple[int, str], object] = {}
     order_books: dict[int, tuple[float, float]] = {}
+    position_sizes: dict[tuple[int, str], float] = {}
     seen_symbol_idxs: set[int] = set()
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
@@ -1155,11 +1160,21 @@ def _submitted_rust_input_context(
                 )
             mode = side_input["mode"]
             modes[(symbol_idx, pside)] = mode
+            position = side_input.get("position")
+            if not isinstance(position, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} position"
+                )
+            position_size = _validated_rust_finite_number(
+                position.get("size"),
+                f"symbol input {input_idx} has invalid {pside} position size",
+            )
+            position_sizes[(symbol_idx, pside)] = abs(position_size)
     if seen_symbol_idxs != expected_symbol_idxs:
         raise FatalBotException(
             "Rust orchestrator symbol inputs do not cover the requested symbols"
         )
-    return modes, order_books
+    return modes, order_books, position_sizes
 
 
 def rust_order_conversion_identity(
@@ -1201,10 +1216,13 @@ def validate_rust_orchestrator_output(
     if not isinstance(orders, list):
         raise FatalBotException("Rust orchestrator orders must be a list")
     expected_symbol_idxs = set(idx_to_symbol)
-    submitted_input_modes, submitted_order_books = _submitted_rust_input_context(
-        orchestrator_input, expected_symbol_idxs
-    )
+    (
+        submitted_input_modes,
+        submitted_order_books,
+        submitted_position_sizes,
+    ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
+    aggregate_close_qty: dict[tuple[int, str], float] = {}
     for order_idx, order in enumerate(orders):
         if not isinstance(order, dict):
             raise FatalBotException(
@@ -1258,6 +1276,14 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} qty sign disagrees with order_type"
             )
+        if order_type.startswith("close_"):
+            pair = (symbol_idx, pside)
+            aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
+            if aggregate_close_qty[pair] > submitted_position_sizes[pair] + 1e-12:
+                raise FatalBotException(
+                    f"Rust orchestrator close quantity for symbol_idx {symbol_idx} "
+                    f"{pside} exceeds submitted position"
+                )
         execution_type = order.get("execution_type")
         if execution_type not in {"limit", "market"}:
             raise FatalBotException(
@@ -1419,11 +1445,17 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid order_type"
             ) from exc
+        if not order_type.startswith("close_"):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} order_type must be a close order"
+            )
+        finite_values: dict[str, float] = {}
         for field in finite_fields:
             value = _validated_rust_finite_number(
                 block.get(field),
                 f"loss_gate_block {block_idx} has invalid {field}",
             )
+            finite_values[field] = value
             if field == "qty" and value == 0.0:
                 raise FatalBotException(
                     f"Rust orchestrator loss_gate_block {block_idx} has invalid qty"
@@ -1432,6 +1464,51 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
                 )
+        qty = finite_values["qty"]
+        if (pside == "long" and qty >= 0.0) or (pside == "short" and qty <= 0.0):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} qty sign disagrees with pside"
+            )
+        projected_pnl = finite_values["projected_pnl"]
+        balance_before = finite_values["balance_before"]
+        projected_balance_after = finite_values["projected_balance_after"]
+        balance_peak = finite_values["balance_peak"]
+        balance_floor = finite_values["balance_floor"]
+        max_realized_loss_pct = finite_values["max_realized_loss_pct"]
+        if projected_pnl >= 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} must have negative projected_pnl"
+            )
+        if balance_before <= 0.0 or balance_peak <= 0.0 or balance_floor <= 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid balance state"
+            )
+        if not 0.0 <= max_realized_loss_pct < 1.0:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has invalid max_realized_loss_pct"
+            )
+        if not math.isclose(
+            projected_balance_after,
+            balance_before + projected_pnl,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has inconsistent projected balance"
+            )
+        if not math.isclose(
+            balance_floor,
+            balance_peak * (1.0 - max_realized_loss_pct),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} has inconsistent balance floor"
+            )
+        if projected_balance_after >= balance_floor - 1e-12:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} does not cross balance floor"
+            )
 
     def validate_diagnostic_symbol_idx(value: object, context: str) -> None:
         if (
