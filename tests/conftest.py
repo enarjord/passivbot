@@ -270,6 +270,8 @@ def _install_passivbot_rust_stub():
                     "warnings": [],
                     "symbol_states": symbol_states,
                     "loss_gate_blocks": [],
+                    "min_effective_cost_blocks": [],
+                    "forager_selections": [],
                 },
             }
         )

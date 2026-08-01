@@ -136,14 +136,19 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
     }
 
 
-def test_passivbot_rust_stub_emits_required_loss_gate_collection():
+def test_passivbot_rust_stub_emits_required_diagnostic_collections():
     import passivbot_rust as pbr
 
     if not getattr(pbr, "__is_stub__", False):
         pytest.skip("real Rust extension is loaded")
     out = json.loads(pbr.compute_ideal_orders_json(json.dumps({"symbols": []})))
 
-    assert out["diagnostics"]["loss_gate_blocks"] == []
+    for field in (
+        "loss_gate_blocks",
+        "min_effective_cost_blocks",
+        "forager_selections",
+    ):
+        assert out["diagnostics"][field] == []
 
 
 def _raw_loss_gate_block(**overrides) -> dict:
