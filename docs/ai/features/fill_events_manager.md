@@ -168,6 +168,13 @@ Exchange fetch methods propagate endpoint failures. The manager or caller may re
 quarantine, rebuild, or defer according to `../error_contract.md`; it must not attach neutral PnL
 merely because an auxiliary endpoint failed.
 
+Unproven required coverage is a controlled live-planning deferral. The execution loop owns its
+bounded, reason-aware retry cadence, and persistent coverage gaps do not consume the generic
+process-restart budget. A change between coverage and PnL block reasons restarts that reason's
+backoff at its configured base. Already-latched HSL RED supervisors continue protective management
+without fills while coverage repair proceeds. Manager-owned known-gap state remains evidence about
+coverage, not a second orchestration timer.
+
 ## Validation
 
 1. Deduplication correctness.
