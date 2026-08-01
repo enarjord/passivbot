@@ -1599,6 +1599,10 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     ("overrides", "error"),
     [
         ({"order_type": "entry_initial_normal_long"}, "must be a close order"),
+        (
+            {"order_type": "close_panic_long"},
+            "panic order_type bypasses the realized-loss gate",
+        ),
         ({"qty": 1.0}, "qty sign disagrees"),
         ({"projected_pnl": 0.0}, "negative projected_pnl"),
         ({"projected_balance_after": 891.0}, "inconsistent projected balance"),

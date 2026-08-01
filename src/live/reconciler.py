@@ -1957,6 +1957,11 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} order_type must be a close order"
             )
+        if order_type.startswith("close_panic_"):
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} panic order_type "
+                "bypasses the realized-loss gate"
+            )
         finite_values: dict[str, float] = {}
         for field in finite_fields:
             value = _validated_rust_finite_number(

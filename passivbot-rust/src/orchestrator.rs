@@ -2252,16 +2252,31 @@ mod core {
             PositionSide::Long => -pos.size.abs(),
             PositionSide::Short => pos.size.abs(),
         };
+        let tolerant_round_dn = |value: f64| {
+            let nearest = round_(value, exchange.price_step);
+            if (value - nearest).abs() <= exchange.price_step * 1e-8 {
+                nearest
+            } else {
+                round_dn(value, exchange.price_step)
+            }
+        };
+        let tolerant_round_up = |value: f64| {
+            let nearest = round_(value, exchange.price_step);
+            if (value - nearest).abs() <= exchange.price_step * 1e-8 {
+                nearest
+            } else {
+                round_up(value, exchange.price_step)
+            }
+        };
         let price = match pside {
             PositionSide::Long => {
-                let one_step_below = round_dn(ob.ask - exchange.price_step, exchange.price_step);
-                if one_step_below > 0.0 {
-                    one_step_below
-                } else {
-                    exchange.price_step
-                }
+                let touch = tolerant_round_dn(ob.ask);
+                round_(touch - exchange.price_step, exchange.price_step).max(exchange.price_step)
             }
-            PositionSide::Short => round_up(ob.bid + exchange.price_step, exchange.price_step),
+            PositionSide::Short => {
+                let touch = tolerant_round_up(ob.bid);
+                round_(touch + exchange.price_step, exchange.price_step)
+            }
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
             return None;
@@ -4412,6 +4427,45 @@ mod core {
 
             assert_eq!(long.price, 99.99);
             assert_eq!(short.price, 100.02);
+        }
+
+        #[test]
+        fn panic_close_does_not_skip_ticks_from_float_noise() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.1,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook { bid: 0.2, ask: 0.3 };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.4,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+            let short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 0.1,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.2);
+            assert_eq!(short.price, 0.3);
         }
 
         #[test]

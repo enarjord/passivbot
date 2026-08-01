@@ -1750,6 +1750,52 @@ def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():
     assert out["orders"][0]["price"] == 99.99
 
 
+@pytest.mark.parametrize(
+    ("pside", "expected_price"),
+    [("long", 0.2), ("short", 0.3)],
+)
+def test_tick_aligned_panic_limit_does_not_skip_tick_from_float_noise(
+    pside, expected_price
+):
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=0.2,
+        ask=0.3,
+        long_mode="panic" if pside == "long" else "manual",
+        long_pos_size=1.0 if pside == "long" else 0.0,
+        long_pos_price=0.4 if pside == "long" else 0.0,
+        short_mode="panic" if pside == "short" else "manual",
+        short_pos_size=-1.0 if pside == "short" else 0.0,
+        short_pos_price=0.1 if pside == "short" else 0.0,
+        short_bp={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            }
+        ),
+        symbols=[symbol],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["order_type"] == f"close_panic_{pside}"
+    assert out["orders"][0]["price"] == expected_price
+
+
 def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation():
     import passivbot_rust as pbr
 
