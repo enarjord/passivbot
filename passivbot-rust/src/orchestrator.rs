@@ -28,6 +28,7 @@ pub struct ForagerHysteresisState {
 }
 
 mod core {
+    use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
         select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
@@ -107,6 +108,8 @@ mod core {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum StrategyInputScope {
+        ForagerSelection,
+        OneWayArbitration,
         StrategyOrders,
         Unstuck,
     }
@@ -2054,6 +2057,20 @@ mod core {
         }
     }
 
+    fn unavailable_forager_candidate(index: usize) -> ForagerCandidate {
+        ForagerCandidate {
+            index,
+            enabled: false,
+            volume_score: 0.0,
+            volatility_score: 0.0,
+            bid: 0.0,
+            ask: 0.0,
+            ema_lower: 0.0,
+            ema_upper: 0.0,
+            entry_initial_ema_dist: 0.0,
+        }
+    }
+
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
@@ -2137,46 +2154,54 @@ mod core {
                         strategy_initial_qty_pct(&strategy_params),
                     );
                 }
-                out.push(ForagerCandidate {
-                    index: s.symbol_idx,
-                    enabled: false,
-                    volume_score: 0.0,
-                    volatility_score: 0.0,
-                    bid: 0.0,
-                    ask: 0.0,
-                    ema_lower: 0.0,
-                    ema_upper: 0.0,
-                    entry_initial_ema_dist: 0.0,
-                });
+                out.push(unavailable_forager_candidate(s.symbol_idx));
                 continue;
             }
             let volume_score = if volume_required {
-                require_forager_input(
-                    s.symbol_idx,
-                    "forager_volume_score",
-                    ema_lookup(
-                        &forager_m1.volume,
-                        side.bot_params.filter_volume_ema_span_1m,
-                    )
-                    .ok_or(OrchestratorError::MissingEma {
-                        symbol_idx: s.symbol_idx,
-                    })?,
-                )?
+                let value = match ema_lookup(
+                    &forager_m1.volume,
+                    side.bot_params.filter_volume_ema_span_1m,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        handle_strategy_input_error(
+                            OrchestratorError::MissingEma {
+                                symbol_idx: s.symbol_idx,
+                            },
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
+                        )?;
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        continue;
+                    }
+                };
+                require_forager_input(s.symbol_idx, "forager_volume_score", value)?
             } else {
                 0.0
             };
             let volatility_score = if volatility_required {
-                require_forager_input(
-                    s.symbol_idx,
-                    "forager_volatility_score",
-                    ema_lookup(
-                        &forager_m1.log_range,
-                        side.bot_params.filter_volatility_ema_span_1m,
-                    )
-                    .ok_or(OrchestratorError::MissingEma {
-                        symbol_idx: s.symbol_idx,
-                    })?,
-                )?
+                let value = match ema_lookup(
+                    &forager_m1.log_range,
+                    side.bot_params.filter_volatility_ema_span_1m,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        handle_strategy_input_error(
+                            OrchestratorError::MissingEma {
+                                symbol_idx: s.symbol_idx,
+                            },
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
+                        )?;
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        continue;
+                    }
+                };
+                require_forager_input(s.symbol_idx, "forager_volatility_score", value)?
             } else {
                 0.0
             };
@@ -2193,17 +2218,7 @@ mod core {
                     | Err(OrchestratorError::NonFiniteInput {
                         field: "ema_bands", ..
                     }) => {
-                        out.push(ForagerCandidate {
-                            index: s.symbol_idx,
-                            enabled: false,
-                            volume_score: 0.0,
-                            volatility_score: 0.0,
-                            bid: 0.0,
-                            ask: 0.0,
-                            ema_lower: 0.0,
-                            ema_upper: 0.0,
-                            entry_initial_ema_dist: 0.0,
-                        });
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
                         continue;
                     }
                     Err(err) => return Err(err),
@@ -2216,17 +2231,7 @@ mod core {
                 ) {
                     Ok(v) => v,
                     Err(_) => {
-                        out.push(ForagerCandidate {
-                            index: s.symbol_idx,
-                            enabled: false,
-                            volume_score: 0.0,
-                            volatility_score: 0.0,
-                            bid: 0.0,
-                            ask: 0.0,
-                            ema_lower: 0.0,
-                            ema_upper: 0.0,
-                            entry_initial_ema_dist: 0.0,
-                        });
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
                         continue;
                     }
                 };
@@ -2414,6 +2419,66 @@ mod core {
                 order_type: order.order_type,
             });
         }
+    }
+
+    fn calc_independent_wel_ideal_order(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        runtime_budget: RuntimeBudgetState,
+    ) -> Option<IdealOrder> {
+        if !matches!(
+            input.global.strategy_kind,
+            StrategyKind::TrailingMartingale | StrategyKind::TrailingGridV7
+        ) {
+            return None;
+        }
+        let side = match pside {
+            PositionSide::Long => &symbol.long,
+            PositionSide::Short => &symbol.short,
+        };
+        if side.position.size == 0.0 {
+            return None;
+        }
+        let state = StateParams {
+            balance: input.balance,
+            order_book: symbol.order_book,
+            ..Default::default()
+        };
+        let runtime_context = RuntimeOrderContext {
+            effective_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
+        };
+        let wallet_exposure = calc_wallet_exposure(
+            symbol.exchange.c_mult,
+            input.balance,
+            side.position.size.abs(),
+            side.position.price,
+        );
+        let order = match pside {
+            PositionSide::Long => calc_wel_auto_reduce_long(
+                &symbol.exchange,
+                &state,
+                &side.bot_params,
+                &runtime_context,
+                &side.position,
+                wallet_exposure,
+            ),
+            PositionSide::Short => calc_wel_auto_reduce_short(
+                &symbol.exchange,
+                &state,
+                &side.bot_params,
+                &runtime_context,
+                &side.position,
+                wallet_exposure,
+            ),
+        }?;
+        Some(IdealOrder {
+            symbol_idx: symbol.symbol_idx,
+            pside,
+            qty: order.qty,
+            price: order.price,
+            order_type: order.order_type,
+        })
     }
 
     fn generate_strategy_ideal_orders(
@@ -3197,14 +3262,46 @@ mod core {
                     );
                     let params_long = strategy_params_long?;
                     let params_short = strategy_params_short?;
-                    let bands_long =
-                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, &params_long)?;
-                    let bands_short = cached_ema_bands(
+                    let bands_long = match cached_ema_bands(
+                        &mut workspace.derived_long,
+                        idx,
+                        &s.emas,
+                        &params_long,
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Long,
+                                StrategyInputScope::OneWayArbitration,
+                                &mut diagnostics,
+                            )?;
+                            workspace.one_way_block_initial_long[idx] = true;
+                            workspace.one_way_block_initial_short[idx] = true;
+                            continue;
+                        }
+                    };
+                    let bands_short = match cached_ema_bands(
                         &mut workspace.derived_short,
                         idx,
                         &s.emas,
                         &params_short,
-                    )?;
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Short,
+                                StrategyInputScope::OneWayArbitration,
+                                &mut diagnostics,
+                            )?;
+                            workspace.one_way_block_initial_long[idx] = true;
+                            workspace.one_way_block_initial_short[idx] = true;
+                            continue;
+                        }
+                    };
 
                     let entry_threshold_long =
                         bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
@@ -3310,13 +3407,25 @@ mod core {
                             wants_closes,
                         ) {
                             Ok(generated) => (entries, closes) = generated,
-                            Err(err) => handle_strategy_input_error(
-                                err,
-                                s,
-                                PositionSide::Long,
-                                StrategyInputScope::StrategyOrders,
-                                &mut diagnostics,
-                            )?,
+                            Err(err) => {
+                                handle_strategy_input_error(
+                                    err,
+                                    s,
+                                    PositionSide::Long,
+                                    StrategyInputScope::StrategyOrders,
+                                    &mut diagnostics,
+                                )?;
+                                if wants_closes {
+                                    if let Some(order) = calc_independent_wel_ideal_order(
+                                        input,
+                                        s,
+                                        PositionSide::Long,
+                                        workspace.runtime_budget_long[s.symbol_idx],
+                                    ) {
+                                        closes.push(order);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3402,13 +3511,25 @@ mod core {
                             wants_closes,
                         ) {
                             Ok(generated) => (entries, closes) = generated,
-                            Err(err) => handle_strategy_input_error(
-                                err,
-                                s,
-                                PositionSide::Short,
-                                StrategyInputScope::StrategyOrders,
-                                &mut diagnostics,
-                            )?,
+                            Err(err) => {
+                                handle_strategy_input_error(
+                                    err,
+                                    s,
+                                    PositionSide::Short,
+                                    StrategyInputScope::StrategyOrders,
+                                    &mut diagnostics,
+                                )?;
+                                if wants_closes {
+                                    if let Some(order) = calc_independent_wel_ideal_order(
+                                        input,
+                                        s,
+                                        PositionSide::Short,
+                                        workspace.runtime_budget_short[s.symbol_idx],
+                                    ) {
+                                        closes.push(order);
+                                    }
+                                }
+                            }
                         }
                     }
                 }

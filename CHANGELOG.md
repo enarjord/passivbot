@@ -8,7 +8,7 @@ All notable user-facing changes will be documented in this file.
   entire planner cycle when one active symbol lacks a completed candle. Known missing EMA inputs
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
   strategy orders are cancelled through normal Rust-authoritative reconciliation, and independent
-  panic/TWEL reducers may continue when their own inputs are complete.
+  panic/WEL/TWEL reducers may continue when their own inputs are complete.
 
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.
 - Stop refetching every account surface when a known fill only gains authoritative PnL or revised fee evidence, while retaining confirmation for new source identities or structural fill changes; validate realized-PnL history once per Rust planning cycle instead of rescanning it for unstuck eligibility.

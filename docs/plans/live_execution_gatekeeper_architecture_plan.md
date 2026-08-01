@@ -17,7 +17,8 @@ surfaces plus the cycle's market snapshot, not blanket completed-candle freshnes
 identify known absent EMA inputs per symbol without fabricating values; Rust then records and
 scopes only consumers that encounter `MissingEma`, while backtest and unannotated calls remain
 strict. Ordinary ideals omitted by that scoped result are still authoritative, so reconciliation
-cancels stale resting strategy orders. Candle-independent panic and TWEL reducers remain eligible.
+cancels stale resting strategy orders. Candle-independent panic, WEL, and TWEL reducers remain
+eligible.
 
 ## Purpose
 

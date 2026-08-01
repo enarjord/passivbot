@@ -18216,6 +18216,10 @@ class Passivbot:
                 self.ema_type = ema_type
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -18231,6 +18235,10 @@ class Passivbot:
                 self.symbol = symbol
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         def close_ema_reason_detail(reason: str) -> tuple[str, str]:
             if str(reason).startswith("non-finite close EMA value"):
@@ -18794,6 +18802,8 @@ class Passivbot:
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
                     if isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                        if exc.contains_non_finite:
+                            raise
                         self._orchestrator_allow_missing_strategy_inputs_symbols.add(
                             sym
                         )
@@ -19536,7 +19546,9 @@ class Passivbot:
             input_hash=input_hash,
             symbol_count=len(input_dict["symbols"]),
             tradable_count=int(tradable_count),
-            ema_unavailable_count=len(ema_unavailable_symbols),
+            ema_unavailable_count=len(
+                ema_unavailable_symbols | allow_missing_strategy_inputs_symbols
+            ),
             trailing_unavailable_count=len(trailing_unavailable_symbols),
             hedge_mode=bool(effective_hedge_mode),
             strategy_kind=strategy_kind,

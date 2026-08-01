@@ -458,6 +458,63 @@ def test_live_authorized_missing_ema_still_emits_twel_reducer():
     assert {order["symbol_idx"] for order in twel_orders} == {1}
 
 
+def test_live_authorized_missing_ema_still_emits_wel_reducer():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+        emas=ema_bundle(m1_close=[]),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[symbol],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+    complete_inp = copy.deepcopy(inp)
+    complete_inp["symbols"][0]["emas"] = ema_bundle()
+    complete_inp["symbols"][0]["allow_missing_strategy_inputs"] = False
+    complete_out = compute(pbr, complete_inp)
+
+    wel_orders = [
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    ]
+    complete_wel_orders = [
+        order
+        for order in complete_out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    ]
+    assert len(wel_orders) == 1
+    assert wel_orders == complete_wel_orders
+    assert wel_orders[0]["symbol_idx"] == 0
+    assert not any(
+        order["pside"] == "long"
+        and (
+            order["order_type"].startswith("entry_")
+            or order["order_type"].startswith("close_grid")
+            or order["order_type"].startswith("close_trailing")
+        )
+        for order in out["orders"]
+    )
+
+
 def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
     import passivbot_rust as pbr
 
@@ -695,6 +752,37 @@ def test_one_way_flat_tie_break_requires_ema_even_when_entry_gate_disabled():
 
     with pytest.raises(ValueError, match="MissingEma"):
         compute(pbr, inp)
+
+
+def test_live_authorized_missing_ema_blocks_both_one_way_initial_sides():
+    import passivbot_rust as pbr
+
+    side_enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=101.0,
+        short_bp=side_enabled,
+        emas=ema_bundle(m1_close=[]),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=side_enabled),
+        symbols=[symbol],
+    )
+    inp["global"]["hedge_mode"] = False
+
+    out = compute(pbr, inp)
+
+    assert not any(order["order_type"].startswith("entry_") for order in out["orders"])
+    assert {
+        "strategy_input_unavailable": {
+            "symbol_idx": 0,
+            "pside": "long",
+            "scope": "one_way_arbitration",
+        }
+    } in out["diagnostics"]["warnings"]
 
 
 @pytest.mark.parametrize(
@@ -2015,6 +2103,64 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert selection["selected_symbol_indices"] == [1]
     assert selection["top_scores"][0]["symbol_idx"] == 1
     assert selection["top_scores"][0]["selected"] is True
+
+
+def test_live_authorized_missing_forager_feature_scopes_only_candidate_side():
+    import passivbot_rust as pbr
+
+    side_params = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.0,
+        "filter_volume_drop_pct": 0.5,
+        "filter_volatility_drop_pct": 0.0,
+        "filter_volume_ema_span_1m": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
+    }
+    global_bp = bot_params_pair(long_overrides=side_params)
+    unavailable = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+        emas=ema_bundle(m1_volume=[]),
+    )
+    unavailable["allow_missing_strategy_inputs"] = True
+    available = make_symbol(
+        1,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+        emas=ema_bundle(m1_volume=[[10.0, 11.0]]),
+    )
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        symbols=[unavailable, available],
+    )
+    strict_inp = copy.deepcopy(inp)
+    strict_inp["symbols"][0]["allow_missing_strategy_inputs"] = False
+
+    with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, strict_inp)
+
+    out = compute(pbr, inp)
+
+    assert any(
+        order["symbol_idx"] == 1 and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert not any(
+        order["symbol_idx"] == 0 and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert {
+        "strategy_input_unavailable": {
+            "symbol_idx": 0,
+            "pside": "long",
+            "scope": "forager_selection",
+        }
+    } in out["diagnostics"]["warnings"]
 
 
 def test_json_rejects_invalid_forager_hysteresis_pct():

@@ -55,7 +55,8 @@ block protective management of held symbols.
 A failed urgent candle refresh is therefore an availability observation, not an account-wide
 planning barrier. Live Python may explicitly mark a symbol's known missing EMA inputs as
 unavailable and pass no invented values. Rust remains strict by default, including backtests, and
-may scope only that explicit live absence to the strategy or unstuck consumer that needs it.
+may scope only that explicit live absence to forager selection, one-way arbitration, strategy, or
+unstuck consumers that need it.
 Missing ordinary strategy intent produces no ideal strategy order for that symbol/side, so normal
 Rust-authoritative reconciliation removes any now-stale resting strategy order. Independent Rust
 risk reducers and panic actions continue when their own inputs are complete. Malformed or

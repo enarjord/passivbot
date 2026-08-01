@@ -1055,6 +1055,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     assert {event.cycle_id for event in rust_events} == {"cy_live"}
     assert rust_events[0].remote_call_id == rust_events[1].remote_call_id
     assert rust_events[0].data["input_hash"] == rust_events[1].data["input_hash"]
+    assert rust_events[0].data["ema_unavailable_count"] == 1
     assert rust_events[1].data["order_count"] == 0
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

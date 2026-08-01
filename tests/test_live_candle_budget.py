@@ -1274,6 +1274,11 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     bot_active = FakeBot()
     bot_active.PB_modes = {"long": {symbol: "normal"}, "short": {}}
     bot_active.active_symbols = [symbol]
+
+    async def unavailable_log_range(*args, **kwargs):
+        raise TimeoutError("log range unavailable")
+
+    bot_active.cm.get_latest_ema_log_range = unavailable_log_range
     active_result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
         bot_active, [symbol], modes=bot_active.PB_modes
     )
@@ -1284,6 +1289,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     bot_with_position.positions = {
         symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}
     }
+    bot_with_position.cm.get_latest_ema_log_range = unavailable_log_range
     held_result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
         bot_with_position, [symbol], modes=bot_with_position.PB_modes
     )
