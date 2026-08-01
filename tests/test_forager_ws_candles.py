@@ -891,6 +891,92 @@ async def test_watcher_retirement_propagates_owner_cancellation(bulk_supported):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bulk_supported", [False, True])
+async def test_unsubscribe_timeout_is_hard_when_connector_suppresses_cancellation(
+    bulk_supported, monkeypatch
+):
+    monkeypatch.setattr(candle_ws, "_UNWATCH_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(candle_ws, "_UNWATCH_MANY_TIMEOUT_SECONDS", 0.01)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def cancellation_resistant_unsubscribe(*_args):
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    ccp = SimpleNamespace(un_watch_ohlcv=cancellation_resistant_unsubscribe)
+    if bulk_supported:
+        ccp.un_watch_ohlcv_for_symbols = cancellation_resistant_unsubscribe
+    bot = SimpleNamespace(ccp=ccp)
+
+    if bulk_supported:
+        result = await asyncio.wait_for(
+            candle_ws._best_effort_unwatch_many(bot, ["A/USDT:USDT"]),
+            timeout=0.2,
+        )
+    else:
+        result = await asyncio.wait_for(
+            candle_ws._best_effort_unwatch(bot, "A/USDT:USDT"),
+            timeout=0.2,
+        )
+
+    assert result is False
+    await asyncio.wait_for(started.wait(), timeout=0.2)
+    abandoned = candle_ws._abandoned_unsubscribe_tasks(bot)
+    assert len(abandoned) == 1
+    abandoned_task = next(iter(abandoned))
+    release.set()
+    await asyncio.wait_for(abandoned_task, timeout=1.0)
+    await asyncio.sleep(0)
+    assert candle_ws._abandoned_unsubscribe_tasks(bot) == set()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_cancellation_keeps_removed_watcher_owned():
+    unsubscribe_started = asyncio.Event()
+
+    class _BlockingBulkCCP:
+        async def un_watch_ohlcv_for_symbols(self, _subscriptions):
+            unsubscribe_started.set()
+            await asyncio.Event().wait()
+
+        async def un_watch_ohlcv(self, _symbol, _timeframe):
+            raise AssertionError("single fallback must not start after owner cancellation")
+
+    symbol = "OWNED/USDT:USDT"
+    watcher = asyncio.create_task(asyncio.Event().wait())
+    tasks = {symbol: watcher}
+    bot = SimpleNamespace(
+        config={"live": {"enable_forager_ws_candles": True}},
+        ws_enabled=True,
+        ccp=_BlockingBulkCCP(),
+        cm=SimpleNamespace(clear_live_ws_ohlcv_state=lambda _symbol: None),
+        approved_coins_minus_ignored_coins={"long": set(), "short": set()},
+        is_forager_mode=lambda pside=None: pside in {None, "long"},
+        _urgent_active_candle_symbols=lambda: [],
+    )
+    reconciliation = asyncio.create_task(
+        candle_ws.reconcile_forager_ws_tasks(bot, tasks)
+    )
+
+    try:
+        await asyncio.wait_for(unsubscribe_started.wait(), timeout=1.0)
+        reconciliation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await reconciliation
+
+        assert tasks == {symbol: watcher}
+        assert not watcher.done()
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_wakeup_exception_is_consumed_before_watcher_retirement():
     class _UnsubscribeWakeupCCP:
         has = {"watchOHLCV": True}

@@ -47,8 +47,10 @@ All notable user-facing changes will be documented in this file.
 - Dynamic candle WebSocket removal now lets the owning watcher consume CCXT
   Pro's unsubscribe wake-up before cancellation, avoiding orphaned-future error
   spam, and reconciliation retires a removed symbol batch with one supported
-  bulk unsubscribe. Watcher cancellation and post-cancellation waits are both
-  bounded; abandoned watchers remain marked retiring until they actually stop.
+  bulk unsubscribe. Bulk and singleton unsubscribe calls, watcher cancellation,
+  and post-cancellation waits are hard-bounded even when connector coroutines
+  suppress cancellation. Removed watchers remain owned until retirement returns,
+  and abandoned watchers remain marked retiring until they actually stop.
   Internal bot restarts await maintainer teardown and close event,
   monitor, and exchange-client resources before constructing the replacement
   bot; cancellation-resistant tasks cannot extend cleanup beyond the bounded

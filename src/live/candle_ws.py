@@ -21,6 +21,8 @@ _SUBSCRIPTION_RECONCILE_SECONDS = 5.0
 _MAX_RECONNECT_DELAY_SECONDS = 30.0
 _FAILURES_BEFORE_COOLDOWN = 5
 _UNSTABLE_COOLDOWN_SECONDS = 300.0
+_UNWATCH_TIMEOUT_SECONDS = 2.0
+_UNWATCH_MANY_TIMEOUT_SECONDS = 3.0
 _WATCHER_RETIRE_GRACE_SECONDS = 3.0
 _WATCHER_CANCEL_GRACE_SECONDS = 1.0
 
@@ -101,20 +103,75 @@ async def _sleep_unless_shutdown(bot: Any, delay_s: float, *, stage: str) -> Non
         await asyncio.sleep(delay_s)
 
 
+def _abandoned_unsubscribe_tasks(bot: Any) -> set[asyncio.Future]:
+    tasks = getattr(bot, "_forager_ws_abandoned_unsubscribe_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        bot._forager_ws_abandoned_unsubscribe_tasks = tasks
+    return tasks
+
+
+def _consume_abandoned_unsubscribe(bot: Any, task: asyncio.Future) -> None:
+    _abandoned_unsubscribe_tasks(bot).discard(task)
+    if task.done() and not task.cancelled():
+        try:
+            task.exception()
+        except BaseException:
+            pass
+
+
+def _cancel_and_track_unsubscribe(bot: Any, task: asyncio.Future) -> None:
+    task.cancel()
+    abandoned = _abandoned_unsubscribe_tasks(bot)
+    abandoned.add(task)
+    task.add_done_callback(
+        lambda done_task: _consume_abandoned_unsubscribe(bot, done_task)
+    )
+
+
+async def _run_unsubscribe_with_hard_timeout(
+    bot: Any, awaitable: Any, *, timeout: float
+) -> bool:
+    """Bound connector unsubscribe without awaiting cancellation-resistant work."""
+    try:
+        task = asyncio.ensure_future(awaitable)
+    except Exception:
+        return False
+    try:
+        done, _pending = await asyncio.wait(
+            {task}, timeout=max(0.0, float(timeout))
+        )
+    except asyncio.CancelledError:
+        _cancel_and_track_unsubscribe(bot, task)
+        raise
+    if task not in done:
+        _cancel_and_track_unsubscribe(bot, task)
+        return False
+    try:
+        task.result()
+        return True
+    except asyncio.CancelledError:
+        return False
+    except Exception:
+        return False
+
+
 async def _best_effort_unwatch(bot: Any, symbol: str) -> bool:
     ccp = getattr(bot, "ccp", None)
     unwatch = getattr(ccp, "un_watch_ohlcv", None)
     if not callable(unwatch):
         return False
     try:
-        await asyncio.wait_for(unwatch(symbol, "1m"), timeout=2.0)
-        return True
+        awaitable = unwatch(symbol, "1m")
     except asyncio.CancelledError:
         raise
-    except TimeoutError:
-        return False
     except Exception:
         return False
+    return await _run_unsubscribe_with_hard_timeout(
+        bot,
+        awaitable,
+        timeout=_UNWATCH_TIMEOUT_SECONDS,
+    )
 
 
 async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
@@ -122,16 +179,18 @@ async def _best_effort_unwatch_many(bot: Any, symbols: list[str]) -> bool:
     unwatch = getattr(ccp, "un_watch_ohlcv_for_symbols", None)
     if not callable(unwatch) or not symbols:
         return False
+    subscriptions = [[symbol, "1m"] for symbol in symbols]
     try:
-        subscriptions = [[symbol, "1m"] for symbol in symbols]
-        await asyncio.wait_for(unwatch(subscriptions), timeout=3.0)
-        return True
+        awaitable = unwatch(subscriptions)
     except asyncio.CancelledError:
         raise
-    except TimeoutError:
-        return False
     except Exception:
         return False
+    return await _run_unsubscribe_with_hard_timeout(
+        bot,
+        awaitable,
+        timeout=_UNWATCH_MANY_TIMEOUT_SECONDS,
+    )
 
 
 def _retiring_watcher_tasks(bot: Any) -> dict[str, set[asyncio.Task]]:
@@ -308,9 +367,12 @@ async def reconcile_forager_ws_tasks(
     existing = set(tasks)
     removed = existing - desired
     added = desired - existing
-    removed_tasks = {symbol: tasks.pop(symbol) for symbol in sorted(removed)}
+    removed_tasks = {symbol: tasks[symbol] for symbol in sorted(removed)}
     if removed_tasks:
         await _retire_watchers(bot, removed_tasks)
+        for symbol, retired_task in removed_tasks.items():
+            if tasks.get(symbol) is retired_task:
+                tasks.pop(symbol, None)
     clear_state = getattr(bot.cm, "clear_live_ws_ohlcv_state", None)
     if callable(clear_state):
         for symbol in sorted(removed):
