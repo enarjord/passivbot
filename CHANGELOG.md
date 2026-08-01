@@ -19,16 +19,16 @@ All notable user-facing changes will be documented in this file.
   the current run's side membership separately from cache-build provenance, and
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
-- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation if its JSON
-  (including duplicate keys or decoder failures), required order batch, order fields (including
-  overflowing numeric values, execution type forbidden by the submitted input, or priority
-  inconsistent with Rust's order and configured-mode rule), while preserving configured HSL panic
-  market closes as the protective exception to `live.market_orders_allowed`. Conversion
-  identities, complete per-symbol mode state, or required consumed diagnostic
-  collections are missing or malformed. The bot no longer
-  converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
-  live calls emit a correlated failed-return event before propagating the error, and HSL RED
-  supervisors no longer swallow fatal producer failures.
+- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation when its JSON
+  (including duplicate keys or decoder failures), required order batch, order fields, conversion
+  identities, complete per-symbol mode state, or required consumed diagnostic collections are
+  missing or malformed. Order-field validation includes overflowing numeric values, panic execution
+  type inconsistent with the submitted config, and priority inconsistent with Rust's order and
+  submitted-mode rule, while preserving configured HSL panic market closes as the protective
+  exception to `live.market_orders_allowed`. The bot no longer converts a fabricated empty batch or
+  usable subset which could cancel existing orders. Normal live calls emit a correlated
+  failed-return event before propagating the error, and HSL RED supervisors no longer swallow fatal
+  producer failures.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

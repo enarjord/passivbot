@@ -33,7 +33,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 8. `bot.{pside}.hsl.panic_close_order_type = "market"` is an explicit protective execution
    override when HSL is enabled. Rust may emit that side's `close_panic_*` as a market order even
    when `live.market_orders_allowed = false`; the live flag gates non-panic market execution and
-   must not downgrade an explicitly configured HSL panic close to a limit order.
+   must not downgrade an explicitly configured HSL panic close to a limit order. The live producer
+   boundary validates this panic execution choice in both directions against the submitted config;
+   it must reject either a limit-for-market or market-for-limit mismatch as malformed Rust output.
 
 ## Failure Semantics
 

@@ -40,6 +40,8 @@ In trading-critical paths, do not:
 - use `dict.get(required_key, default)` to hide a missing required configuration or input
 - pass fabricated defaults to Rust, reconciliation, a risk gate, or the executor
 - reinterpret malformed or partial Rust output as current strategy intent
+- treat a producer-echoed diagnostic as independent proof of a field that is deterministic from the
+  submitted input; validate the echo and the decision against that input
 
 These shapes may be valid in optional or observability-only code. Classify the consumer before
 changing a match.

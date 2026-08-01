@@ -1040,27 +1040,77 @@ def _validate_intrinsic_rust_execution_priority(
         )
 
 
-def _rust_input_allows_market_execution(
+def _expected_rust_panic_execution_type(
     global_input: dict, order_type: str, pside: str
-) -> bool:
-    if global_input.get("market_orders_allowed", False) is True:
-        return True
+) -> str | None:
     if order_type.rsplit("_", 1)[0] != "close_panic":
-        return False
+        return None
     # HSL panic execution is an explicit protective override. Rust evaluates
     # this before market_orders_allowed, so Python must preserve the same rule.
     if global_input.get("panic_close_market", False) is True:
-        return True
+        return "market"
     global_bot_params = global_input.get("global_bot_params")
     if not isinstance(global_bot_params, dict):
-        return False
+        return "limit"
     side_params = global_bot_params.get(pside)
     if not isinstance(side_params, dict):
-        return False
+        return "limit"
     return (
-        side_params.get("hsl_enabled", False) is True
-        and side_params.get("hsl_panic_close_order_type", "market") == "market"
+        "market"
+        if (
+            side_params.get("hsl_enabled", False) is True
+            and side_params.get("hsl_panic_close_order_type", "market") == "market"
+        )
+        else "limit"
     )
+
+
+def _submitted_rust_input_modes(
+    orchestrator_input: dict, expected_symbol_idxs: set[int]
+) -> dict[tuple[int, str], object]:
+    symbols = orchestrator_input.get("symbols")
+    if not isinstance(symbols, list):
+        raise FatalBotException(
+            "Rust orchestrator validation missing corresponding symbol inputs"
+        )
+    valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
+    modes: dict[tuple[int, str], object] = {}
+    seen_symbol_idxs: set[int] = set()
+    for input_idx, row in enumerate(symbols):
+        if not isinstance(row, dict):
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} must be a mapping"
+            )
+        symbol_idx = row.get("symbol_idx")
+        if (
+            isinstance(symbol_idx, bool)
+            or not isinstance(symbol_idx, int)
+            or symbol_idx not in expected_symbol_idxs
+            or symbol_idx in seen_symbol_idxs
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator symbol input {input_idx} has invalid symbol_idx"
+            )
+        seen_symbol_idxs.add(symbol_idx)
+        for pside in ("long", "short"):
+            side_input = row.get(pside)
+            if not isinstance(side_input, dict):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} input"
+                )
+            if "mode" not in side_input or side_input["mode"] not in valid_modes | {
+                None
+            }:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} mode"
+                )
+            mode = side_input["mode"]
+            modes[(symbol_idx, pside)] = mode
+    if seen_symbol_idxs != expected_symbol_idxs:
+        raise FatalBotException(
+            "Rust orchestrator symbol inputs do not cover the requested symbols"
+        )
+    return modes
 
 
 def rust_order_conversion_identity(
@@ -1101,6 +1151,10 @@ def validate_rust_orchestrator_output(
     orders = out["orders"]
     if not isinstance(orders, list):
         raise FatalBotException("Rust orchestrator orders must be a list")
+    expected_symbol_idxs = set(idx_to_symbol)
+    submitted_input_modes = _submitted_rust_input_modes(
+        orchestrator_input, expected_symbol_idxs
+    )
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     for order_idx, order in enumerate(orders):
         if not isinstance(order, dict):
@@ -1160,11 +1214,19 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has invalid execution_type"
             )
-        if execution_type == "market" and not _rust_input_allows_market_execution(
+        expected_panic_execution_type = _expected_rust_panic_execution_type(
             global_input, order_type, pside
+        )
+        if (
+            expected_panic_execution_type is not None
+            and execution_type != expected_panic_execution_type
+        ) or (
+            expected_panic_execution_type is None
+            and execution_type == "market"
+            and global_input.get("market_orders_allowed", False) is not True
         ):
             raise FatalBotException(
-                f"Rust orchestrator order {order_idx} has market execution_type "
+                f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"
             )
         execution_priority = order.get("execution_priority")
@@ -1198,9 +1260,7 @@ def validate_rust_orchestrator_output(
     symbol_states = diagnostics["symbol_states"]
     if not isinstance(symbol_states, list):
         raise FatalBotException("Rust orchestrator symbol_states must be a list")
-    expected_symbol_idxs = set(idx_to_symbol)
     seen_symbol_idxs: set[int] = set()
-    input_modes_by_symbol_side: dict[tuple[int, str], object] = {}
     valid_modes = {"normal", "panic", "graceful_stop", "tp_only", "manual"}
     for state_idx, row in enumerate(symbol_states):
         if not isinstance(row, dict):
@@ -1231,7 +1291,11 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} input_mode"
                 )
-            input_modes_by_symbol_side[(symbol_idx, pside)] = side_state["input_mode"]
+            if side_state["input_mode"] != submitted_input_modes[(symbol_idx, pside)]:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol_state {state_idx} has {pside} input_mode "
+                    "inconsistent with its submitted input"
+                )
             if side_state.get("effective_mode") not in valid_modes:
                 raise FatalBotException(
                     f"Rust orchestrator symbol_state {state_idx} has invalid {pside} effective_mode"
@@ -1248,7 +1312,7 @@ def validate_rust_orchestrator_output(
 
     for order_idx, order in enumerate(orders):
         order_type = str(order["order_type"])
-        input_mode = input_modes_by_symbol_side[
+        input_mode = submitted_input_modes[
             (int(order["symbol_idx"]), str(order["pside"]))
         ]
         expected_priority = _expected_rust_execution_priority(

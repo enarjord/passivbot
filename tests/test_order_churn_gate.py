@@ -67,7 +67,7 @@ def _raw_rust_order(**overrides) -> dict:
     return order
 
 
-def _raw_rust_input(**global_overrides) -> dict:
+def _raw_rust_input(*, long_mode=None, short_mode="manual", **global_overrides) -> dict:
     global_input = {
         "market_orders_allowed": False,
         "panic_close_market": False,
@@ -83,7 +83,16 @@ def _raw_rust_input(**global_overrides) -> dict:
         },
     }
     global_input.update(global_overrides)
-    return {"global": global_input}
+    return {
+        "global": global_input,
+        "symbols": [
+            {
+                "symbol_idx": 0,
+                "long": {"mode": long_mode},
+                "short": {"mode": short_mode},
+            }
+        ],
+    }
 
 
 def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
@@ -476,7 +485,7 @@ def test_raw_rust_output_rejects_priority_inconsistent_with_full_rust_rule(
 
     with pytest.raises(FatalBotException, match="inconsistent with"):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(long_mode=input_mode)
         )
 
 
@@ -490,14 +499,33 @@ def test_raw_rust_output_accepts_risk_critical_graceful_stop_close():
     out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = "graceful_stop"
 
     assert reconciler.validate_rust_orchestrator_output(
-        out, {0: SYMBOL}, _raw_rust_input()
+        out, {0: SYMBOL}, _raw_rust_input(long_mode="graceful_stop")
     ) == [order]
+
+
+def test_raw_rust_output_rejects_input_mode_echo_changed_from_submitted_mode():
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_grid_long",
+        execution_priority="risk_critical",
+    )
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["long"]["input_mode"] = "graceful_stop"
+
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input(long_mode="normal")
+        )
 
 
 def test_raw_rust_output_rejects_market_entry_when_input_forbids_it():
     order = _raw_rust_order(execution_type="market")
 
-    with pytest.raises(FatalBotException, match="inconsistent with its submitted input"):
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([order]),
             {0: SYMBOL},
@@ -554,6 +582,76 @@ def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disab
 @pytest.mark.parametrize(
     "global_overrides",
     [
+        {
+            "global_bot_params": {
+                "long": {
+                    "hsl_enabled": True,
+                    "hsl_panic_close_order_type": "market",
+                },
+                "short": {
+                    "hsl_enabled": False,
+                    "hsl_panic_close_order_type": "market",
+                },
+            }
+        },
+        {"panic_close_market": True},
+    ],
+    ids=["side-local-hsl-market", "global-panic-market"],
+)
+def test_raw_rust_output_rejects_limit_panic_close_when_market_is_configured(
+    global_overrides,
+):
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_panic_long",
+        execution_type="limit",
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(market_orders_allowed=False, **global_overrides),
+        )
+
+
+def test_raw_rust_output_rejects_market_panic_close_when_limit_is_configured():
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_panic_long",
+        execution_type="market",
+        execution_priority="risk_critical",
+    )
+    global_bot_params = {
+        "long": {
+            "hsl_enabled": True,
+            "hsl_panic_close_order_type": "limit",
+        },
+        "short": {
+            "hsl_enabled": False,
+            "hsl_panic_close_order_type": "market",
+        },
+    }
+
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                market_orders_allowed=True,
+                global_bot_params=global_bot_params,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "global_overrides",
+    [
         {},
         {
             "global_bot_params": {
@@ -578,7 +676,9 @@ def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_override
         execution_priority="risk_critical",
     )
 
-    with pytest.raises(FatalBotException, match="inconsistent with its submitted input"):
+    with pytest.raises(
+        FatalBotException, match="inconsistent with its submitted input"
+    ):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([order]),
             {0: SYMBOL},
