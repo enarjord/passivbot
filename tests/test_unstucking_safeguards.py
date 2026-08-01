@@ -38,6 +38,8 @@ def _empty_orchestrator_output(input_json: str) -> str:
                 "warnings": [],
                 "symbol_states": symbol_states,
                 "loss_gate_blocks": [],
+                "min_effective_cost_blocks": [],
+                "forager_selections": [],
             },
         }
     )
@@ -68,6 +70,8 @@ def _single_symbol_orchestrator_output(
     }
     if include_loss_gate_blocks:
         diagnostics_payload.setdefault("loss_gate_blocks", [])
+    diagnostics_payload.setdefault("min_effective_cost_blocks", [])
+    diagnostics_payload.setdefault("forager_selections", [])
     return json.dumps(
         {
             "orders": [] if orders is None else orders,

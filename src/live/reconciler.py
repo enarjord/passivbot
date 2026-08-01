@@ -1461,7 +1461,11 @@ def validate_rust_orchestrator_output(
         for symbol_idx in value:
             validate_diagnostic_symbol_idx(symbol_idx, context)
 
-    min_effective_cost_blocks = diagnostics.get("min_effective_cost_blocks", [])
+    if "min_effective_cost_blocks" not in diagnostics:
+        raise FatalBotException(
+            "Rust orchestrator diagnostics missing required min_effective_cost_blocks"
+        )
+    min_effective_cost_blocks = diagnostics["min_effective_cost_blocks"]
     if not isinstance(min_effective_cost_blocks, list):
         raise FatalBotException(
             "Rust orchestrator min_effective_cost_blocks must be a list"
@@ -1481,7 +1485,11 @@ def validate_rust_orchestrator_output(
         validate_diagnostic_pside(block.get("pside"), context)
         validate_diagnostic_finite_fields(block, min_cost_finite_fields, context)
 
-    forager_selections = diagnostics.get("forager_selections", [])
+    if "forager_selections" not in diagnostics:
+        raise FatalBotException(
+            "Rust orchestrator diagnostics missing required forager_selections"
+        )
+    forager_selections = diagnostics["forager_selections"]
     if not isinstance(forager_selections, list):
         raise FatalBotException("Rust orchestrator forager_selections must be a list")
     score_finite_fields = (

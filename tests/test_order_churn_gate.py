@@ -130,6 +130,8 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
         "diagnostics": {
             "symbol_states": symbol_states,
             "loss_gate_blocks": [],
+            "min_effective_cost_blocks": [],
+            "forager_selections": [],
         },
     }
 
@@ -808,11 +810,15 @@ def test_raw_rust_output_requires_explicit_input_mode():
         )
 
 
-def test_raw_rust_output_requires_loss_gate_blocks_collection():
+@pytest.mark.parametrize(
+    "field",
+    ["loss_gate_blocks", "min_effective_cost_blocks", "forager_selections"],
+)
+def test_raw_rust_output_requires_consumed_diagnostic_collection(field):
     out = _raw_rust_output()
-    del out["diagnostics"]["loss_gate_blocks"]
+    del out["diagnostics"][field]
 
-    with pytest.raises(FatalBotException, match="missing required loss_gate_blocks"):
+    with pytest.raises(FatalBotException, match=rf"missing required {field}"):
         reconciler.validate_rust_orchestrator_output(
             out, {0: SYMBOL}, _raw_rust_input()
         )
