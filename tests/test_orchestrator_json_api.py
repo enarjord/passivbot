@@ -377,7 +377,7 @@ def test_json_rejects_missing_ema():
         compute(pbr, inp)
 
 
-def test_live_authorized_missing_ema_scopes_strategy_orders_atomically():
+def test_live_authorized_missing_entry_ema_preserves_independent_closes():
     import passivbot_rust as pbr
 
     symbol = make_symbol(
@@ -396,11 +396,11 @@ def test_live_authorized_missing_ema_scopes_strategy_orders_atomically():
 
     assert not any(
         order["pside"] == "long"
-        and (
-            order["order_type"].startswith("entry_")
-            or order["order_type"].startswith("close_grid")
-            or order["order_type"].startswith("close_trailing")
-        )
+        and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert any(
+        order["pside"] == "long" and order["order_type"].startswith("close_")
         for order in out["orders"]
     )
     assert {
@@ -410,6 +410,59 @@ def test_live_authorized_missing_ema_scopes_strategy_orders_atomically():
             "scope": "strategy_orders",
         }
     } in out["diagnostics"]["warnings"]
+
+
+def test_live_authorized_missing_entry_volatility_preserves_independent_closes():
+    import passivbot_rust as pbr
+
+    strategy = adaptive_strategy_params(
+        entry_volatility_ema_span_1h=4.0,
+        entry_weight_volatility_1h=1.0,
+    )
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        emas=ema_bundle(h1_log_range=[]),
+    )
+    symbol["allow_missing_strategy_inputs"] = True
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+    complete_inp = copy.deepcopy(inp)
+    complete_inp["symbols"][0]["emas"] = ema_bundle(h1_log_range=[[4.0, 0.01]])
+    complete_inp["symbols"][0]["allow_missing_strategy_inputs"] = False
+    complete_out = compute(pbr, complete_inp)
+
+    assert not any(
+        order["pside"] == "long" and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    scoped_closes = [
+        order
+        for order in out["orders"]
+        if order["pside"] == "long" and order["order_type"].startswith("close_")
+    ]
+    complete_closes = [
+        order
+        for order in complete_out["orders"]
+        if order["pside"] == "long" and order["order_type"].startswith("close_")
+    ]
+    assert scoped_closes
+    assert scoped_closes == complete_closes
+    assert out["diagnostics"]["warnings"].count(
+        {
+            "strategy_input_unavailable": {
+                "symbol_idx": 0,
+                "pside": "long",
+                "scope": "strategy_orders",
+            }
+        }
+    ) == 1
 
 
 def test_live_authorized_missing_ema_still_emits_twel_reducer():
@@ -506,9 +559,13 @@ def test_live_authorized_missing_ema_still_emits_wel_reducer():
     assert wel_orders[0]["symbol_idx"] == 0
     assert not any(
         order["pside"] == "long"
+        and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert any(
+        order["pside"] == "long"
         and (
-            order["order_type"].startswith("entry_")
-            or order["order_type"].startswith("close_grid")
+            order["order_type"].startswith("close_grid")
             or order["order_type"].startswith("close_trailing")
         )
         for order in out["orders"]
@@ -547,10 +604,13 @@ def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
 
     assert any(order["pside"] == "short" for order in out["orders"])
     assert not any(
+        order["pside"] == "long" and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert any(
         order["pside"] == "long"
         and (
-            order["order_type"].startswith("entry_")
-            or order["order_type"].startswith("close_grid")
+            order["order_type"].startswith("close_grid")
             or order["order_type"].startswith("close_trailing")
         )
         for order in out["orders"]

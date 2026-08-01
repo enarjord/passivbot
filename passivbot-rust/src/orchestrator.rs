@@ -2324,13 +2324,14 @@ mod core {
         if symbol.allow_missing_strategy_inputs
             && matches!(err, OrchestratorError::MissingEma { .. })
         {
-            diagnostics
-                .warnings
-                .push(OrchestratorWarning::StrategyInputUnavailable {
-                    symbol_idx: symbol.symbol_idx,
-                    pside,
-                    scope,
-                });
+            let warning = OrchestratorWarning::StrategyInputUnavailable {
+                symbol_idx: symbol.symbol_idx,
+                pside,
+                scope,
+            };
+            if !diagnostics.warnings.contains(&warning) {
+                diagnostics.warnings.push(warning);
+            }
             Ok(())
         } else {
             Err(err)
@@ -2588,6 +2589,56 @@ mod core {
         let mut closes = Vec::new();
         append_strategy_orders_as_ideal(&mut closes, generated.closes, symbol.symbol_idx, pside);
         Ok((entries, closes))
+    }
+
+    fn generate_available_strategy_ideal_orders(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        cache: &mut [CachedSideDerived],
+        runtime_budget: RuntimeBudgetState,
+        wants_entries: bool,
+        wants_closes: bool,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
+        let requests = if symbol.allow_missing_strategy_inputs && wants_entries && wants_closes {
+            [(true, false), (false, true)]
+        } else {
+            [(wants_entries, wants_closes), (false, false)]
+        };
+        let mut entries = Vec::new();
+        let mut closes = Vec::new();
+        let mut close_inputs_unavailable = false;
+        for (request_entries, request_closes) in requests {
+            if !request_entries && !request_closes {
+                continue;
+            }
+            match generate_strategy_ideal_orders(
+                input,
+                symbol,
+                pside,
+                cache,
+                runtime_budget,
+                request_entries,
+                request_closes,
+            ) {
+                Ok((generated_entries, generated_closes)) => {
+                    entries.extend(generated_entries);
+                    closes.extend(generated_closes);
+                }
+                Err(err) => {
+                    handle_strategy_input_error(
+                        err,
+                        symbol,
+                        pside,
+                        StrategyInputScope::StrategyOrders,
+                        diagnostics,
+                    )?;
+                    close_inputs_unavailable |= request_closes;
+                }
+            }
+        }
+        Ok((entries, closes, close_inputs_unavailable))
     }
 
     #[derive(Clone)]
@@ -3412,34 +3463,26 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        match generate_strategy_ideal_orders(
-                            input,
-                            s,
-                            PositionSide::Long,
-                            &mut workspace.derived_long,
-                            workspace.runtime_budget_long[s.symbol_idx],
-                            wants_entries,
-                            wants_closes,
-                        ) {
-                            Ok(generated) => (entries, closes) = generated,
-                            Err(err) => {
-                                handle_strategy_input_error(
-                                    err,
-                                    s,
-                                    PositionSide::Long,
-                                    StrategyInputScope::StrategyOrders,
-                                    &mut diagnostics,
-                                )?;
-                                if wants_closes {
-                                    if let Some(order) = calc_independent_wel_ideal_order(
-                                        input,
-                                        s,
-                                        PositionSide::Long,
-                                        workspace.runtime_budget_long[s.symbol_idx],
-                                    ) {
-                                        closes.push(order);
-                                    }
-                                }
+                        let (generated_entries, generated_closes, close_inputs_unavailable) =
+                            generate_available_strategy_ideal_orders(
+                                input,
+                                s,
+                                PositionSide::Long,
+                                &mut workspace.derived_long,
+                                workspace.runtime_budget_long[s.symbol_idx],
+                                wants_entries,
+                                wants_closes,
+                                &mut diagnostics,
+                            )?;
+                        (entries, closes) = (generated_entries, generated_closes);
+                        if close_inputs_unavailable {
+                            if let Some(order) = calc_independent_wel_ideal_order(
+                                input,
+                                s,
+                                PositionSide::Long,
+                                workspace.runtime_budget_long[s.symbol_idx],
+                            ) {
+                                closes.push(order);
                             }
                         }
                     }
@@ -3516,34 +3559,26 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        match generate_strategy_ideal_orders(
-                            input,
-                            s,
-                            PositionSide::Short,
-                            &mut workspace.derived_short,
-                            workspace.runtime_budget_short[s.symbol_idx],
-                            wants_entries,
-                            wants_closes,
-                        ) {
-                            Ok(generated) => (entries, closes) = generated,
-                            Err(err) => {
-                                handle_strategy_input_error(
-                                    err,
-                                    s,
-                                    PositionSide::Short,
-                                    StrategyInputScope::StrategyOrders,
-                                    &mut diagnostics,
-                                )?;
-                                if wants_closes {
-                                    if let Some(order) = calc_independent_wel_ideal_order(
-                                        input,
-                                        s,
-                                        PositionSide::Short,
-                                        workspace.runtime_budget_short[s.symbol_idx],
-                                    ) {
-                                        closes.push(order);
-                                    }
-                                }
+                        let (generated_entries, generated_closes, close_inputs_unavailable) =
+                            generate_available_strategy_ideal_orders(
+                                input,
+                                s,
+                                PositionSide::Short,
+                                &mut workspace.derived_short,
+                                workspace.runtime_budget_short[s.symbol_idx],
+                                wants_entries,
+                                wants_closes,
+                                &mut diagnostics,
+                            )?;
+                        (entries, closes) = (generated_entries, generated_closes);
+                        if close_inputs_unavailable {
+                            if let Some(order) = calc_independent_wel_ideal_order(
+                                input,
+                                s,
+                                PositionSide::Short,
+                                workspace.runtime_budget_short[s.symbol_idx],
+                            ) {
+                                closes.push(order);
                             }
                         }
                     }
