@@ -565,7 +565,7 @@ def test_live_authorized_missing_ema_does_not_scope_unaffected_pside():
     ]
 
 
-def test_trailing_grid_v7_close_only_ignores_entry_only_h1_volatility():
+def test_trailing_grid_v7_close_only_ignores_entry_only_emas():
     import passivbot_rust as pbr
 
     strategy = trailing_grid_v7_strategy_params(
@@ -581,7 +581,7 @@ def test_trailing_grid_v7_close_only_ignores_entry_only_h1_volatility():
         long_pos_price=100.0,
         long_strategy=strategy,
         short_strategy=strategy,
-        emas=ema_bundle(h1_log_range=[]),
+        emas=ema_bundle(m1_close=[], h1_log_range=[]),
     )
     inp = make_input(
         balance=1_000.0,

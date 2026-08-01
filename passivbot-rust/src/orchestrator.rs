@@ -2389,7 +2389,7 @@ mod core {
                 }
             }
             StrategyParams::EmaAnchor(_) => wants_entries || wants_closes,
-            StrategyParams::TrailingGridV7(_) => wants_entries || wants_closes,
+            StrategyParams::TrailingGridV7(_) => wants_entries,
         }
     }
 
