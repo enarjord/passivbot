@@ -72,16 +72,16 @@ pub fn calc_initial_entry_qty(
 }
 
 pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
-    f64::max(
-        exchange_params.min_qty,
-        round_up(
+    round_up(
+        f64::max(
+            exchange_params.min_qty,
             cost_to_qty(
                 exchange_params.min_cost,
                 entry_price,
                 exchange_params.c_mult,
             ),
-            exchange_params.qty_step,
         ),
+        exchange_params.qty_step,
     )
 }
 
@@ -1145,6 +1145,19 @@ mod tests {
         RuntimeOrderContext {
             effective_wallet_exposure_limit: 1.0,
         }
+    }
+
+    #[test]
+    fn test_min_entry_qty_quantizes_unaligned_exchange_minimum() {
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            min_qty: 0.015,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+
+        assert_eq!(calc_min_entry_qty(100.0, &exchange), 0.02);
     }
 
     #[test]

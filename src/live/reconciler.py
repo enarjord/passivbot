@@ -1139,11 +1139,10 @@ def _rust_effective_min_qty(
 ) -> float:
     """Mirror Rust's compact effective-minimum calculation for boundary checks."""
     qty_step, _price_step, min_qty, min_cost, c_mult = exchange
-    raw_min_cost_steps = (min_cost / price / c_mult) / qty_step
-    if not math.isfinite(raw_min_cost_steps):
+    raw_min_steps = max(min_qty, min_cost / price / c_mult) / qty_step
+    if not math.isfinite(raw_min_steps):
         return math.inf
-    min_cost_qty = round(math.ceil(raw_min_cost_steps) * qty_step, 10)
-    return max(min_qty, min_cost_qty)
+    return round(math.ceil(raw_min_steps) * qty_step, 10)
 
 
 def _validate_rust_close_exchange_constraints(

@@ -1705,6 +1705,49 @@ def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():
     assert out["orders"][0]["price"] == 99.99
 
 
+def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=0.01,
+                ask=0.015,
+                long_mode="panic",
+                long_pos_size=1.5,
+                long_pos_price=0.02,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["execution_type"] == "limit"
+    assert out["orders"][0]["price"] == 0.01
+
+
+def test_unaligned_exchange_min_qty_is_quantized_before_live_validation():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(0, bid=100.0, ask=100.0)
+    symbol["exchange"].update(
+        {"qty_step": 0.01, "min_qty": 0.015, "min_cost": 0.0}
+    )
+    inp = make_input(balance=10.0, symbols=[symbol])
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(order for order in out["orders"] if order["order_type"].startswith("entry_"))
+    assert abs(entry["qty"]) == 0.02
+
+
 def test_panic_close_order_type_is_side_local():
     import passivbot_rust as pbr
 

@@ -2253,7 +2253,16 @@ mod core {
             PositionSide::Short => pos.size.abs(),
         };
         let price = match pside {
-            PositionSide::Long => round_dn(ob.ask - exchange.price_step, exchange.price_step),
+            PositionSide::Long => {
+                let one_step_below = round_dn(ob.ask - exchange.price_step, exchange.price_step);
+                if one_step_below > 0.0 {
+                    one_step_below
+                } else if ob.ask > exchange.price_step {
+                    exchange.price_step
+                } else {
+                    0.0
+                }
+            }
             PositionSide::Short => round_up(ob.bid + exchange.price_step, exchange.price_step),
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
@@ -4405,6 +4414,36 @@ mod core {
 
             assert_eq!(long.price, 99.99);
             assert_eq!(short.price, 100.02);
+        }
+
+        #[test]
+        fn panic_close_keeps_low_off_tick_long_price_positive() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 0.01,
+                ask: 0.015,
+            };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.02,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.01);
         }
 
         #[test]

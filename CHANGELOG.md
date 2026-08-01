@@ -43,8 +43,9 @@ All notable user-facing changes will be documented in this file.
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
-  supervisors no longer swallow fatal producer failures. Rust now also quantizes protective panic
-  limit prices when the submitted top-of-book quote itself is off tick.
+  supervisors no longer swallow fatal producer failures. Rust now also quantizes effective minimum
+  quantities to the submitted quantity step and protective panic limit prices when the submitted
+  top-of-book quote itself is off tick, including low-priced books near one price step.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
