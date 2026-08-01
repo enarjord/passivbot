@@ -1913,6 +1913,21 @@ def validate_rust_orchestrator_output(
     loss_gate_blocks = diagnostics["loss_gate_blocks"]
     if not isinstance(loss_gate_blocks, list):
         raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
+    submitted_max_realized_loss_pct: float | None = None
+    if loss_gate_blocks:
+        submitted_max_realized_loss_pct = _validated_rust_finite_number(
+            global_input.get("max_realized_loss_pct"),
+            "submitted global input has invalid max_realized_loss_pct",
+        )
+        if submitted_max_realized_loss_pct < 0.0:
+            raise FatalBotException(
+                "Rust orchestrator submitted global input has invalid max_realized_loss_pct"
+            )
+        if submitted_max_realized_loss_pct >= 1.0:
+            raise FatalBotException(
+                "Rust orchestrator loss_gate_blocks present while submitted "
+                "realized-loss gate is disabled"
+            )
     finite_fields = (
         "qty",
         "price",
@@ -1999,6 +2014,11 @@ def validate_rust_orchestrator_output(
         if not 0.0 <= max_realized_loss_pct < 1.0:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid max_realized_loss_pct"
+            )
+        if max_realized_loss_pct != submitted_max_realized_loss_pct:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} max_realized_loss_pct "
+                "is inconsistent with submitted policy"
             )
         if not math.isclose(
             projected_balance_after,

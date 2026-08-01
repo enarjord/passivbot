@@ -43,8 +43,9 @@ All notable user-facing changes will be documented in this file.
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
   converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
   live calls emit a correlated failed-return event before propagating the error, and HSL RED
-  supervisors no longer swallow fatal producer failures. Impossible panic-close loss-gate blocks
-  are rejected because Rust deliberately bypasses that gate for panic reducers. Rust now also
+  supervisors no longer swallow fatal producer failures. Impossible loss-gate blocks are rejected
+  when Rust bypasses that gate for panic reducers, the submitted policy disables the gate, or the
+  block reports a different loss percentage than the submitted policy. Rust now also
   quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, quantizes EMA Anchor touch prices in the protective
   direction, and keeps panic limit prices valid when the submitted top-of-book quote itself is off

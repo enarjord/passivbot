@@ -96,6 +96,7 @@ def _raw_rust_input(
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
         "panic_close_market": False,
+        "max_realized_loss_pct": 0.1,
         "global_bot_params": {
             "long": {
                 "n_positions": long_n_positions,
@@ -1593,6 +1594,31 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     assert reconciler.validate_rust_orchestrator_output(
         out, {0: SYMBOL}, _raw_rust_input()
     ) == []
+
+
+@pytest.mark.parametrize(
+    ("submitted_max_realized_loss_pct", "block_max_realized_loss_pct", "error"),
+    [
+        (1.0, 0.1, "submitted realized-loss gate is disabled"),
+        (0.2, 0.1, "inconsistent with submitted policy"),
+    ],
+)
+def test_raw_rust_output_rejects_loss_gate_block_inconsistent_with_submitted_policy(
+    submitted_max_realized_loss_pct, block_max_realized_loss_pct, error
+):
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(max_realized_loss_pct=block_max_realized_loss_pct)
+    ]
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                max_realized_loss_pct=submitted_max_realized_loss_pct
+            ),
+        )
 
 
 @pytest.mark.parametrize(
