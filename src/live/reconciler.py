@@ -1190,7 +1190,9 @@ def _validate_rust_limit_price_exchange_constraints(
     if not math.isfinite(price_steps):
         raise FatalBotException(f"{context} has invalid exchange-constrained price")
     rounded_price = round(price_steps) * price_step
-    price_tolerance = price_step * 1e-8
+    price_tolerance = (
+        sys.float_info.epsilon * max(abs(price), abs(rounded_price)) * 4.0
+    )
     if not math.isclose(price, rounded_price, rel_tol=0.0, abs_tol=price_tolerance):
         raise FatalBotException(
             f"{context} price is inconsistent with submitted price_step"

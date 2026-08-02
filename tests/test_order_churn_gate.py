@@ -1651,6 +1651,36 @@ def test_raw_rust_output_accepts_limit_price_aligned_to_submitted_price_step():
     ) == [order]
 
 
+@pytest.mark.parametrize("price", [0.1000000005, 0.0999999995])
+def test_raw_rust_output_rejects_genuine_sub_tick_price_offset(price):
+    with pytest.raises(FatalBotException, match="price_step"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(price=price)]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                bid=price,
+                ask=price,
+                price_step=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_accepts_tick_alignment_with_only_representation_noise():
+    price = 0.1 + 0.2
+    order = _raw_rust_order(price=price)
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(
+            bid=price,
+            ask=price,
+            price_step=0.1,
+            min_cost=0.0,
+        ),
+    ) == [order]
+
+
 def test_raw_rust_output_rejects_off_step_tiny_limit_price():
     with pytest.raises(FatalBotException, match="price_step"):
         reconciler.validate_rust_orchestrator_output(

@@ -67,8 +67,9 @@ All notable user-facing changes will be documented in this file.
   restricts aligned-tick snapping to floating representation error, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step and valid tiny increments, without skipping a tick because of ordinary
-  floating-point noise. Quantity- and price-step validation scale their tolerances to the submitted
-  increments, so malformed values cannot hide inside a fixed absolute tolerance. Close validation rejects
+  floating-point noise. Quantity-step validation scales its tolerance to the submitted increment,
+  while price-step validation admits only floating representation error, so genuinely off-tick
+  prices cannot hide inside a fixed fraction of the tick. Close validation rejects
   positions at or below Rust's final
   close-trimming dust threshold before applying the exact-position exception. The complete
   serialized diagnostic envelope now requires and
