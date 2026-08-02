@@ -2356,6 +2356,20 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} qty sign disagrees with pside"
             )
+        _validate_rust_close_exchange_constraints(
+            qty,
+            submitted_position_sizes[pair],
+            submitted_order_books[symbol_idx],
+            submitted_exchange_constraints[symbol_idx],
+            f"Rust orchestrator loss_gate_block {block_idx}",
+        )
+        qty_tolerance = _rust_representation_tolerance(
+            abs(qty), submitted_position_sizes[pair]
+        )
+        if abs(qty) > submitted_position_sizes[pair] + qty_tolerance:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} qty exceeds submitted position"
+            )
         projected_pnl = finite_values["projected_pnl"]
         balance_before = finite_values["balance_before"]
         projected_balance_after = finite_values["projected_balance_after"]
@@ -2472,6 +2486,7 @@ def validate_rust_orchestrator_output(
         "challenger_score",
         "score_gap",
     )
+    forager_selected_pairs: set[tuple[int, str]] = set()
     for selection_idx, selection in enumerate(forager_selections):
         context = f"forager_selection {selection_idx}"
         if not isinstance(selection, dict):
@@ -2504,6 +2519,7 @@ def validate_rust_orchestrator_output(
                     f"Rust orchestrator {context} selected_symbol_indices "
                     "disagree with submitted flat active symbol states"
                 )
+            forager_selected_pairs.add(pair)
 
         top_scores = selection.get("top_scores")
         if not isinstance(top_scores, list):
@@ -2549,6 +2565,18 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator {event_context} has invalid kept_incumbent"
                 )
+    for pair, side_state in submitted_symbol_states.items():
+        if (
+            submitted_position_sizes[pair] == 0.0
+            and side_state["active"]
+            and submitted_input_modes[pair] != "normal"
+            and pair not in forager_selected_pairs
+        ):
+            symbol_idx, pside = pair
+            raise FatalBotException(
+                f"Rust orchestrator flat active {pside} symbol_idx {symbol_idx} "
+                "is missing from submitted forager selections"
+            )
     return orders
 
 

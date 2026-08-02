@@ -56,7 +56,8 @@ All notable user-facing changes will be documented in this file.
   block reports a different loss percentage than the submitted policy, and when the submitted
   side is flat, manual, panic, globally disabled, or uses a different strategy family. They are
   also rejected for reducer families disabled by their submitted unstuck, WEL, or TWEL gates,
-  including the global auto-unstuck gate. Rust now
+  including the global auto-unstuck gate, or when their quantities violate the submitted close
+  step, effective minimum, or position cap. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
   collapsing a positive sub-step minimum to zero, including when an aligned step multiplication is
@@ -81,9 +82,10 @@ All notable user-facing changes will be documented in this file.
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, including loss-gate warning policies, and graceful-stop
   mode uses Rust's exact nonzero-position rule. Unstuck reducers must agree with Rust's submitted
-  global auto-unstuck gate. Forager selections must agree with the corresponding flat active
-  symbol states while allowing Rust's later one-way tie-break to disable initial entry on one
-  selected side.
+  global auto-unstuck gate. Forager selections and flat active state must agree in both directions:
+  selected symbols are flat and active, and every non-forced active flat symbol appears in the
+  corresponding selection, while allowing Rust's later one-way tie-break to disable initial entry
+  on one selected side.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

@@ -1472,8 +1472,11 @@ def test_raw_rust_output_accepts_recursive_flat_grid_entry_batch(strategy_kind):
         ),
     ]
 
+    out = _raw_rust_output(orders)
+    out["diagnostics"]["forager_selections"] = [_raw_forager_selection()]
+
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output(orders),
+        out,
         {0: SYMBOL},
         _raw_rust_input(long_pos_size=0.0, strategy_kind=strategy_kind),
     ) == orders
@@ -1481,9 +1484,11 @@ def test_raw_rust_output_accepts_recursive_flat_grid_entry_batch(strategy_kind):
 
 def test_raw_rust_output_accepts_flat_ema_anchor_entry_batch():
     order = _raw_rust_order(order_type="entry_ema_anchor_long")
+    out = _raw_rust_output([order])
+    out["diagnostics"]["forager_selections"] = [_raw_forager_selection()]
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output([order]),
+        out,
         {0: SYMBOL},
         _raw_rust_input(long_pos_size=0.0, strategy_kind="ema_anchor"),
     ) == [order]
@@ -2254,6 +2259,26 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
 
 
 @pytest.mark.parametrize(
+    ("qty", "error"),
+    [
+        (-1.001, "qty exceeds submitted position"),
+        (-0.0105, "quantity is inconsistent with submitted qty_step"),
+        (-0.005, "quantity is below submitted effective close minimum"),
+    ],
+)
+def test_raw_rust_output_rejects_loss_gate_block_with_invalid_close_quantity(
+    qty, error
+):
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block(qty=qty)]
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+@pytest.mark.parametrize(
     ("order_type", "disabled_gate", "error"),
     [
         ("close_unstuck_long", "unstuck_family", "submitted reducer enablement"),
@@ -2561,6 +2586,17 @@ def test_raw_rust_output_rejects_forager_selection_disagreeing_with_active_state
             out,
             {0: SYMBOL, 1: "ETH/USDT:USDT"},
             orchestrator_input,
+        )
+
+
+def test_raw_rust_output_rejects_flat_active_pair_missing_forager_selection():
+    order = _raw_rust_order(order_type="entry_initial_normal_long")
+
+    with pytest.raises(FatalBotException, match="missing from submitted forager"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=0.0),
         )
 
 
