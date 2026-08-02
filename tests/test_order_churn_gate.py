@@ -536,6 +536,49 @@ def test_raw_rust_output_rejects_unknown_order_type_when_lookup_is_permissive(
         )
 
 
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_legacy_inflated_entry_order_types(
+    strategy_kind,
+    pside,
+):
+    out = _raw_rust_output(
+        [
+            _raw_rust_order(
+                pside=pside,
+                qty=1.0 if pside == "long" else -1.0,
+                order_type=f"entry_grid_inflated_{pside}",
+            )
+        ]
+    )
+    if pside == "short":
+        out["diagnostics"]["symbol_states"][0]["long"].update(
+            input_mode="manual",
+            effective_mode="manual",
+            active=False,
+            allow_initial=False,
+        )
+        out["diagnostics"]["symbol_states"][0]["short"].update(
+            input_mode=None,
+            effective_mode="normal",
+            active=True,
+            allow_initial=True,
+        )
+
+    with pytest.raises(FatalBotException, match="invalid order_type"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=1.0 if pside == "short" else 0.0,
+                strategy_kind=strategy_kind,
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     "orders",
     [

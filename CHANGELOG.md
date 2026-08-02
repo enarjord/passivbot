@@ -41,7 +41,8 @@ All notable user-facing changes will be documented in this file.
   prices outside the submitted price step, requires diagnostic effective modes to match Rust's
   submitted mode/position/global-enable rule,
   requires order-type names to round-trip through Rust's
-  canonical ID mapping, and validates active-state diagnostics in both directions for ineligible
+  canonical ID mapping, rejects legacy inflated-entry enum variants which have no Rust producer,
+  and validates active-state diagnostics in both directions for ineligible
   sides and eligible managed positions, while preserving Rust's
   held-position DCA and configured HSL panic market closes as explicit Rust
   behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer

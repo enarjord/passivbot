@@ -1012,6 +1012,13 @@ _PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
     }
 )
 
+_LEGACY_UNEMITTABLE_RUST_ORDER_TYPES = frozenset(
+    {
+        "entry_grid_inflated_long",
+        "entry_grid_inflated_short",
+    }
+)
+
 
 def _rust_order_requires_risk_critical_priority(order_type: str) -> bool:
     return order_type.rsplit("_", 1)[0] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
@@ -1667,6 +1674,8 @@ def validate_rust_orchestrator_output(
             order_type_id = _pb_attr("pbr").order_type_snake_to_id(order_type)
             if _pb_attr("pbr").order_type_id_to_snake(order_type_id) != order_type:
                 raise ValueError("order type lookup did not round-trip")
+            if order_type in _LEGACY_UNEMITTABLE_RUST_ORDER_TYPES:
+                raise ValueError("legacy order type has no Rust producer")
             order_side = determine_side_from_order_tuple((qty, price, order_type))
         except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
             raise FatalBotException(
