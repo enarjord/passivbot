@@ -1355,7 +1355,8 @@ mod core {
                 }
             }
         }
-        if total <= pos_abs + EPS {
+        let aggregate_tolerance = f64::EPSILON * total.abs().max(pos_abs) * 4.0;
+        if total <= pos_abs + aggregate_tolerance {
             enforce_no_dust_remainder(closes);
             return;
         }
@@ -1392,15 +1393,18 @@ mod core {
         let mut excess = total - pos_abs;
         let mut trimmed: Vec<IdealOrder> = Vec::with_capacity(closes.len());
         for mut o in closes.drain(..) {
-            if excess <= EPS {
+            let excess_tolerance = f64::EPSILON * total.abs().max(pos_abs) * 4.0;
+            if excess <= excess_tolerance {
                 trimmed.push(o);
                 continue;
             }
             let qty_abs = o.qty.abs();
             if qty_abs <= EPS {
+                excess = (excess - qty_abs).max(0.0);
                 continue;
             }
-            if qty_abs <= excess + EPS {
+            let comparison_tolerance = f64::EPSILON * qty_abs.abs().max(excess.abs()) * 4.0;
+            if qty_abs <= excess + comparison_tolerance {
                 // drop whole order
                 excess -= qty_abs;
                 continue;
@@ -1410,6 +1414,7 @@ mod core {
             // avoids occasional one-step under-trims due to float representation noise.
             new_abs = round_(new_abs, exchange.qty_step);
             if new_abs <= EPS {
+                excess = 0.0;
                 continue;
             }
             if !allow_below_min && new_abs < min_entry_qty {
@@ -5762,6 +5767,44 @@ mod core {
                 "expected -0.5, got {}",
                 trimmed.qty
             );
+        }
+
+        #[test]
+        fn trim_closes_caps_tiny_aggregate_without_absolute_slack() {
+            let ob = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 1e-12,
+                price_step: 0.1,
+                min_qty: 1e-12,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1e-12,
+                    price: 101.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1e-12,
+                    price: 102.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+            ];
+
+            trim_closes_to_position(PositionSide::Long, &mut closes, 1.1e-12, &ob, &exchange);
+
+            let total: f64 = closes.iter().map(|order| order.qty.abs()).sum();
+            assert!(total <= 1.1e-12);
+            assert_eq!(closes.len(), 1);
         }
 
         #[test]

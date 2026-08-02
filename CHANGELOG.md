@@ -22,7 +22,8 @@ All notable user-facing changes will be documented in this file.
 - Live Rust orchestrator output now fails fatally before diagnostics or reconciliation when its JSON
   (including duplicate keys, non-standard numeric constants, exponent-overflow floats, or decoder failures), required order
   batch, order fields, aggregate
-  close quantity relative to the submitted position, conversion identities, complete per-symbol
+  close quantity relative to the submitted position using representation-scale tolerance even for
+  tiny contracts, conversion identities, complete per-symbol
   mode state, or required consumed diagnostic collections are missing or malformed. Diagnostic
   validation rejects impossible realized-loss blocks. Order-field validation includes overflowing
   numeric values, execution type
@@ -31,6 +32,8 @@ All notable user-facing changes will be documented in this file.
   by the submitted mode or flat-side eligibility, rejects all orders for globally disabled sides,
   requires each flat-side entry batch to contain the strategy's valid initial family while
   preserving Rust's recursive initial-plus-grid ladders,
+  rejects initial-normal entries for held trailing-strategy sides and multiple EMA Anchor entries
+  for one symbol-side,
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects protective reducers whose direct submitted unstuck, WEL, or TWEL

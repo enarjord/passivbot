@@ -60,7 +60,7 @@ def _raw_rust_order(**overrides) -> dict:
         "pside": "long",
         "qty": 1.0,
         "price": 100.0,
-        "order_type": "entry_initial_normal_long",
+        "order_type": "entry_grid_normal_long",
         "execution_type": "limit",
         "execution_priority": "ordinary",
     }
@@ -633,6 +633,25 @@ def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
     ) == orders
 
 
+def test_raw_rust_output_rejects_tiny_close_wave_exceeding_submitted_position():
+    orders = [
+        _raw_rust_order(qty=-1e-12, price=100.0, order_type="close_grid_long"),
+        _raw_rust_order(qty=-1e-12, price=101.0, order_type="close_grid_long"),
+    ]
+
+    with pytest.raises(FatalBotException, match="exceeds submitted position"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=1.1e-12,
+                qty_step=1e-12,
+                min_qty=1e-12,
+                min_cost=0.0,
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("input_mode", "position_size", "order"),
     [
@@ -922,7 +941,7 @@ def test_raw_rust_output_accepts_non_panic_execution_type_matching_policy(
         qty=qty,
         price=price,
         order_type=(
-            "entry_initial_normal_long" if qty > 0.0 else "close_grid_long"
+            "entry_grid_normal_long" if qty > 0.0 else "close_grid_long"
         ),
         execution_type=execution_type,
     )
@@ -960,7 +979,7 @@ def test_raw_rust_output_rejects_non_panic_execution_type_mismatch(
         qty=qty,
         price=price,
         order_type=(
-            "entry_initial_normal_long" if qty > 0.0 else "close_grid_long"
+            "entry_grid_normal_long" if qty > 0.0 else "close_grid_long"
         ),
         execution_type=execution_type,
     )
@@ -1409,7 +1428,9 @@ def test_raw_rust_output_rejects_orders_for_globally_disabled_held_side(order):
 
 
 def test_raw_rust_output_rejects_flat_entry_contradicted_by_symbol_state():
-    out = _raw_rust_output([_raw_rust_order()])
+    out = _raw_rust_output(
+        [_raw_rust_order(order_type="entry_initial_normal_long")]
+    )
     out["diagnostics"]["symbol_states"][0]["long"].update(
         active=False,
         allow_initial=False,
@@ -1466,6 +1487,94 @@ def test_raw_rust_output_accepts_flat_ema_anchor_entry_batch():
         {0: SYMBOL},
         _raw_rust_input(long_pos_size=0.0, strategy_kind="ema_anchor"),
     ) == [order]
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "pside"),
+    [
+        ("trailing_martingale", "long"),
+        ("trailing_martingale", "short"),
+        ("trailing_grid_v7", "long"),
+        ("trailing_grid_v7", "short"),
+    ],
+)
+def test_raw_rust_output_rejects_initial_normal_entry_for_held_side(
+    strategy_kind, pside
+):
+    qty = 1.0 if pside == "long" else -1.0
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        order_type=f"entry_initial_normal_{pside}",
+    )
+    out = _raw_rust_output([order])
+    if pside == "short":
+        out["diagnostics"]["symbol_states"][0]["long"].update(
+            input_mode="manual",
+            effective_mode="manual",
+            active=False,
+            allow_initial=False,
+        )
+        out["diagnostics"]["symbol_states"][0]["short"].update(
+            input_mode=None,
+            effective_mode="normal",
+            active=True,
+            allow_initial=False,
+        )
+
+    with pytest.raises(FatalBotException, match="requires a flat submitted side"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                strategy_kind=strategy_kind,
+            ),
+        )
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_multiple_ema_anchor_entries_for_held_side(pside):
+    qty = 1.0 if pside == "long" else -1.0
+    orders = [
+        _raw_rust_order(
+            pside=pside,
+            qty=qty,
+            price=price,
+            order_type=f"entry_ema_anchor_{pside}",
+        )
+        for price in (99.0, 100.0)
+    ]
+    out = _raw_rust_output(orders)
+    if pside == "short":
+        out["diagnostics"]["symbol_states"][0]["long"].update(
+            input_mode="manual",
+            effective_mode="manual",
+            active=False,
+            allow_initial=False,
+        )
+        out["diagnostics"]["symbol_states"][0]["short"].update(
+            input_mode=None,
+            effective_mode="normal",
+            active=True,
+            allow_initial=False,
+        )
+
+    with pytest.raises(FatalBotException, match="more than one entry"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                strategy_kind="ema_anchor",
+            ),
+        )
 
 
 def _two_flat_long_symbol_inputs(*, forced_normal: bool = False):

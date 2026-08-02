@@ -1764,6 +1764,8 @@ def validate_rust_orchestrator_output(
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
+    ema_anchor_entry_count: dict[tuple[int, str], int] = {}
+    held_initial_normal_orders: list[tuple[int, str]] = []
     protective_reducer_order_indices: dict[tuple[int, str], int] = {}
     flat_entry_pairs: set[tuple[int, str]] = set()
     flat_entry_order_types: dict[tuple[int, str], list[str]] = {}
@@ -1843,6 +1845,18 @@ def validate_rust_orchestrator_output(
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("entry_"):
+            if (
+                order_type == f"entry_initial_normal_{pside}"
+                and submitted_position_sizes[pair] != 0.0
+            ):
+                held_initial_normal_orders.append((order_idx, pside))
+            if order_type == f"entry_ema_anchor_{pside}":
+                ema_anchor_entry_count[pair] = ema_anchor_entry_count.get(pair, 0) + 1
+                if ema_anchor_entry_count[pair] > 1:
+                    raise FatalBotException(
+                        f"Rust orchestrator {pside} EMA Anchor entry batch for symbol_idx "
+                        f"{symbol_idx} contains more than one entry"
+                    )
             if submitted_entry_cooldown_active[pair]:
                 raise FatalBotException(
                     f"Rust orchestrator order {order_idx} is inconsistent with submitted entry cooldown"
@@ -1879,7 +1893,13 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx}",
             )
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
-            if aggregate_close_qty[pair] > submitted_position_sizes[pair] + 1e-12:
+            aggregate_tolerance = _rust_representation_tolerance(
+                aggregate_close_qty[pair], submitted_position_sizes[pair]
+            )
+            if (
+                aggregate_close_qty[pair]
+                > submitted_position_sizes[pair] + aggregate_tolerance
+            ):
                 raise FatalBotException(
                     f"Rust orchestrator close quantity for symbol_idx {symbol_idx} "
                     f"{pside} exceeds submitted position"
@@ -1949,6 +1969,13 @@ def validate_rust_orchestrator_output(
                 f"{previous_idx} and {order_idx} collide under conversion identity"
             )
         seen_conversion_identities[conversion_identity] = order_idx
+
+    if held_initial_normal_orders:
+        order_idx, pside = held_initial_normal_orders[0]
+        raise FatalBotException(
+            f"Rust orchestrator order {order_idx} {pside} initial-normal entry "
+            "requires a flat submitted side"
+        )
 
     for (symbol_idx, pside), order_types in flat_entry_order_types.items():
         _validate_rust_flat_entry_batch(
@@ -3822,7 +3849,8 @@ def finalize_reduce_only_orders(
             if not ro:
                 continue
             total = sum(float(o.get("qty", 0.0)) for o in ro)
-            if total <= pos_size_abs + 1e-12:
+            aggregate_tolerance = _rust_representation_tolerance(total, pos_size_abs)
+            if total <= pos_size_abs + aggregate_tolerance:
                 continue
             excess = total - pos_size_abs
             # Rust already caps a planned wave, but the position may shrink before live

@@ -177,6 +177,31 @@ def test_finalize_reduce_only_orders_trims_ordinary_before_protective_reducer():
     assert sum(by_type.values()) == 20.0
 
 
+def test_finalize_reduce_only_orders_caps_tiny_aggregate_without_absolute_slack():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.positions[symbol]["long"] = {"size": 1.1e-12, "price": 100.0}
+    orders = {
+        symbol: [
+            _make_order(
+                symbol,
+                "sell",
+                "long",
+                1e-12,
+                price,
+                "close_grid_long",
+                reduce_only=True,
+            )
+            for price in (101.0, 102.0)
+        ]
+    }
+
+    finalized = bot._finalize_reduce_only_orders(orders, {symbol: 100.0})
+
+    assert sum(order["qty"] for order in finalized[symbol]) <= 1.1e-12
+
+
 def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
     bot = Passivbot.__new__(Passivbot)
     bot.hsl = {
