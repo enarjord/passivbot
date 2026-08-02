@@ -1003,6 +1003,23 @@ def _validated_rust_finite_number(value: object, context: str) -> float:
     return value_f
 
 
+def _validated_rust_u64(value: object, context: str) -> int:
+    error = f"Rust orchestrator {context}"
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > (1 << 64) - 1
+    ):
+        raise FatalBotException(error)
+    return value
+
+
+def _rust_representation_tolerance(value: float, expected: float) -> float:
+    """Return a small tolerance for arithmetic representation noise only."""
+    return sys.float_info.epsilon * max(abs(value), abs(expected)) * 4.0
+
+
 _PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
     {
         "close_panic",
@@ -1164,16 +1181,13 @@ def _validate_rust_entry_exchange_constraints(
     if not math.isfinite(qty_steps) or not math.isfinite(entry_cost):
         raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
     rounded_qty = round(qty_steps) * qty_step
-    qty_tolerance = qty_step * 1e-8
+    qty_tolerance = _rust_representation_tolerance(qty_abs, rounded_qty)
     if not math.isclose(qty_abs, rounded_qty, rel_tol=0.0, abs_tol=qty_tolerance):
         raise FatalBotException(
             f"{context} quantity is inconsistent with submitted qty_step"
         )
     cost_tolerance = 8.0 * max(math.ulp(entry_cost), math.ulp(min_cost))
-    if (
-        qty_abs + qty_tolerance < min_qty
-        or entry_cost + cost_tolerance < min_cost
-    ):
+    if qty_abs + 1e-12 < min_qty or entry_cost + cost_tolerance < min_cost:
         raise FatalBotException(
             f"{context} quantity is below submitted effective entry minimum"
         )
@@ -1190,9 +1204,7 @@ def _validate_rust_limit_price_exchange_constraints(
     if not math.isfinite(price_steps):
         raise FatalBotException(f"{context} has invalid exchange-constrained price")
     rounded_price = round(price_steps) * price_step
-    price_tolerance = (
-        sys.float_info.epsilon * max(abs(price), abs(rounded_price)) * 4.0
-    )
+    price_tolerance = _rust_representation_tolerance(price, rounded_price)
     if not math.isclose(price, rounded_price, rel_tol=0.0, abs_tol=price_tolerance):
         raise FatalBotException(
             f"{context} price is inconsistent with submitted price_step"
@@ -1300,21 +1312,19 @@ def _validate_rust_close_exchange_constraints(
         )
     market_price = order_book[1] if qty < 0.0 else order_book[0]
     effective_min_qty = _rust_effective_min_qty(market_price, exchange)
-    qty_tolerance = qty_step * 1e-8
-    closes_exact_remaining_position = math.isclose(
-        qty_abs, position_abs, rel_tol=0.0, abs_tol=qty_tolerance
-    )
+    closes_exact_remaining_position = qty_abs == position_abs
     if closes_exact_remaining_position:
         return
     qty_steps = qty_abs / qty_step
     if not math.isfinite(qty_steps):
         raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
     rounded_qty = round(qty_steps) * qty_step
+    qty_tolerance = _rust_representation_tolerance(qty_abs, rounded_qty)
     if not math.isclose(qty_abs, rounded_qty, rel_tol=0.0, abs_tol=qty_tolerance):
         raise FatalBotException(
             f"{context} quantity is inconsistent with submitted qty_step"
         )
-    if qty_abs + qty_tolerance < effective_min_qty:
+    if qty_abs + 1e-12 < effective_min_qty:
         raise FatalBotException(
             f"{context} quantity is below submitted effective close minimum"
         )
@@ -1399,6 +1409,7 @@ def _submitted_rust_input_context(
     str,
     dict[tuple[int, str], frozenset[str]],
     dict[int, tuple[float, float, float, float, float]],
+    dict[tuple[int, str], bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1411,6 +1422,10 @@ def _submitted_rust_input_context(
     position_sizes: dict[tuple[int, str], float] = {}
     symbol_side_eligibility: dict[tuple[int, str], bool] = {}
     exchange_constraints: dict[int, tuple[float, float, float, float, float]] = {}
+    entry_cooldown_active: dict[tuple[int, str], bool] = {}
+    timestamp_ms = _validated_rust_u64(
+        orchestrator_input.get("timestamp_ms", 0), "input has invalid timestamp_ms"
+    )
     global_input = orchestrator_input.get("global")
     if not isinstance(global_input, dict):
         raise FatalBotException(
@@ -1579,6 +1594,37 @@ def _submitted_rust_input_context(
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} bot_params"
                 )
+            cooldown_minutes = _validated_rust_finite_number(
+                bot_params.get("risk_entry_cooldown_minutes", 0.0),
+                f"symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes",
+            )
+            if cooldown_minutes < 0.0:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes"
+                )
+            last_fill_timestamp_ms = side_input.get(
+                "last_increase_fill_timestamp_ms"
+            )
+            if last_fill_timestamp_ms is not None:
+                last_fill_timestamp_ms = _validated_rust_u64(
+                    last_fill_timestamp_ms,
+                    f"symbol input {input_idx} has invalid {pside} last_increase_fill_timestamp_ms",
+                )
+            if cooldown_minutes > 0.0 and last_fill_timestamp_ms is not None:
+                delay_float = cooldown_minutes * 60_000.0
+                delay_ms = (
+                    (1 << 64) - 1
+                    if not math.isfinite(delay_float)
+                    else min(math.ceil(delay_float), (1 << 64) - 1)
+                )
+                cooldown_until_ms = min(
+                    last_fill_timestamp_ms + delay_ms, (1 << 64) - 1
+                )
+                entry_cooldown_active[(symbol_idx, pside)] = (
+                    timestamp_ms < cooldown_until_ms
+                )
+            else:
+                entry_cooldown_active[(symbol_idx, pside)] = False
             wallet_exposure_limit = _validated_rust_finite_number(
                 bot_params.get("wallet_exposure_limit"),
                 f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit",
@@ -1636,6 +1682,7 @@ def _submitted_rust_input_context(
         strategy_kind,
         reducer_family_enablement,
         exchange_constraints,
+        entry_cooldown_active,
     )
 
 
@@ -1713,6 +1760,7 @@ def validate_rust_orchestrator_output(
         submitted_strategy_kind,
         submitted_reducer_family_enablement,
         submitted_exchange_constraints,
+        submitted_entry_cooldown_active,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -1795,6 +1843,10 @@ def validate_rust_orchestrator_output(
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("entry_"):
+            if submitted_entry_cooldown_active[pair]:
+                raise FatalBotException(
+                    f"Rust orchestrator order {order_idx} is inconsistent with submitted entry cooldown"
+                )
             _validate_rust_entry_exchange_constraints(
                 qty,
                 price,

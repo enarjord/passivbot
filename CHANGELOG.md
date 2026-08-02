@@ -67,12 +67,13 @@ All notable user-facing changes will be documented in this file.
   restricts aligned-tick snapping to floating representation error, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step and valid tiny increments, without skipping a tick because of ordinary
-  floating-point noise. Quantity-step validation scales its tolerance to the submitted increment,
-  while price-step validation admits only floating representation error, so genuinely off-tick
-  prices cannot hide inside a fixed fraction of the tick. Close validation rejects
+  floating-point noise. Quantity-step and price-step validation admit only floating representation
+  error, so genuinely off-step values cannot hide inside a fixed fraction of the increment. Close validation rejects
   positions at or below Rust's final
   close-trimming dust threshold before applying the exact-position exception, and panic-limit
-  prices must match Rust's exact one-tick protective formula for the submitted book. The complete
+  prices must match Rust's exact one-tick protective formula for the submitted book. Entries are
+  rejected when the submitted fill timestamp and cooldown make Rust's deterministic add-order gate
+  active. The complete
   serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, including loss-gate warning policies, and graceful-stop

@@ -88,6 +88,11 @@ def _raw_rust_input(
     min_qty=0.001,
     min_cost=1.0,
     c_mult=1.0,
+    timestamp_ms=0,
+    long_last_increase_fill_timestamp_ms=None,
+    short_last_increase_fill_timestamp_ms=None,
+    long_entry_cooldown_minutes=0.0,
+    short_entry_cooldown_minutes=0.0,
     **global_overrides,
 ) -> dict:
     global_input = {
@@ -125,6 +130,7 @@ def _raw_rust_input(
                 global_bot_params_override.get(pside, {})
             )
     return {
+        "timestamp_ms": timestamp_ms,
         "global": global_input,
         "symbols": [
             {
@@ -140,9 +146,13 @@ def _raw_rust_input(
                 "tradable": tradable,
                 "long": {
                     "mode": long_mode,
+                    "last_increase_fill_timestamp_ms": (
+                        long_last_increase_fill_timestamp_ms
+                    ),
                     "position": {"size": long_pos_size, "price": 100.0},
                     "bot_params": {
                         "wallet_exposure_limit": long_wallet_exposure_limit,
+                        "risk_entry_cooldown_minutes": long_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold": 1.0,
                         "unstuck_enabled": True,
@@ -153,9 +163,13 @@ def _raw_rust_input(
                 },
                 "short": {
                     "mode": short_mode,
+                    "last_increase_fill_timestamp_ms": (
+                        short_last_increase_fill_timestamp_ms
+                    ),
                     "position": {"size": short_pos_size, "price": 100.0},
                     "bot_params": {
                         "wallet_exposure_limit": short_wallet_exposure_limit,
+                        "risk_entry_cooldown_minutes": short_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold": 1.0,
                         "unstuck_enabled": True,
@@ -1643,6 +1657,66 @@ def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
     ]
 
 
+def test_raw_rust_output_rejects_off_step_entry_beyond_representation_noise():
+    with pytest.raises(FatalBotException, match="qty_step"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(qty=0.1000000005)]),
+            {0: SYMBOL},
+            _raw_rust_input(qty_step=0.1, min_qty=0.1, min_cost=0.0),
+        )
+
+
+def test_raw_rust_output_accepts_representation_noisy_aligned_entry_quantity():
+    order = _raw_rust_order(qty=0.1 + 0.2)
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(qty_step=0.1, min_qty=0.1, min_cost=0.0),
+    ) == [order]
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_entry_during_submitted_cooldown(pside):
+    qty = 0.1 if pside == "long" else -0.1
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        order_type=f"entry_grid_normal_{pside}",
+    )
+    input_overrides = {
+        "timestamp_ms": 1_000,
+        f"{pside}_last_increase_fill_timestamp_ms": 500,
+        f"{pside}_entry_cooldown_minutes": 1.0,
+        f"{pside}_pos_size": 1.0,
+        f"{pside}_mode": None,
+    }
+    with pytest.raises(FatalBotException, match="submitted entry cooldown"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+                **input_overrides,
+            ),
+        )
+
+
+def test_raw_rust_output_accepts_close_during_submitted_entry_cooldown():
+    order = _raw_rust_order(qty=-1.0, order_type="close_grid_long")
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(
+            timestamp_ms=1_000,
+            long_last_increase_fill_timestamp_ms=500,
+            long_entry_cooldown_minutes=1.0,
+            min_cost=0.0,
+        ),
+    ) == [order]
+
+
 def test_raw_rust_output_rejects_off_step_tiny_entry_quantity():
     with pytest.raises(FatalBotException, match="qty_step"):
         reconciler.validate_rust_orchestrator_output(
@@ -1872,6 +1946,35 @@ def test_raw_rust_output_accepts_aligned_partial_close_at_exchange_minimum():
         _raw_rust_output([order]),
         {0: SYMBOL},
         _raw_rust_input(long_pos_size=0.2, qty_step=0.01, min_qty=0.07),
+    ) == [order]
+
+
+def test_raw_rust_output_rejects_off_step_close_beyond_representation_noise():
+    order = _raw_rust_order(qty=-0.1000000005, order_type="close_grid_long")
+    with pytest.raises(FatalBotException, match="qty_step"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=1.0,
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_accepts_representation_noisy_aligned_partial_close():
+    order = _raw_rust_order(qty=-(0.1 + 0.2), order_type="close_grid_long")
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(
+            long_pos_size=1.0,
+            qty_step=0.1,
+            min_qty=0.1,
+            min_cost=0.0,
+        ),
     ) == [order]
 
 
