@@ -1862,7 +1862,7 @@ def test_panic_mode_emits_close_panic_long():
     assert o["symbol_idx"] == 0
     assert o["pside"] == "long"
     assert o["order_type"] == "close_panic_long"
-    assert o["qty"] < 0.0
+    assert o["qty"] == -1.5
 
 
 def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():

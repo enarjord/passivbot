@@ -34,7 +34,8 @@ All notable user-facing changes will be documented in this file.
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects protective reducers whose direct submitted unstuck, WEL, or TWEL
-  enablement is disabled, rejects entry quantities below the submitted effective exchange minimum or
+  enablement is disabled, requires panic reducers to close the full submitted position, rejects
+  entry quantities below the submitted effective exchange minimum or
   outside the submitted quantity step, rejects close quantities below their effective minimum or
   outside the submitted quantity step except for an exact remaining position, rejects limit
   prices outside the submitted price step, requires diagnostic effective modes to match Rust's

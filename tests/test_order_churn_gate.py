@@ -954,6 +954,21 @@ def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disab
     ) == [order]
 
 
+def test_raw_rust_output_rejects_partial_panic_close():
+    order = _raw_rust_order(
+        qty=-0.5,
+        order_type="close_panic_long",
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(FatalBotException, match="panic quantity"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output_for_long_mode([order], "panic"),
+            {0: SYMBOL},
+            _raw_rust_input(long_mode="panic", long_pos_size=1.0),
+        )
+
+
 @pytest.mark.parametrize(
     "global_overrides",
     [

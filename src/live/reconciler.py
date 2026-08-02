@@ -1711,6 +1711,12 @@ def validate_rust_orchestrator_output(
                 )
             protective_reducer_order_indices[pair] = order_idx
         if order_type.startswith("close_"):
+            if order_type.startswith("close_panic_") and abs(qty) != abs(
+                submitted_position_sizes[pair]
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator order {order_idx} panic quantity does not equal submitted position"
+                )
             _validate_rust_close_exchange_constraints(
                 qty,
                 submitted_position_sizes[pair],
