@@ -1049,6 +1049,74 @@ def test_raw_rust_output_rejects_partial_panic_close():
         )
 
 
+@pytest.mark.parametrize(
+    ("pside", "position_size"),
+    [("long", 1.0), ("short", -1.0)],
+)
+def test_raw_rust_output_rejects_missing_panic_close_for_held_side(
+    pside, position_size
+):
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0][pside].update(
+        input_mode="panic",
+        effective_mode="panic",
+        active=True,
+    )
+    if pside == "short":
+        out["diagnostics"]["symbol_states"][0]["long"].update(
+            input_mode="manual",
+            effective_mode="manual",
+            active=False,
+            allow_initial=False,
+        )
+
+    with pytest.raises(FatalBotException, match="missing required full-position panic close"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode="panic" if pside == "long" else "manual",
+                long_pos_size=position_size if pside == "long" else 0.0,
+                short_mode="panic" if pside == "short" else "manual",
+                short_pos_size=position_size if pside == "short" else 0.0,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("position_size", "global_overrides", "expected_effective_mode"),
+    [
+        (1e-12, {}, "panic"),
+        (
+            1.0,
+            {
+                "long_n_positions": 0,
+                "long_total_wallet_exposure_limit": 0.0,
+            },
+            "manual",
+        ),
+    ],
+    ids=["rust-dust", "globally-disabled"],
+)
+def test_raw_rust_output_allows_empty_panic_batch_when_rust_cannot_emit_close(
+    position_size, global_overrides, expected_effective_mode
+):
+    out = _raw_rust_output_for_long_mode([], "panic")
+    out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] = (
+        expected_effective_mode
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(
+            long_mode="panic",
+            long_pos_size=position_size,
+            **global_overrides,
+        ),
+    ) == []
+
+
 def _panic_limit_case(
     pside: str,
     price: float,

@@ -1778,6 +1778,7 @@ def validate_rust_orchestrator_output(
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
     entry_order_count: dict[tuple[int, str], int] = {}
+    panic_close_pairs: set[tuple[int, str]] = set()
     held_initial_normal_orders: list[tuple[int, str]] = []
     protective_reducer_order_indices: dict[tuple[int, str], int] = {}
     flat_entry_pairs: set[tuple[int, str]] = set()
@@ -1901,6 +1902,8 @@ def validate_rust_orchestrator_output(
                 )
             protective_reducer_order_indices[pair] = order_idx
         if order_type.startswith("close_"):
+            if order_type.startswith("close_panic_"):
+                panic_close_pairs.add(pair)
             if order_type.startswith("close_panic_") and abs(qty) != abs(
                 submitted_position_sizes[pair]
             ):
@@ -2598,6 +2601,18 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator flat active {pside} symbol_idx {symbol_idx} "
                 "is missing from submitted forager selections"
+            )
+    for pair, position_size in submitted_position_sizes.items():
+        symbol_idx, pside = pair
+        if (
+            submitted_global_side_enablement[pside]
+            and submitted_input_modes[pair] == "panic"
+            and position_size > 1e-12
+            and pair not in panic_close_pairs
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator panic {pside} batch for symbol_idx {symbol_idx} "
+                "is missing required full-position panic close"
             )
     return orders
 

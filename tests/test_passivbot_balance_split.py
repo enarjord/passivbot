@@ -9191,7 +9191,21 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return _empty_orchestrator_output(captured["input"], {"warnings": []})
+        output = json.loads(
+            _empty_orchestrator_output(captured["input"], {"warnings": []})
+        )
+        output["orders"].append(
+            {
+                "symbol_idx": 0,
+                "pside": "long",
+                "qty": -1.0,
+                "price": 100.4,
+                "order_type": "close_panic_long",
+                "execution_type": "limit",
+                "execution_priority": "risk_critical",
+            }
+        )
+        return json.dumps(output)
 
     monkeypatch.setattr(
         pb_mod.planning_gates,
@@ -9218,7 +9232,10 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         FakeBot()
     )
 
-    assert out == {}
+    assert set(out) == {symbol}
+    assert len(out[symbol]) == 1
+    assert out[symbol][0][:3] == (-1.0, 100.4, "close_panic_long")
+    assert out[symbol][0][4:] == ("limit", "risk_critical")
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
     assert rust_symbol["short"]["mode"] == "manual"
