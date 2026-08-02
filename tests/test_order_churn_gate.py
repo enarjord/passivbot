@@ -95,6 +95,8 @@ def _raw_rust_input(
     short_entry_cooldown_minutes=0.0,
     long_entry_retracement_base_pct=0.0,
     short_entry_retracement_base_pct=0.0,
+    long_close_retracement_base_pct=0.0,
+    short_close_retracement_base_pct=0.0,
     **global_overrides,
 ) -> dict:
     global_input = {
@@ -155,6 +157,9 @@ def _raw_rust_input(
                     "strategy_params": {
                         "entry": {
                             "retracement_base_pct": long_entry_retracement_base_pct
+                        },
+                        "close": {
+                            "retracement_base_pct": long_close_retracement_base_pct
                         }
                     },
                     "bot_params": {
@@ -177,6 +182,9 @@ def _raw_rust_input(
                     "strategy_params": {
                         "entry": {
                             "retracement_base_pct": short_entry_retracement_base_pct
+                        },
+                        "close": {
+                            "retracement_base_pct": short_close_retracement_base_pct
                         }
                     },
                     "bot_params": {
@@ -624,7 +632,10 @@ def test_raw_rust_output_rejects_close_wave_exceeding_submitted_position(orders)
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output(orders),
             {0: SYMBOL},
-            _raw_rust_input(long_pos_size=1.0),
+            _raw_rust_input(
+                long_pos_size=1.0,
+                strategy_kind="trailing_grid_v7",
+            ),
         )
 
 
@@ -641,7 +652,10 @@ def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
     assert reconciler.validate_rust_orchestrator_output(
         _raw_rust_output(orders),
         {0: SYMBOL},
-        _raw_rust_input(long_pos_size=1.0),
+        _raw_rust_input(
+            long_pos_size=1.0,
+            strategy_kind="trailing_grid_v7",
+        ),
     ) == orders
 
 
@@ -1718,6 +1732,33 @@ def test_raw_rust_output_rejects_multiple_ema_anchor_entries_for_held_side(pside
         )
 
 
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_multiple_ema_anchor_closes_for_held_side(pside):
+    qty = -0.4 if pside == "long" else 0.4
+    orders = [
+        _raw_rust_order(
+            pside=pside,
+            qty=qty,
+            price=price,
+            order_type=f"close_ema_anchor_{pside}",
+        )
+        for price in (100.0, 101.0)
+    ]
+
+    with pytest.raises(FatalBotException, match="more than one close"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                strategy_kind="ema_anchor",
+            ),
+        )
+
+
 def _two_flat_long_symbol_inputs(*, forced_normal: bool = False):
     orchestrator_input = _raw_rust_input(
         long_pos_size=0.0,
@@ -2182,6 +2223,47 @@ def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
                     retracement_base_pct if pside == "long" else 0.0
                 ),
                 short_entry_retracement_base_pct=(
+                    retracement_base_pct if pside == "short" else 0.0
+                ),
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("pside", "retracement_base_pct", "order_family"),
+    [
+        ("long", 0.0, "close_trailing"),
+        ("short", 0.0, "close_trailing"),
+        ("long", 0.01, "close_grid"),
+        ("short", 0.01, "close_grid"),
+    ],
+)
+def test_raw_rust_output_rejects_martingale_close_family_for_retracement_mode(
+    pside, retracement_base_pct, order_family
+):
+    qty = -0.1 if pside == "long" else 0.1
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        order_type=f"{order_family}_{pside}",
+    )
+
+    with pytest.raises(FatalBotException, match="close family.*retracement mode"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                long_close_retracement_base_pct=(
+                    retracement_base_pct if pside == "long" else 0.0
+                ),
+                short_close_retracement_base_pct=(
                     retracement_base_pct if pside == "short" else 0.0
                 ),
                 qty_step=0.1,
@@ -2667,6 +2749,20 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     assert reconciler.validate_rust_orchestrator_output(
         out, {0: SYMBOL}, _raw_rust_input()
     ) == []
+
+
+def test_raw_rust_output_rejects_loss_gate_block_with_off_step_price():
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(price=100.003)
+    ]
+
+    with pytest.raises(FatalBotException, match="price_step"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(price_step=0.01),
+        )
 
 
 @pytest.mark.parametrize(

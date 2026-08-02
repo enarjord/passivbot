@@ -70,9 +70,11 @@ All notable user-facing changes will be documented in this file.
   closes. Market-entry minimum cost is validated against the submitted executable touch rather
   than the producer's reference price. Positive entry cooldowns retain Rust's single-entry staging
   rule after the time window expires, and positive trailing-martingale entry retracement retains
-  Rust's single-entry staging rule even when cooldown is zero, and canonical martingale re-entry
-  families must match the submitted grid-versus-retracement branch. Held positions in enabled
-  panic mode require Rust's full-position panic close. WEL and auto-unstuck limit prices are
+  Rust's single-entry staging rule even when cooldown is zero, canonical martingale entry and close
+  families must match their submitted grid-versus-retracement branches, and EMA Anchor emits at
+  most one entry and one close per symbol-side. Held positions in enabled panic mode require Rust's
+  full-position panic close. Loss-gate diagnostic prices must match the submitted exchange step.
+  WEL and auto-unstuck limit prices are
   directionally quantized from off-tick book quotes before minimum sizing and
   loss projection. It quantizes EMA Anchor
   touch prices in the protective direction without moving float-noisy aligned touches, preserves

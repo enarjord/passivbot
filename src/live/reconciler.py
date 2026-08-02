@@ -1132,6 +1132,7 @@ def _validate_rust_order_family_for_submitted_strategy(
     order_type: str,
     strategy_kind: str,
     entry_retracement_enabled: bool,
+    close_retracement_enabled: bool,
     context: str,
 ) -> None:
     """Reject ordinary strategy families the submitted Rust strategy cannot emit."""
@@ -1147,9 +1148,9 @@ def _validate_rust_order_family_for_submitted_strategy(
         )
     if strategy_kind != "trailing_martingale":
         return
-    entry_family = order_type.rsplit("_", 1)[0]
-    grid_reentry = entry_family in {"entry_grid_normal", "entry_grid_cropped"}
-    trailing_reentry = entry_family in {
+    order_family = order_type.rsplit("_", 1)[0]
+    grid_reentry = order_family in {"entry_grid_normal", "entry_grid_cropped"}
+    trailing_reentry = order_family in {
         "entry_trailing_normal",
         "entry_trailing_cropped",
     }
@@ -1158,6 +1159,14 @@ def _validate_rust_order_family_for_submitted_strategy(
     ):
         raise FatalBotException(
             f"{context} has entry family inconsistent with submitted retracement mode"
+        )
+    grid_close = order_family == "close_grid"
+    trailing_close = order_family == "close_trailing"
+    if (grid_close and close_retracement_enabled) or (
+        trailing_close and not close_retracement_enabled
+    ):
+        raise FatalBotException(
+            f"{context} has close family inconsistent with submitted retracement mode"
         )
 
 
@@ -1440,6 +1449,7 @@ def _submitted_rust_input_context(
     dict[tuple[int, str], bool],
     dict[tuple[int, str], bool],
     dict[tuple[int, str], bool],
+    dict[tuple[int, str], bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1455,6 +1465,7 @@ def _submitted_rust_input_context(
     entry_cooldown_active: dict[tuple[int, str], bool] = {}
     entry_cooldown_positive: dict[tuple[int, str], bool] = {}
     entry_sequential_staging: dict[tuple[int, str], bool] = {}
+    close_retracement_enabled: dict[tuple[int, str], bool] = {}
     timestamp_ms = _validated_rust_u64(
         orchestrator_input.get("timestamp_ms", 0), "input has invalid timestamp_ms"
     )
@@ -1636,6 +1647,7 @@ def _submitted_rust_input_context(
                 )
             entry_cooldown_positive[(symbol_idx, pside)] = cooldown_minutes > 0.0
             entry_sequential_staging[(symbol_idx, pside)] = False
+            close_retracement_enabled[(symbol_idx, pside)] = False
             strategy_params = side_input.get("strategy_params")
             if strategy_kind == "trailing_martingale" and isinstance(
                 strategy_params, dict
@@ -1648,6 +1660,15 @@ def _submitted_rust_input_context(
                     )
                     entry_sequential_staging[(symbol_idx, pside)] = (
                         retracement_base_pct > 0.0
+                    )
+                close_params = strategy_params.get("close")
+                if isinstance(close_params, dict):
+                    close_retracement_base_pct = _validated_rust_finite_number(
+                        close_params.get("retracement_base_pct", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} close retracement_base_pct",
+                    )
+                    close_retracement_enabled[(symbol_idx, pside)] = (
+                        close_retracement_base_pct > 0.0
                     )
             last_fill_timestamp_ms = side_input.get(
                 "last_increase_fill_timestamp_ms"
@@ -1732,6 +1753,7 @@ def _submitted_rust_input_context(
         entry_cooldown_active,
         entry_cooldown_positive,
         entry_sequential_staging,
+        close_retracement_enabled,
     )
 
 
@@ -1812,10 +1834,12 @@ def validate_rust_orchestrator_output(
         submitted_entry_cooldown_active,
         submitted_entry_cooldown_positive,
         submitted_entry_sequential_staging,
+        submitted_close_retracement_enabled,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
+    ema_anchor_close_count: dict[tuple[int, str], int] = {}
     initial_partial_entry_count: dict[tuple[int, str], int] = {}
     entry_order_count: dict[tuple[int, str], int] = {}
     panic_close_pairs: set[tuple[int, str]] = set()
@@ -1897,6 +1921,7 @@ def validate_rust_orchestrator_output(
             order_type,
             submitted_strategy_kind,
             submitted_entry_sequential_staging[pair],
+            submitted_close_retracement_enabled[pair],
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("entry_"):
@@ -1946,6 +1971,15 @@ def validate_rust_orchestrator_output(
                 )
             protective_reducer_order_indices[pair] = order_idx
         if order_type.startswith("close_"):
+            if order_type == f"close_ema_anchor_{pside}":
+                ema_anchor_close_count[pair] = (
+                    ema_anchor_close_count.get(pair, 0) + 1
+                )
+                if ema_anchor_close_count[pair] > 1:
+                    raise FatalBotException(
+                        f"Rust orchestrator {pside} EMA Anchor close batch for symbol_idx "
+                        f"{symbol_idx} contains more than one close"
+                    )
             if order_type.startswith("close_panic_"):
                 panic_close_pairs.add(pair)
             if order_type.startswith("close_panic_") and abs(qty) != abs(
@@ -2465,6 +2499,7 @@ def validate_rust_orchestrator_output(
             order_type,
             submitted_strategy_kind,
             submitted_entry_sequential_staging[pair],
+            submitted_close_retracement_enabled[pair],
             f"Rust orchestrator loss_gate_block {block_idx}",
         )
         _validate_rust_reducer_enablement(
@@ -2490,6 +2525,11 @@ def validate_rust_orchestrator_output(
                     f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
                 )
         qty = finite_values["qty"]
+        _validate_rust_limit_price_exchange_constraints(
+            finite_values["price"],
+            submitted_exchange_constraints[symbol_idx],
+            f"Rust orchestrator loss_gate_block {block_idx}",
+        )
         if (pside == "long" and qty >= 0.0) or (pside == "short" and qty <= 0.0):
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} qty sign disagrees with pside"
