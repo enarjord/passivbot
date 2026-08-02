@@ -53,7 +53,8 @@ All notable user-facing changes will be documented in this file.
   side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
-  collapsing a positive sub-step minimum to zero, while quantities genuinely above a step still
+  collapsing a positive sub-step minimum to zero, including when an aligned step multiplication is
+  represented one ULP below the exchange minimum, while quantities genuinely above a step still
   round up, and recomputes minimum entry quantity after the final strategy price is quantized so
   minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
   precision instead of admitting orders below tiny exchange minimums. It quantizes EMA Anchor

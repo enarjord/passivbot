@@ -1172,14 +1172,20 @@ def _rust_effective_min_qty(
         return math.inf
     nearest_step_count = round(raw_min_steps)
     nearest_step = nearest_step_count * qty_step
+    representation_tolerance = (
+        sys.float_info.epsilon * max(abs(raw_min), abs(nearest_step)) * 4.0
+    )
     if raw_min == 0.0:
         return 0.0
     if (
         nearest_step_count > 0
         and abs(raw_min_steps - nearest_step_count) <= 1e-8
-        and nearest_step >= raw_min
+        and (
+            nearest_step >= raw_min
+            or raw_min - nearest_step <= representation_tolerance
+        )
     ):
-        return nearest_step
+        return max(nearest_step, raw_min)
     return math.ceil(raw_min_steps) * qty_step
 
 

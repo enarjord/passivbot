@@ -1989,19 +1989,24 @@ def test_off_step_full_panic_close_passes_live_validation():
 
 
 @pytest.mark.parametrize(
-    ("min_qty", "expected_qty"),
-    [(0.015, 0.02), (0.07, 0.07)],
+    ("qty_step", "min_qty", "expected_qty"),
+    [(0.01, 0.015, 0.02), (0.01, 0.07, 0.07), (0.03, 0.33, 0.33)],
 )
 def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
-    min_qty, expected_qty
+    qty_step, min_qty, expected_qty
 ):
     import passivbot_rust as pbr
 
-    symbol = make_symbol(0, bid=100.0, ask=100.0)
-    symbol["exchange"].update(
-        {"qty_step": 0.01, "min_qty": min_qty, "min_cost": 0.0}
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_bp={"entry_initial_qty_pct": 0.0},
     )
-    inp = make_input(balance=10.0, symbols=[symbol])
+    symbol["exchange"].update(
+        {"qty_step": qty_step, "min_qty": min_qty, "min_cost": 0.0}
+    )
+    inp = make_input(balance=40.0, symbols=[symbol])
     out = compute(pbr, inp)
 
     reconciler.validate_rust_orchestrator_output(
