@@ -3246,6 +3246,45 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     assert "close_auto_reduce_twel_long" not in order_types
 
 
+def test_wel_off_tick_limit_meets_minimum_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 1.0,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=3.0,
+        ask=3.003,
+        long_pos_size=10.001,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 5.0}
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    )
+
+    assert wel_order["price"] == 3.0
+    assert wel_order["qty"] == pytest.approx(-1.667)
+    assert abs(wel_order["qty"]) * wel_order["price"] >= 5.0
+
+
 def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     import passivbot_rust as pbr
 

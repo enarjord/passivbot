@@ -1537,7 +1537,12 @@ def test_raw_rust_output_rejects_impossible_flat_entry_batch(order_type):
         reconciler.validate_rust_orchestrator_output(
             _raw_rust_output([_raw_rust_order(order_type=order_type)]),
             {0: SYMBOL},
-            _raw_rust_input(long_pos_size=0.0),
+            _raw_rust_input(
+                long_pos_size=0.0,
+                long_entry_retracement_base_pct=(
+                    0.01 if order_type.startswith("entry_trailing_") else 0.0
+                ),
+            ),
         )
 
 
@@ -2123,7 +2128,7 @@ def test_raw_rust_output_rejects_multiple_entries_with_positive_retracement(psid
             pside=pside,
             qty=qty,
             price=price,
-            order_type=f"entry_grid_normal_{pside}",
+            order_type=f"entry_trailing_normal_{pside}",
         )
         for price in (99.0, 100.0)
     ]
@@ -2141,6 +2146,71 @@ def test_raw_rust_output_rejects_multiple_entries_with_positive_retracement(psid
                 qty_step=0.1,
                 min_qty=0.1,
                 min_cost=0.0,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("pside", "retracement_base_pct", "order_family"),
+    [
+        ("long", 0.0, "entry_trailing_normal"),
+        ("short", 0.0, "entry_trailing_cropped"),
+        ("long", 0.01, "entry_grid_cropped"),
+        ("short", 0.01, "entry_grid_normal"),
+    ],
+)
+def test_raw_rust_output_rejects_martingale_entry_family_for_retracement_mode(
+    pside, retracement_base_pct, order_family
+):
+    qty = 0.1 if pside == "long" else -0.1
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        order_type=f"{order_family}_{pside}",
+    )
+
+    with pytest.raises(FatalBotException, match="retracement mode"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                long_entry_retracement_base_pct=(
+                    retracement_base_pct if pside == "long" else 0.0
+                ),
+                short_entry_retracement_base_pct=(
+                    retracement_base_pct if pside == "short" else 0.0
+                ),
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_rejects_wel_close_below_minimum_at_limit_price():
+    order = _raw_rust_order(
+        qty=-1.666,
+        price=3.0,
+        order_type="close_auto_reduce_wel_long",
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(FatalBotException, match="close minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=10.001,
+                bid=3.0,
+                ask=3.003,
+                qty_step=0.001,
+                price_step=0.01,
+                min_qty=0.0,
+                min_cost=5.0,
             ),
         )
 

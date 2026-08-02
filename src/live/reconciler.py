@@ -1129,7 +1129,10 @@ def _validate_rust_order_family_for_submitted_mode(
 
 
 def _validate_rust_order_family_for_submitted_strategy(
-    order_type: str, strategy_kind: str, context: str
+    order_type: str,
+    strategy_kind: str,
+    entry_retracement_enabled: bool,
+    context: str,
 ) -> None:
     """Reject ordinary strategy families the submitted Rust strategy cannot emit."""
     if _rust_order_requires_risk_critical_priority(order_type):
@@ -1141,6 +1144,20 @@ def _validate_rust_order_family_for_submitted_strategy(
     if (strategy_kind == "ema_anchor") != is_ema_anchor_order:
         raise FatalBotException(
             f"{context} has order family inconsistent with submitted strategy"
+        )
+    if strategy_kind != "trailing_martingale":
+        return
+    entry_family = order_type.rsplit("_", 1)[0]
+    grid_reentry = entry_family in {"entry_grid_normal", "entry_grid_cropped"}
+    trailing_reentry = entry_family in {
+        "entry_trailing_normal",
+        "entry_trailing_cropped",
+    }
+    if (grid_reentry and entry_retracement_enabled) or (
+        trailing_reentry and not entry_retracement_enabled
+    ):
+        raise FatalBotException(
+            f"{context} has entry family inconsistent with submitted retracement mode"
         )
 
 
@@ -1305,6 +1322,8 @@ def _validate_rust_close_exchange_constraints(
     order_book: tuple[float, float],
     exchange: tuple[float, float, float, float, float],
     context: str,
+    *,
+    minimum_price: float | None = None,
 ) -> None:
     """Reject close quantities Rust trimming cannot emit under submitted constraints."""
     qty_step, _price_step, _min_qty, _min_cost, _c_mult = exchange
@@ -1315,7 +1334,9 @@ def _validate_rust_close_exchange_constraints(
             f"{context} cannot close a submitted position at or below Rust's dust threshold"
         )
     market_price = order_book[1] if qty < 0.0 else order_book[0]
-    effective_min_qty = _rust_effective_min_qty(market_price, exchange)
+    effective_min_qty = _rust_effective_min_qty(
+        market_price if minimum_price is None else minimum_price, exchange
+    )
     closes_exact_remaining_position = qty_abs == position_abs
     if closes_exact_remaining_position:
         return
@@ -1875,6 +1896,7 @@ def validate_rust_orchestrator_output(
         _validate_rust_order_family_for_submitted_strategy(
             order_type,
             submitted_strategy_kind,
+            submitted_entry_sequential_staging[pair],
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("entry_"):
@@ -1938,6 +1960,11 @@ def validate_rust_orchestrator_output(
                 submitted_order_books[symbol_idx],
                 submitted_exchange_constraints[symbol_idx],
                 f"Rust orchestrator order {order_idx}",
+                minimum_price=(
+                    price
+                    if order_type.startswith("close_auto_reduce_wel_")
+                    else None
+                ),
             )
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
             aggregate_tolerance = _rust_representation_tolerance(
@@ -1977,6 +2004,17 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"
+            )
+        if (
+            order_type.startswith("close_auto_reduce_wel_")
+            and execution_type == "market"
+        ):
+            _validate_rust_close_exchange_constraints(
+                qty,
+                submitted_position_sizes[pair],
+                submitted_order_books[symbol_idx],
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
             )
         if order_type.startswith("entry_"):
             bid, ask = submitted_order_books[symbol_idx]
@@ -2426,6 +2464,7 @@ def validate_rust_orchestrator_output(
         _validate_rust_order_family_for_submitted_strategy(
             order_type,
             submitted_strategy_kind,
+            submitted_entry_sequential_staging[pair],
             f"Rust orchestrator loss_gate_block {block_idx}",
         )
         _validate_rust_reducer_enablement(
@@ -2461,6 +2500,11 @@ def validate_rust_orchestrator_output(
             submitted_order_books[symbol_idx],
             submitted_exchange_constraints[symbol_idx],
             f"Rust orchestrator loss_gate_block {block_idx}",
+            minimum_price=(
+                finite_values["price"]
+                if order_type.startswith("close_auto_reduce_wel_")
+                else None
+            ),
         )
         qty_tolerance = _rust_representation_tolerance(
             abs(qty), submitted_position_sizes[pair]

@@ -133,7 +133,9 @@ pub(crate) fn calc_wel_auto_reduce_long(
     if market_price <= 0.0 {
         return None;
     }
-    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_price = tolerant_round_dn_preserve_step(market_price, exchange_params.price_step)
+        .max(exchange_params.price_step);
+    let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
     let mut close_qty;
     let mut steps = 0usize;
@@ -174,8 +176,7 @@ pub(crate) fn calc_wel_auto_reduce_long(
     }
     Some(Order {
         qty: -close_qty,
-        price: tolerant_round_dn_preserve_step(market_price, exchange_params.price_step)
-            .max(exchange_params.price_step),
+        price: close_price,
         order_type: OrderType::CloseAutoReduceWelLong,
     })
 }
@@ -218,7 +219,9 @@ pub(crate) fn calc_wel_auto_reduce_short(
     if market_price <= 0.0 {
         return None;
     }
-    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_price = tolerant_round_up_preserve_step(market_price, exchange_params.price_step)
+        .max(exchange_params.price_step);
+    let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
     let mut close_qty;
     let mut steps = 0usize;
@@ -257,8 +260,7 @@ pub(crate) fn calc_wel_auto_reduce_short(
     }
     Some(Order {
         qty: close_qty,
-        price: tolerant_round_up_preserve_step(market_price, exchange_params.price_step)
-            .max(exchange_params.price_step),
+        price: close_price,
         order_type: OrderType::CloseAutoReduceWelShort,
     })
 }
@@ -995,6 +997,51 @@ mod tests {
             we,
         )
         .is_none());
+    }
+
+    #[test]
+    fn test_wel_long_recomputes_minimum_from_quantized_limit_price() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 3.003,
+                bid: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            risk_wel_enforcer_threshold: 1.0,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: 10.001,
+            price: 100.0,
+        };
+        let we = calc_wallet_exposure(exchange.c_mult, state.balance, pos.size, pos.price);
+
+        let order = super::calc_wel_auto_reduce_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &pos,
+            we,
+        )
+        .expect("should emit WEL reducer");
+
+        assert_eq!(order.price, 3.0);
+        assert_eq!(order.qty, -1.667);
+        assert!(order.qty.abs() * order.price * exchange.c_mult >= exchange.min_cost);
     }
 
     #[test]
