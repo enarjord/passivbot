@@ -1849,6 +1849,15 @@ def test_raw_rust_output_accepts_aligned_tiny_entry_quantity():
     ) == [order]
 
 
+def test_raw_rust_output_rejects_step_aligned_entry_below_tiny_minimum():
+    with pytest.raises(FatalBotException, match="entry minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(qty=1e-13)]),
+            {0: SYMBOL},
+            _raw_rust_input(qty_step=1e-13, min_qty=1e-12, min_cost=0.0),
+        )
+
+
 def test_raw_rust_output_rejects_quantity_below_tiny_minimum_cost():
     with pytest.raises(FatalBotException, match="entry minimum"):
         reconciler.validate_rust_orchestrator_output(
@@ -2104,6 +2113,24 @@ def test_raw_rust_output_rejects_off_step_tiny_close_quantity():
             _raw_rust_input(
                 long_pos_size=1e-11,
                 qty_step=1e-12,
+                min_qty=1e-12,
+                min_cost=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_rejects_step_aligned_partial_close_below_tiny_minimum():
+    order = _raw_rust_order(
+        qty=-1e-13,
+        order_type="close_grid_long",
+    )
+    with pytest.raises(FatalBotException, match="close minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=2e-12,
+                qty_step=1e-13,
                 min_qty=1e-12,
                 min_cost=0.0,
             ),
