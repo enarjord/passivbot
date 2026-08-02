@@ -1925,6 +1925,56 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     ) == []
 
 
+@pytest.mark.parametrize(
+    ("order_type", "disabled_gate", "error"),
+    [
+        ("close_unstuck_long", "unstuck_family", "submitted reducer enablement"),
+        (
+            "close_auto_reduce_wel_long",
+            "wel_family",
+            "submitted reducer enablement",
+        ),
+        (
+            "close_auto_reduce_twel_long",
+            "twel_family",
+            "submitted reducer enablement",
+        ),
+        ("close_unstuck_long", "auto_unstuck", "submitted auto-unstuck gate"),
+    ],
+)
+def test_raw_rust_output_rejects_loss_gate_block_for_disabled_reducer(
+    order_type,
+    disabled_gate,
+    error,
+):
+    orchestrator_input = _raw_rust_input()
+    if disabled_gate == "unstuck_family":
+        orchestrator_input["symbols"][0]["long"]["bot_params"][
+            "unstuck_enabled"
+        ] = False
+    elif disabled_gate == "wel_family":
+        orchestrator_input["symbols"][0]["long"]["bot_params"][
+            "risk_wel_enforcer_enabled"
+        ] = False
+    elif disabled_gate == "twel_family":
+        orchestrator_input["global"]["global_bot_params"]["long"][
+            "risk_twel_enforcer_enabled"
+        ] = False
+    else:
+        orchestrator_input["global"]["auto_unstuck_allowed"] = False
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(order_type=order_type)
+    ]
+
+    with pytest.raises(FatalBotException, match=error):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            orchestrator_input,
+        )
+
+
 def test_raw_rust_output_rejects_loss_gate_block_for_flat_side():
     out = _raw_rust_output()
     out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]

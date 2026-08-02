@@ -1012,6 +1012,14 @@ _PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
     }
 )
 
+_SUBMITTED_GATED_REDUCER_FAMILIES = frozenset(
+    {
+        "close_auto_reduce_twel",
+        "close_auto_reduce_wel",
+        "close_unstuck",
+    }
+)
+
 _LEGACY_UNEMITTABLE_RUST_ORDER_TYPES = frozenset(
     {
         "entry_grid_inflated_long",
@@ -1022,6 +1030,27 @@ _LEGACY_UNEMITTABLE_RUST_ORDER_TYPES = frozenset(
 
 def _rust_order_requires_risk_critical_priority(order_type: str) -> bool:
     return order_type.rsplit("_", 1)[0] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
+
+
+def _validate_rust_reducer_enablement(
+    order_type: str,
+    pair: tuple[int, str],
+    submitted_reducer_family_enablement: dict[tuple[int, str], frozenset[str]],
+    submitted_auto_unstuck_allowed: bool,
+    context: str,
+) -> None:
+    protective_family = order_type.rsplit("_", 1)[0]
+    if (
+        protective_family in _SUBMITTED_GATED_REDUCER_FAMILIES
+        and protective_family not in submitted_reducer_family_enablement[pair]
+    ):
+        raise FatalBotException(
+            f"{context} contradicts submitted reducer enablement"
+        )
+    if protective_family == "close_unstuck" and not submitted_auto_unstuck_allowed:
+        raise FatalBotException(
+            f"{context} contradicts submitted auto-unstuck gate"
+        )
 
 
 def _expected_rust_execution_priority(order_type: str, input_mode: object) -> str:
@@ -1785,22 +1814,13 @@ def validate_rust_orchestrator_output(
             execution_priority,
             f"Rust orchestrator order {order_idx}",
         )
-        protective_family = order_type.rsplit("_", 1)[0]
-        if protective_family in {
-            "close_auto_reduce_twel",
-            "close_auto_reduce_wel",
-            "close_unstuck",
-        } and protective_family not in submitted_reducer_family_enablement[pair]:
-            raise FatalBotException(
-                f"Rust orchestrator order {order_idx} contradicts submitted reducer enablement"
-            )
-        if (
-            protective_family == "close_unstuck"
-            and not submitted_auto_unstuck_allowed
-        ):
-            raise FatalBotException(
-                f"Rust orchestrator order {order_idx} contradicts submitted auto-unstuck gate"
-            )
+        _validate_rust_reducer_enablement(
+            order_type,
+            pair,
+            submitted_reducer_family_enablement,
+            submitted_auto_unstuck_allowed,
+            f"Rust orchestrator order {order_idx}",
+        )
         conversion_identity = rust_order_conversion_identity(
             idx_to_symbol[symbol_idx], qty, price, order_type
         )
@@ -2162,6 +2182,13 @@ def validate_rust_orchestrator_output(
         _validate_rust_order_family_for_submitted_strategy(
             order_type,
             submitted_strategy_kind,
+            f"Rust orchestrator loss_gate_block {block_idx}",
+        )
+        _validate_rust_reducer_enablement(
+            order_type,
+            pair,
+            submitted_reducer_family_enablement,
+            submitted_auto_unstuck_allowed,
             f"Rust orchestrator loss_gate_block {block_idx}",
         )
         finite_values: dict[str, float] = {}

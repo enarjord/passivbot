@@ -51,7 +51,9 @@ All notable user-facing changes will be documented in this file.
   supervisors no longer swallow fatal producer failures. Impossible loss-gate blocks are rejected
   when Rust bypasses that gate for panic reducers, the submitted policy disables the gate, or the
   block reports a different loss percentage than the submitted policy, and when the submitted
-  side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
+  side is flat, manual, panic, globally disabled, or uses a different strategy family. They are
+  also rejected for reducer families disabled by their submitted unstuck, WEL, or TWEL gates,
+  including the global auto-unstuck gate. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
   collapsing a positive sub-step minimum to zero, including when an aligned step multiplication is
