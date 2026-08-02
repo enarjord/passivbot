@@ -14,6 +14,9 @@ from backtest_cancellation import raise_if_backtest_cancel_requested
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
+_FRAME_MATERIALIZER_TARGET_CHUNK_BYTES = 64 * 1024 * 1024
+
+
 def _fill_sparse_hlcv_gaps(
     values: np.ndarray, valid_mask: np.ndarray, *, fill_edge_gaps: bool = False
 ) -> int:
@@ -142,6 +145,30 @@ def _close_memmap(array: np.memmap | None) -> None:
             mmap_obj.close()
         except (BufferError, OSError, ValueError):
             pass
+
+
+def _write_time_major_frame_chunks(
+    destination: np.ndarray,
+    frames: list[np.ndarray],
+    *,
+    target_chunk_bytes: int = _FRAME_MATERIALIZER_TARGET_CHUNK_BYTES,
+) -> int:
+    """Write coin-major source frames into a time-major destination in bounded chunks."""
+    if not frames:
+        return 0
+    n_steps = int(destination.shape[0])
+    row_bytes = int(len(frames) * destination.shape[2] * destination.dtype.itemsize)
+    chunk_rows = max(1, int(target_chunk_bytes) // max(1, row_bytes))
+    chunk_count = 0
+    for start in range(0, n_steps, chunk_rows):
+        raise_if_backtest_cancel_requested("frame materializer chunk write")
+        end = min(n_steps, start + chunk_rows)
+        destination[start:end, :, :] = np.stack(
+            [frame[start:end, :] for frame in frames],
+            axis=1,
+        )
+        chunk_count += 1
+    return chunk_count
 
 
 @dataclass(frozen=True)
@@ -401,8 +428,6 @@ def materialize_frames(
     try:
         raise_if_backtest_cancel_requested("frame materializer memmap allocation")
         hlcvs = np.memmap(hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4))
-        hlcvs[:] = np.nan
-        raise_if_backtest_cancel_requested("frame materializer hlcvs initialization")
         timestamps_mm = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
         timestamps_mm[:] = ts_arr
         btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
@@ -410,17 +435,18 @@ def materialize_frames(
         raise_if_backtest_cancel_requested("frame materializer static arrays")
 
         enriched_mss = deepcopy(mss)
+        prepared_frames: list[np.ndarray] = []
         for coin_idx, coin in enumerate(coins):
             raise_if_backtest_cancel_requested("frame materializer coin loop")
             coin_t0 = time.monotonic()
             logging.info(
-                "[materializer] frame coin start %d/%d exchange=%s coin=%s",
+                "[materializer] frame coin prepare start %d/%d exchange=%s coin=%s",
                 coin_idx + 1,
                 len(coins),
                 exchange,
                 coin,
             )
-            aligned = np.array(aligned_values_by_coin[coin], dtype=np.float64, copy=True)
+            aligned = np.asarray(aligned_values_by_coin[coin], dtype=np.float64)
             if aligned.shape != (n_steps, 4):
                 raise ValueError(
                     f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
@@ -439,12 +465,23 @@ def materialize_frames(
                 start_ts=int(ts_arr[0]) if n_steps else 0,
                 interval_ms=60_000 if n_steps < 2 else int(ts_arr[1] - ts_arr[0]),
             )
-            synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
+            has_internal_gaps = (
+                source_valid_count > 0
+                and source_valid_count
+                < source_last_valid_index - source_first_valid_index + 1
+            )
+            if has_internal_gaps:
+                # Preserve the caller-owned aligned frame while applying the same
+                # synthetic-gap policy to the materialized payload.
+                aligned = np.array(aligned, dtype=np.float64, copy=True)
+                synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
+            else:
+                synthetic_gap_fill_count = 0
             if synthetic_gaps_tradable:
                 tradable_first_index, tradable_last_index, _tradable_count = (
                     _longest_contiguous_valid_span(valid_mask)
                 )
-            hlcvs[:, coin_idx, :] = aligned
+            prepared_frames.append(aligned)
             meta = enriched_mss.setdefault(coin, {})
             meta["first_valid_index"] = tradable_first_index
             meta["last_valid_index"] = tradable_last_index
@@ -457,7 +494,7 @@ def materialize_frames(
                 if synthetic_gaps_tradable:
                     meta["synthetic_gap_fill_tradable"] = True
             logging.info(
-                "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
+                "[materializer] frame coin prepare done %d/%d exchange=%s coin=%s source_first_valid=%d "
                 "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
                 coin_idx + 1,
                 len(coins),
@@ -471,6 +508,26 @@ def materialize_frames(
             )
             raise_if_backtest_cancel_requested("frame materializer coin finalize")
 
+        write_t0 = time.monotonic()
+        logging.info(
+            "[materializer] frame write start exchange=%s rows=%d coins=%d bytes=%d",
+            exchange,
+            n_steps,
+            len(coins),
+            int(hlcvs.nbytes),
+        )
+        chunk_count = _write_time_major_frame_chunks(hlcvs, prepared_frames)
+        write_elapsed = time.monotonic() - write_t0
+        logging.info(
+            "[materializer] frame write done exchange=%s rows=%d coins=%d chunks=%d "
+            "elapsed_s=%.1f throughput_mib_s=%.1f",
+            exchange,
+            n_steps,
+            len(coins),
+            chunk_count,
+            write_elapsed,
+            float(hlcvs.nbytes) / (1024.0**2) / max(write_elapsed, 1e-9),
+        )
         raise_if_backtest_cancel_requested("frame materializer close")
         _close_memmap(hlcvs)
         _close_memmap(timestamps_mm)
