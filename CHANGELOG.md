@@ -71,7 +71,8 @@ All notable user-facing changes will be documented in this file.
   while price-step validation admits only floating representation error, so genuinely off-tick
   prices cannot hide inside a fixed fraction of the tick. Close validation rejects
   positions at or below Rust's final
-  close-trimming dust threshold before applying the exact-position exception. The complete
+  close-trimming dust threshold before applying the exact-position exception, and panic-limit
+  prices must match Rust's exact one-tick protective formula for the submitted book. The complete
   serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, including loss-gate warning policies, and graceful-stop

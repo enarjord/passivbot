@@ -693,7 +693,11 @@ def test_raw_rust_output_keeps_graceful_stop_dca_with_open_position():
 def test_raw_rust_output_rejects_ordinary_priority_for_protective_orders(
     order_type,
 ):
-    order = _raw_rust_order(qty=-1.0, order_type=order_type)
+    order = _raw_rust_order(
+        qty=-1.0,
+        price=99.99 if order_type == "close_panic_long" else 100.0,
+        order_type=order_type,
+    )
     input_mode = "panic" if order_type == "close_panic_long" else None
     out = (
         _raw_rust_output_for_long_mode([order], input_mode)
@@ -1010,6 +1014,88 @@ def test_raw_rust_output_rejects_partial_panic_close():
             {0: SYMBOL},
             _raw_rust_input(long_mode="panic", long_pos_size=1.0),
         )
+
+
+def _panic_limit_case(
+    pside: str,
+    price: float,
+    *,
+    bid: float,
+    ask: float,
+    price_step: float,
+) -> tuple[dict, dict, dict]:
+    qty = -1.0 if pside == "long" else 1.0
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        price=price,
+        order_type=f"close_panic_{pside}",
+        execution_priority="risk_critical",
+    )
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0][pside].update(
+        input_mode="panic",
+        effective_mode="panic",
+        active=True,
+    )
+    orchestrator_input = _raw_rust_input(
+        long_mode="panic" if pside == "long" else None,
+        long_pos_size=1.0,
+        short_mode="panic" if pside == "short" else "manual",
+        short_pos_size=-1.0 if pside == "short" else 0.0,
+        bid=bid,
+        ask=ask,
+        price_step=price_step,
+    )
+    return order, out, orchestrator_input
+
+
+@pytest.mark.parametrize(
+    ("pside", "price"),
+    [("long", 50.0), ("short", 200.0)],
+)
+def test_raw_rust_output_rejects_panic_limit_price_not_derived_from_book(
+    pside, price
+):
+    _order, out, orchestrator_input = _panic_limit_case(
+        pside,
+        price,
+        bid=100.0,
+        ask=100.0,
+        price_step=0.01,
+    )
+
+    with pytest.raises(FatalBotException, match="panic limit price"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            orchestrator_input,
+        )
+
+
+@pytest.mark.parametrize(
+    ("pside", "price", "bid", "ask", "price_step"),
+    [
+        ("long", 99.99, 100.003, 100.007, 0.01),
+        ("short", 0.3, 0.1000000005, 0.2, 0.1),
+    ],
+)
+def test_raw_rust_output_accepts_panic_limit_price_derived_from_book(
+    pside, price, bid, ask, price_step
+):
+    order, out, orchestrator_input = _panic_limit_case(
+        pside,
+        price,
+        bid=bid,
+        ask=ask,
+        price_step=price_step,
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        orchestrator_input,
+    ) == [order]
 
 
 @pytest.mark.parametrize(

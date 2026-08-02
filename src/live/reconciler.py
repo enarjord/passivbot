@@ -1199,6 +1199,62 @@ def _validate_rust_limit_price_exchange_constraints(
         )
 
 
+def _rust_tolerant_touch_step_count(
+    value: float, price_step: float, *, round_up: bool
+) -> int | float:
+    """Return Rust's representation-tolerant directional touch tick."""
+    step_count = value / price_step
+    if not math.isfinite(step_count):
+        return math.inf
+    nearest_step_count = round(step_count)
+    nearest_price = nearest_step_count * price_step
+    representation_tolerance = (
+        sys.float_info.epsilon * max(abs(value), abs(nearest_price)) * 4.0
+    )
+    if math.isclose(
+        value,
+        nearest_price,
+        rel_tol=0.0,
+        abs_tol=representation_tolerance,
+    ):
+        return nearest_step_count
+    return math.ceil(step_count) if round_up else math.floor(step_count)
+
+
+def _validate_rust_panic_limit_price(
+    price: float,
+    pside: str,
+    order_book: tuple[float, float],
+    exchange: tuple[float, float, float, float, float],
+    context: str,
+) -> None:
+    """Reject panic-limit prices inconsistent with Rust's submitted-book formula."""
+    _qty_step, price_step, _min_qty, _min_cost, _c_mult = exchange
+    bid, ask = order_book
+    if pside == "long":
+        expected_step_count = max(
+            _rust_tolerant_touch_step_count(ask, price_step, round_up=False) - 1,
+            1,
+        )
+    else:
+        expected_step_count = (
+            _rust_tolerant_touch_step_count(bid, price_step, round_up=True) + 1
+        )
+    expected_price = expected_step_count * price_step
+    representation_tolerance = (
+        sys.float_info.epsilon * max(abs(price), abs(expected_price)) * 4.0
+    )
+    if not math.isclose(
+        price,
+        expected_price,
+        rel_tol=0.0,
+        abs_tol=representation_tolerance,
+    ):
+        raise FatalBotException(
+            f"{context} panic limit price is inconsistent with submitted order book"
+        )
+
+
 def _rust_effective_min_qty(
     price: float, exchange: tuple[float, float, float, float, float]
 ) -> float:
@@ -1802,6 +1858,14 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"
+            )
+        if order_type.startswith("close_panic_") and execution_type == "limit":
+            _validate_rust_panic_limit_price(
+                price,
+                pside,
+                submitted_order_books[symbol_idx],
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
             )
         execution_priority = order.get("execution_priority")
         if not isinstance(execution_priority, str) or execution_priority not in {
