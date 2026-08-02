@@ -85,7 +85,10 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
     let nearest_step = nearest_step_count * exchange_params.qty_step;
     if raw_min == 0.0 {
         0.0
-    } else if nearest_step_count > 0.0 && (raw_min_steps - nearest_step_count).abs() <= 1e-8 {
+    } else if nearest_step_count > 0.0
+        && (raw_min_steps - nearest_step_count).abs() <= 1e-8
+        && nearest_step >= raw_min
+    {
         nearest_step
     } else {
         raw_min_steps.ceil() * exchange_params.qty_step
@@ -1204,6 +1207,18 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(calc_min_entry_qty(100.0, &tiny_aligned_exchange), 1e-12);
+
+        let genuinely_above_step_exchange = ExchangeParams {
+            qty_step: 0.001,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            calc_min_entry_qty(4999.999975, &genuinely_above_step_exchange),
+            0.002
+        );
     }
 
     #[test]

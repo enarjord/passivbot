@@ -1517,11 +1517,48 @@ def test_raw_rust_output_accepts_aligned_tiny_entry_quantity():
     ) == [order]
 
 
+def test_raw_rust_output_rejects_quantity_below_tiny_minimum_cost():
+    with pytest.raises(FatalBotException, match="entry minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(qty=1e-12, price=1.0)]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                bid=1.0,
+                ask=1.0,
+                qty_step=1e-12,
+                min_qty=0.0,
+                min_cost=1e-9,
+            ),
+        )
+
+
+def test_raw_rust_output_accepts_quantity_at_tiny_minimum_cost():
+    order = _raw_rust_order(qty=1e-9, price=1.0)
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(
+            bid=1.0,
+            ask=1.0,
+            qty_step=1e-12,
+            min_qty=0.0,
+            min_cost=1e-9,
+        ),
+    ) == [order]
+
+
 def test_rust_effective_min_qty_rounds_positive_sub_step_minimum_up():
     assert reconciler._rust_effective_min_qty(
         1e9,
         (1.0, 0.01, 0.0, 1.0, 1.0),
     ) == 1.0
+
+
+def test_rust_effective_min_qty_ceils_genuinely_above_step_minimum():
+    assert reconciler._rust_effective_min_qty(
+        4999.999975,
+        (0.001, 0.01, 0.0, 5.0, 1.0),
+    ) == 0.002
 
 
 def test_rust_effective_min_qty_preserves_tiny_aligned_exchange_minimum():

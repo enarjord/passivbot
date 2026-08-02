@@ -52,11 +52,13 @@ All notable user-facing changes will be documented in this file.
   side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
-  collapsing a positive sub-step minimum to zero, and recomputes minimum entry quantity after the
-  final strategy price is quantized so minimum-cost orders remain valid. It quantizes EMA Anchor
-  touch prices in the protective direction without moving float-noisy aligned touches, preserves positive bid and ask
-  ticks below ten decimal places, clamps only positive sub-tick bids instead of turning nonpositive
-  targets into entries, and keeps panic limit prices
+  collapsing a positive sub-step minimum to zero, while quantities genuinely above a step still
+  round up, and recomputes minimum entry quantity after the final strategy price is quantized so
+  minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
+  precision instead of admitting orders below tiny exchange minimums. It quantizes EMA Anchor
+  touch prices in the protective direction without moving float-noisy aligned touches, preserves
+  positive bid and ask ticks below ten decimal places, clamps only positive sub-tick bids instead of
+  turning nonpositive targets into entries, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step and valid tiny increments, without skipping a tick because of ordinary
   floating-point noise. Quantity- and price-step validation scale their tolerances to the submitted

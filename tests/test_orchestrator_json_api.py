@@ -378,6 +378,12 @@ def test_real_rust_preserves_tiny_aligned_exchange_minimum():
     assert pbr.calc_min_entry_qty_py(100.0, 1.0, 1e-12, 1e-12, 0.0) == 1e-12
 
 
+def test_real_rust_ceils_minimum_genuinely_above_quantity_step():
+    import passivbot_rust as pbr
+
+    assert pbr.calc_min_entry_qty_py(4999.999975, 1.0, 0.001, 0.0, 5.0) == 0.002
+
+
 def test_live_validator_accepts_rust_market_execution_policy():
     import passivbot_rust as pbr
 

@@ -1133,7 +1133,11 @@ def _validate_rust_entry_exchange_constraints(
         raise FatalBotException(
             f"{context} quantity is inconsistent with submitted qty_step"
         )
-    if qty_abs + qty_tolerance < min_qty or entry_cost + 1e-9 < min_cost:
+    cost_tolerance = 8.0 * max(math.ulp(entry_cost), math.ulp(min_cost))
+    if (
+        qty_abs + qty_tolerance < min_qty
+        or entry_cost + cost_tolerance < min_cost
+    ):
         raise FatalBotException(
             f"{context} quantity is below submitted effective entry minimum"
         )
@@ -1170,7 +1174,11 @@ def _rust_effective_min_qty(
     nearest_step = nearest_step_count * qty_step
     if raw_min == 0.0:
         return 0.0
-    if nearest_step_count > 0 and abs(raw_min_steps - nearest_step_count) <= 1e-8:
+    if (
+        nearest_step_count > 0
+        and abs(raw_min_steps - nearest_step_count) <= 1e-8
+        and nearest_step >= raw_min
+    ):
         return nearest_step
     return math.ceil(raw_min_steps) * qty_step
 
