@@ -59,8 +59,9 @@ All notable user-facing changes will be documented in this file.
   minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
   precision instead of admitting orders below tiny exchange minimums. It quantizes EMA Anchor
   touch prices in the protective direction without moving float-noisy aligned touches, preserves
-  positive bid and ask ticks below ten decimal places, clamps only positive sub-tick bids instead of
-  turning nonpositive targets into entries, and keeps panic limit prices
+  positive bid and ask ticks below ten decimal places, keeps the minimum positive tick for short
+  closes while suppressing long entries when no positive tick exists at or below the selected bid,
+  restricts aligned-tick snapping to floating representation error, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step and valid tiny increments, without skipping a tick because of ordinary
   floating-point noise. Quantity- and price-step validation scale their tolerances to the submitted

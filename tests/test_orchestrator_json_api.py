@@ -1355,6 +1355,96 @@ def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
     assert short_close["price"] == 0.01
 
 
+def test_sub_tick_ema_anchor_bid_suppresses_long_entry_above_the_book():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=0.005,
+        ask=0.015,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 0.005],
+                [20.0, 0.005],
+                [math.sqrt(10.0 * 20.0), 0.005],
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
+        ),
+    )
+    inp = make_input(balance=1_000.0, strategy_kind="ema_anchor", symbols=[symbol])
+    inp["global"]["market_orders_allowed"] = True
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    assert not any(
+        order["order_type"] == "entry_ema_anchor_long" for order in out["orders"]
+    )
+
+
+def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=0.09,
+        ask=0.1000000005,
+        long_mode="manual",
+        short_bp={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 0.1000000005],
+                [20.0, 0.1000000005],
+                [math.sqrt(10.0 * 20.0), 0.1000000005],
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
+        ),
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        strategy_kind="ema_anchor",
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    short_entry = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "entry_ema_anchor_short"
+    )
+    assert short_entry["price"] == 0.2
+
+
 def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     import passivbot_rust as pbr
 
@@ -1935,6 +2025,42 @@ def test_tick_aligned_panic_limit_does_not_skip_tick_from_float_noise(
     assert len(out["orders"]) == 1
     assert out["orders"][0]["order_type"] == f"close_panic_{pside}"
     assert out["orders"][0]["price"] == expected_price
+
+
+def test_genuinely_above_tick_short_panic_keeps_protective_offset():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=0.1000000005,
+        ask=0.2,
+        long_mode="manual",
+        short_mode="panic",
+        short_pos_size=-1.0,
+        short_pos_price=0.1,
+        short_bp={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["order_type"] == "close_panic_short"
+    assert out["orders"][0]["price"] == 0.3
 
 
 def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation():

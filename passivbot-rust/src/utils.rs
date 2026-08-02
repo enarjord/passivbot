@@ -30,6 +30,11 @@ fn round_to_step_decimal_places(value: f64, step: f64) -> f64 {
     }
 }
 
+fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
+    let scale = value.abs().max(aligned_value.abs());
+    (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
+}
+
 /// Directionally quantize without truncating valid increments below ten decimals.
 pub fn round_dn_preserve_step(value: f64, step: f64) -> f64 {
     round_to_step_decimal_places((value / step).floor() * step, step)
@@ -44,8 +49,9 @@ pub fn round_up_preserve_step(value: f64, step: f64) -> f64 {
 pub fn tolerant_round_dn_preserve_step(value: f64, step: f64) -> f64 {
     let step_count = value / step;
     let nearest_count = step_count.round();
-    if (step_count - nearest_count).abs() <= 1e-8 {
-        round_to_step_decimal_places(nearest_count * step, step)
+    let nearest_value = nearest_count * step;
+    if differs_only_by_float_representation(value, nearest_value) {
+        round_to_step_decimal_places(nearest_value, step)
     } else {
         round_dn_preserve_step(value, step)
     }
@@ -55,8 +61,9 @@ pub fn tolerant_round_dn_preserve_step(value: f64, step: f64) -> f64 {
 pub fn tolerant_round_up_preserve_step(value: f64, step: f64) -> f64 {
     let step_count = value / step;
     let nearest_count = step_count.round();
-    if (step_count - nearest_count).abs() <= 1e-8 {
-        round_to_step_decimal_places(nearest_count * step, step)
+    let nearest_value = nearest_count * step;
+    if differs_only_by_float_representation(value, nearest_value) {
+        round_to_step_decimal_places(nearest_value, step)
     } else {
         round_up_preserve_step(value, step)
     }
@@ -445,7 +452,15 @@ pub fn calc_ema_price_ask(
 
 #[cfg(test)]
 mod tests {
-    use super::ema_last_f64;
+    use super::{ema_last_f64, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step};
+
+    #[test]
+    fn tolerant_directional_rounding_does_not_snap_genuine_tick_offsets() {
+        assert_eq!(tolerant_round_up_preserve_step(0.1000000005, 0.1), 0.2);
+        assert_eq!(tolerant_round_dn_preserve_step(0.0999999995, 0.1), 0.0);
+        assert_eq!(tolerant_round_up_preserve_step(0.1 + 0.2, 0.1), 0.3);
+        assert_eq!(tolerant_round_dn_preserve_step(0.29, 0.01), 0.29);
+    }
 
     #[test]
     fn ema_last_matches_sequential_reference_and_skips_nonfinite_values() {

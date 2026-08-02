@@ -238,7 +238,10 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.position.size,
                     effective_wallet_exposure_limit,
                 );
-                if bid_price.is_finite() && bid_price > 0.0 && effective_wallet_exposure_limit > 0.0
+                if bid_price.is_finite()
+                    && bid_price > 0.0
+                    && bid_price <= request.state.order_book.bid
+                    && effective_wallet_exposure_limit > 0.0
                 {
                     let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
                     let qty = calc_entry_qty(
@@ -497,6 +500,73 @@ mod tests {
         };
 
         assert_eq!(calc_bid_price(&state, &exchange, &params, -1.0, 1.0), 0.01);
+    }
+
+    #[test]
+    fn sub_tick_bid_does_not_generate_long_entry_above_the_book() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.005,
+                ask: 0.015,
+            },
+            ema_bands: EMABands {
+                lower: 0.005,
+                upper: 0.015,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let bot_params = BotParams::default();
+        let strategy_params = StrategyParams::EmaAnchor(EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        });
+        let position = Position::default();
+        let trailing = TrailingPriceBundle::default();
+        let request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: false,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(1.0),
+            position: &position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+
+        let generated = generate_orders(StrategySide::Long, request);
+
+        assert!(generated.entries.is_empty());
+    }
+
+    #[test]
+    fn genuinely_above_tick_ask_rounds_up() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.09,
+                ask: 0.1000000005,
+            },
+            ema_bands: EMABands {
+                lower: 0.09,
+                upper: 0.1000000005,
+            },
+            ..base_state()
+        };
+        let exchange = ExchangeParams {
+            price_step: 0.1,
+            ..base_exchange()
+        };
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_ask_price(&state, &exchange, &params, 0.0, 1.0), 0.2);
     }
 
     #[test]

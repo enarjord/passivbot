@@ -4451,6 +4451,23 @@ mod core {
 
             assert_eq!(long.price, 0.2);
             assert_eq!(short.price, 0.3);
+
+            let genuinely_above_tick_book = OrderBook {
+                bid: 0.1000000005,
+                ask: 0.2,
+            };
+            let genuinely_above_tick_short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 0.1,
+                },
+                &genuinely_above_tick_book,
+                &exchange,
+            )
+            .unwrap();
+            assert_eq!(genuinely_above_tick_short.price, 0.3);
         }
 
         #[test]
