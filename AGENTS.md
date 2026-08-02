@@ -74,6 +74,12 @@ or order-construction work; it is not mandatory for unrelated documentation or t
 Before broad edits, inspect the branch, recent commits, worktree status, and relevant callers/tests.
 For reviews against a moving branch, refresh the target ref and record the reviewed SHAs.
 
+When disagreeing with pull-request review feedback, do not silently discard the finding. If the
+task authorizes review-comment writes, post an evidence-backed rationale in the original thread,
+leave the thread unresolved, and explicitly request reviewer reconsideration. Otherwise draft the
+reply and ask for authorization. Follow `docs/ai/runbooks/pr_review.md` for adjudication and
+resolution criteria.
+
 Publish completed, validated work as a regular ready-for-review pull request by default. Before
 publication, make the branch clean, make the PR body accurate, and run the required author checks.
 Do not use a draft PR as a holding area for work the agent knows is incomplete; continue locally or
