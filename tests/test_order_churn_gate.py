@@ -1831,6 +1831,35 @@ def test_raw_rust_output_accepts_close_during_submitted_entry_cooldown():
     ) == [order]
 
 
+def test_raw_rust_output_rejects_multiple_entries_after_positive_cooldown_expires():
+    orders = [
+        _raw_rust_order(
+            qty=0.1,
+            price=100.0,
+            order_type="entry_initial_normal_long",
+        ),
+        _raw_rust_order(
+            qty=0.1,
+            price=99.0,
+            order_type="entry_grid_normal_long",
+        ),
+    ]
+    with pytest.raises(FatalBotException, match="positive submitted cooldown"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(
+                timestamp_ms=120_000,
+                long_last_increase_fill_timestamp_ms=60_000,
+                long_entry_cooldown_minutes=1.0,
+                long_pos_size=0.0,
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
 def test_raw_rust_output_rejects_off_step_tiny_entry_quantity():
     with pytest.raises(FatalBotException, match="qty_step"):
         reconciler.validate_rust_orchestrator_output(

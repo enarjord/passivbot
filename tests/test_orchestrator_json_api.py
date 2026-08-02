@@ -2656,6 +2656,60 @@ def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
     assert unstuck[0]["qty"] == pytest.approx(-1.5)
 
 
+@pytest.mark.parametrize(
+    ("pside", "position_size", "position_price", "bid", "ask", "expected_price"),
+    [
+        ("long", 10.0, 130.0, 120.0, 120.003, 120.01),
+        ("short", -10.0, 110.0, 120.003, 120.01, 120.0),
+    ],
+)
+def test_auto_unstuck_quantizes_off_tick_book_price_before_live_validation(
+    pside,
+    position_size,
+    position_price,
+    bid,
+    ask,
+    expected_price,
+):
+    import passivbot_rust as pbr
+
+    side_bp = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.5,
+        "wallet_exposure_limit": 1.5,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_gating_enabled": False,
+        "unstuck_loss_allowance_pct": 0.005,
+    }
+    symbol_kwargs = {
+        f"{pside}_pos_size": position_size,
+        f"{pside}_pos_price": position_price,
+        f"{pside}_bp": side_bp,
+    }
+    global_kwargs = {f"{pside}_overrides": side_bp}
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(**global_kwargs),
+        symbols=[make_symbol(0, bid=bid, ask=ask, **symbol_kwargs)],
+    )
+    inp["global"][f"unstuck_allowance_{pside}"] = 1e9
+
+    out = compute(pbr, inp)
+    unstuck = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == f"close_unstuck_{pside}"
+    )
+
+    assert unstuck["price"] == pytest.approx(expected_price)
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT"},
+        inp,
+    )
+
+
 def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     import passivbot_rust as pbr
 

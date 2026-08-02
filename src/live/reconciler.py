@@ -1417,6 +1417,7 @@ def _submitted_rust_input_context(
     dict[tuple[int, str], frozenset[str]],
     dict[int, tuple[float, float, float, float, float]],
     dict[tuple[int, str], bool],
+    dict[tuple[int, str], bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1430,6 +1431,7 @@ def _submitted_rust_input_context(
     symbol_side_eligibility: dict[tuple[int, str], bool] = {}
     exchange_constraints: dict[int, tuple[float, float, float, float, float]] = {}
     entry_cooldown_active: dict[tuple[int, str], bool] = {}
+    entry_cooldown_positive: dict[tuple[int, str], bool] = {}
     timestamp_ms = _validated_rust_u64(
         orchestrator_input.get("timestamp_ms", 0), "input has invalid timestamp_ms"
     )
@@ -1609,6 +1611,7 @@ def _submitted_rust_input_context(
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes"
                 )
+            entry_cooldown_positive[(symbol_idx, pside)] = cooldown_minutes > 0.0
             last_fill_timestamp_ms = side_input.get(
                 "last_increase_fill_timestamp_ms"
             )
@@ -1690,6 +1693,7 @@ def _submitted_rust_input_context(
         reducer_family_enablement,
         exchange_constraints,
         entry_cooldown_active,
+        entry_cooldown_positive,
     )
 
 
@@ -1768,10 +1772,12 @@ def validate_rust_orchestrator_output(
         submitted_reducer_family_enablement,
         submitted_exchange_constraints,
         submitted_entry_cooldown_active,
+        submitted_entry_cooldown_positive,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
+    entry_order_count: dict[tuple[int, str], int] = {}
     held_initial_normal_orders: list[tuple[int, str]] = []
     protective_reducer_order_indices: dict[tuple[int, str], int] = {}
     flat_entry_pairs: set[tuple[int, str]] = set()
@@ -1852,6 +1858,15 @@ def validate_rust_orchestrator_output(
             f"Rust orchestrator order {order_idx}",
         )
         if order_type.startswith("entry_"):
+            entry_order_count[pair] = entry_order_count.get(pair, 0) + 1
+            if (
+                submitted_entry_cooldown_positive[pair]
+                and entry_order_count[pair] > 1
+            ):
+                raise FatalBotException(
+                    f"Rust orchestrator {pside} entry batch for symbol_idx {symbol_idx} "
+                    "contains more than one entry with positive submitted cooldown"
+                )
             if (
                 order_type == f"entry_initial_normal_{pside}"
                 and submitted_position_sizes[pair] != 0.0

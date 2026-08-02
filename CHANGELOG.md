@@ -66,7 +66,9 @@ All notable user-facing changes will be documented in this file.
   minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
   precision instead of admitting orders below tiny exchange minimum costs, and quantity-minimum
   tolerance is likewise restricted to floating representation error for both entries and partial
-  closes. It quantizes EMA Anchor
+  closes. Positive entry cooldowns retain Rust's single-entry staging rule after the time window
+  expires, and auto-unstuck limit prices are directionally quantized from off-tick book quotes
+  before sizing and loss projection. It quantizes EMA Anchor
   touch prices in the protective direction without moving float-noisy aligned touches, preserves
   positive bid and ask ticks below ten decimal places, keeps the minimum positive tick for short
   closes while suppressing long entries when no positive tick exists at or below the selected bid,
