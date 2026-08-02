@@ -1609,6 +1609,57 @@ def test_raw_rust_output_rejects_initial_normal_entry_for_held_side(
         )
 
 
+@pytest.mark.parametrize(
+    ("strategy_kind", "pside"),
+    [
+        ("trailing_martingale", "long"),
+        ("trailing_martingale", "short"),
+        ("trailing_grid_v7", "long"),
+        ("trailing_grid_v7", "short"),
+    ],
+)
+def test_raw_rust_output_rejects_multiple_initial_partial_entries(
+    strategy_kind, pside
+):
+    qty = 0.4 if pside == "long" else -0.4
+    orders = [
+        _raw_rust_order(
+            pside=pside,
+            qty=qty,
+            price=price,
+            order_type=f"entry_initial_partial_{pside}",
+        )
+        for price in (99.0, 100.0)
+    ]
+    out = _raw_rust_output(orders)
+    if pside == "short":
+        out["diagnostics"]["symbol_states"][0]["long"].update(
+            input_mode="manual",
+            effective_mode="manual",
+            active=False,
+            allow_initial=False,
+        )
+        out["diagnostics"]["symbol_states"][0]["short"].update(
+            input_mode=None,
+            effective_mode="normal",
+            active=True,
+            allow_initial=True,
+        )
+
+    with pytest.raises(FatalBotException, match="initial-partial.*more than one"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=0.2 if pside == "long" else 0.0,
+                short_pos_size=-0.2 if pside == "short" else 0.0,
+                strategy_kind=strategy_kind,
+            ),
+        )
+
+
 @pytest.mark.parametrize("pside", ["long", "short"])
 def test_raw_rust_output_rejects_multiple_ema_anchor_entries_for_held_side(pside):
     qty = 1.0 if pside == "long" else -1.0
@@ -1698,6 +1749,95 @@ def test_raw_rust_output_allows_forced_normal_position_cap_expansion():
         out,
         {0: SYMBOL, 1: "ETH/USDT:USDT"},
         orchestrator_input,
+    ) == []
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_inactive_forced_normal_flat_side_with_capacity(
+    pside,
+):
+    orchestrator_input = _raw_rust_input(
+        long_mode="normal" if pside == "long" else "manual",
+        short_mode="normal" if pside == "short" else "manual",
+        long_pos_size=0.0,
+        short_pos_size=0.0,
+    )
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        input_mode="normal" if pside == "long" else "manual",
+        effective_mode="normal" if pside == "long" else "manual",
+        active=False,
+        allow_initial=False,
+    )
+    out["diagnostics"]["symbol_states"][0]["short"].update(
+        input_mode="normal" if pside == "short" else "manual",
+        effective_mode="normal" if pside == "short" else "manual",
+        active=False,
+        allow_initial=False,
+    )
+
+    with pytest.raises(FatalBotException, match="forced-normal capacity"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            orchestrator_input,
+        )
+
+
+def test_raw_rust_output_allows_inactive_forced_normal_when_capacity_is_full():
+    orchestrator_input = _raw_rust_input(long_pos_size=1.0, long_mode=None)
+    second_symbol = deepcopy(orchestrator_input["symbols"][0])
+    second_symbol["symbol_idx"] = 1
+    second_symbol["long"]["mode"] = "normal"
+    second_symbol["long"]["position"] = {"size": 0.0, "price": 100.0}
+    orchestrator_input["symbols"].append(second_symbol)
+    out = _raw_rust_output(
+        symbol_states=[
+            _raw_rust_output()["diagnostics"]["symbol_states"][0],
+            {
+                "symbol_idx": 1,
+                "long": {
+                    "input_mode": "normal",
+                    "effective_mode": "normal",
+                    "active": False,
+                    "allow_initial": False,
+                },
+                "short": {
+                    "input_mode": "manual",
+                    "effective_mode": "manual",
+                    "active": False,
+                    "allow_initial": False,
+                },
+            },
+        ]
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL, 1: "ETH/USDT:USDT"},
+        orchestrator_input,
+    ) == []
+
+
+def test_raw_rust_output_allows_one_way_blocked_forced_normal_flat_side():
+    out = _raw_rust_output()
+    out["diagnostics"]["symbol_states"][0]["long"].update(
+        input_mode="normal",
+        effective_mode="normal",
+        active=False,
+        allow_initial=False,
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(
+            long_mode="normal",
+            short_mode="manual",
+            long_pos_size=0.0,
+            short_pos_size=-1.0,
+            hedge_mode=False,
+        ),
     ) == []
 
 

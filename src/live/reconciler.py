@@ -1777,6 +1777,7 @@ def validate_rust_orchestrator_output(
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
+    initial_partial_entry_count: dict[tuple[int, str], int] = {}
     entry_order_count: dict[tuple[int, str], int] = {}
     panic_close_pairs: set[tuple[int, str]] = set()
     held_initial_normal_orders: list[tuple[int, str]] = []
@@ -1873,6 +1874,15 @@ def validate_rust_orchestrator_output(
                 and submitted_position_sizes[pair] != 0.0
             ):
                 held_initial_normal_orders.append((order_idx, pside))
+            if order_type == f"entry_initial_partial_{pside}":
+                initial_partial_entry_count[pair] = (
+                    initial_partial_entry_count.get(pair, 0) + 1
+                )
+                if initial_partial_entry_count[pair] > 1:
+                    raise FatalBotException(
+                        f"Rust orchestrator {pside} initial-partial entry batch for "
+                        f"symbol_idx {symbol_idx} contains more than one entry"
+                    )
             if order_type == f"entry_ema_anchor_{pside}":
                 ema_anchor_entry_count[pair] = ema_anchor_entry_count.get(pair, 0) + 1
                 if ema_anchor_entry_count[pair] > 1:
@@ -2185,6 +2195,9 @@ def validate_rust_orchestrator_output(
             "Rust orchestrator symbol_states do not cover the requested symbols"
         )
 
+    submitted_symbol_idx_order = [
+        int(row["symbol_idx"]) for row in orchestrator_input["symbols"]
+    ]
     for pside in ("long", "short"):
         eligible_count = sum(
             submitted_symbol_side_eligibility[(symbol_idx, pside)]
@@ -2204,6 +2217,35 @@ def validate_rust_orchestrator_output(
             and submitted_input_modes[(symbol_idx, pside)] != "manual"
             for symbol_idx in expected_symbol_idxs
         )
+        workspace_active_idxs = {
+            symbol_idx
+            for symbol_idx in expected_symbol_idxs
+            if submitted_position_sizes[(symbol_idx, pside)] != 0.0
+            and submitted_input_modes[(symbol_idx, pside)] != "manual"
+        }
+        if submitted_global_side_enablement[pside]:
+            opposite_pside = "short" if pside == "long" else "long"
+            for symbol_idx in submitted_symbol_idx_order:
+                if len(workspace_active_idxs) >= effective_n_positions:
+                    break
+                pair = (symbol_idx, pside)
+                if (
+                    symbol_idx in workspace_active_idxs
+                    or not submitted_symbol_side_eligibility[pair]
+                    or submitted_input_modes[pair] != "normal"
+                    or (
+                        not submitted_hedge_mode
+                        and submitted_position_sizes[(symbol_idx, opposite_pside)]
+                        != 0.0
+                    )
+                ):
+                    continue
+                workspace_active_idxs.add(symbol_idx)
+                if not submitted_symbol_states[pair]["active"]:
+                    raise FatalBotException(
+                        f"Rust orchestrator symbol_state for symbol_idx {symbol_idx} "
+                        f"has {pside} inactive inconsistent with submitted forced-normal capacity"
+                    )
         max_flat_active = max(effective_n_positions - held_workspace_count, 0)
         flat_active_count = sum(
             submitted_position_sizes[(symbol_idx, pside)] == 0.0

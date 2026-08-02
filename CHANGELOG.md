@@ -32,9 +32,10 @@ All notable user-facing changes will be documented in this file.
   by the submitted mode or flat-side eligibility, rejects all orders for globally disabled sides,
   requires each flat-side entry batch to contain the strategy's valid initial family while
   preserving Rust's recursive initial-plus-grid ladders,
-  rejects initial-normal entries for held trailing-strategy sides and multiple EMA Anchor entries
-  for one symbol-side,
-  enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
+  rejects initial-normal entries for held trailing-strategy sides, multiple initial-partial entries,
+  and multiple EMA Anchor entries for one symbol-side,
+  enforces flat active-set caps, forced-normal active-slot reservations, and one-way initial-side
+  exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
   protective reducers, rejects protective reducers whose direct submitted unstuck, WEL, or TWEL
   enablement is disabled, requires panic reducers to close the full submitted position, rejects
