@@ -1480,6 +1480,29 @@ def _submitted_rust_input_context(
     )
 
 
+def _submitted_auto_unstuck_allowed(global_input: dict) -> bool:
+    explicit = global_input.get("auto_unstuck_allowed")
+    if explicit is not None:
+        if not isinstance(explicit, bool):
+            raise FatalBotException(
+                "Rust orchestrator global input has invalid auto_unstuck_allowed"
+            )
+        return explicit
+    allowances = []
+    for pside in ("long", "short"):
+        field = f"unstuck_allowance_{pside}"
+        allowance = _validated_rust_finite_number(
+            global_input.get(field, 0.0),
+            f"global input has invalid {field}",
+        )
+        if allowance < 0.0:
+            raise FatalBotException(
+                f"Rust orchestrator global input has invalid {field}"
+            )
+        allowances.append(allowance)
+    return any(allowance > 0.0 for allowance in allowances)
+
+
 def rust_order_conversion_identity(
     symbol_key: object, qty: object, price: object, order_type: object
 ) -> tuple[object, float, float, str]:
@@ -1511,6 +1534,7 @@ def validate_rust_orchestrator_output(
             "Rust orchestrator validation missing corresponding global input"
         )
     global_input = orchestrator_input["global"]
+    submitted_auto_unstuck_allowed = _submitted_auto_unstuck_allowed(global_input)
     if not isinstance(out, dict):
         raise FatalBotException("Rust orchestrator output must be a mapping")
     if "orders" not in out:
@@ -1680,6 +1704,13 @@ def validate_rust_orchestrator_output(
             execution_priority,
             f"Rust orchestrator order {order_idx}",
         )
+        if (
+            order_type.rsplit("_", 1)[0] == "close_unstuck"
+            and not submitted_auto_unstuck_allowed
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} contradicts submitted auto-unstuck gate"
+            )
         conversion_identity = rust_order_conversion_identity(
             idx_to_symbol[symbol_idx], qty, price, order_type
         )
@@ -1762,7 +1793,11 @@ def validate_rust_orchestrator_output(
             _validated_rust_finite_number(
                 details.get(field), f"{context} has invalid {field}"
             )
-        if details.get("policy") not in {"reduce_overweight", "reduce_portfolio"}:
+        policy = details.get("policy")
+        if not isinstance(policy, str) or policy not in {
+            "reduce_overweight",
+            "reduce_portfolio",
+        }:
             raise FatalBotException(
                 f"Rust orchestrator {context} has invalid policy"
             )

@@ -93,6 +93,7 @@ def _raw_rust_input(
     global_input = {
         "hedge_mode": True,
         "strategy_kind": "trailing_martingale",
+        "auto_unstuck_allowed": True,
         "market_orders_allowed": False,
         "market_order_near_touch_threshold": 0.001,
         "panic_close_market": False,
@@ -661,6 +662,21 @@ def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
         {0: SYMBOL},
         _raw_rust_input(),
     ) == [order]
+
+
+def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type="close_unstuck_long",
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(FatalBotException, match="submitted auto-unstuck gate"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(auto_unstuck_allowed=False),
+        )
 
 
 @pytest.mark.parametrize(
@@ -2070,6 +2086,29 @@ def test_raw_rust_output_rejects_malformed_warnings(warnings, error):
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
             out, {0: SYMBOL}, _raw_rust_input()
+        )
+
+
+@pytest.mark.parametrize("policy", [[], {}], ids=["array", "object"])
+def test_raw_rust_output_rejects_unhashable_warning_policy_as_fatal(policy):
+    out = _raw_rust_output()
+    out["diagnostics"]["warnings"] = [
+        {
+            "twel_repair_blocked_by_loss_gate": {
+                "pside": "long",
+                "current_twe": 0.6,
+                "twel_repair_target": 0.5,
+                "policy": policy,
+                "candidate_count": 1,
+                "blocked_order_count": 1,
+                "projected_twe_after_allowed_reductions": 0.6,
+            }
+        }
+    ]
+
+    with pytest.raises(FatalBotException, match="invalid policy"):
+        reconciler.parse_and_validate_rust_orchestrator_output(
+            json.dumps(out), {0: SYMBOL}, _raw_rust_input()
         )
 
 

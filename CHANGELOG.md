@@ -63,9 +63,11 @@ All notable user-facing changes will be documented in this file.
   close-trimming dust threshold before applying the exact-position exception. The complete
   serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
-  malformed as JSON arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position
-  rule. Forager selections must agree with the corresponding flat active symbol states while
-  allowing Rust's later one-way tie-break to disable initial entry on one selected side.
+  malformed as JSON arrays or objects, including loss-gate warning policies, and graceful-stop
+  mode uses Rust's exact nonzero-position rule. Unstuck reducers must agree with Rust's submitted
+  global auto-unstuck gate. Forager selections must agree with the corresponding flat active
+  symbol states while allowing Rust's later one-way tie-break to disable initial entry on one
+  selected side.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
