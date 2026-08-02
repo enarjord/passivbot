@@ -102,12 +102,16 @@ def _raw_rust_input(
             "long": {
                 "n_positions": long_n_positions,
                 "total_wallet_exposure_limit": long_total_wallet_exposure_limit,
+                "risk_twel_enforcer_enabled": True,
+                "risk_twel_enforcer_threshold": 1.0,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
             "short": {
                 "n_positions": short_n_positions,
                 "total_wallet_exposure_limit": short_total_wallet_exposure_limit,
+                "risk_twel_enforcer_enabled": True,
+                "risk_twel_enforcer_threshold": 1.0,
                 "hsl_enabled": False,
                 "hsl_panic_close_order_type": "market",
             },
@@ -138,14 +142,26 @@ def _raw_rust_input(
                     "mode": long_mode,
                     "position": {"size": long_pos_size, "price": 100.0},
                     "bot_params": {
-                        "wallet_exposure_limit": long_wallet_exposure_limit
+                        "wallet_exposure_limit": long_wallet_exposure_limit,
+                        "risk_wel_enforcer_enabled": True,
+                        "risk_wel_enforcer_threshold": 1.0,
+                        "unstuck_enabled": True,
+                        "unstuck_close_pct": 0.1,
+                        "unstuck_loss_allowance_pct": 0.1,
+                        "unstuck_threshold": 0.1,
                     },
                 },
                 "short": {
                     "mode": short_mode,
                     "position": {"size": short_pos_size, "price": 100.0},
                     "bot_params": {
-                        "wallet_exposure_limit": short_wallet_exposure_limit
+                        "wallet_exposure_limit": short_wallet_exposure_limit,
+                        "risk_wel_enforcer_enabled": True,
+                        "risk_wel_enforcer_threshold": 1.0,
+                        "unstuck_enabled": True,
+                        "unstuck_close_pct": 0.1,
+                        "unstuck_loss_allowance_pct": 0.1,
+                        "unstuck_threshold": 0.1,
                     },
                 },
             }
@@ -676,6 +692,63 @@ def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
             _raw_rust_output([order]),
             {0: SYMBOL},
             _raw_rust_input(auto_unstuck_allowed=False),
+        )
+
+
+@pytest.mark.parametrize(
+    ("order_type", "scope", "field", "value"),
+    [
+        ("close_unstuck_long", "symbol", "unstuck_enabled", False),
+        ("close_unstuck_long", "symbol", "unstuck_loss_allowance_pct", 0.0),
+        ("close_unstuck_long", "symbol", "unstuck_close_pct", 0.0),
+        ("close_unstuck_long", "symbol", "unstuck_threshold", 0.0),
+        (
+            "close_auto_reduce_wel_long",
+            "symbol",
+            "risk_wel_enforcer_enabled",
+            False,
+        ),
+        (
+            "close_auto_reduce_wel_long",
+            "symbol",
+            "risk_wel_enforcer_threshold",
+            0.0,
+        ),
+        (
+            "close_auto_reduce_twel_long",
+            "global",
+            "risk_twel_enforcer_enabled",
+            False,
+        ),
+        (
+            "close_auto_reduce_twel_long",
+            "global",
+            "risk_twel_enforcer_threshold",
+            0.0,
+        ),
+    ],
+)
+def test_raw_rust_output_rejects_disabled_protective_reducer_family(
+    order_type, scope, field, value
+):
+    orchestrator_input = _raw_rust_input()
+    params = (
+        orchestrator_input["symbols"][0]["long"]["bot_params"]
+        if scope == "symbol"
+        else orchestrator_input["global"]["global_bot_params"]["long"]
+    )
+    params[field] = value
+    order = _raw_rust_order(
+        qty=-1.0,
+        order_type=order_type,
+        execution_priority="risk_critical",
+    )
+
+    with pytest.raises(FatalBotException, match="submitted reducer enablement"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            orchestrator_input,
         )
 
 

@@ -1257,6 +1257,46 @@ def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     assert prices["close_ema_anchor_long"] == 102.01
 
 
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
+    strategy_kind,
+):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=0.0)
+    )
+    symbol = make_symbol(
+        0,
+        bid=3.003,
+        ask=3.01,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 5.0}
+    )
+    inp = make_input(
+        balance=100.0,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
+
+    assert entry["price"] == 3.0
+    assert abs(entry["qty"]) == pytest.approx(1.667)
+    assert abs(entry["qty"]) * entry["price"] >= symbol["exchange"]["min_cost"]
+
+
 def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
     import passivbot_rust as pbr
 

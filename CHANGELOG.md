@@ -33,7 +33,8 @@ All notable user-facing changes will be documented in this file.
   preserving Rust's recursive initial-plus-grid ladders,
   enforces flat active-set caps and one-way initial-side exclusion, requires flat entries to agree
   with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
-  protective reducers, rejects entry quantities below the submitted effective exchange minimum or
+  protective reducers, rejects protective reducers whose direct submitted unstuck, WEL, or TWEL
+  enablement is disabled, rejects entry quantities below the submitted effective exchange minimum or
   outside the submitted quantity step, rejects close quantities below their effective minimum or
   outside the submitted quantity step except for an exact remaining position, rejects limit
   prices outside the submitted price step, requires diagnostic effective modes to match Rust's
@@ -51,8 +52,9 @@ All notable user-facing changes will be documented in this file.
   side is flat, manual, panic, globally disabled, or uses a different strategy family. Rust now
   also quantizes effective minimum quantities to the submitted quantity step without overshooting
   already aligned floating-point values, including valid quantities below ten decimal places, or
-  collapsing a positive sub-step minimum to zero, quantizes EMA Anchor touch prices in the
-  protective direction without moving float-noisy aligned touches, preserves positive bid and ask
+  collapsing a positive sub-step minimum to zero, and recomputes minimum entry quantity after the
+  final strategy price is quantized so minimum-cost orders remain valid. It quantizes EMA Anchor
+  touch prices in the protective direction without moving float-noisy aligned touches, preserves positive bid and ask
   ticks below ten decimal places, clamps only positive sub-tick bids instead of turning nonpositive
   targets into entries, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or

@@ -1044,6 +1044,13 @@ pub fn calc_entries_long(
             RoundingMode::Nearest,
             "calc_entries_long::price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange_params));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange_params.qty_step,
@@ -1111,6 +1118,13 @@ pub fn calc_entries_short(
             RoundingMode::Nearest,
             "calc_entries_short::price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange_params));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange_params.qty_step,
@@ -1147,6 +1161,7 @@ pub fn calc_entries_short(
 mod tests {
     use super::*;
     use crate::strategies::EmaGateMode;
+    use crate::types::OrderBook;
 
     fn make_runtime_context() -> RuntimeOrderContext {
         RuntimeOrderContext {
@@ -1189,6 +1204,50 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(calc_min_entry_qty(100.0, &tiny_aligned_exchange), 1e-12);
+    }
+
+    #[test]
+    fn final_entry_price_quantization_recomputes_minimum_cost_quantity() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 3.003,
+                ask: 3.01,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let entry = TrailingMartingaleEntryParams {
+            ema_gate_mode: EmaGateMode::Disabled,
+            initial_qty_pct: 0.0,
+            ..Default::default()
+        };
+
+        let orders = calc_entries_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(orders[0].price, 3.0);
+        assert!((orders[0].qty - 1.667).abs() < 1e-12);
+        assert!(orders[0].qty * orders[0].price >= exchange.min_cost);
     }
 
     #[test]

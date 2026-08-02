@@ -1289,6 +1289,7 @@ def _submitted_rust_input_context(
     dict[str, int],
     bool,
     str,
+    dict[tuple[int, str], frozenset[str]],
     dict[int, tuple[float, float, float, float, float]],
 ]:
     symbols = orchestrator_input.get("symbols")
@@ -1312,6 +1313,7 @@ def _submitted_rust_input_context(
         raise FatalBotException("Rust orchestrator global input has invalid bot params")
     global_side_enablement: dict[str, bool] = {}
     global_side_n_positions: dict[str, int] = {}
+    global_twel_enforcer_enablement: dict[str, bool] = {}
     for pside in ("long", "short"):
         side_params = global_bot_params.get(pside)
         if not isinstance(side_params, dict):
@@ -1335,6 +1337,18 @@ def _submitted_rust_input_context(
             total_wallet_exposure_limit > 0.0 and n_positions > 0
         )
         global_side_n_positions[pside] = n_positions
+        twel_enabled = side_params.get("risk_twel_enforcer_enabled", True)
+        if not isinstance(twel_enabled, bool):
+            raise FatalBotException(
+                f"Rust orchestrator global input has invalid {pside} TWEL enforcer flag"
+            )
+        twel_threshold = _validated_rust_finite_number(
+            side_params.get("risk_twel_enforcer_threshold", 0.0),
+            f"global input has invalid {pside} TWEL enforcer threshold",
+        )
+        global_twel_enforcer_enablement[pside] = (
+            twel_enabled and twel_threshold > 0.0
+        )
     hedge_mode = global_input.get("hedge_mode", True)
     if not isinstance(hedge_mode, bool):
         raise FatalBotException("Rust orchestrator global input has invalid hedge_mode")
@@ -1346,6 +1360,7 @@ def _submitted_rust_input_context(
     }:
         raise FatalBotException("Rust orchestrator global input has invalid strategy_kind")
     seen_symbol_idxs: set[int] = set()
+    reducer_family_enablement: dict[tuple[int, str], frozenset[str]] = {}
     for input_idx, row in enumerate(symbols):
         if not isinstance(row, dict):
             raise FatalBotException(
@@ -1463,6 +1478,41 @@ def _submitted_rust_input_context(
             symbol_side_eligibility[(symbol_idx, pside)] = (
                 tradable and wallet_exposure_limit != 0.0
             )
+            wel_enabled = bot_params.get("risk_wel_enforcer_enabled", True)
+            if not isinstance(wel_enabled, bool):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} WEL enforcer flag"
+                )
+            wel_threshold = _validated_rust_finite_number(
+                bot_params.get("risk_wel_enforcer_threshold", 0.0),
+                f"symbol input {input_idx} has invalid {pside} WEL enforcer threshold",
+            )
+            unstuck_enabled = bot_params.get("unstuck_enabled", True)
+            if not isinstance(unstuck_enabled, bool):
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} unstuck flag"
+                )
+            unstuck_values = {
+                field: _validated_rust_finite_number(
+                    bot_params.get(field, 0.0),
+                    f"symbol input {input_idx} has invalid {pside} {field}",
+                )
+                for field in (
+                    "unstuck_loss_allowance_pct",
+                    "unstuck_close_pct",
+                    "unstuck_threshold",
+                )
+            }
+            enabled_families: set[str] = set()
+            if wel_enabled and wel_threshold > 0.0:
+                enabled_families.add("close_auto_reduce_wel")
+            if global_twel_enforcer_enablement[pside]:
+                enabled_families.add("close_auto_reduce_twel")
+            if unstuck_enabled and all(value > 0.0 for value in unstuck_values.values()):
+                enabled_families.add("close_unstuck")
+            reducer_family_enablement[(symbol_idx, pside)] = frozenset(
+                enabled_families
+            )
     if seen_symbol_idxs != expected_symbol_idxs:
         raise FatalBotException(
             "Rust orchestrator symbol inputs do not cover the requested symbols"
@@ -1476,6 +1526,7 @@ def _submitted_rust_input_context(
         global_side_n_positions,
         hedge_mode,
         strategy_kind,
+        reducer_family_enablement,
         exchange_constraints,
     )
 
@@ -1552,6 +1603,7 @@ def validate_rust_orchestrator_output(
         submitted_global_side_n_positions,
         submitted_hedge_mode,
         submitted_strategy_kind,
+        submitted_reducer_family_enablement,
         submitted_exchange_constraints,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
@@ -1704,8 +1756,17 @@ def validate_rust_orchestrator_output(
             execution_priority,
             f"Rust orchestrator order {order_idx}",
         )
+        protective_family = order_type.rsplit("_", 1)[0]
+        if protective_family in {
+            "close_auto_reduce_twel",
+            "close_auto_reduce_wel",
+            "close_unstuck",
+        } and protective_family not in submitted_reducer_family_enablement[pair]:
+            raise FatalBotException(
+                f"Rust orchestrator order {order_idx} contradicts submitted reducer enablement"
+            )
         if (
-            order_type.rsplit("_", 1)[0] == "close_unstuck"
+            protective_family == "close_unstuck"
             and not submitted_auto_unstuck_allowed
         ):
             raise FatalBotException(

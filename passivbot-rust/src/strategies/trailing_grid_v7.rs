@@ -1909,6 +1909,13 @@ fn calc_entries_long(
             RoundingMode::Nearest,
             "trailing_grid_v7::entries_long_price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange.qty_step,
@@ -1969,6 +1976,13 @@ fn calc_entries_short(
             RoundingMode::Nearest,
             "trailing_grid_v7::entries_short_price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange.qty_step,
@@ -2516,6 +2530,48 @@ mod tests {
             OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceWelShort => "auto_reduce",
             other => panic!("unexpected order type for v7 diagnostic parity: {other:?}"),
         }
+    }
+
+    #[test]
+    fn final_entry_price_quantization_recomputes_minimum_cost_quantity() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 3.003,
+                ask: 3.01,
+            },
+            ema_bands: EMABands {
+                lower: 3.003,
+                upper: 3.01,
+            },
+            ..Default::default()
+        };
+        let entry = TrailingGridV7EntryParams {
+            initial_qty_pct: 0.0,
+            ..Default::default()
+        };
+
+        let orders = calc_entries_long(
+            &exchange,
+            &state,
+            &bot(),
+            &runtime(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(orders[0].price, 3.0);
+        assert!((orders[0].qty - 1.667).abs() < 1e-12);
+        assert!(orders[0].qty * orders[0].price >= exchange.min_cost);
     }
 
     #[test]
