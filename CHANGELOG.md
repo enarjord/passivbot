@@ -72,7 +72,9 @@ All notable user-facing changes will be documented in this file.
   rule after the time window expires, and positive trailing-martingale entry retracement retains
   Rust's single-entry staging rule even when cooldown is zero, canonical martingale entry and close
   families must match their submitted grid-versus-retracement branches, and EMA Anchor emits at
-  most one entry and one close per symbol-side. Held positions in enabled panic mode require Rust's
+  most one entry and one close per symbol-side. Canonical trailing-martingale retracement emits at
+  most one trailing close per symbol-side, and close minimum-cost validation uses the emitted limit
+  price or executable market touch. Held positions in enabled panic mode require Rust's
   full-position panic close. Loss-gate diagnostic prices must match the submitted exchange step.
   WEL and auto-unstuck limit prices are
   directionally quantized from off-tick book quotes before minimum sizing and

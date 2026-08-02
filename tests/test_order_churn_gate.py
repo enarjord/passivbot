@@ -2191,6 +2191,37 @@ def test_raw_rust_output_rejects_multiple_entries_with_positive_retracement(psid
         )
 
 
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_multiple_trailing_martingale_closes(pside):
+    qty = -0.4 if pside == "long" else 0.4
+    orders = [
+        _raw_rust_order(
+            pside=pside,
+            qty=qty,
+            price=price,
+            order_type=f"close_trailing_{pside}",
+        )
+        for price in (100.0, 101.0)
+    ]
+
+    with pytest.raises(FatalBotException, match="more than one trailing close"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                long_close_retracement_base_pct=0.01 if pside == "long" else 0.0,
+                short_close_retracement_base_pct=0.01 if pside == "short" else 0.0,
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("pside", "retracement_base_pct", "order_family"),
     [
@@ -2293,6 +2324,54 @@ def test_raw_rust_output_rejects_wel_close_below_minimum_at_limit_price():
                 price_step=0.01,
                 min_qty=0.0,
                 min_cost=5.0,
+            ),
+        )
+
+
+def test_raw_rust_output_rejects_ordinary_close_below_minimum_at_limit_price():
+    order = _raw_rust_order(
+        qty=-1.0,
+        price=1.0,
+        order_type="close_grid_long",
+    )
+
+    with pytest.raises(FatalBotException, match="close minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=10.0,
+                bid=100.0,
+                ask=101.0,
+                qty_step=1.0,
+                price_step=1.0,
+                min_qty=0.0,
+                min_cost=100.0,
+            ),
+        )
+
+
+def test_raw_rust_output_market_close_minimum_uses_executable_touch():
+    order = _raw_rust_order(
+        qty=-1.0,
+        price=100.0,
+        order_type="close_grid_long",
+        execution_type="market",
+    )
+
+    with pytest.raises(FatalBotException, match="close minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_pos_size=10.0,
+                bid=100.0,
+                ask=101.0,
+                qty_step=0.01,
+                price_step=0.01,
+                min_qty=0.0,
+                min_cost=100.5,
+                market_orders_allowed=True,
             ),
         )
 

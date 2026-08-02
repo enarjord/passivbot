@@ -1342,7 +1342,7 @@ def _validate_rust_close_exchange_constraints(
         raise FatalBotException(
             f"{context} cannot close a submitted position at or below Rust's dust threshold"
         )
-    market_price = order_book[1] if qty < 0.0 else order_book[0]
+    market_price = order_book[1] if qty > 0.0 else order_book[0]
     effective_min_qty = _rust_effective_min_qty(
         market_price if minimum_price is None else minimum_price, exchange
     )
@@ -1840,6 +1840,7 @@ def validate_rust_orchestrator_output(
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
     ema_anchor_close_count: dict[tuple[int, str], int] = {}
+    trailing_martingale_close_count: dict[tuple[int, str], int] = {}
     initial_partial_entry_count: dict[tuple[int, str], int] = {}
     entry_order_count: dict[tuple[int, str], int] = {}
     panic_close_pairs: set[tuple[int, str]] = set()
@@ -1980,6 +1981,18 @@ def validate_rust_orchestrator_output(
                         f"Rust orchestrator {pside} EMA Anchor close batch for symbol_idx "
                         f"{symbol_idx} contains more than one close"
                     )
+            if (
+                submitted_strategy_kind == "trailing_martingale"
+                and order_type == f"close_trailing_{pside}"
+            ):
+                trailing_martingale_close_count[pair] = (
+                    trailing_martingale_close_count.get(pair, 0) + 1
+                )
+                if trailing_martingale_close_count[pair] > 1:
+                    raise FatalBotException(
+                        f"Rust orchestrator {pside} trailing-martingale close batch for "
+                        f"symbol_idx {symbol_idx} contains more than one trailing close"
+                    )
             if order_type.startswith("close_panic_"):
                 panic_close_pairs.add(pair)
             if order_type.startswith("close_panic_") and abs(qty) != abs(
@@ -1988,18 +2001,6 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator order {order_idx} panic quantity does not equal submitted position"
                 )
-            _validate_rust_close_exchange_constraints(
-                qty,
-                submitted_position_sizes[pair],
-                submitted_order_books[symbol_idx],
-                submitted_exchange_constraints[symbol_idx],
-                f"Rust orchestrator order {order_idx}",
-                minimum_price=(
-                    price
-                    if order_type.startswith("close_auto_reduce_wel_")
-                    else None
-                ),
-            )
             aggregate_close_qty[pair] = aggregate_close_qty.get(pair, 0.0) + abs(qty)
             aggregate_tolerance = _rust_representation_tolerance(
                 aggregate_close_qty[pair], submitted_position_sizes[pair]
@@ -2039,16 +2040,14 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"
             )
-        if (
-            order_type.startswith("close_auto_reduce_wel_")
-            and execution_type == "market"
-        ):
+        if order_type.startswith("close_"):
             _validate_rust_close_exchange_constraints(
                 qty,
                 submitted_position_sizes[pair],
                 submitted_order_books[symbol_idx],
                 submitted_exchange_constraints[symbol_idx],
                 f"Rust orchestrator order {order_idx}",
+                minimum_price=price if execution_type == "limit" else None,
             )
         if order_type.startswith("entry_"):
             bid, ask = submitted_order_books[symbol_idx]
