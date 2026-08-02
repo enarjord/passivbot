@@ -67,9 +67,12 @@ All notable user-facing changes will be documented in this file.
   minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
   precision instead of admitting orders below tiny exchange minimum costs, and quantity-minimum
   tolerance is likewise restricted to floating representation error for both entries and partial
-  closes. Positive entry cooldowns retain Rust's single-entry staging rule after the time window
-  expires, held positions in enabled panic mode require Rust's full-position panic close, and
-  auto-unstuck limit prices are directionally quantized from off-tick book quotes before sizing and
+  closes. Market-entry minimum cost is validated against the submitted executable touch rather
+  than the producer's reference price. Positive entry cooldowns retain Rust's single-entry staging
+  rule after the time window expires, and positive trailing-martingale entry retracement retains
+  Rust's single-entry staging rule even when cooldown is zero. Held positions in enabled panic mode
+  require Rust's full-position panic close. WEL and auto-unstuck limit prices are directionally
+  quantized from off-tick book quotes before sizing and
   loss projection. It quantizes EMA Anchor
   touch prices in the protective direction without moving float-noisy aligned touches, preserves
   positive bid and ask ticks below ten decimal places, keeps the minimum positive tick for short

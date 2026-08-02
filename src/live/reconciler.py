@@ -1169,7 +1169,7 @@ def _validate_rust_flat_entry_batch(
 
 def _validate_rust_entry_exchange_constraints(
     qty: float,
-    price: float,
+    cost_price: float,
     exchange: tuple[float, float, float, float, float],
     context: str,
 ) -> None:
@@ -1177,7 +1177,7 @@ def _validate_rust_entry_exchange_constraints(
     qty_step, _price_step, min_qty, min_cost, c_mult = exchange
     qty_abs = abs(qty)
     qty_steps = qty_abs / qty_step
-    entry_cost = qty_abs * price * c_mult
+    entry_cost = qty_abs * cost_price * c_mult
     if not math.isfinite(qty_steps) or not math.isfinite(entry_cost):
         raise FatalBotException(f"{context} has invalid exchange-constrained quantity")
     rounded_qty = round(qty_steps) * qty_step
@@ -1418,6 +1418,7 @@ def _submitted_rust_input_context(
     dict[int, tuple[float, float, float, float, float]],
     dict[tuple[int, str], bool],
     dict[tuple[int, str], bool],
+    dict[tuple[int, str], bool],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1432,6 +1433,7 @@ def _submitted_rust_input_context(
     exchange_constraints: dict[int, tuple[float, float, float, float, float]] = {}
     entry_cooldown_active: dict[tuple[int, str], bool] = {}
     entry_cooldown_positive: dict[tuple[int, str], bool] = {}
+    entry_sequential_staging: dict[tuple[int, str], bool] = {}
     timestamp_ms = _validated_rust_u64(
         orchestrator_input.get("timestamp_ms", 0), "input has invalid timestamp_ms"
     )
@@ -1612,6 +1614,20 @@ def _submitted_rust_input_context(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes"
                 )
             entry_cooldown_positive[(symbol_idx, pside)] = cooldown_minutes > 0.0
+            entry_sequential_staging[(symbol_idx, pside)] = False
+            strategy_params = side_input.get("strategy_params")
+            if strategy_kind == "trailing_martingale" and isinstance(
+                strategy_params, dict
+            ):
+                entry_params = strategy_params.get("entry")
+                if isinstance(entry_params, dict):
+                    retracement_base_pct = _validated_rust_finite_number(
+                        entry_params.get("retracement_base_pct", 0.0),
+                        f"symbol input {input_idx} has invalid {pside} entry retracement_base_pct",
+                    )
+                    entry_sequential_staging[(symbol_idx, pside)] = (
+                        retracement_base_pct > 0.0
+                    )
             last_fill_timestamp_ms = side_input.get(
                 "last_increase_fill_timestamp_ms"
             )
@@ -1694,6 +1710,7 @@ def _submitted_rust_input_context(
         exchange_constraints,
         entry_cooldown_active,
         entry_cooldown_positive,
+        entry_sequential_staging,
     )
 
 
@@ -1773,6 +1790,7 @@ def validate_rust_orchestrator_output(
         submitted_exchange_constraints,
         submitted_entry_cooldown_active,
         submitted_entry_cooldown_positive,
+        submitted_entry_sequential_staging,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -1894,12 +1912,6 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator order {order_idx} is inconsistent with submitted entry cooldown"
                 )
-            _validate_rust_entry_exchange_constraints(
-                qty,
-                price,
-                submitted_exchange_constraints[symbol_idx],
-                f"Rust orchestrator order {order_idx}",
-            )
         if order_type.startswith("entry_") and submitted_position_sizes[pair] == 0.0:
             flat_entry_pairs.add(pair)
             flat_entry_order_types.setdefault(pair, []).append(order_type)
@@ -1966,6 +1978,17 @@ def validate_rust_orchestrator_output(
                 f"Rust orchestrator order {order_idx} has execution_type "
                 "inconsistent with its submitted input"
             )
+        if order_type.startswith("entry_"):
+            bid, ask = submitted_order_books[symbol_idx]
+            entry_cost_price = (
+                ask if qty > 0.0 else bid
+            ) if execution_type == "market" else price
+            _validate_rust_entry_exchange_constraints(
+                qty,
+                entry_cost_price,
+                submitted_exchange_constraints[symbol_idx],
+                f"Rust orchestrator order {order_idx}",
+            )
         if order_type.startswith("close_panic_") and execution_type == "limit":
             _validate_rust_panic_limit_price(
                 price,
@@ -2004,6 +2027,15 @@ def validate_rust_orchestrator_output(
                 f"{previous_idx} and {order_idx} collide under conversion identity"
             )
         seen_conversion_identities[conversion_identity] = order_idx
+        if (
+            order_type.startswith("entry_")
+            and submitted_entry_sequential_staging[pair]
+            and entry_order_count[pair] > 1
+        ):
+            raise FatalBotException(
+                f"Rust orchestrator {pside} entry batch for symbol_idx {symbol_idx} "
+                "contains more than one entry with positive submitted retracement"
+            )
 
     if held_initial_normal_orders:
         order_idx, pside = held_initial_normal_orders[0]

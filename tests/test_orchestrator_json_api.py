@@ -3226,8 +3226,8 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         long_pos_size=6.0,
         long_pos_price=100.0,
         long_bp=long_bp,
@@ -3237,6 +3237,12 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_auto_reduce_wel_long" in order_types
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    )
+    assert wel_order["price"] == 100.0
     assert "close_auto_reduce_twel_long" not in order_types
 
 
@@ -3257,8 +3263,8 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         long_pos_size=6.0,
         long_pos_price=100.0,
         long_bp=long_bp,
@@ -3296,8 +3302,8 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         short_pos_size=-6.0,
         short_pos_price=100.0,
         short_bp=short_bp,
@@ -3309,6 +3315,12 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_auto_reduce_wel_short" in order_types
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_short"
+    )
+    assert wel_order["price"] == 100.0
     assert "close_unstuck_short" not in order_types
     assert "close_grid_short" in order_types
     assert sum(

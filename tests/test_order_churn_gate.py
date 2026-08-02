@@ -93,6 +93,8 @@ def _raw_rust_input(
     short_last_increase_fill_timestamp_ms=None,
     long_entry_cooldown_minutes=0.0,
     short_entry_cooldown_minutes=0.0,
+    long_entry_retracement_base_pct=0.0,
+    short_entry_retracement_base_pct=0.0,
     **global_overrides,
 ) -> dict:
     global_input = {
@@ -150,6 +152,11 @@ def _raw_rust_input(
                         long_last_increase_fill_timestamp_ms
                     ),
                     "position": {"size": long_pos_size, "price": 100.0},
+                    "strategy_params": {
+                        "entry": {
+                            "retracement_base_pct": long_entry_retracement_base_pct
+                        }
+                    },
                     "bot_params": {
                         "wallet_exposure_limit": long_wallet_exposure_limit,
                         "risk_entry_cooldown_minutes": long_entry_cooldown_minutes,
@@ -167,6 +174,11 @@ def _raw_rust_input(
                         short_last_increase_fill_timestamp_ms
                     ),
                     "position": {"size": short_pos_size, "price": 100.0},
+                    "strategy_params": {
+                        "entry": {
+                            "retracement_base_pct": short_entry_retracement_base_pct
+                        }
+                    },
                     "bot_params": {
                         "wallet_exposure_limit": short_wallet_exposure_limit,
                         "risk_entry_cooldown_minutes": short_entry_cooldown_minutes,
@@ -1979,6 +1991,41 @@ def test_raw_rust_output_accepts_step_aligned_entry_at_effective_minimum():
     ]
 
 
+@pytest.mark.parametrize(
+    ("pside", "qty", "price", "near_touch_threshold"),
+    [
+        ("long", 0.001, 10_000.0, 0.001),
+        ("short", -0.001, 10_000.0, 100.0),
+    ],
+)
+def test_raw_rust_output_rejects_market_entry_below_minimum_at_submitted_touch(
+    pside, qty, price, near_touch_threshold
+):
+    order = _raw_rust_order(
+        pside=pside,
+        qty=qty,
+        price=price,
+        order_type=f"entry_grid_normal_{pside}",
+        execution_type="market",
+    )
+    with pytest.raises(FatalBotException, match="entry minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([order]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                bid=100.0,
+                ask=100.0,
+                min_cost=10.0,
+                market_orders_allowed=True,
+                market_order_near_touch_threshold=near_touch_threshold,
+            ),
+        )
+
+
 def test_raw_rust_output_rejects_off_step_entry_beyond_representation_noise():
     with pytest.raises(FatalBotException, match="qty_step"):
         reconciler.validate_rust_orchestrator_output(
@@ -2061,6 +2108,36 @@ def test_raw_rust_output_rejects_multiple_entries_after_positive_cooldown_expire
                 long_last_increase_fill_timestamp_ms=60_000,
                 long_entry_cooldown_minutes=1.0,
                 long_pos_size=0.0,
+                qty_step=0.1,
+                min_qty=0.1,
+                min_cost=0.0,
+            ),
+        )
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_raw_rust_output_rejects_multiple_entries_with_positive_retracement(pside):
+    qty = 0.1 if pside == "long" else -0.1
+    orders = [
+        _raw_rust_order(
+            pside=pside,
+            qty=qty,
+            price=price,
+            order_type=f"entry_grid_normal_{pside}",
+        )
+        for price in (99.0, 100.0)
+    ]
+    with pytest.raises(FatalBotException, match="positive submitted retracement"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output(orders),
+            {0: SYMBOL},
+            _raw_rust_input(
+                long_mode=None if pside == "long" else "manual",
+                short_mode=None if pside == "short" else "manual",
+                long_pos_size=1.0 if pside == "long" else 0.0,
+                short_pos_size=-1.0 if pside == "short" else 0.0,
+                long_entry_retracement_base_pct=0.01 if pside == "long" else 0.0,
+                short_entry_retracement_base_pct=0.01 if pside == "short" else 0.0,
                 qty_step=0.1,
                 min_qty=0.1,
                 min_cost=0.0,
