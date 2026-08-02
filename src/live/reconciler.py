@@ -1150,7 +1150,7 @@ def _validate_rust_limit_price_exchange_constraints(
     if not math.isfinite(price_steps):
         raise FatalBotException(f"{context} has invalid exchange-constrained price")
     rounded_price = round(price_steps) * price_step
-    price_tolerance = max(price_step * 1e-8, 1e-12)
+    price_tolerance = price_step * 1e-8
     if not math.isclose(price, rounded_price, rel_tol=0.0, abs_tol=price_tolerance):
         raise FatalBotException(
             f"{context} price is inconsistent with submitted price_step"
@@ -2202,7 +2202,6 @@ def validate_rust_orchestrator_output(
             if (
                 submitted_position_sizes[pair] != 0.0
                 or not side_state["active"]
-                or not side_state["allow_initial"]
             ):
                 raise FatalBotException(
                     f"Rust orchestrator {context} selected_symbol_indices "

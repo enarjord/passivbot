@@ -1460,6 +1460,34 @@ def test_raw_rust_output_accepts_limit_price_aligned_to_submitted_price_step():
     ) == [order]
 
 
+def test_raw_rust_output_rejects_off_step_tiny_limit_price():
+    with pytest.raises(FatalBotException, match="price_step"):
+        reconciler.validate_rust_orchestrator_output(
+            _raw_rust_output([_raw_rust_order(price=1.5e-12)]),
+            {0: SYMBOL},
+            _raw_rust_input(
+                bid=1.5e-12,
+                ask=1.5e-12,
+                price_step=1e-12,
+                min_cost=0.0,
+            ),
+        )
+
+
+def test_raw_rust_output_accepts_aligned_tiny_limit_price():
+    order = _raw_rust_order(price=1e-12)
+    assert reconciler.validate_rust_orchestrator_output(
+        _raw_rust_output([order]),
+        {0: SYMBOL},
+        _raw_rust_input(
+            bid=1e-12,
+            ask=1e-12,
+            price_step=1e-12,
+            min_cost=0.0,
+        ),
+    ) == [order]
+
+
 @pytest.mark.parametrize(
     ("order_overrides", "input_overrides", "error"),
     [
@@ -1965,6 +1993,33 @@ def test_raw_rust_output_rejects_forager_selection_disagreeing_with_active_state
             {0: SYMBOL, 1: "ETH/USDT:USDT"},
             orchestrator_input,
         )
+
+
+def test_raw_rust_output_accepts_forager_selection_losing_one_way_tie_break():
+    order = _raw_rust_order(order_type="entry_initial_normal_long")
+    out = _raw_rust_output([order])
+    out["diagnostics"]["symbol_states"][0]["short"].update(
+        input_mode=None,
+        effective_mode="normal",
+        active=True,
+        allow_initial=False,
+    )
+    out["diagnostics"]["forager_selections"] = [
+        _raw_forager_selection(pside="long"),
+        _raw_forager_selection(pside="short"),
+    ]
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(
+            hedge_mode=False,
+            long_pos_size=0.0,
+            short_pos_size=0.0,
+            short_mode=None,
+            min_cost=0.0,
+        ),
+    ) == [order]
 
 
 @pytest.mark.parametrize(

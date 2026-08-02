@@ -592,6 +592,43 @@ def test_one_way_flat_tie_break_requires_ema_even_when_entry_gate_disabled():
         compute(pbr, inp)
 
 
+def test_live_validator_accepts_one_way_forager_selection_before_tie_break():
+    import passivbot_rust as pbr
+
+    side_enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=side_enabled),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                short_bp=side_enabled,
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = False
+
+    out = compute(pbr, inp)
+    states = out["diagnostics"]["symbol_states"][0]
+    selections = {
+        item["pside"]: item["selected_symbol_indices"]
+        for item in out["diagnostics"]["forager_selections"]
+    }
+
+    assert selections == {"long": [0], "short": [0]}
+    assert states["long"]["active"] is True
+    assert states["long"]["allow_initial"] is True
+    assert states["short"]["active"] is True
+    assert states["short"]["allow_initial"] is False
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT"},
+        inp,
+    )
+
+
 @pytest.mark.parametrize(
     "field",
     ["qty_step", "price_step", "min_qty", "min_cost", "c_mult", "maker_fee", "taker_fee"],

@@ -57,15 +57,15 @@ All notable user-facing changes will be documented in this file.
   targets into entries, and keeps panic limit prices
   valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
   near one price step and valid tiny increments, without skipping a tick because of ordinary
-  floating-point noise. Quantity-step validation scales its tolerance to the submitted increment,
-  so malformed quantities cannot hide inside a fixed absolute tolerance. Close validation rejects
+  floating-point noise. Quantity- and price-step validation scale their tolerances to the submitted
+  increments, so malformed values cannot hide inside a fixed absolute tolerance. Close validation rejects
   positions at or below Rust's final
   close-trimming dust threshold before applying the exact-position exception. The complete
   serialized diagnostic envelope now requires and
   validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
   malformed as JSON arrays or objects, and graceful-stop mode uses Rust's exact nonzero-position
-  rule. Forager selections must agree with the corresponding flat active/allow-initial symbol
-  states before those states can authorize live entries.
+  rule. Forager selections must agree with the corresponding flat active symbol states while
+  allowing Rust's later one-way tie-break to disable initial entry on one selected side.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent
