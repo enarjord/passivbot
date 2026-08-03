@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Prevent symbols retained for existing positions or open-order reconciliation from becoming live
+  forager candidates after removal from a side's approved set. Disapproved symbols now remain in
+  graceful-stop or manual mode according to `live.auto_gs` while their existing state is managed.
 - Reduce peak memory during combined candle preparation by releasing exchange-candidate frames
   after volume normalization and consuming selected frames as dense arrays are materialized.
 - Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the

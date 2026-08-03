@@ -6,12 +6,12 @@ from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonC
 from passivbot import Passivbot
 
 
-def _make_mode_override_bot():
-    ignored_symbol = "DOGE/USDT:USDT"
+def _make_mode_override_bot(auto_gs=True):
+    disapproved_symbol = "DOGE/USDT:USDT"
     approved_symbol = "BTC/USDT:USDT"
     bot = Passivbot.__new__(Passivbot)
     bot.positions = {
-        ignored_symbol: {
+        disapproved_symbol: {
             "long": {"size": 0.0, "price": 0.0},
             "short": {"size": 0.0, "price": 0.0},
         }
@@ -22,9 +22,9 @@ def _make_mode_override_bot():
         "long": {approved_symbol},
         "short": set(),
     }
-    bot.ignored_coins = {"long": {ignored_symbol}, "short": set()}
+    bot.ignored_coins = {"long": {disapproved_symbol}, "short": set()}
     bot.markets_dict = {
-        ignored_symbol: {"active": True},
+        disapproved_symbol: {"active": True},
         approved_symbol: {"active": True},
     }
     bot.ineligible_symbols = {}
@@ -32,44 +32,93 @@ def _make_mode_override_bot():
     bot._equity_hard_stop_enabled = lambda pside: False
     bot.config_get = lambda path, symbol=None: ""
     bot.is_old_enough = lambda pside, symbol: True
-    return bot, ignored_symbol, approved_symbol
+    bot.PB_mode_stop = {
+        "long": "graceful_stop" if auto_gs else "manual",
+        "short": "graceful_stop" if auto_gs else "manual",
+    }
+    return bot, disapproved_symbol, approved_symbol
 
 
-def test_ignored_coin_retained_flat_position_gets_graceful_stop_override():
-    bot, ignored_symbol, approved_symbol = _make_mode_override_bot()
+def test_disapproved_coin_retained_flat_position_gets_graceful_stop_override():
+    bot, disapproved_symbol, approved_symbol = _make_mode_override_bot()
 
     universe = bot._build_live_symbol_universe()
-    assert ignored_symbol in universe
-    assert ignored_symbol not in bot.approved_coins_minus_ignored_coins["long"]
+    assert disapproved_symbol in universe
+    assert disapproved_symbol not in bot.approved_coins_minus_ignored_coins["long"]
 
     overrides = bot._build_orchestrator_mode_overrides(universe)
 
-    assert overrides["long"][ignored_symbol] == "graceful_stop"
-    assert overrides["short"][ignored_symbol] is None
+    assert overrides["long"][disapproved_symbol] == "graceful_stop"
+    assert overrides["short"][disapproved_symbol] == "graceful_stop"
     assert overrides["long"][approved_symbol] is None
+    assert overrides["short"][approved_symbol] == "graceful_stop"
 
 
-@pytest.mark.parametrize("forced_mode", ["manual", "panic", "tp_only"])
-def test_ignored_coin_preserves_stricter_forced_modes(forced_mode):
-    bot, ignored_symbol, _approved_symbol = _make_mode_override_bot()
+@pytest.mark.parametrize(
+    "forced_mode", ["manual", "panic", "graceful_stop", "tp_only"]
+)
+def test_ignored_coin_preserves_entry_blocking_forced_modes(forced_mode):
+    bot, disapproved_symbol, _approved_symbol = _make_mode_override_bot()
     bot.config_get = (
         lambda path, symbol=None: forced_mode
-        if path == ["live", "forced_mode_long"] and symbol == ignored_symbol
+        if path == ["live", "forced_mode_long"] and symbol == disapproved_symbol
         else ""
     )
 
-    assert bot._orchestrator_mode_override("long", ignored_symbol) == forced_mode
+    assert bot._orchestrator_mode_override("long", disapproved_symbol) == forced_mode
 
 
 def test_ignored_coin_overrides_forced_normal_to_graceful_stop():
-    bot, ignored_symbol, _approved_symbol = _make_mode_override_bot()
+    bot, disapproved_symbol, _approved_symbol = _make_mode_override_bot()
     bot.config_get = (
         lambda path, symbol=None: "normal"
-        if path == ["live", "forced_mode_long"] and symbol == ignored_symbol
+        if path == ["live", "forced_mode_long"] and symbol == disapproved_symbol
         else ""
     )
 
-    assert bot._orchestrator_mode_override("long", ignored_symbol) == "graceful_stop"
+    assert (
+        bot._orchestrator_mode_override("long", disapproved_symbol)
+        == "graceful_stop"
+    )
+
+
+def test_disapproved_coin_uses_manual_mode_when_auto_gs_is_disabled():
+    bot, disapproved_symbol, _approved_symbol = _make_mode_override_bot(auto_gs=False)
+
+    assert bot._orchestrator_mode_override("long", disapproved_symbol) == "manual"
+
+
+def test_retained_order_and_position_do_not_expand_forager_eligibility():
+    bot, _disapproved_symbol, approved_symbol = _make_mode_override_bot()
+    retained_order_symbol = "ETH/USDT:USDT"
+    held_symbol = "UNI/USDT:USDT"
+    bot.positions = {
+        held_symbol: {
+            "long": {"size": 1.0, "price": 1.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {retained_order_symbol: [{"symbol": retained_order_symbol}]}
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {approved_symbol},
+        "short": {approved_symbol},
+    }
+    bot.ignored_coins = {"long": set(), "short": set()}
+    bot.markets_dict.update(
+        {
+            retained_order_symbol: {"active": True},
+            held_symbol: {"active": True},
+        }
+    )
+
+    universe = bot._build_live_symbol_universe()
+    overrides = bot._build_orchestrator_mode_overrides(universe)
+
+    assert universe == [approved_symbol, retained_order_symbol, held_symbol]
+    for pside in ("long", "short"):
+        assert overrides[pside][approved_symbol] is None
+        assert overrides[pside][retained_order_symbol] == "graceful_stop"
+        assert overrides[pside][held_symbol] == "graceful_stop"
 
 
 def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(caplog):
