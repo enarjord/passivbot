@@ -315,37 +315,62 @@ pub fn strategy_requires_sequential_entry_staging(params: &StrategyParams) -> bo
 }
 
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
+    strategy_needs_log_range_1m_for_request(params, true, true)
+}
+
+pub fn strategy_needs_log_range_1m_for_request(
+    params: &StrategyParams,
+    wants_entries: bool,
+    wants_closes: bool,
+) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {
-            (params.entry.threshold_volatility_1m_weight != 0.0
-                || params.entry.retracement_volatility_1m_weight != 0.0
-                || params.close.threshold_volatility_1m_weight != 0.0
-                || params.close.retracement_volatility_1m_weight != 0.0)
+            ((wants_entries
+                && (params.entry.threshold_volatility_1m_weight != 0.0
+                    || params.entry.retracement_volatility_1m_weight != 0.0))
+                || (wants_closes
+                    && (params.close.threshold_volatility_1m_weight != 0.0
+                        || params.close.retracement_volatility_1m_weight != 0.0)))
                 && params.volatility_ema_span_1m > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
-            params.offset_volatility_1m_weight != 0.0 && params.offset_volatility_ema_span_1m > 0.0
+            (wants_entries || wants_closes)
+                && params.offset_volatility_1m_weight != 0.0
+                && params.offset_volatility_ema_span_1m > 0.0
         }
         StrategyParams::TrailingGridV7(_) => false,
     }
 }
 
 pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
+    strategy_needs_log_range_1h_for_request(params, true, true)
+}
+
+pub fn strategy_needs_log_range_1h_for_request(
+    params: &StrategyParams,
+    wants_entries: bool,
+    wants_closes: bool,
+) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {
-            (params.entry.threshold_volatility_1h_weight != 0.0
-                || params.entry.retracement_volatility_1h_weight != 0.0
-                || params.close.threshold_volatility_1h_weight != 0.0
-                || params.close.retracement_volatility_1h_weight != 0.0)
+            ((wants_entries
+                && (params.entry.threshold_volatility_1h_weight != 0.0
+                    || params.entry.retracement_volatility_1h_weight != 0.0))
+                || (wants_closes
+                    && (params.close.threshold_volatility_1h_weight != 0.0
+                        || params.close.retracement_volatility_1h_weight != 0.0)))
                 && params.volatility_ema_span_1h > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
-            params.offset_volatility_1h_weight != 0.0 && params.offset_volatility_ema_span_1h > 0.0
+            (wants_entries || wants_closes)
+                && params.offset_volatility_1h_weight != 0.0
+                && params.offset_volatility_ema_span_1h > 0.0
         }
         StrategyParams::TrailingGridV7(params) => {
-            (params.entry.grid_spacing_volatility_weight != 0.0
-                || params.entry.trailing_threshold_volatility_weight != 0.0
-                || params.entry.trailing_retracement_volatility_weight != 0.0)
+            wants_entries
+                && (params.entry.grid_spacing_volatility_weight != 0.0
+                    || params.entry.trailing_threshold_volatility_weight != 0.0
+                    || params.entry.trailing_retracement_volatility_weight != 0.0)
                 && params.entry.volatility_ema_span_hours > 0.0
         }
     }
@@ -377,7 +402,11 @@ pub fn generate_orders(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_strategy_params, StrategyKind, StrategySide};
+    use super::{
+        parse_strategy_params, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1h_for_request, StrategyKind, StrategyParams, StrategySide,
+        TrailingGridV7Params,
+    };
     use crate::types::BotParams;
     use serde_json::json;
 
@@ -422,5 +451,21 @@ mod tests {
         .expect_err("missing close.trailing_threshold_pct must fail");
 
         assert!(err.contains("trailing_threshold_pct"), "{err}");
+    }
+
+    #[test]
+    fn trailing_grid_v7_entry_volatility_is_not_required_for_close_only_request() {
+        let mut params = TrailingGridV7Params::default();
+        params.entry.grid_spacing_volatility_weight = 1.0;
+        params.entry.volatility_ema_span_hours = 4.0;
+        let params = StrategyParams::TrailingGridV7(params);
+
+        assert!(strategy_needs_log_range_1h(&params));
+        assert!(strategy_needs_log_range_1h_for_request(
+            &params, true, false
+        ));
+        assert!(!strategy_needs_log_range_1h_for_request(
+            &params, false, true
+        ));
     }
 }
