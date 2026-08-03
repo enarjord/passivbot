@@ -154,18 +154,21 @@ def build_hlcvs_manifest(
     if candidate_report is not None:
         files["candidate_report"] = _json_file_entry("candidate_report.json", candidate_report)
 
+    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    source_selection = meta.get("source_selection", {}) if isinstance(meta, dict) else {}
     sources = {}
     for coin in coins:
-        meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        coin_meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        selection = source_selection.get(coin, {}) if isinstance(source_selection, dict) else {}
         sources[coin] = {
-            "ohlcv_exchange": meta.get("ohlcv_source") or meta.get("exchange"),
-            "market_settings_exchange": meta.get("exchange"),
-            "symbol": meta.get("symbol"),
-            "first_valid_index": meta.get("first_valid_index"),
-            "last_valid_index": meta.get("last_valid_index"),
+            "ohlcv_exchange": coin_meta.get("ohlcv_source") or coin_meta.get("exchange"),
+            "market_settings_exchange": coin_meta.get("exchange"),
+            "symbol": coin_meta.get("symbol"),
+            "first_valid_index": coin_meta.get("first_valid_index"),
+            "last_valid_index": coin_meta.get("last_valid_index"),
+            "selection_reason": selection.get("selection_reason"),
         }
 
-    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     build_side_membership = _side_membership(config, coins)
     manifest = {
         "schema_version": HLCVS_MANIFEST_SCHEMA_VERSION,
@@ -183,6 +186,12 @@ def build_hlcvs_manifest(
                 config, "backtest.gap_tolerance_ohlcvs_minutes"
             ),
             "ohlcv_source_dir": get_optional_config_value(config, "backtest.ohlcv_source_dir"),
+            "volume_normalization": bool(
+                get_optional_config_value(config, "backtest.volume_normalization", True)
+            ),
+            "hlcv_preparation_algorithm_version": meta.get(
+                "preparation_algorithm_version"
+            ),
         },
         "effective": {
             "coins": list(coins),
@@ -195,6 +204,10 @@ def build_hlcvs_manifest(
         },
         "files": files,
         "sources": sources,
+        "preparation": {
+            "source_selection": source_selection,
+            "volume_normalization": meta.get("volume_normalization", {}),
+        },
         "btc_benchmark": {
             "exchange": meta.get("btc_source_exchange"),
             "symbol": "BTC/USDT:USDT",

@@ -20,6 +20,13 @@ def test_build_backtest_dataset_metadata_prefers_cache_coin_order_and_absolute_p
                 "materialization_schema_version": 1,
                 "files": {"hlcvs": {"sha256": "abc"}},
                 "effective": {"side_membership": {"long": ["BTC"], "short": ["ETH"]}},
+                "preparation": {
+                    "volume_normalization": {
+                        "enabled": True,
+                        "reference_exchange": "binance",
+                    },
+                    "source_selection": {"BTC": {"selected_exchange": "binance"}},
+                },
             }
         )
     )
@@ -53,6 +60,10 @@ def test_build_backtest_dataset_metadata_prefers_cache_coin_order_and_absolute_p
     assert metadata["manifest_schema_version"] == 1
     assert metadata["materialization_schema_version"] == 1
     assert metadata["content_hashes"] == {"hlcvs": "abc"}
+    assert metadata["preparation"]["volume_normalization"]["reference_exchange"] == "binance"
+    assert metadata["preparation"]["source_selection"]["BTC"]["selected_exchange"] == (
+        "binance"
+    )
     assert metadata["side_membership"] == {"long": ["BTC"], "short": ["ETH"]}
     assert metadata["cache_build_side_membership"] == {
         "long": ["BTC"],

@@ -33,7 +33,15 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
   config. `intersection` (default) keeps the config's requested coins/date
   window clipped to the verified dataset. `dataset` adopts the dataset's
   effective coins and timestamp window for exact artifact replay.
-- **volume_normalization**: When `true` (default), normalize volume data across exchanges to make combined datasets comparable.
+- **volume_normalization**: When `true` (default), normalize volume data across exchanges using
+  the median of per-coin median daily log-volume ratios over the latest complete UTC days. Daily
+  estimates require at least 95% common minute coverage, and underdetermined exchange links fail
+  loudly instead of silently using an unstable factor. Set to `false` to preserve each selected
+  exchange's native volume. The first selected exchange in `backtest.exchanges` is the stable
+  normalization reference. Equivalent full-range candle sources are also selected by that
+  configured order; total volume is never a source-selection tie-breaker. Cache manifests and
+  backtest `dataset.json` artifacts record the chosen sources, reasons, estimation window,
+  contributors, dispersion, exclusions, reference exchange, and full-precision scale factors.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry

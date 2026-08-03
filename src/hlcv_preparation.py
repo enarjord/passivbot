@@ -106,6 +106,13 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
+HLCV_PREPARATION_ALGORITHM_VERSION = 2
+VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
+VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
+VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
+VOLUME_NORMALIZATION_MIN_CONTRIBUTORS = 3
+
+
 @dataclass(frozen=True)
 class CombinedCoinPlan:
     coin: str
@@ -202,6 +209,7 @@ class CombinedCoinResolution:
     best_df: pd.DataFrame
     market_settings: dict
     candidates: tuple[CombinedExchangeCandidate, ...]
+    selection_reason: str
 
 
 def _has_tradfi_provider_config() -> bool:
@@ -4212,7 +4220,11 @@ async def prepare_hlcvs_combined(
         for coin, exchange in market_settings_sources.items()
         if exchange
     }
-    ohlcv_exchanges = sorted(set(exchanges_to_consider) | set(normalized_forced_sources.values()))
+    # Configuration order is the stable tie-break contract for equivalent full-range
+    # candidates. Preserve it through preparation instead of converting it to a set.
+    ohlcv_exchanges = list(
+        dict.fromkeys([*exchanges_to_consider, *normalized_forced_sources.values()])
+    )
 
     requested_start_date = require_config_value(config, "backtest.start_date")
     requested_start_ts = int(date_to_ts(requested_start_date))
@@ -4255,9 +4267,17 @@ async def prepare_hlcvs_combined(
             force_refetch_gaps=force_refetch_gaps,
             ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
         )
-    extra_forced = set(normalized_forced_sources.values()) - set(exchanges_to_consider)
-    extra_mss = set(normalized_mss_sources.values()) - set(exchanges_to_consider) - extra_forced
-    for ex in extra_forced | extra_mss:
+    extra_exchanges = list(
+        dict.fromkeys(
+            [
+                *normalized_forced_sources.values(),
+                *normalized_mss_sources.values(),
+            ]
+        )
+    )
+    for ex in extra_exchanges:
+        if ex in om_dict:
+            continue
         om_dict[ex] = HLCVManager(
             ex,
             effective_start_date,
@@ -4331,6 +4351,7 @@ async def prepare_hlcvs_combined(
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
         candidate_report = mss.pop("__candidate_report__", [])
+        preparation_meta = mss.pop("__preparation_meta__", {})
         mss["__meta__"] = {
             "requested_start_ts": int(requested_start_ts),
             "requested_start_date": ts_to_date(requested_start_ts),
@@ -4340,6 +4361,7 @@ async def prepare_hlcvs_combined(
             "warmup_minutes_provided": int(warmup_provided),
             "btc_source_exchange": btc_source_exchange,
             "candidate_report": candidate_report,
+            **preparation_meta,
         }
 
         run_id = f"combined_{uuid4().hex[:12]}"
@@ -4409,6 +4431,7 @@ async def _prepare_hlcvs_combined_impl(
     chosen_data_per_coin = {}
     chosen_mss_per_coin = {}
     chosen_candidates_per_coin: dict[str, tuple[CombinedExchangeCandidate, ...]] = {}
+    source_selection: dict[str, dict] = {}
     candidate_report: list[dict] = []
 
     # Preload markets
@@ -4463,6 +4486,30 @@ async def _prepare_hlcvs_combined_impl(
         chosen_data_per_coin[result.coin] = result.best_df
         chosen_mss_per_coin[result.coin] = result.market_settings
         chosen_candidates_per_coin[result.coin] = result.candidates
+        selected_candidate = next(
+            candidate
+            for candidate in result.candidates
+            if candidate.exchange == result.best_exchange
+        )
+        source_selection[result.coin] = {
+            "selected_exchange": to_standard_exchange_name(result.best_exchange),
+            "selection_reason": result.selection_reason,
+            "forced": result.selection_reason == "forced_exchange",
+            "configured_priority": [
+                to_standard_exchange_name(exchange) for exchange in exchanges_to_consider
+            ],
+            "selected_quality": {
+                "full_range": bool(selected_candidate.full_range),
+                "coverage_count": int(selected_candidate.coverage_count),
+                "gap_count": int(selected_candidate.gap_count),
+                "first_ts": (
+                    selected_candidate.summary.first_ts if selected_candidate.summary else None
+                ),
+                "last_ts": (
+                    selected_candidate.summary.last_ts if selected_candidate.summary else None
+                ),
+            },
+        }
         progress.update()
 
     progress.log_done()
@@ -4478,24 +4525,7 @@ async def _prepare_hlcvs_combined_impl(
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
 
-    start_ts_for_volume_ratios = max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
-
     # Use OHLCV sources for volume ratio calculation, not market settings sources
-    exchanges_with_data = sorted(
-        set(
-            [
-                chosen_mss_per_coin[coin].get("ohlcv_source", chosen_mss_per_coin[coin]["exchange"])
-                for coin in valid_coins
-            ]
-        )
-    )
-    exchange_volume_ratios = compute_exchange_volume_ratios_from_candidates(
-        exchanges_with_data,
-        valid_coins,
-        chosen_candidates_per_coin,
-        int(start_ts_for_volume_ratios),
-        int(global_end_time),
-    )
     exchanges_counts = defaultdict(int)
     for coin in chosen_mss_per_coin:
         # Use OHLCV source for volume normalization, not market settings source
@@ -4503,16 +4533,76 @@ async def _prepare_hlcvs_combined_impl(
             "ohlcv_source", chosen_mss_per_coin[coin]["exchange"]
         )
         exchanges_counts[ohlcv_exchange] += 1
-    reference_exchange = sorted(exchanges_counts.items(), key=lambda x: x[1])[-1][0]
-    exchange_volume_ratios_mapped = _build_exchange_volume_ratio_map(
-        exchange_volume_ratios,
-        exchanges_counts.keys(),
-        reference_exchange,
-        valid_coins=valid_coins,
+
+    configured_exchange_priority = list(
+        dict.fromkeys(to_standard_exchange_name(exchange) for exchange in exchanges_to_consider)
+    )
+    exchanges_with_data = [
+        exchange for exchange in configured_exchange_priority if exchange in exchanges_counts
+    ]
+    exchanges_with_data.extend(
+        sorted(set(exchanges_counts).difference(exchanges_with_data))
+    )
+    reference_exchange = _select_volume_reference_exchange(
+        exchanges_counts, configured_exchange_priority
     )
 
+    normalization_enabled = bool(config.get("backtest", {}).get("volume_normalization", True))
+    day_ms = 24 * 60 * 60 * 1000
+    normalization_end_ts_exclusive = int(global_end_time // day_ms * day_ms)
+    if int(global_end_time) % day_ms:
+        normalization_end_ts_exclusive += day_ms
+    normalization_start_ts = max(
+        int(global_start_time),
+        normalization_end_ts_exclusive - VOLUME_NORMALIZATION_LOOKBACK_DAYS * day_ms,
+    )
+    normalization_start_ts = int((normalization_start_ts + day_ms - 1) // day_ms * day_ms)
+
+    if normalization_enabled and len(exchanges_counts) > 1:
+        exchange_volume_ratios, normalization_diagnostics = (
+            compute_exchange_volume_ratios_with_diagnostics(
+                exchanges_with_data,
+                valid_coins,
+                chosen_candidates_per_coin,
+                normalization_start_ts,
+                normalization_end_ts_exclusive,
+            )
+        )
+        exchange_volume_ratios_mapped = _build_exchange_volume_ratio_map(
+            exchange_volume_ratios,
+            exchanges_counts.keys(),
+            reference_exchange,
+            valid_coins=valid_coins,
+        )
+    else:
+        exchange_volume_ratios = {}
+        exchange_volume_ratios_mapped = defaultdict(dict)
+        for exchange in exchanges_counts:
+            exchange_volume_ratios_mapped[exchange][exchange] = 1.0
+            exchange_volume_ratios_mapped[exchange][reference_exchange] = 1.0
+        normalization_diagnostics = {
+            "method": "disabled" if not normalization_enabled else "single_exchange_identity",
+            "window_start_ts": normalization_start_ts,
+            "window_end_ts_exclusive": normalization_end_ts_exclusive,
+            "pair_estimates": {},
+        }
+
+    normalization_provenance = {
+        "enabled": normalization_enabled,
+        "reference_exchange": reference_exchange,
+        "reference_selection_reason": "configured_exchange_priority",
+        "exchange_counts": {
+            exchange: int(count) for exchange, count in sorted(exchanges_counts.items())
+        },
+        "scale_factors_to_reference": {
+            exchange: float(exchange_volume_ratios_mapped[exchange][reference_exchange])
+            for exchange in sorted(exchanges_counts)
+        },
+        **normalization_diagnostics,
+    }
+
     # Log volume normalization ratios (used to scale volumes when combining multi-exchange data)
-    if len(exchanges_counts) > 1:
+    if normalization_enabled and len(exchanges_counts) > 1:
         ratio_summary = ", ".join(
             f"{ex}={exchange_volume_ratios_mapped[ex][reference_exchange]:.3f}"
             for ex in sorted(exchanges_counts.keys())
@@ -4522,6 +4612,11 @@ async def _prepare_hlcvs_combined_impl(
             "volume normalization: reference=%s ratios=[%s] (coins per exchange: %s)",
             reference_exchange,
             ratio_summary,
+            ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
+        )
+    elif len(exchanges_counts) > 1:
+        logging.info(
+            "volume normalization disabled; preserving native exchange volumes (%s)",
             ", ".join(f"{ex}={cnt}" for ex, cnt in sorted(exchanges_counts.items())),
         )
 
@@ -4576,6 +4671,18 @@ async def _prepare_hlcvs_combined_impl(
             trade_start_idx = last_idx
         chosen_mss_per_coin[coin]["trade_start_index"] = trade_start_idx
 
+    for item in candidate_report:
+        coin_selection = source_selection.get(str(item.get("coin")))
+        selected = bool(
+            coin_selection
+            and to_standard_exchange_name(str(item.get("exchange")))
+            == coin_selection["selected_exchange"]
+        )
+        item["selected"] = selected
+        item["selection_reason"] = (
+            coin_selection["selection_reason"] if selected and coin_selection else None
+        )
+
     chosen_mss_per_coin["__candidate_report__"] = sorted(
         candidate_report,
         key=lambda item: (
@@ -4584,6 +4691,11 @@ async def _prepare_hlcvs_combined_impl(
             str(item.get("status", "")),
         ),
     )
+    chosen_mss_per_coin["__preparation_meta__"] = {
+        "preparation_algorithm_version": HLCV_PREPARATION_ALGORITHM_VERSION,
+        "source_selection": source_selection,
+        "volume_normalization": normalization_provenance,
+    }
     return chosen_mss_per_coin, timestamps, aligned_values_by_coin
 
 
@@ -4681,6 +4793,7 @@ def _pick_best_combined_candidate(
     coin: str,
     forced_exchange: Optional[str],
     candidates: list[CombinedExchangeCandidate],
+    exchange_priority: Optional[Sequence[str]] = None,
 ) -> CombinedExchangeCandidate:
     if not candidates:
         raise ValueError(f"No exchange data found at all for coin {coin}. Skipping.")
@@ -4693,17 +4806,54 @@ def _pick_best_combined_candidate(
         return chosen[0]
     if len(candidates) == 1:
         return candidates[0]
-    ranked = sorted(
+    ordered_priority = list(exchange_priority or [candidate.exchange for candidate in candidates])
+    priority_rank = {
+        to_standard_exchange_name(exchange): rank
+        for rank, exchange in enumerate(ordered_priority)
+    }
+
+    full_range = [candidate for candidate in candidates if candidate.full_range]
+    if full_range:
+        return min(
+            full_range,
+            key=lambda candidate: priority_rank.get(
+                to_standard_exchange_name(candidate.exchange), len(priority_rank)
+            ),
+        )
+
+    # Partial candidates still compete on data integrity. Configuration order only
+    # breaks exact coverage/gap ties; volume must never choose the candle source.
+    return min(
         candidates,
         key=lambda candidate: (
-            1 if candidate.full_range else 0,
-            candidate.coverage_count,
-            -candidate.gap_count,
-            candidate.total_volume,
+            -int(candidate.coverage_count),
+            int(candidate.gap_count),
+            priority_rank.get(to_standard_exchange_name(candidate.exchange), len(priority_rank)),
         ),
-        reverse=True,
     )
-    return ranked[0]
+
+
+def _combined_candidate_selection_reason(
+    chosen: CombinedExchangeCandidate,
+    forced_exchange: Optional[str],
+    candidates: Sequence[CombinedExchangeCandidate],
+) -> str:
+    if forced_exchange:
+        return "forced_exchange"
+    if len(candidates) == 1:
+        return "only_usable_candidate"
+    if chosen.full_range:
+        return "configured_priority_among_full_range_candidates"
+    best_coverage = max(int(candidate.coverage_count) for candidate in candidates)
+    coverage_peers = [
+        candidate for candidate in candidates if int(candidate.coverage_count) == best_coverage
+    ]
+    if len(coverage_peers) == 1:
+        return "highest_partial_coverage"
+    best_gap_count = min(int(candidate.gap_count) for candidate in coverage_peers)
+    if sum(int(candidate.gap_count) == best_gap_count for candidate in coverage_peers) == 1:
+        return "fewest_gaps_at_best_partial_coverage"
+    return "configured_priority_after_partial_quality_tie"
 
 
 def _combined_summary_from_result(
@@ -4892,7 +5042,15 @@ async def _resolve_combined_coin(
                 logging.info(f"No exchange data found at all for coin {coin}. Skipping.")
                 return None
 
-            best_candidate = _pick_best_combined_candidate(coin, plan.forced_exchange, candidates)
+            best_candidate = _pick_best_combined_candidate(
+                coin,
+                plan.forced_exchange,
+                candidates,
+                exchange_priority=plan.candidate_exchanges,
+            )
+            selection_reason = _combined_candidate_selection_reason(
+                best_candidate, plan.forced_exchange, candidates
+            )
             logging.info(
                 f"{coin} exchange preference: {[candidate.exchange for candidate in candidates]}"
             )
@@ -4910,6 +5068,7 @@ async def _resolve_combined_coin(
                 best_df=best_candidate.df,
                 market_settings=market_settings,
                 candidates=tuple(candidates),
+                selection_reason=selection_reason,
             )
         except Exception as e:
             logging.error(f"Error processing coin {coin}: {e}")
@@ -5314,13 +5473,69 @@ def compute_exchange_volume_ratios_from_candidates(
     start_ts: int,
     end_ts: int,
 ) -> Dict[Tuple[str, str], float]:
+    """Compatibility wrapper whose ``end_ts`` remains inclusive."""
+    ratios, _diagnostics = compute_exchange_volume_ratios_with_diagnostics(
+        exchanges,
+        coins,
+        candidates_by_coin,
+        int(start_ts),
+        int(end_ts) + 60_000,
+    )
+    return ratios
+
+
+def _select_volume_reference_exchange(
+    exchange_counts: Dict[str, int], configured_priority: Sequence[str]
+) -> str:
+    selected = {to_standard_exchange_name(exchange) for exchange in exchange_counts}
+    for exchange in configured_priority:
+        normalized = to_standard_exchange_name(exchange)
+        if normalized in selected:
+            return normalized
+    if selected:
+        return sorted(selected)[0]
+    raise ValueError("cannot select volume normalization reference without a selected exchange")
+
+
+def compute_exchange_volume_ratios_with_diagnostics(
+    exchanges: Sequence[str],
+    coins: Sequence[str],
+    candidates_by_coin: Dict[str, Sequence[CombinedExchangeCandidate]],
+    start_ts: int,
+    end_ts_exclusive: int,
+) -> tuple[Dict[Tuple[str, str], float], dict]:
+    """Estimate exchange quote-volume ratios from robust complete-day overlap.
+
+    Each coin contributes the median of its eligible daily log ratios. The pair
+    estimate is the median across coin estimates, preventing one high-volume or
+    anomalous market from dominating the normalization factor.
+    """
+    minute_ms = 60_000
+    day_ms = 24 * 60 * minute_ms
+    window_start_ts = int((int(start_ts) + day_ms - 1) // day_ms * day_ms)
+    window_end_ts_exclusive = int(int(end_ts_exclusive) // day_ms * day_ms)
+    window_days = max(0, (window_end_ts_exclusive - window_start_ts) // day_ms)
+    if window_days <= 0:
+        raise ValueError(
+            "cannot normalize volumes: no complete UTC days in estimation window "
+            f"[{start_ts}, {end_ts_exclusive})"
+        )
+
     ordered_exchanges = sorted({to_standard_exchange_name(ex) for ex in exchanges})
     exchange_pairs: list[tuple[str, str]] = []
     for i, ex0 in enumerate(ordered_exchanges):
         for ex1 in ordered_exchanges[i + 1 :]:
             exchange_pairs.append((ex0, ex1))
 
-    all_data: dict[str, dict[tuple[str, str], float]] = {}
+    pair_coin_logs: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
+    pair_daily_logs: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(dict)
+    pair_excluded: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
+    pair_potential_counts: dict[tuple[str, str], int] = defaultdict(int)
+    minimum_common_rows = int(np.ceil(1440 * VOLUME_NORMALIZATION_MIN_COMMON_FRACTION))
+    minimum_eligible_days = max(
+        1, int(np.ceil(window_days * VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION))
+    )
+
     for coin in coins:
         candidate_map = {
             to_standard_exchange_name(candidate.exchange): candidate
@@ -5331,47 +5546,120 @@ def compute_exchange_volume_ratios_from_candidates(
         for ex in sorted(set(ordered_exchanges).intersection(candidate_map)):
             volume_by_timestamp = _timestamp_volume_dict_from_candidate_df(
                 candidate_map[ex].df,
-                start_ts=int(start_ts),
-                end_ts=int(end_ts),
+                start_ts=window_start_ts,
+                end_ts=window_end_ts_exclusive - minute_ms,
             )
             if volume_by_timestamp:
                 timestamp_volumes[ex] = volume_by_timestamp
 
-        coin_data = {}
         for ex0, ex1 in exchange_pairs:
+            pair = (ex0, ex1)
+            if ex0 in candidate_map and ex1 in candidate_map:
+                pair_potential_counts[pair] += 1
             if ex0 not in timestamp_volumes or ex1 not in timestamp_volumes:
+                if ex0 in candidate_map and ex1 in candidate_map:
+                    pair_excluded[pair][coin] = "no_valid_volume_in_window"
                 continue
             pair_common_timestamps = set(timestamp_volumes[ex0]).intersection(
                 timestamp_volumes[ex1]
             )
             if not pair_common_timestamps:
+                pair_excluded[pair][coin] = "no_common_valid_timestamps"
                 continue
-            sum0 = sum(timestamp_volumes[ex0][timestamp] for timestamp in pair_common_timestamps)
-            sum1 = sum(timestamp_volumes[ex1][timestamp] for timestamp in pair_common_timestamps)
-            if sum0 <= 0.0 or sum1 <= 0.0:
+
+            daily: dict[int, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+            for timestamp in pair_common_timestamps:
+                day_start = int(timestamp // day_ms * day_ms)
+                bucket = daily[day_start]
+                bucket[0] += 1.0
+                bucket[1] += float(timestamp_volumes[ex0][timestamp])
+                bucket[2] += float(timestamp_volumes[ex1][timestamp])
+
+            daily_logs = []
+            for day_start in range(
+                window_start_ts, window_end_ts_exclusive, day_ms
+            ):
+                common_count, sum0, sum1 = daily.get(day_start, [0.0, 0.0, 0.0])
+                if (
+                    int(common_count) < minimum_common_rows
+                    or not np.isfinite(sum0)
+                    or not np.isfinite(sum1)
+                    or sum0 <= 0.0
+                    or sum1 <= 0.0
+                ):
+                    continue
+                daily_logs.append(float(np.log(sum0 / sum1)))
+
+            if len(daily_logs) < minimum_eligible_days:
+                pair_excluded[pair][coin] = (
+                    f"insufficient_complete_days:{len(daily_logs)}/{minimum_eligible_days}"
+                )
                 continue
-            coin_data[(ex0, ex1)] = sum0 / sum1
+            pair_coin_logs[pair][coin] = float(np.median(daily_logs))
+            pair_daily_logs[pair][coin] = daily_logs
 
-        if coin_data:
-            all_data[coin] = coin_data
+    ratios: Dict[Tuple[str, str], float] = {}
+    pair_estimates = {}
+    for pair in exchange_pairs:
+        potential_count = int(pair_potential_counts.get(pair, 0))
+        required_contributors = min(VOLUME_NORMALIZATION_MIN_CONTRIBUTORS, len(coins))
+        contributor_logs = pair_coin_logs.get(pair, {})
+        pair_key = f"{pair[0]}/{pair[1]}"
+        pair_payload = {
+            "potential_contributors": potential_count,
+            "required_contributors": required_contributors,
+            "contributors": {
+                coin: {
+                    "ratio": float(np.exp(log_ratio)),
+                    "eligible_days": len(pair_daily_logs[pair][coin]),
+                    "daily_log_ratio_mad": float(
+                        np.median(
+                            np.abs(
+                                np.asarray(pair_daily_logs[pair][coin], dtype=np.float64)
+                                - np.median(pair_daily_logs[pair][coin])
+                            )
+                        )
+                    ),
+                }
+                for coin, log_ratio in sorted(contributor_logs.items())
+            },
+            "excluded": dict(sorted(pair_excluded.get(pair, {}).items())),
+        }
+        if required_contributors > 0 and len(contributor_logs) >= required_contributors:
+            logs = np.asarray(list(contributor_logs.values()), dtype=np.float64)
+            pair_log_median = float(np.median(logs))
+            ratio = float(np.exp(pair_log_median))
+            ratios[pair] = ratio
+            pair_payload.update(
+                {
+                    "ratio": ratio,
+                    "coin_log_ratio_median": pair_log_median,
+                    "coin_log_ratio_mad": float(
+                        np.median(np.abs(logs - pair_log_median))
+                    ),
+                }
+            )
+        else:
+            pair_payload["rejection_reason"] = (
+                "no_shared_candidate_coins"
+                if potential_count == 0
+                else f"insufficient_contributors:{len(contributor_logs)}/{required_contributors}"
+            )
+        pair_estimates[pair_key] = pair_payload
 
-    averages = {}
-    if not all_data:
-        return averages
-
-    used_pairs = set()
-    for coin in all_data:
-        for pair in all_data[coin]:
-            used_pairs.add(pair)
-
-    for pair in used_pairs:
-        ratios_for_pair = []
-        for coin in all_data:
-            if pair in all_data[coin]:
-                ratios_for_pair.append(all_data[coin][pair])
-        averages[pair] = float(np.mean(ratios_for_pair)) if ratios_for_pair else 0.0
-
-    return averages
+    diagnostics = {
+        "method": "median_log_daily_quote_volume_ratio",
+        "lookback_days": VOLUME_NORMALIZATION_LOOKBACK_DAYS,
+        "window_start_ts": window_start_ts,
+        "window_end_ts_exclusive": window_end_ts_exclusive,
+        "window_days": int(window_days),
+        "minimum_daily_common_fraction": VOLUME_NORMALIZATION_MIN_COMMON_FRACTION,
+        "minimum_eligible_days_fraction": VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION,
+        "minimum_common_rows_per_day": minimum_common_rows,
+        "minimum_eligible_days": minimum_eligible_days,
+        "pair_estimates": pair_estimates,
+    }
+    return ratios, diagnostics
 
 
 def _find_exchange_volume_scale_factor(
@@ -5446,9 +5734,11 @@ def _build_exchange_volume_ratio_map(
 
 
 __all__ = [
+    "HLCV_PREPARATION_ALGORITHM_VERSION",
     "HLCVManager",
     "prepare_hlcvs",
     "prepare_hlcvs_combined",
     "compute_exchange_volume_ratios",
     "compute_exchange_volume_ratios_from_candidates",
+    "compute_exchange_volume_ratios_with_diagnostics",
 ]
