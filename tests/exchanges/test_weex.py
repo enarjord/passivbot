@@ -209,6 +209,24 @@ def test_weex_symbol_unavailable_cooldown_can_be_disabled():
     assert getattr(bot, "_exchange_symbol_unavailable_until_ms", {}) == {}
 
 
+def test_weex_symbol_unavailable_cooldown_rejects_unsafe_runtime_value(caplog):
+    bot = _bot()
+    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 1e308
+
+    with caplog.at_level("ERROR"):
+        activated = bot._activate_exchange_symbol_unavailable_cooldown(
+            SYMBOL,
+            ccxt.PermissionDenied(
+                'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
+            ),
+            now_ms=1_000,
+        )
+
+    assert activated is False
+    assert getattr(bot, "_exchange_symbol_unavailable_until_ms", {}) == {}
+    assert "action=preserve_original_exchange_failure" in caplog.text
+
+
 def test_weex_symbol_config_gates_entries_but_not_protective_closes():
     bot = _bot()
 

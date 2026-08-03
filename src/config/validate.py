@@ -11,6 +11,7 @@ from .bot import (
 )
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
 from .shared_bot import get_grouped_bot_value
+from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from .strategy import (
     BOT_POSITION_SIDES,
     get_active_strategy_side,
@@ -250,6 +251,14 @@ def validate_config(
     if exchange_symbol_cooldown_hours < 0.0:
         raise ValueError(
             "config.live.exchange_symbol_unavailable_cooldown_hours must be >= 0"
+        )
+    if (
+        exchange_symbol_cooldown_hours
+        > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
+    ):
+        raise ValueError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be <= "
+            f"{MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:g}"
         )
     activation_raw = config["live"]["order_replacement_churn_gate_activation_count"]
     if isinstance(activation_raw, bool) or not isinstance(activation_raw, int):

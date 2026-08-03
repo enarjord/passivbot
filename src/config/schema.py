@@ -6,6 +6,10 @@ from .strategy import get_all_strategy_defaults
 
 CONFIG_SCHEMA_VERSION = "v8.0.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
+# A symbol suspension is temporary policy, not an indefinite timestamp. This
+# generous bound also keeps hours-to-milliseconds conversion finite and well
+# within the integer ranges used by persisted/structured timestamp consumers.
+MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS = 24.0 * 365.25 * 100.0
 
 
 def _get_shared_bot_defaults():

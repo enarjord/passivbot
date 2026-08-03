@@ -126,6 +126,7 @@ from config.strategy import (
     normalize_strategy_kind,
 )
 from config.shared_bot import get_grouped_bot_value
+from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
 from risk_limits import (
@@ -9880,9 +9881,31 @@ class Passivbot:
         reason = self._classify_exchange_symbol_unavailable_error(exc)
         if not reason:
             return False
-        cooldown_hours = float(
-            self.live_value("exchange_symbol_unavailable_cooldown_hours")
+        raw_cooldown_hours = self.live_value(
+            "exchange_symbol_unavailable_cooldown_hours"
         )
+        try:
+            cooldown_hours = float(raw_cooldown_hours)
+        except (TypeError, ValueError, OverflowError):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "value_type=%s action=preserve_original_exchange_failure",
+                type(raw_cooldown_hours).__name__,
+            )
+            return False
+        if (
+            not math.isfinite(cooldown_hours)
+            or cooldown_hours < 0.0
+            or cooldown_hours > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
+        ):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "hours=%.6g max_hours=%.6g "
+                "action=preserve_original_exchange_failure",
+                cooldown_hours,
+                MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS,
+            )
+            return False
         if cooldown_hours <= 0.0:
             return False
         now = int(utc_ms() if now_ms is None else now_ms)
@@ -9972,8 +9995,8 @@ class Passivbot:
     ) -> set[str]:
         """Apply entry-only mode overrides and return currently cooled symbols."""
         unavailable_symbols = set(
-            self._active_exchange_symbol_unavailable_cooldowns(
-                symbols, now_ms=now_ms
+            Passivbot._active_exchange_symbol_unavailable_cooldowns(
+                self, symbols, now_ms=now_ms
             )
         )
         self._orchestrator_exchange_unavailable_symbols = set(unavailable_symbols)

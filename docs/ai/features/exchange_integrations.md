@@ -39,7 +39,9 @@ connector may opt in only with an exact structured exchange code and a fixture-b
 test.
 
 On a proven suspension, `live.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
-RAM-only cooldown (default `6.0` hours; `0` disables it). A flat affected symbol is nontradable for
+RAM-only cooldown (default `6.0` hours; `0` disables it; maximum `876600` hours). Values outside
+that bounded conversion domain are rejected during configuration and cannot mask the original
+exchange failure. A flat affected symbol is nontradable for
 new planning through `graceful_stop`. An affected symbol with a position uses `tp_only`, overriding
 `normal` or `graceful_stop`, so all further entries are suppressed while ordinary closes remain
 available without successful leverage refresh. Explicit `panic` and `manual` modes remain stronger.
