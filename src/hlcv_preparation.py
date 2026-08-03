@@ -106,11 +106,29 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 4
+HLCV_PREPARATION_ALGORITHM_VERSION = 5
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
 VOLUME_NORMALIZATION_MIN_CONTRIBUTORS = 3
+
+
+def _filter_forced_sources_for_coins(
+    forced_sources: Dict[str, str], coins: Sequence[str]
+) -> Dict[str, str]:
+    active_aliases: set[str] = set()
+    for raw_coin in coins:
+        coin = str(raw_coin)
+        active_aliases.add(coin)
+        if coin.startswith("xyz:"):
+            active_aliases.add(coin[4:])
+        else:
+            active_aliases.add(f"xyz:{coin}")
+    return {
+        coin: forced_sources[coin]
+        for coin in sorted(forced_sources)
+        if coin in active_aliases
+    }
 
 
 def _partition_combined_exchange_roles(
@@ -136,6 +154,15 @@ def _complete_utc_day_window_end_exclusive(last_timestamp: int) -> int:
     if int(last_timestamp) >= day_start + day_ms - minute_ms:
         return day_start + day_ms
     return day_start
+
+
+def _normalization_candidate_start_ts(effective_start_ts: int, end_ts: int) -> int:
+    day_ms = 24 * 60 * 60 * 1000
+    latest_complete_day_end_exclusive = _complete_utc_day_window_end_exclusive(end_ts)
+    return max(
+        int(effective_start_ts),
+        latest_complete_day_end_exclusive - VOLUME_NORMALIZATION_LOOKBACK_DAYS * day_ms,
+    )
 
 
 @dataclass(frozen=True)
@@ -4240,6 +4267,10 @@ async def prepare_hlcvs_combined(
         for coin, exchange in forced_sources.items()
         if exchange
     }
+    normalized_forced_sources = _filter_forced_sources_for_coins(
+        normalized_forced_sources,
+        effective_backtest_data_coins(config),
+    )
     market_settings_sources = market_settings_sources or {}
     normalized_mss_sources = {
         str(coin): to_ccxt_exchange_id(exchange)
@@ -5155,6 +5186,19 @@ async def _load_combined_coin_candidates(
 ) -> list[CombinedExchangeCandidate]:
     tasks = []
     position_map = {ex0: (1 + i) for i, ex0 in enumerate(exchanges_to_consider)}
+    selection_exchange_set = set(plan.selection_exchanges)
+    normalization_start_ts = _normalization_candidate_start_ts(
+        plan.effective_start_ts,
+        end_ts,
+    )
+    start_ts_by_exchange = {
+        ex: (
+            plan.effective_start_ts
+            if ex in selection_exchange_set
+            else normalization_start_ts
+        )
+        for ex in plan.candidate_exchanges
+    }
     for ex in plan.candidate_exchanges:
         tasks.append(
             asyncio.create_task(
@@ -5162,7 +5206,7 @@ async def _load_combined_coin_candidates(
                     plan.coin,
                     ex,
                     om_dict[ex],
-                    plan.effective_start_ts,
+                    start_ts_by_exchange[ex],
                     end_ts,
                     progress_position=position_map.get(ex, 1),
                     catalog=catalog,
@@ -5182,7 +5226,6 @@ async def _load_combined_coin_candidates(
             ) from forced_result
 
     candidates: list[CombinedExchangeCandidate] = []
-    selection_exchange_set = set(plan.selection_exchanges)
     for ex, result in zip(plan.candidate_exchanges, results):
         symbol = None
         try:
@@ -5198,7 +5241,7 @@ async def _load_combined_coin_candidates(
                 symbol=symbol,
                 reason=f"normalization_candidate_fetch_failed:{type(result).__name__}",
                 gap_class="unknown",
-                effective_start_ts=plan.effective_start_ts,
+                effective_start_ts=start_ts_by_exchange[ex],
                 end_ts=end_ts,
             )
             if candidate_report is not None:
@@ -5217,7 +5260,7 @@ async def _load_combined_coin_candidates(
                 symbol=symbol,
                 reason="unavailable",
                 gap_class="unknown",
-                effective_start_ts=plan.effective_start_ts,
+                effective_start_ts=start_ts_by_exchange[ex],
                 end_ts=end_ts,
             )
             if candidate_report is not None:
@@ -5229,7 +5272,7 @@ async def _load_combined_coin_candidates(
             exchange=ex,
             symbol=symbol,
             result=result,
-            effective_start_ts=plan.effective_start_ts,
+            effective_start_ts=start_ts_by_exchange[ex],
             end_ts=end_ts,
             source_layer=source_layer,
         )

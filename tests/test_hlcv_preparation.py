@@ -2166,6 +2166,12 @@ def test_pick_best_combined_candidate_uses_config_order_not_volume_for_full_rang
 
 
 def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
+    filtered_forced_sources = hp._filter_forced_sources_for_coins(
+        {"BTC": "okx", "STALE": "hyperliquid", "xyz:TSLA": "hyperliquid"},
+        ["BTC", "xyz:TSLA"],
+    )
+    assert filtered_forced_sources == {"BTC": "okx", "xyz:TSLA": "hyperliquid"}
+
     configured, extras = hp._partition_combined_exchange_roles(
         ["binanceusdm", "bybit", "binanceusdm"],
         {"BTC": "okx", "ETH": "hyperliquid"},
@@ -2678,6 +2684,53 @@ async def test_load_combined_coin_candidates_tolerates_failed_normalization_only
 
     assert [candidate.exchange for candidate in candidates] == ["binanceusdm"]
     assert report[-1]["reason"] == "normalization_candidate_fetch_failed:RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_load_combined_coin_candidates_bounds_normalization_only_exchange_to_lookback(
+    monkeypatch, tmp_path
+):
+    day0 = month_start_ts(2026, 1)
+    day100 = day0 + 100 * 86_400_000
+    expected_normalization_start = day100 - hp.VOLUME_NORMALIZATION_LOOKBACK_DAYS * 86_400_000
+    plan = hp.CombinedCoinPlan(
+        coin="BTC",
+        effective_start_ts=day0,
+        forced_exchange=None,
+        selection_exchanges=("binanceusdm",),
+        candidate_exchanges=("binanceusdm", "okx"),
+    )
+
+    class FakeManager:
+        def has_coin(self, coin):
+            return True
+
+        def get_symbol(self, coin):
+            return f"{coin}/USDT:USDT"
+
+    calls = {}
+
+    async def fake_fetch(coin, ex, _om, start_ts, end_ts, **_kwargs):
+        calls[ex] = (start_ts, end_ts)
+        return None
+
+    monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch)
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "ohlcvs", catalog)
+
+    await hp._load_combined_coin_candidates(
+        plan=plan,
+        om_dict={"binanceusdm": FakeManager(), "okx": FakeManager()},
+        end_ts=day100,
+        force_refetch_gaps=False,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchanges_to_consider=("binanceusdm",),
+    )
+
+    assert calls["binanceusdm"] == (day0, day100)
+    assert calls["okx"] == (expected_normalization_start, day100)
 
 
 @pytest.mark.asyncio
