@@ -9983,8 +9983,12 @@ class Passivbot:
                 normalized_mode = self._mode_override_to_orchestrator_mode(
                     pside_overrides.get(symbol)
                 )
-                if normalized_mode in {None, "normal"}:
-                    pside_overrides[symbol] = "graceful_stop"
+                has_position = bool(self.has_position(symbol=symbol))
+                cooldown_mode = "tp_only" if has_position else "graceful_stop"
+                if normalized_mode in {None, "normal"} or (
+                    has_position and normalized_mode == "graceful_stop"
+                ):
+                    pside_overrides[symbol] = cooldown_mode
         return unavailable_symbols
 
     def _exchange_symbol_cooldown_blocks_tradability(

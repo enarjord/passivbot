@@ -166,6 +166,17 @@ def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog)
     assert bot._exchange_symbol_cooldown_blocks_tradability(SYMBOL, active)
 
     bot.has_position = lambda symbol=None: True
+    held_modes = {
+        "long": {SYMBOL: "graceful_stop"},
+        "short": {SYMBOL: "manual"},
+    }
+    assert bot._apply_exchange_symbol_unavailable_planning_policy(
+        [SYMBOL], held_modes, now_ms=now_ms + 2
+    ) == {SYMBOL}
+    assert held_modes == {
+        "long": {SYMBOL: "tp_only"},
+        "short": {SYMBOL: "manual"},
+    }
     assert not bot._exchange_symbol_cooldown_blocks_tradability(SYMBOL, active)
 
     with caplog.at_level("INFO"):
@@ -196,6 +207,21 @@ def test_weex_symbol_unavailable_cooldown_can_be_disabled():
         SYMBOL, error, now_ms=1_000_000
     )
     assert getattr(bot, "_exchange_symbol_unavailable_until_ms", {}) == {}
+
+
+def test_weex_symbol_config_gates_entries_but_not_protective_closes():
+    bot = _bot()
+
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+    assert bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": SYMBOL, "reduce_only": False}]
+    )
+    assert not bot._pending_exchange_config_consumes_error_budget([])
 
 
 def test_weex_balance_excludes_unrealized_pnl_from_equity():

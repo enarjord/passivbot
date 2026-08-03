@@ -40,11 +40,13 @@ test.
 
 On a proven suspension, `live.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
 RAM-only cooldown (default `6.0` hours; `0` disables it). A flat affected symbol is nontradable for
-new planning. An affected symbol with a position remains in planning with normal entries suppressed
-so ordinary closes and panic handling remain available. The initial failed write retains the normal
-execution failure/restart-budget consequences; the cooldown prevents repeated futile writes rather
-than hiding the fault. Expiry restores on-demand attempts, another classified response starts a new
-cooldown, and process restart deliberately clears the state and retries immediately.
+new planning through `graceful_stop`. An affected symbol with a position uses `tp_only`, overriding
+`normal` or `graceful_stop`, so all further entries are suppressed while ordinary closes remain
+available without successful leverage refresh. Explicit `panic` and `manual` modes remain stronger.
+The initial failed entry/configuration write retains the normal execution failure/restart-budget
+consequences; the cooldown prevents repeated futile entry writes rather than hiding the fault.
+Expiry restores on-demand attempts, another classified response starts a new cooldown, and process
+restart deliberately clears the state and retries immediately.
 
 Future connectors encountering an equivalent venue rule must add their own exact classifier. Do
 not generalize one exchange's code, match human-readable messages, persist cooldowns across runs, or

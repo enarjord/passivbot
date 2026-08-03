@@ -160,6 +160,16 @@ class WeexBot(CCXTBot):
             return "weex_api_symbol_unavailable"
         return None
 
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """WEEX leverage setup is an entry prerequisite, not a close prerequisite."""
+        return self._extract_order_reduce_only(order) is not True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Keep WEEX entry-configuration failures visible to restart supervision."""
+        return bool(blocked_orders)
+
     async def update_exchange_config_by_symbols(self, symbols: list[str]):
         for symbol in symbols:
             margin_mode = self._get_margin_mode_for_symbol(symbol)

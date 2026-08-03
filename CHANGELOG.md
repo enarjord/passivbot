@@ -6,9 +6,11 @@ All notable user-facing changes will be documented in this file.
 
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
-  flat symbols stop generating entries, held symbols retain close and panic management, expiry
-  retries automatically, and bot restart retries immediately. The shared policy is available to
-  future connectors only through their own exact exchange-code classifiers.
+  flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
+  management, and protective closes bypass failed entry-only leverage setup. The initial failure
+  remains restart-budget-visible; expiry retries automatically and bot restart retries immediately.
+  The shared policy is available to future connectors only through their own exact exchange-code
+  classifiers.
 - Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the
   entire planner cycle when one active symbol lacks a completed candle. Known missing EMA inputs
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
