@@ -211,6 +211,16 @@ class TestCacheHashIndependence:
 
         assert hash_a != hash_b
 
+    def test_volume_normalization_mode_changes_hash(self):
+        cfg_enabled = _base_config()
+        cfg_disabled = copy.deepcopy(cfg_enabled)
+        cfg_enabled["backtest"]["volume_normalization"] = True
+        cfg_disabled["backtest"]["volume_normalization"] = False
+
+        assert get_cache_hash(cfg_enabled, "combined") != get_cache_hash(
+            cfg_disabled, "combined"
+        )
+
 
 # ============================================================================
 # Test Class: Warmup Sufficiency Gate

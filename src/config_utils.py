@@ -1600,8 +1600,8 @@ CLI_HELP_OVERRIDES = {
     ),
     "backtest.base_dir": "Directory where standalone backtest results are written.",
     "backtest.volume_normalization": (
-        "Normalize volume across exchanges for combined datasets. Leave enabled "
-        "for comparable combined-exchange backtests."
+        "Normalize combined-exchange volume with robust complete-day, cross-coin "
+        "estimates. Disable to preserve each selected exchange's native volume."
     ),
     "backtest.liquidation_threshold": (
         "Early-stop equity floor as a fraction of starting balance. Must "
