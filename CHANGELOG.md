@@ -227,6 +227,14 @@ All notable user-facing changes will be documented in this file.
   transport health: unnormalizable rows are discarded with a bounded warning and force an
   authoritative account-state refresh, while valid rows in the same message are processed without
   reconnecting. Bitget side-attribution failures now use this path without logging raw payloads.
+- Hyperliquid sparse private order updates now recover mandatory one-way position-side and
+  close-only semantics by exact exchange order ID from the current authoritative REST open-order
+  snapshot. Orders already resting at bot startup therefore avoid repeated semantic-rejection REST
+  refreshes. A bounded recent copy covers terminal updates arriving just after reconciliation
+  removes the order. Exchange-ID and client-ID aliases must agree, authoritative contradictions
+  invalidate older cached semantics and cannot fall back to local acknowledgements, and
+  snapshot-recovered rows still force account refresh because the snapshot proves semantics rather
+  than local ownership. Missing, ambiguous, stale, and contradictory identities remain fail-closed.
 - Binance's explicit `MarginModeAlreadySet` response is now treated as a successful configuration
   no-op at DEBUG instead of an ERROR; unknown margin-mode failures retain their existing loud
   handling.
