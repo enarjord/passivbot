@@ -4467,6 +4467,15 @@ async def _prepare_hlcvs_combined_impl(
 
     progress.log_done()
 
+    # The gather result duplicates references already retained in the chosen
+    # data/settings/candidate maps. Drop it before allocating dense frames.
+    results.clear()
+    tasks.clear()
+    result = None
+    # Let asyncio discard completed gather/task result references before the
+    # normalization and dense-alignment allocations that follow.
+    await asyncio.sleep(0)
+
     if not chosen_data_per_coin:
         raise ValueError("No coin data found on any exchange for the requested date range.")
 
@@ -4543,10 +4552,15 @@ async def _prepare_hlcvs_combined_impl(
                 ", ".join(sorted(coins_list)),
             )
 
+    # Candidate frames are needed through normalization only. Candidate report
+    # entries contain summaries, so unselected source frames can now be freed.
+    chosen_candidates_per_coin.clear()
+
     aligned_values_by_coin = {}
 
     for i, coin in enumerate(valid_coins):
-        df = chosen_data_per_coin[coin].copy()
+        # Consume each selected frame as its dense replacement is materialized.
+        df = chosen_data_per_coin.pop(coin)
         df = df.set_index("timestamp").reindex(timestamps)
         # Use OHLCV source for volume normalization, not market settings source
         exchange_for_this_coin = chosen_mss_per_coin[coin].get(

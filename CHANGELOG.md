@@ -12,6 +12,8 @@ All notable user-facing changes will be documented in this file.
   automatically and bot restart retries immediately.
   The shared policy is available to future connectors only through their own exact exchange-code
   classifiers.
+- Reduce peak memory during combined candle preparation by releasing exchange-candidate frames
+  after volume normalization and consuming selected frames as dense arrays are materialized.
 - Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the
   entire planner cycle when one active symbol lacks a completed candle. Known missing EMA inputs
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
