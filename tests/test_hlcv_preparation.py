@@ -2165,6 +2165,50 @@ def test_pick_best_combined_candidate_uses_config_order_not_volume_for_full_rang
     assert chosen.exchange == "binanceusdm"
 
 
+def test_forced_only_exchanges_do_not_leak_into_unforced_candidates():
+    configured, extras = hp._partition_combined_exchange_roles(
+        ["binanceusdm", "bybit", "binanceusdm"],
+        {"BTC": "okx", "ETH": "hyperliquid"},
+        {"SOL": "gateio"},
+    )
+    configured_reordered, extras_reordered = hp._partition_combined_exchange_roles(
+        ["binanceusdm", "bybit", "binanceusdm"],
+        {"ETH": "hyperliquid", "BTC": "okx"},
+        {"SOL": "gateio"},
+    )
+
+    assert configured == configured_reordered == ["binanceusdm", "bybit"]
+    assert extras == extras_reordered == ["gateio", "hyperliquid", "okx"]
+
+    unforced = hp._plan_combined_coin(
+        coin="SOL",
+        base_start_ts=0,
+        end_ts=1,
+        first_timestamps_unified={"SOL": 0},
+        minimum_coin_age_days=0.0,
+        min_coin_age_ms=0,
+        tradfi_for_stock_perps=False,
+        forced_sources={"BTC": "okx"},
+        exchanges_to_consider=configured,
+    )
+    forced = hp._plan_combined_coin(
+        coin="BTC",
+        base_start_ts=0,
+        end_ts=1,
+        first_timestamps_unified={"BTC": 0},
+        minimum_coin_age_days=0.0,
+        min_coin_age_ms=0,
+        tradfi_for_stock_perps=False,
+        forced_sources={"BTC": "okx"},
+        exchanges_to_consider=configured,
+    )
+
+    assert unforced is not None
+    assert unforced.candidate_exchanges == ("binanceusdm", "bybit")
+    assert forced is not None
+    assert forced.candidate_exchanges == ("okx",)
+
+
 def test_volume_reference_exchange_uses_config_order_not_selected_coin_count():
     chosen = hp._select_volume_reference_exchange(
         {"binance": 1, "bybit": 20}, ["binanceusdm", "bybit"]
@@ -2318,6 +2362,48 @@ def test_exchange_volume_ratios_from_candidates_do_not_compare_partial_day_to_fu
     )
 
     assert ratios == {}
+
+
+def test_volume_normalization_excludes_incomplete_final_utc_day_from_denominator():
+    day0 = month_start_ts(2026, 4)
+    day1 = day0 + 86_400_000
+    partial_final_timestamp = day1 + 12 * 60 * 60 * 1000
+    timestamps = np.array([day0 + i * 60_000 for i in range(1440)], dtype=np.int64)
+
+    def candidate(exchange, volume):
+        volumes = np.full(len(timestamps), volume, dtype=np.float64)
+        return hp.CombinedExchangeCandidate(
+            exchange=exchange,
+            df=pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "high": np.ones(len(timestamps)),
+                    "low": np.ones(len(timestamps)),
+                    "close": np.ones(len(timestamps)),
+                    "volume": volumes,
+                    "valid": np.ones(len(timestamps), dtype=bool),
+                }
+            ),
+            coverage_count=len(timestamps),
+            gap_count=0,
+            total_volume=float(volumes.sum()),
+        )
+
+    window_end = hp._complete_utc_day_window_end_exclusive(partial_final_timestamp)
+    assert hp._complete_utc_day_window_end_exclusive(day1 - 60_000) == day1
+    assert hp._complete_utc_day_window_end_exclusive(day1) == day1
+    ratios, diagnostics = hp.compute_exchange_volume_ratios_with_diagnostics(
+        ["binance", "bybit"],
+        ["BTC"],
+        {"BTC": (candidate("binance", 2.0), candidate("bybit", 1.0))},
+        day0,
+        window_end,
+    )
+
+    assert window_end == day1
+    assert diagnostics["window_days"] == 1
+    assert diagnostics["minimum_eligible_days"] == 1
+    assert ratios[("binance", "bybit")] == pytest.approx(2.0)
 
 
 def test_exchange_volume_ratios_use_median_coin_estimate_and_report_outlier_dispersion():

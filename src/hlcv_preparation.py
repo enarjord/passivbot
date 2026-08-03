@@ -106,11 +106,36 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 2
+HLCV_PREPARATION_ALGORITHM_VERSION = 3
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
 VOLUME_NORMALIZATION_MIN_CONTRIBUTORS = 3
+
+
+def _partition_combined_exchange_roles(
+    configured_exchanges: Sequence[str],
+    forced_sources: Dict[str, str],
+    market_settings_sources: Dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Separate OHLCV candidates from exchanges needed only by per-coin overrides."""
+    candidate_exchanges = list(dict.fromkeys(configured_exchanges))
+    candidate_exchange_set = set(candidate_exchanges)
+    override_only_exchanges = sorted(
+        (set(forced_sources.values()) | set(market_settings_sources.values()))
+        - candidate_exchange_set
+    )
+    return candidate_exchanges, override_only_exchanges
+
+
+def _complete_utc_day_window_end_exclusive(last_timestamp: int) -> int:
+    """Return the exclusive end of the latest complete 1m UTC day."""
+    minute_ms = 60_000
+    day_ms = 24 * 60 * minute_ms
+    day_start = int(last_timestamp // day_ms * day_ms)
+    if int(last_timestamp) >= day_start + day_ms - minute_ms:
+        return day_start + day_ms
+    return day_start
 
 
 @dataclass(frozen=True)
@@ -4220,10 +4245,13 @@ async def prepare_hlcvs_combined(
         for coin, exchange in market_settings_sources.items()
         if exchange
     }
-    # Configuration order is the stable tie-break contract for equivalent full-range
-    # candidates. Preserve it through preparation instead of converting it to a set.
-    ohlcv_exchanges = list(
-        dict.fromkeys([*exchanges_to_consider, *normalized_forced_sources.values()])
+    # Only configured exchanges are candidates for unforced coins. Exchanges used
+    # solely by a per-coin override still need managers, but must not leak into the
+    # candidate list. Sort those extras so mapping insertion order cannot affect work.
+    ohlcv_exchanges, extra_exchanges = _partition_combined_exchange_roles(
+        exchanges_to_consider,
+        normalized_forced_sources,
+        normalized_mss_sources,
     )
 
     requested_start_date = require_config_value(config, "backtest.start_date")
@@ -4245,14 +4273,14 @@ async def prepare_hlcvs_combined(
         )
     logging.info(
         "combined starting v2-aware candle preparation across %d exchange(s) for %d candidate coin(s)",
-        len(set(ohlcv_exchanges)),
+        len(ohlcv_exchanges) + len(extra_exchanges),
         len(
             effective_backtest_data_coins(config)
         ),
     )
 
     om_dict: Dict[str, HLCVManager] = {}
-    for ex in exchanges_to_consider:
+    for ex in ohlcv_exchanges:
         om_dict[ex] = HLCVManager(
             ex,
             effective_start_date,
@@ -4267,17 +4295,7 @@ async def prepare_hlcvs_combined(
             force_refetch_gaps=force_refetch_gaps,
             ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
         )
-    extra_exchanges = list(
-        dict.fromkeys(
-            [
-                *normalized_forced_sources.values(),
-                *normalized_mss_sources.values(),
-            ]
-        )
-    )
     for ex in extra_exchanges:
-        if ex in om_dict:
-            continue
         om_dict[ex] = HLCVManager(
             ex,
             effective_start_date,
@@ -4549,9 +4567,9 @@ async def _prepare_hlcvs_combined_impl(
 
     normalization_enabled = bool(config.get("backtest", {}).get("volume_normalization", True))
     day_ms = 24 * 60 * 60 * 1000
-    normalization_end_ts_exclusive = int(global_end_time // day_ms * day_ms)
-    if int(global_end_time) % day_ms:
-        normalization_end_ts_exclusive += day_ms
+    normalization_end_ts_exclusive = _complete_utc_day_window_end_exclusive(
+        int(global_end_time)
+    )
     normalization_start_ts = max(
         int(global_start_time),
         normalization_end_ts_exclusive - VOLUME_NORMALIZATION_LOOKBACK_DAYS * day_ms,
