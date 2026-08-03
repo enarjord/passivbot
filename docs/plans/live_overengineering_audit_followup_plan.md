@@ -51,6 +51,11 @@ verification and contract-specific regression coverage.
    planning, reconciliation, snapshot stamping, and event diagnostics now read
    the epoch directly from `FreshnessLedger`; execution-loop `cycle_id` remains
    a separate observability lifecycle.
+7. The current architecture-tightening slice removes completed candles from the
+   account-wide staged planning barrier. Known live EMA absence is passed to
+   strict-by-default Rust as symbol-scoped availability metadata, so only actual
+   EMA consumers are suppressed, stale strategy orders remain cancellable, and
+   candle-independent reducers can still run.
 
 ## Decision rules for further work
 

@@ -1015,6 +1015,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     captured = {}
 
     async def fake_load_bundle(self, symbols, modes):
+        self._orchestrator_allow_missing_strategy_inputs_symbols = {symbol}
         m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
         m1_volume = {symbol: {10.0: 1_000.0}}
         m1_log_range = {symbol: {10.0: 0.01}}
@@ -1035,6 +1036,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
+    assert rust_symbol["allow_missing_strategy_inputs"] is True
     assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     rust_events = [
@@ -1053,6 +1055,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     assert {event.cycle_id for event in rust_events} == {"cy_live"}
     assert rust_events[0].remote_call_id == rust_events[1].remote_call_id
     assert rust_events[0].data["input_hash"] == rust_events[1].data["input_hash"]
+    assert rust_events[0].data["ema_unavailable_count"] == 1
     assert rust_events[1].data["order_count"] == 0
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 

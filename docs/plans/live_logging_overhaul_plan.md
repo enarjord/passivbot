@@ -569,8 +569,8 @@ After the event bus exists.
   captured with input digest.
 - Gatekeeper tests: stale market snapshot defers normal creates, panic close can
   use its reduced freshness contract, candidate-only stale EMA excludes the
-  candidate, and active/normal stale required EMA fails or defers loudly according
-  to its contract.
+  candidate, and active-symbol EMA absence is visible at the Rust consumer scope
+  without globally deferring independent actions.
 - Executor tests: partial create response emits an ambiguous event, terminal
   rejection emits a non-ambiguous rejected event, and confirmation requested is
   emitted before confirmation refresh.

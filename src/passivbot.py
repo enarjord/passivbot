@@ -17163,6 +17163,7 @@ class Passivbot:
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
         self._orchestrator_ema_unavailable_symbols = set()
+        self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
         previous_ema_entry_cancellation_order_keys = set(
@@ -18215,6 +18216,10 @@ class Passivbot:
                 self.ema_type = ema_type
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -18230,6 +18235,10 @@ class Passivbot:
                 self.symbol = symbol
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         def close_ema_reason_detail(reason: str) -> tuple[str, str]:
             if str(reason).startswith("non-finite close EMA value"):
@@ -18590,6 +18599,15 @@ class Passivbot:
                     type(exc).__name__,
                     interval_ms=15 * 60 * 1000,
                 )
+                if isinstance(exc, (TimeoutError, RuntimeError)):
+                    missing = [
+                        (float(span), f"{type(exc).__name__}: projection unavailable")
+                        for span in sorted(need_close_spans[sym])
+                    ]
+                    detail = "; ".join(
+                        [f"span={span:.8g} reason={reason}" for span, reason in missing]
+                    )
+                    raise MissingCloseEma(sym, missing, detail) from exc
                 raise
             close = dict(projected.get("close", {}))
             if is_forager_mode() and not project_strategy_log_range:
@@ -18614,26 +18632,59 @@ class Passivbot:
                     ),
                     "m1_log_range",
                 )
-            missing_close = [
+            nonfinite_close = [
                 span
                 for span in sorted(need_close_spans[sym])
-                if span not in close or not math.isfinite(float(close[span]))
+                if span in close and not math.isfinite(float(close[span]))
+            ]
+            if nonfinite_close:
+                raise RuntimeError(
+                    "[ema] non-finite projected open-tail close EMA for "
+                    f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_close)}"
+                )
+            missing_close = [
+                span for span in sorted(need_close_spans[sym]) if span not in close
             ]
             if missing_close:
-                raise RuntimeError(
-                    "[ema] projected open-tail close EMA incomplete for "
-                    f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
+                missing = [
+                    (float(span), "projected close EMA missing")
+                    for span in missing_close
+                ]
+                detail = "; ".join(
+                    [f"span={span:.8g} reason={reason}" for span, reason in missing]
                 )
+                raise MissingCloseEma(sym, missing, detail)
             if not is_forager_mode() or project_strategy_log_range:
+                projected_lr1m = projected.get("log_range", {}) or {}
+                nonfinite_required_lr1m = [
+                    span
+                    for span in required_m1_lr_for_symbol
+                    if span in projected_lr1m
+                    and not math.isfinite(float(projected_lr1m[span]))
+                ]
+                if nonfinite_required_lr1m:
+                    raise RuntimeError(
+                        "[ema] non-finite projected open-tail m1 log-range EMA for "
+                        f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_required_lr1m)}"
+                    )
                 missing_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
-                    if span not in lr1m or not math.isfinite(float(lr1m[span]))
+                    if span not in projected_lr1m
                 ]
                 if missing_required_lr1m:
-                    raise RuntimeError(
-                        "[ema] projected open-tail m1 log-range EMA incomplete for "
-                        f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
+                    missing = [
+                        (float(span), "projected m1 log-range EMA missing")
+                        for span in missing_required_lr1m
+                    ]
+                    detail = "; ".join(
+                        [
+                            f"span={span:.8g} reason={reason}"
+                            for span, reason in missing
+                        ]
+                    )
+                    raise MissingRequiredEma(
+                        sym, "m1_log_range", missing, detail
                     )
             self._orchestrator_ema_projection_symbols.add(sym)
             self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
@@ -18679,41 +18730,76 @@ class Passivbot:
             requested_m1_lr_spans = sorted(
                 set(m1_lr_spans) | set(required_m1_lr_for_symbol)
             )
+            close: dict[float, float] = {}
+            vol: Optional[dict[float, float]] = None
+            lr1m: Optional[dict[float, float]] = None
+            h1: dict[float, float] = {}
             forager_lr1m: Optional[dict[float, float]] = None
+            input_unavailability: list[Exception] = []
+
+            def collect_input_unavailability(exc: Exception) -> bool:
+                if not isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                    return False
+                if exc.contains_non_finite:
+                    return False
+                input_unavailability.append(exc)
+                return True
+
             try:
                 projection_ctx = projection_contexts.get(sym)
                 if projection_ctx is not None:
-                    close, vol, lr1m = await load_projected_open_tail_bundle(
-                        sym,
-                        projection_ctx,
-                        required_m1_lr_for_symbol,
-                        requested_m1_lr_spans,
-                    )
+                    try:
+                        close, vol, lr1m = await load_projected_open_tail_bundle(
+                            sym,
+                            projection_ctx,
+                            required_m1_lr_for_symbol,
+                            requested_m1_lr_spans,
+                        )
+                    except Exception as exc:
+                        if not collect_input_unavailability(exc):
+                            raise
                 else:
                     try:
                         close = await fetch_close_map(
                             sym, sorted(need_close_spans[sym]), log_on_missing=False
                         )
                     except MissingCloseEma as exc:
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = projection_contexts.get(
                             sym
                         ) or refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
                             log_missing_close_ema(sym, exc.missing)
-                            raise
-                        close, vol, lr1m = await load_projected_open_tail_bundle(
-                            sym,
-                            late_projection_ctx,
-                            required_m1_lr_for_symbol,
-                            requested_m1_lr_spans,
-                        )
+                            if not collect_input_unavailability(exc):
+                                raise
+                        else:
+                            try:
+                                close, vol, lr1m = (
+                                    await load_projected_open_tail_bundle(
+                                        sym,
+                                        late_projection_ctx,
+                                        required_m1_lr_for_symbol,
+                                        requested_m1_lr_spans,
+                                    )
+                                )
+                            except Exception as projection_exc:
+                                if not collect_input_unavailability(projection_exc):
+                                    raise
                     else:
                         vol = None
                         lr1m = None
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                h1 = await fetch_required_map(
-                    sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
-                )
+                try:
+                    h1 = await fetch_required_map(
+                        sym,
+                        sorted(need_h1_lr_spans[sym]),
+                        ema_lr_1h,
+                        "h1_log_range",
+                    )
+                except Exception as exc:
+                    if not collect_input_unavailability(exc):
+                        raise
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if vol is None:
                     vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
@@ -18727,7 +18813,11 @@ class Passivbot:
                             "m1_log_range",
                             log_on_missing=False,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        if not isinstance(exc, MissingRequiredEma):
+                            raise
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
                             log_ema_issue(
@@ -18743,22 +18833,30 @@ class Passivbot:
                                     sym, "m1_log_range", required_m1_lr_for_symbol
                                 ),
                             )
-                            raise
-                        projected_close, projected_vol, projected_lr1m = (
-                            await load_projected_open_tail_bundle(
-                                sym,
-                                late_projection_ctx,
-                                required_m1_lr_for_symbol,
-                                requested_m1_lr_spans,
-                            )
-                        )
-                        close = projected_close
-                        if projected_vol is not None:
-                            vol = projected_vol
-                        if projected_lr1m is not None:
-                            lr1m = projected_lr1m
-                        else:
+                            collect_input_unavailability(exc)
                             lr1m = {}
+                        else:
+                            try:
+                                projected_close, projected_vol, projected_lr1m = (
+                                    await load_projected_open_tail_bundle(
+                                        sym,
+                                        late_projection_ctx,
+                                        required_m1_lr_for_symbol,
+                                        requested_m1_lr_spans,
+                                    )
+                                )
+                            except Exception as projection_exc:
+                                if not collect_input_unavailability(projection_exc):
+                                    raise
+                                lr1m = {}
+                            else:
+                                close = projected_close
+                                if projected_vol is not None:
+                                    vol = projected_vol
+                                if projected_lr1m is not None:
+                                    lr1m = projected_lr1m
+                                else:
+                                    lr1m = {}
                     else:
                         optional_lr1m = await fetch_map(
                             sym,
@@ -18786,8 +18884,32 @@ class Passivbot:
                     }
                 if forager_lr1m is None:
                     forager_lr1m = {}
+                if input_unavailability:
+                    raise input_unavailability[0]
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
+                    if isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                        if exc.contains_non_finite:
+                            raise
+                        self._orchestrator_allow_missing_strategy_inputs_symbols.add(
+                            sym
+                        )
+                        log_ema_issue(
+                            ("strategy_inputs_unavailable", sym),
+                            logging.WARNING,
+                            "[ema] strategy inputs unavailable %s action=scope_consumers_in_rust error_type=%s | %s",
+                            Passivbot._log_symbol(sym),
+                            ema_error_type(exc),
+                            ema_candle_health_context(sym),
+                            interval_ms=15 * 60 * 1000,
+                        )
+                        return (
+                            close,
+                            vol or {},
+                            lr1m or {},
+                            h1,
+                            forager_lr1m or {},
+                        )
                     raise
                 if sym in cache_only_symbols:
                     reason = "cache_only_fetch_failed"
@@ -19304,6 +19426,13 @@ class Passivbot:
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
         )
+        allow_missing_strategy_inputs_symbols = set(
+            getattr(
+                self,
+                "_orchestrator_allow_missing_strategy_inputs_symbols",
+                set(),
+            )
+        )
         forager_m1_log_range_emas = getattr(
             self, "_orchestrator_forager_m1_log_range_emas", {}
         )
@@ -19469,6 +19598,9 @@ class Passivbot:
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
+                    "allow_missing_strategy_inputs": (
+                        symbol in allow_missing_strategy_inputs_symbols
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -19501,7 +19633,9 @@ class Passivbot:
             input_hash=input_hash,
             symbol_count=len(input_dict["symbols"]),
             tradable_count=int(tradable_count),
-            ema_unavailable_count=len(ema_unavailable_symbols),
+            ema_unavailable_count=len(
+                ema_unavailable_symbols | allow_missing_strategy_inputs_symbols
+            ),
             trailing_unavailable_count=len(trailing_unavailable_symbols),
             hedge_mode=bool(effective_hedge_mode),
             strategy_kind=strategy_kind,
@@ -21031,7 +21165,7 @@ class Passivbot:
                 Passivbot._log_active_candle_refresh_incomplete(
                     self, ordered_symbols, missing
                 )
-                return False
+                return True
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
                 signature,
