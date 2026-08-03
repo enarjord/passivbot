@@ -59,6 +59,7 @@ def _ccxt_exchange() -> ccxt.weex:
 def _bot(*, time_in_force: str = "gtc") -> WeexBot:
     bot = build_contract_bot("weex")
     bot.config["live"]["time_in_force"] = time_in_force
+    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 6.0
     bot.broker_code = "WEEX111164"
     bot.custom_id_max_length = 36
     return bot
@@ -108,6 +109,148 @@ def test_weex_client_accepts_only_documented_success_envelope():
             {},
             "{}",
         )
+
+
+def test_weex_classifies_only_exact_api_symbol_unavailable_code():
+    bot = _bot()
+    unavailable = ccxt.PermissionDenied(
+        'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
+    )
+    other = ccxt.PermissionDenied(
+        'weex {"code":-1056,"msg":"illegal IP"}'
+    )
+
+    assert (
+        bot._classify_exchange_symbol_unavailable_error(unavailable)
+        == "weex_api_symbol_unavailable"
+    )
+    assert bot._classify_exchange_symbol_unavailable_error(other) is None
+    assert (
+        bot._classify_exchange_symbol_unavailable_error(
+            ccxt.PermissionDenied("contains -1058 but no structured code")
+        )
+        is None
+    )
+
+
+def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog):
+    bot = _bot()
+    bot._exchange_config_retry_after_ms = {}
+    bot._exchange_config_retry_attempts = {SYMBOL: 3}
+    bot.has_position = lambda symbol=None: False
+    error = ccxt.PermissionDenied(
+        'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
+    )
+    now_ms = 1_000_000
+
+    assert bot._activate_exchange_symbol_unavailable_cooldown(
+        SYMBOL, error, now_ms=now_ms
+    )
+    expected_until = now_ms + 6 * 60 * 60 * 1000
+    assert bot._exchange_symbol_unavailable_until_ms == {SYMBOL: expected_until}
+    assert bot._exchange_config_retry_after_ms == {SYMBOL: expected_until}
+    assert bot._activate_exchange_symbol_unavailable_cooldown(
+        SYMBOL, error, now_ms=now_ms + 60_000
+    )
+    refreshed_until = expected_until + 60_000
+    assert bot._exchange_symbol_unavailable_until_ms == {SYMBOL: refreshed_until}
+    assert bot._exchange_config_retry_after_ms == {SYMBOL: refreshed_until}
+    assert "action=refresh_entry_block_until_retry" in caplog.text
+
+    modes = {"long": {SYMBOL: None}, "short": {SYMBOL: "panic"}}
+    active = bot._apply_exchange_symbol_unavailable_planning_policy(
+        [SYMBOL], modes, now_ms=now_ms + 1
+    )
+    assert active == {SYMBOL}
+    assert modes == {
+        "long": {SYMBOL: "graceful_stop"},
+        "short": {SYMBOL: "panic"},
+    }
+    assert bot._exchange_symbol_cooldown_blocks_tradability(SYMBOL, active)
+
+    bot.has_position = lambda symbol=None: True
+    held_modes = {
+        "long": {SYMBOL: "graceful_stop"},
+        "short": {SYMBOL: "manual"},
+    }
+    assert bot._apply_exchange_symbol_unavailable_planning_policy(
+        [SYMBOL], held_modes, now_ms=now_ms + 2
+    ) == {SYMBOL}
+    assert held_modes == {
+        "long": {SYMBOL: "tp_only"},
+        "short": {SYMBOL: "manual"},
+    }
+    assert not bot._exchange_symbol_cooldown_blocks_tradability(SYMBOL, active)
+
+    with caplog.at_level("INFO"):
+        assert bot._active_exchange_symbol_unavailable_cooldowns(
+            [SYMBOL], now_ms=expected_until
+        ) == {SYMBOL: refreshed_until}
+        assert bot._active_exchange_symbol_unavailable_cooldowns(
+            [SYMBOL], now_ms=refreshed_until
+        ) == {}
+    assert bot._exchange_symbol_unavailable_until_ms == {}
+    assert bot._exchange_config_retry_after_ms == {}
+    assert bot._exchange_config_retry_attempts == {}
+    assert "cooldown expired" in caplog.text
+
+    assert bot._activate_exchange_symbol_unavailable_cooldown(
+        SYMBOL, error, now_ms=refreshed_until + 1
+    )
+    assert bot._exchange_symbol_unavailable_until_ms == {
+        SYMBOL: refreshed_until + 1 + 6 * 60 * 60 * 1000
+    }
+
+
+def test_weex_symbol_unavailable_cooldown_can_be_disabled():
+    bot = _bot()
+    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
+    error = ccxt.PermissionDenied(
+        'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
+    )
+
+    assert not bot._activate_exchange_symbol_unavailable_cooldown(
+        SYMBOL, error, now_ms=1_000_000
+    )
+    assert getattr(bot, "_exchange_symbol_unavailable_until_ms", {}) == {}
+
+
+def test_weex_symbol_unavailable_cooldown_rejects_unsafe_runtime_value(caplog):
+    bot = _bot()
+    bot.config["live"]["exchange_symbol_unavailable_cooldown_hours"] = 1e308
+
+    with caplog.at_level("ERROR"):
+        activated = bot._activate_exchange_symbol_unavailable_cooldown(
+            SYMBOL,
+            ccxt.PermissionDenied(
+                'weex {"code":-1058,"msg":"The trading pair is not supported via the API"}'
+            ),
+            now_ms=1_000,
+        )
+
+    assert activated is False
+    assert getattr(bot, "_exchange_symbol_unavailable_until_ms", {}) == {}
+    assert "action=preserve_original_exchange_failure" in caplog.text
+
+
+def test_weex_symbol_config_gates_entries_but_not_protective_closes():
+    bot = _bot()
+
+    assert bot._order_requires_exchange_config_before_create(
+        {"reduce_only": False}
+    )
+    assert not bot._order_requires_exchange_config_before_create(
+        {"reduce_only": True}
+    )
+    bot._last_exchange_config_failed_attempt_symbols = {SYMBOL}
+    assert bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": SYMBOL, "reduce_only": False}]
+    )
+    bot._last_exchange_config_failed_attempt_symbols = set()
+    assert not bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": SYMBOL, "reduce_only": False}]
+    )
+    assert not bot._pending_exchange_config_consumes_error_budget([])
 
 
 def test_weex_balance_excludes_unrealized_pnl_from_equity():

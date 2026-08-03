@@ -10,6 +10,7 @@ import ccxt.pro as ccxt_pro
 from config.access import require_live_value
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from exchanges.ipv4_transport import IPv4TransportMixin
+from live.diagnostic_safety import bounded_exchange_error_context
 from passivbot import logging
 from utils import symbol_to_coin
 
@@ -145,6 +146,36 @@ class WeexBot(CCXTBot):
         """
         logging.debug(
             "[config] weex position and margin mode are configured per symbol"
+        )
+
+    def _classify_exchange_symbol_unavailable_error(
+        self, exc: BaseException
+    ) -> str | None:
+        """Classify only WEEX's documented API-symbol suspension code.
+
+        Other exchanges must add their own exact code classifier rather than
+        reusing WEEX semantics or matching human-readable response text.
+        """
+        if bounded_exchange_error_context(exc).get("error_code") == "-1058":
+            return "weex_api_symbol_unavailable"
+        return None
+
+    def _order_requires_exchange_config_before_create(self, order: dict) -> bool:
+        """WEEX leverage setup is an entry prerequisite, not a close prerequisite."""
+        return self._extract_order_reduce_only(order) is not True
+
+    def _pending_exchange_config_consumes_error_budget(
+        self, blocked_orders: list[dict]
+    ) -> bool:
+        """Charge only WEEX configuration writes that failed in this executor cycle."""
+        failed_symbols = set(
+            getattr(self, "_last_exchange_config_failed_attempt_symbols", set())
+            or set()
+        )
+        return any(
+            str(order.get("symbol") or "") in failed_symbols
+            for order in blocked_orders
+            if isinstance(order, dict)
         )
 
     async def update_exchange_config_by_symbols(self, symbols: list[str]):

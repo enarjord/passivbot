@@ -11,6 +11,7 @@ from .bot import (
 )
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
 from .shared_bot import get_grouped_bot_value
+from .schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from .strategy import (
     BOT_POSITION_SIDES,
     get_active_strategy_side,
@@ -230,6 +231,35 @@ def validate_config(
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
+    exchange_symbol_cooldown_raw = config["live"][
+        "exchange_symbol_unavailable_cooldown_hours"
+    ]
+    if isinstance(exchange_symbol_cooldown_raw, bool):
+        raise TypeError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be numeric"
+        )
+    try:
+        exchange_symbol_cooldown_hours = float(exchange_symbol_cooldown_raw)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be numeric"
+        ) from exc
+    if not math.isfinite(exchange_symbol_cooldown_hours):
+        raise ValueError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be finite"
+        )
+    if exchange_symbol_cooldown_hours < 0.0:
+        raise ValueError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be >= 0"
+        )
+    if (
+        exchange_symbol_cooldown_hours
+        > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
+    ):
+        raise ValueError(
+            "config.live.exchange_symbol_unavailable_cooldown_hours must be <= "
+            f"{MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS:g}"
+        )
     activation_raw = config["live"]["order_replacement_churn_gate_activation_count"]
     if isinstance(activation_raw, bool) or not isinstance(activation_raw, int):
         raise TypeError(

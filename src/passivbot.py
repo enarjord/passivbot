@@ -126,6 +126,7 @@ from config.strategy import (
     normalize_strategy_kind,
 )
 from config.shared_bot import get_grouped_bot_value
+from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
 from risk_limits import (
@@ -1154,6 +1155,11 @@ class Passivbot:
         if not failures:
             return
         for action, order, error in failures:
+            symbol = order.get("symbol") if isinstance(order, dict) else None
+            if symbol:
+                self._activate_exchange_symbol_unavailable_cooldown(
+                    str(symbol), error
+                )
             self._log_order_write_failure(
                 action=action, order=order, error=error
             )
@@ -1622,6 +1628,12 @@ class Passivbot:
         self._entry_cooldown_pos_increase_detected_ts: dict[str, dict[str, int]] = {}
         self._entry_cooldown_delta_guard_last_log_ms: dict[tuple[str, str], int] = {}
         self._entry_cooldown_delta_guard_log_interval_ms = 60_000
+        # Connector-classified, RAM-only venue suspensions. These intentionally
+        # reset on process restart so a restarted bot immediately rechecks the
+        # exchange instead of inheriting stale local availability state.
+        self._exchange_symbol_unavailable_until_ms: dict[str, int] = {}
+        self._exchange_symbol_unavailable_reason_by_symbol: dict[str, str] = {}
+        self._orchestrator_exchange_unavailable_symbols: set[str] = set()
 
         # Health tracking for periodic summary
         self._health_start_ms = utc_ms()
@@ -9842,6 +9854,177 @@ class Passivbot:
             fields.append(f"{key}={value}")
         return " ".join(fields)
 
+    def _classify_exchange_symbol_unavailable_error(
+        self, exc: BaseException
+    ) -> str | None:
+        """Return a connector-owned reason for a proven symbol suspension.
+
+        Exchange error codes are not portable. Supported connectors must
+        override this hook with exact, fixture-tested classifications; generic
+        message matching would turn unrelated write failures into trading policy.
+        """
+        return None
+
+    def _activate_exchange_symbol_unavailable_cooldown(
+        self,
+        symbol: str,
+        exc: BaseException,
+        *,
+        now_ms: int | None = None,
+    ) -> bool:
+        """Temporarily suppress entries after a proven venue suspension.
+
+        The state is deliberately per-process and in memory. Flat symbols are
+        made nontradable for Rust planning. Held symbols remain tradable under
+        entry-blocking mode overrides so closes and panic handling are preserved.
+        """
+        reason = self._classify_exchange_symbol_unavailable_error(exc)
+        if not reason:
+            return False
+        raw_cooldown_hours = self.live_value(
+            "exchange_symbol_unavailable_cooldown_hours"
+        )
+        try:
+            cooldown_hours = float(raw_cooldown_hours)
+        except (TypeError, ValueError, OverflowError):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "value_type=%s action=preserve_original_exchange_failure",
+                type(raw_cooldown_hours).__name__,
+            )
+            return False
+        if (
+            not math.isfinite(cooldown_hours)
+            or cooldown_hours < 0.0
+            or cooldown_hours > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
+        ):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "hours=%.6g max_hours=%.6g "
+                "action=preserve_original_exchange_failure",
+                cooldown_hours,
+                MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS,
+            )
+            return False
+        if cooldown_hours <= 0.0:
+            return False
+        now = int(utc_ms() if now_ms is None else now_ms)
+        cooldown_ms = max(1, int(cooldown_hours * 60.0 * 60.0 * 1000.0))
+        cooldowns = getattr(self, "_exchange_symbol_unavailable_until_ms", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self._exchange_symbol_unavailable_until_ms = cooldowns
+        existing_until = int(cooldowns.get(symbol, 0) or 0)
+        until_ms = now + cooldown_ms
+        cooldowns[symbol] = until_ms
+        reasons = getattr(
+            self, "_exchange_symbol_unavailable_reason_by_symbol", None
+        )
+        if not isinstance(reasons, dict):
+            reasons = {}
+            self._exchange_symbol_unavailable_reason_by_symbol = reasons
+        reasons[symbol] = str(reason)
+        retry_after = getattr(self, "_exchange_config_retry_after_ms", None)
+        if isinstance(retry_after, dict):
+            retry_after[symbol] = until_ms
+        error_context = bounded_exchange_error_context(exc)
+        logging.warning(
+            "[config] exchange temporarily disabled API trading for symbol | "
+            "symbol=%s reason=%s error_code=%s cooldown_hours=%.6g until_ms=%d "
+            "action=%s",
+            Passivbot._log_symbol(symbol),
+            reason,
+            error_context.get("error_code", "-"),
+            cooldown_hours,
+            until_ms,
+            (
+                "refresh_entry_block_until_retry"
+                if existing_until > now
+                else "block_entries_until_retry"
+            ),
+        )
+        return True
+
+    def _active_exchange_symbol_unavailable_cooldowns(
+        self,
+        symbols: Iterable[str] | None = None,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
+        """Return active cooldowns, expiring them on the bot's live clock."""
+        now = int(utc_ms() if now_ms is None else now_ms)
+        cooldowns = getattr(self, "_exchange_symbol_unavailable_until_ms", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self._exchange_symbol_unavailable_until_ms = cooldowns
+        reasons = getattr(
+            self, "_exchange_symbol_unavailable_reason_by_symbol", None
+        )
+        if not isinstance(reasons, dict):
+            reasons = {}
+            self._exchange_symbol_unavailable_reason_by_symbol = reasons
+        requested = None if symbols is None else {str(symbol) for symbol in symbols}
+        for symbol, raw_until in list(cooldowns.items()):
+            until_ms = int(raw_until or 0)
+            if until_ms > now:
+                continue
+            cooldowns.pop(symbol, None)
+            reason = reasons.pop(symbol, "exchange_symbol_unavailable")
+            retry_after = getattr(self, "_exchange_config_retry_after_ms", None)
+            if isinstance(retry_after, dict):
+                retry_after.pop(symbol, None)
+            retry_attempts = getattr(self, "_exchange_config_retry_attempts", None)
+            if isinstance(retry_attempts, dict):
+                retry_attempts.pop(symbol, None)
+            logging.info(
+                "[config] exchange symbol API-trading cooldown expired | "
+                "symbol=%s reason=%s action=retry_on_demand",
+                Passivbot._log_symbol(symbol),
+                reason,
+            )
+        return {
+            str(symbol): int(until_ms)
+            for symbol, until_ms in cooldowns.items()
+            if int(until_ms or 0) > now
+            and (requested is None or str(symbol) in requested)
+        }
+
+    def _apply_exchange_symbol_unavailable_planning_policy(
+        self,
+        symbols: Iterable[str],
+        mode_overrides: dict[str, dict[str, Optional[str]]],
+        *,
+        now_ms: int | None = None,
+    ) -> set[str]:
+        """Apply entry-only mode overrides and return currently cooled symbols."""
+        unavailable_symbols = set(
+            Passivbot._active_exchange_symbol_unavailable_cooldowns(
+                self, symbols, now_ms=now_ms
+            )
+        )
+        self._orchestrator_exchange_unavailable_symbols = set(unavailable_symbols)
+        for pside in ("long", "short"):
+            pside_overrides = mode_overrides.setdefault(pside, {})
+            for symbol in unavailable_symbols:
+                normalized_mode = self._mode_override_to_orchestrator_mode(
+                    pside_overrides.get(symbol)
+                )
+                has_position = bool(self.has_position(symbol=symbol))
+                cooldown_mode = "tp_only" if has_position else "graceful_stop"
+                if normalized_mode in {None, "normal"} or (
+                    has_position and normalized_mode == "graceful_stop"
+                ):
+                    pside_overrides[symbol] = cooldown_mode
+        return unavailable_symbols
+
+    def _exchange_symbol_cooldown_blocks_tradability(
+        self, symbol: str, unavailable_symbols: set[str]
+    ) -> bool:
+        """Block flat planning while preserving management of held positions."""
+        return bool(
+            symbol in unavailable_symbols and not self.has_position(symbol=symbol)
+        )
+
     async def update_exchange_configs(
         self,
         symbols=None,
@@ -9855,6 +10038,11 @@ class Passivbot:
             self._exchange_config_retry_attempts = {}
         if not hasattr(self, "_exchange_config_retry_after_ms"):
             self._exchange_config_retry_after_ms = {}
+        # This is per-invocation execution evidence, not cumulative state. A
+        # connector may use it immediately after this call to charge only
+        # actual failed writes to its restart budget; retry-backoff skips must
+        # not be counted as new failures.
+        self._last_exchange_config_failed_attempt_symbols = set()
         if symbols is None:
             symbols = self.active_symbols
         symbols = list(dict.fromkeys(symbols or []))
@@ -9888,6 +10076,7 @@ class Passivbot:
                 except RestartBotException:
                     raise
                 except Exception as e:
+                    self._last_exchange_config_failed_attempt_symbols.add(symbol)
                     attempts = (
                         int(self._exchange_config_retry_attempts.get(symbol, 0) or 0)
                         + 1
@@ -9896,6 +10085,15 @@ class Passivbot:
                     backoff_s = self._exchange_config_backoff_seconds(attempts)
                     self._exchange_config_retry_after_ms[symbol] = utc_ms() + int(
                         backoff_s * 1000.0
+                    )
+                    cooldown_handler = getattr(
+                        self,
+                        "_activate_exchange_symbol_unavailable_cooldown",
+                        None,
+                    )
+                    cooldown_activated = bool(
+                        callable(cooldown_handler)
+                        and cooldown_handler(symbol, e, now_ms=retry_check_now_ms)
                     )
                     if self._is_rate_limit_like_exception(e):
                         self._health_rate_limits += 1
@@ -9906,9 +10104,10 @@ class Passivbot:
                         )
                         break
                     logging.warning(
-                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs %s",
+                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs cooldown=%s %s",
                         symbol,
                         backoff_s,
+                        "active" if cooldown_activated else "none",
                         Passivbot._format_exchange_config_error(e),
                     )
                 else:
@@ -16893,6 +17092,14 @@ class Passivbot:
             mode_overrides = Passivbot._build_orchestrator_mode_overrides_fallback(
                 self, symbols
             )
+        exchange_unavailable_symbols = (
+            Passivbot._apply_exchange_symbol_unavailable_planning_policy(
+                self,
+                symbols,
+                mode_overrides,
+                now_ms=timestamp_ms,
+            )
+        )
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -16948,6 +17155,11 @@ class Passivbot:
                 raise Exception(f"invalid market price for {symbol}: {mprice}")
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            exchange_cooldown_blocks_symbol = (
+                Passivbot._exchange_symbol_cooldown_blocks_tradability(
+                    self, symbol, exchange_unavailable_symbols
+                )
+            )
             effective_min_cost = float(
                 getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
             )
@@ -17012,7 +17224,9 @@ class Passivbot:
                     "order_book": {"bid": mprice, "ask": mprice},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": bool(
-                        active and symbol not in trailing_unavailable_symbols
+                        active
+                        and symbol not in trailing_unavailable_symbols
+                        and not exchange_cooldown_blocks_symbol
                     ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
@@ -19397,6 +19611,11 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
+        exchange_unavailable_symbols = (
+            self._apply_exchange_symbol_unavailable_planning_policy(
+                symbols, mode_overrides, now_ms=utc_ms()
+            )
+        )
         self._assert_staged_planner_preconditions(
             include_market_snapshot=False,
             context="market snapshot refresh",
@@ -19533,10 +19752,16 @@ class Passivbot:
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            exchange_cooldown_blocks_symbol = (
+                self._exchange_symbol_cooldown_blocks_tradability(
+                    symbol, exchange_unavailable_symbols
+                )
+            )
             tradable = bool(
                 active
                 and symbol not in ema_unavailable_symbols
                 and symbol not in trailing_unavailable_symbols
+                and not exchange_cooldown_blocks_symbol
             )
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:

@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
+  suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
+  flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
+  management, and protective closes bypass failed entry-only leverage setup. The initial failure
+  remains restart-budget-visible without charging skipped retry-backoff cycles; expiry retries
+  automatically, each repeated qualifying response refreshes the deadline, and bot restart retries
+  immediately. Cooldown duration validation is bounded so an extreme numeric value cannot overflow
+  and mask the original exchange failure.
+  The shared policy is available to future connectors only through their own exact exchange-code
+  classifiers.
 - Prevent symbols retained for existing positions or open-order reconciliation from becoming live
   forager candidates after removal from a side's approved set. Disapproved symbols now remain in
   graceful-stop or manual mode according to `live.auto_gs` while their existing state is managed.

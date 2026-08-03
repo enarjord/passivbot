@@ -257,6 +257,11 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Coin Selection",
         },
     },
+    "live.exchange_symbol_unavailable_cooldown_hours": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
     "live.order_replacement_churn_gate_activation_count": {
         "owner": "live",
         "consumed_by": {"live"},
@@ -1018,6 +1023,22 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Forager incumbent score tolerance. Keeps an already-selected flat forager coin when a challenger score is within this fractional normalized-score gap.",
     },
+    "live.exchange_symbol_unavailable_cooldown_hours": {
+        "visible": ["--exchange-symbol-unavailable-cooldown-hours"],
+        "hidden": [
+            "--live.exchange_symbol_unavailable_cooldown_hours",
+            "--live_exchange_symbol_unavailable_cooldown_hours",
+        ],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": (
+            "Hours to suppress new entries for a symbol after a connector proves "
+            "that the venue has temporarily disabled API trading for it. The "
+            "RAM-only cooldown resets on bot restart; 0 disables this suppression."
+        ),
+    },
     "live.order_replacement_churn_gate_activation_count": {
         "visible": ["--order-replacement-churn-gate-activation-count"],
         "hidden": [
@@ -1717,6 +1738,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.forced_mode_long",
         "live.forced_mode_short",
         "live.hedge_mode",
+        "live.exchange_symbol_unavailable_cooldown_hours",
         "live.leverage",
         "live.market_orders_allowed",
         "live.max_realized_loss_pct",

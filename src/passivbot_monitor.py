@@ -621,6 +621,17 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
     fill_confirmation_diagnostics = getattr(
         self, "_trailing_fill_confirmation_diagnostics", {}
     ) or {}
+    now_ms = int(utc_ms())
+    exchange_symbol_cooldowns = {
+        str(symbol): int(until_ms)
+        for symbol, until_ms in (
+            getattr(self, "_exchange_symbol_unavailable_until_ms", {}) or {}
+        ).items()
+        if int(until_ms or 0) > now_ms
+    }
+    exchange_symbol_cooldown_reasons = getattr(
+        self, "_exchange_symbol_unavailable_reason_by_symbol", {}
+    ) or {}
     out: dict[str, dict] = {}
     for symbol in sorted(symbols):
         market_active = bool(
@@ -641,12 +652,19 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
         tradability_reasons.extend(
             str(reason) for reason in symbol_trailing_reasons if reason
         )
+        has_position = bool(self.has_position(symbol=symbol))
+        exchange_cooldown_blocks_symbol = bool(
+            symbol in exchange_symbol_cooldowns and not has_position
+        )
+        if exchange_cooldown_blocks_symbol:
+            tradability_reasons.append("exchange_symbol_unavailable_cooldown")
         entry: dict[str, Any] = {
             "active_symbol": symbol in set(getattr(self, "active_symbols", []) or []),
             "tradable": bool(
                 market_active
                 and symbol not in ema_unavailable_symbols
                 and symbol not in trailing_unavailable_symbols
+                and not exchange_cooldown_blocks_symbol
             ),
             "tradability_reasons": sorted(set(tradability_reasons)),
             "approved": {
@@ -666,8 +684,18 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
             "qty_step": float(getattr(self, "qty_steps", {}).get(symbol, 0.0) or 0.0),
             "c_mult": float(getattr(self, "c_mults", {}).get(symbol, 0.0) or 0.0),
             "has_open_orders": bool(getattr(self, "open_orders", {}).get(symbol)),
-            "has_position": bool(self.has_position(symbol=symbol)),
+            "has_position": has_position,
         }
+        if symbol in exchange_symbol_cooldowns:
+            entry["exchange_symbol_unavailable"] = {
+                "reason": str(
+                    exchange_symbol_cooldown_reasons.get(
+                        symbol, "exchange_symbol_unavailable"
+                    )
+                ),
+                "until_ms": int(exchange_symbol_cooldowns[symbol]),
+                "entry_blocked": True,
+            }
         forager_candidate_psides = []
         for pside in ("long", "short"):
             try:
@@ -700,6 +728,8 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 rankability_reasons.append("ranking_features_unavailable")
             if symbol in candidate_ema_unavailable_symbols:
                 rankability_reasons.append("required_ema_unavailable")
+            if symbol in exchange_symbol_cooldowns:
+                rankability_reasons.append("exchange_symbol_unavailable_cooldown")
             matching_ema_reasons = sorted(
                 str(reason)
                 for reason, reason_symbols in ema_unavailable_reasons.items()
