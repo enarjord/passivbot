@@ -50,7 +50,15 @@ an order-open websocket row before the concurrent create request returns its
 exchange order ID. While a create is still freshly submitted, the connector may
 briefly yield for that acknowledgement and retry the row, but recovery still
 requires the exact acknowledged exchange ID and all existing contradiction
-checks. Price, quantity, side, or order shape alone never prove ownership.
+checks. Sparse Hyperliquid rows for orders already resting at process startup may
+instead recover side, `position_side`, and close-only intent from one exact
+exchange-ID match in the current authoritative REST open-order snapshot. A
+bounded five-minute in-memory copy of those exact semantics covers terminal
+updates which arrive just after reconciliation removes the order; it is rebuilt
+from REST after restart and does not preserve ownership or trading intent.
+Missing, duplicate, expired, or contradictory matches remain rejected and
+trigger a fresh account-state read. Price, quantity, side, or order shape alone
+never prove ownership.
 
 A successful private-websocket read and a valid individual order row are separate health
 boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,

@@ -42,6 +42,7 @@ class HyperliquidBot(CCXTBot):
     HIP3_FULL_DEX_SWEEP_INTERVAL_MS = 30 * 60_000
     ORDER_WS_CREATE_ACK_GRACE_SECONDS = 1.0
     ORDER_WS_SUBMITTED_LOOKBACK_MS = 5_000
+    ORDER_WS_OPEN_SNAPSHOT_SEMANTICS_TTL_MS = 5 * 60_000
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -586,16 +587,14 @@ class HyperliquidBot(CCXTBot):
                     try:
                         order["position_side"] = self.determine_pos_side(order)
                     except (KeyError, TypeError, ValueError) as exc:
-                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        recovered = self._hl_recover_ws_order_semantics(order)
                         if recovered is None:
                             untrusted.append((order, exc))
                             continue
-                        position_side, reduce_only = recovered
+                        position_side, reduce_only, semantics_source = recovered
                         order["position_side"] = position_side
                         order["reduceOnly"] = reduce_only
-                        order["_pb_order_semantics_source"] = (
-                            "acknowledged_exchange_order_id"
-                        )
+                        order["_pb_order_semantics_source"] = semantics_source
                         if self._hl_ws_order_has_fill_progress(order):
                             order[
                                 "_pb_order_update_requires_authoritative_refresh"
@@ -615,16 +614,14 @@ class HyperliquidBot(CCXTBot):
                     await asyncio.sleep(self.ORDER_WS_CREATE_ACK_GRACE_SECONDS)
                     still_untrusted = []
                     for order, exc in untrusted:
-                        recovered = self._hl_acknowledged_ws_order_semantics(order)
+                        recovered = self._hl_recover_ws_order_semantics(order)
                         if recovered is None:
                             still_untrusted.append((order, exc))
                             continue
-                        position_side, reduce_only = recovered
+                        position_side, reduce_only, semantics_source = recovered
                         order["position_side"] = position_side
                         order["reduceOnly"] = reduce_only
-                        order["_pb_order_semantics_source"] = (
-                            "acknowledged_exchange_order_id"
-                        )
+                        order["_pb_order_semantics_source"] = semantics_source
                         if self._hl_ws_order_has_fill_progress(order):
                             order[
                                 "_pb_order_update_requires_authoritative_refresh"
@@ -723,27 +720,8 @@ class HyperliquidBot(CCXTBot):
         """
         if not isinstance(order, dict):
             return None
-        info = order.get("info")
-        info_wrapper = info if isinstance(info, dict) else {}
-        nested_order = info_wrapper.get("order")
-        raw_info = nested_order if isinstance(nested_order, dict) else info_wrapper
-        raw_source_candidates = (info_wrapper, raw_info)
-        raw_sources = tuple(
-            source
-            for index, source in enumerate(raw_source_candidates)
-            if source
-            and all(
-                source is not prior for prior in raw_source_candidates[:index]
-            )
-        )
-
-        exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
-        exchange_ids = {
-            str(source.get(key))
-            for source in (order, *raw_sources)
-            for key in exchange_id_keys
-            if source.get(key) not in (None, "")
-        }
+        raw_sources = self._hl_ws_order_raw_sources(order)
+        exchange_ids = self._hl_ws_order_exchange_ids(order, raw_sources)
         if len(exchange_ids) != 1:
             return None
         exchange_id = next(iter(exchange_ids))
@@ -796,6 +774,135 @@ class HyperliquidBot(CCXTBot):
         )
         if action_side != position_side:
             return None
+        return self._hl_validate_recovered_ws_order_semantics(
+            order,
+            raw_sources=raw_sources,
+            position_side=position_side,
+            reduce_only=reduce_only,
+        )
+
+    def _hl_recover_ws_order_semantics(
+        self, order: dict
+    ) -> tuple[str, bool, str] | None:
+        """Recover sparse semantics from exchange truth, then local create acknowledgement."""
+        recovered = self._hl_open_snapshot_ws_order_semantics(order)
+        if recovered is not None:
+            return (*recovered, "authoritative_open_order_snapshot")
+        recovered = self._hl_acknowledged_ws_order_semantics(order)
+        if recovered is not None:
+            return (*recovered, "acknowledged_exchange_order_id")
+        return None
+
+    @staticmethod
+    def _hl_ws_order_raw_sources(order: dict) -> tuple[dict, ...]:
+        """Return distinct native websocket payload wrappers for validation."""
+        info = order.get("info")
+        info_wrapper = info if isinstance(info, dict) else {}
+        nested_order = info_wrapper.get("order")
+        raw_info = nested_order if isinstance(nested_order, dict) else info_wrapper
+        raw_source_candidates = (info_wrapper, raw_info)
+        return tuple(
+            source
+            for index, source in enumerate(raw_source_candidates)
+            if source
+            and all(source is not prior for prior in raw_source_candidates[:index])
+        )
+
+    @staticmethod
+    def _hl_ws_order_exchange_ids(
+        order: dict, raw_sources: tuple[dict, ...]
+    ) -> set[str]:
+        exchange_id_keys = ("id", "order_id", "orderId", "orderID", "ordId", "oid")
+        return {
+            str(source.get(key))
+            for source in (order, *raw_sources)
+            for key in exchange_id_keys
+            if source.get(key) not in (None, "")
+        }
+
+    def _hl_open_snapshot_ws_order_semantics(
+        self, order: dict
+    ) -> tuple[str, bool] | None:
+        """Recover sparse WS semantics from the exact authoritative REST order.
+
+        The in-memory ``open_orders`` view is refreshed from exchange state and
+        survives no process-local provenance assumptions.  This makes recovery
+        reproducible after restart while still requiring one exact exchange ID
+        and rejecting ambiguous, missing, or contradictory payloads.
+        """
+        if not isinstance(order, dict):
+            return None
+        raw_sources = self._hl_ws_order_raw_sources(order)
+        exchange_ids = self._hl_ws_order_exchange_ids(order, raw_sources)
+        if len(exchange_ids) != 1:
+            return None
+        exchange_id = next(iter(exchange_ids))
+        matches = [
+            existing
+            for orders in (getattr(self, "open_orders", {}) or {}).values()
+            if isinstance(orders, list)
+            for existing in orders
+            if isinstance(existing, dict)
+            and self._extract_order_exchange_id(existing) == exchange_id
+        ]
+        if len(matches) > 1:
+            return None
+        if len(matches) == 1:
+            existing = matches[0]
+            side = str(existing.get("side") or "").lower()
+            position_side = str(existing.get("position_side") or "").lower()
+            reduce_only = self._canonical_open_order_reduce_only(existing)
+        else:
+            now_ms = utc_ms()
+            semantics_cache = getattr(
+                self, "_hl_open_order_semantics_by_exchange_id", {}
+            )
+            if not isinstance(semantics_cache, dict):
+                semantics_cache = {}
+            cutoff_ms = now_ms - self.ORDER_WS_OPEN_SNAPSHOT_SEMANTICS_TTL_MS
+            semantics_cache = {
+                key: value
+                for key, value in semantics_cache.items()
+                if isinstance(value, dict)
+                and int(value.get("last_seen_ms", 0) or 0) >= cutoff_ms
+            }
+            self._hl_open_order_semantics_by_exchange_id = semantics_cache
+            existing = semantics_cache.get(exchange_id)
+            if not isinstance(existing, dict):
+                return None
+            side = str(existing.get("side") or "").lower()
+            position_side = str(existing.get("position_side") or "").lower()
+            reduce_only = existing.get("reduce_only")
+        if (
+            side not in {"buy", "sell"}
+            or position_side not in {"long", "short"}
+            or not isinstance(reduce_only, bool)
+        ):
+            return None
+        if str(order.get("side") or "").lower() != side:
+            return None
+        action_side = self._derive_one_way_position_side(
+            {"side": side, "reduceOnly": reduce_only}
+        )
+        if action_side != position_side:
+            return None
+        return self._hl_validate_recovered_ws_order_semantics(
+            order,
+            raw_sources=raw_sources,
+            position_side=position_side,
+            reduce_only=reduce_only,
+        )
+
+    def _hl_validate_recovered_ws_order_semantics(
+        self,
+        order: dict,
+        *,
+        raw_sources: tuple[dict, ...],
+        position_side: str,
+        reduce_only: bool,
+    ) -> tuple[str, bool] | None:
+        """Reject any websocket field contradicting recovered semantics."""
+        side = str(order.get("side") or "").lower()
         raw_side_values = [
             source.get("side")
             for source in raw_sources
@@ -964,7 +1071,48 @@ class HyperliquidBot(CCXTBot):
         for elm in fetched:
             elm["position_side"] = self.determine_pos_side(elm)
             elm["qty"] = elm["amount"]
-        return sorted(fetched, key=lambda x: x["timestamp"])
+        normalized = sorted(fetched, key=lambda x: x["timestamp"])
+        self._hl_note_authoritative_open_order_semantics(normalized)
+        return normalized
+
+    def _hl_note_authoritative_open_order_semantics(self, orders: list[dict]) -> None:
+        """Retain a bounded exact-ID semantic hint for terminal WS updates.
+
+        Reconciliation may remove a canceled or filled order from ``open_orders``
+        before its sparse websocket update arrives. This cache retains only
+        semantics already proven by a REST open-order snapshot and is rebuilt
+        after every process restart.
+        """
+        now_ms = utc_ms()
+        cutoff_ms = now_ms - self.ORDER_WS_OPEN_SNAPSHOT_SEMANTICS_TTL_MS
+        cache = getattr(self, "_hl_open_order_semantics_by_exchange_id", {})
+        if not isinstance(cache, dict):
+            cache = {}
+        cache = {
+            key: value
+            for key, value in cache.items()
+            if isinstance(value, dict)
+            and int(value.get("last_seen_ms", 0) or 0) >= cutoff_ms
+        }
+        for order in orders:
+            exchange_id = self._extract_order_exchange_id(order)
+            side = str(order.get("side") or "").lower()
+            position_side = str(order.get("position_side") or "").lower()
+            reduce_only = self._canonical_open_order_reduce_only(order)
+            if (
+                not exchange_id
+                or side not in {"buy", "sell"}
+                or position_side not in {"long", "short"}
+                or not isinstance(reduce_only, bool)
+            ):
+                continue
+            cache[exchange_id] = {
+                "side": side,
+                "position_side": position_side,
+                "reduce_only": reduce_only,
+                "last_seen_ms": now_ms,
+            }
+        self._hl_open_order_semantics_by_exchange_id = cache
 
     async def fetch_open_orders(self, symbol: str = None):
         fetched = await self._do_fetch_open_orders(symbol=symbol)
