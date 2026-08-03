@@ -30,6 +30,31 @@ reconciliation/tolerance path until that venue receives a connector-specific con
 separate global retirement of the old initial-entry-only distance gate does not enable the new
 churn policy there.
 
+### Temporary exchange-side symbol suspension
+
+Some venues reject otherwise valid authenticated writes because API trading for one symbol is
+temporarily unavailable. This is a connector-owned classification boundary: the shared runtime
+must never infer a suspension from exception text or a portable-looking numeric code. A supported
+connector may opt in only with an exact structured exchange code and a fixture-backed regression
+test.
+
+On a proven suspension, `live.exchange_symbol_unavailable_cooldown_hours` starts a per-symbol,
+RAM-only cooldown (default `6.0` hours; `0` disables it; maximum `876600` hours). Values outside
+that bounded conversion domain are rejected during configuration and cannot mask the original
+exchange failure. A flat affected symbol is nontradable for
+new planning through `graceful_stop`. An affected symbol with a position uses `tp_only`, overriding
+`normal` or `graceful_stop`, so all further entries are suppressed while ordinary closes remain
+available without successful leverage refresh. Explicit `panic` and `manual` modes remain stronger.
+The initial failed entry/configuration write retains the normal execution failure/restart-budget
+consequences. Retry-backoff cycles with no authenticated write do not count as additional failures;
+the cooldown prevents repeated futile entry writes rather than hiding the fault.
+Expiry restores on-demand attempts, another classified response starts a new cooldown, and process
+restart deliberately clears the state and retries immediately.
+
+Future connectors encountering an equivalent venue rule must add their own exact classifier. Do
+not generalize one exchange's code, match human-readable messages, persist cooldowns across runs, or
+make held positions wholly nontradable.
+
 ## Private Order Websocket Normalization
 
 Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
@@ -50,7 +75,24 @@ an order-open websocket row before the concurrent create request returns its
 exchange order ID. While a create is still freshly submitted, the connector may
 briefly yield for that acknowledgement and retry the row, but recovery still
 requires the exact acknowledged exchange ID and all existing contradiction
-checks. Price, quantity, side, or order shape alone never prove ownership.
+checks. Sparse Hyperliquid rows for orders already resting at process startup may
+instead recover side, `position_side`, and close-only intent from one exact
+exchange-ID match in the current authoritative REST open-order snapshot. A
+bounded five-minute in-memory copy of those exact semantics covers terminal
+updates which arrive just after reconciliation removes the order; it is rebuilt
+from REST after restart and does not preserve ownership or trading intent.
+Every supplied exchange-ID and client-ID alias must agree with the canonical
+identity retained by the snapshot or its bounded copy. A contradictory current
+snapshot row invalidates any older cached semantics for its exchange-ID aliases.
+Missing, duplicate, expired, or contradictory matches remain rejected and
+trigger a fresh account-state read;
+authoritative snapshot contradictions must not fall back to process-local
+acknowledgement evidence. A unified `reduceOnly` value of `false` or `null` is
+treated as a CCXT placeholder only when the native row omits that field; an
+explicit native value still must agree with the recovered semantics. All
+snapshot-recovered rows request authoritative refresh because an exact exchange
+ID proves semantics but not local ownership. Price, quantity, side, or order
+shape alone never prove ownership.
 
 A successful private-websocket read and a valid individual order row are separate health
 boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,
@@ -536,6 +578,14 @@ failure.
 
 Primary references: [WEEX V3 error codes](https://www.weex.com/api-doc/contract/ExampleOfErrorCode)
 and [WEEX API integration preparation](https://www.weex.com/api-doc/spot/QuickStart/IntegrationPreparation).
+
+### API-unsupported symbols
+
+WEEX error code `-1058` means that the trading pair is not supported through the API. The WEEX
+connector classifies only this exact structured response for the shared temporary symbol-suspension
+policy. It must not classify raw message text, nearby codes such as `-1056`, or generic permission
+errors. After the configured cooldown expires, the next required exchange configuration or order
+write retries the symbol; another `-1058` begins a fresh cooldown.
 
 ### Market data and CCXT compatibility
 

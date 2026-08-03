@@ -4,6 +4,36 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
+  suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
+  flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
+  management, and protective closes bypass failed entry-only leverage setup. The initial failure
+  remains restart-budget-visible without charging skipped retry-backoff cycles; expiry retries
+  automatically, each repeated qualifying response refreshes the deadline, and bot restart retries
+  immediately. Cooldown duration validation is bounded so an extreme numeric value cannot overflow
+  and mask the original exchange failure.
+  The shared policy is available to future connectors only through their own exact exchange-code
+  classifiers.
+- Prevent symbols retained for existing positions or open-order reconciliation from becoming live
+  forager candidates after removal from a side's approved set. Disapproved symbols now remain in
+  graceful-stop or manual mode according to `live.auto_gs` while their existing state is managed.
+- Reduce peak memory during combined candle preparation by releasing exchange-candidate frames
+  after volume normalization and consuming selected frames as dense arrays are materialized.
+- Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the
+  entire planner cycle when one active symbol lacks a completed candle. Known missing EMA inputs
+  remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
+  strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
+  strategy branches remain independent when their input needs differ, and independent panic,
+  WEL, and TWEL reducers may continue when their own inputs are complete.
+
+- Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
+  full-range sources now follow configured exchange priority instead of total volume, robust
+  complete-day median-log estimates replace arithmetic volume averaging, and underdetermined
+  normalization fails loudly. `backtest.volume_normalization` now controls scaling and cache
+  identity, while cache manifests and backtest dataset artifacts retain source-selection and
+  normalization provenance.
+- Reduce optimizer-suite startup time and peak memory by copying materialized candle datasets
+  directly into shared memory instead of creating a redundant full-size intermediate array.
 - Speed up combined backtest and optimizer-suite candle materialization by writing bounded
   time-major chunks instead of repeatedly sweeping the full memmap once per coin.
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.
@@ -169,6 +199,9 @@ All notable user-facing changes will be documented in this file.
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing
   one slow symbol from consuming the batch budget and starving other candidates.
+  The remaining cycle time is also shared across the remaining selected surfaces,
+  so sparse-history pagination cannot consume the entire wall-time allowance before
+  later candidates receive a refresh attempt.
 - Added production Bitunix USDT perpetual-futures support through a native signed REST and
   WebSocket connector, including complete market metadata and top-of-book coverage, live-candle
   pagination, hedge-mode order and position reconciliation, account configuration, realized-PnL
@@ -294,6 +327,14 @@ All notable user-facing changes will be documented in this file.
   transport health: unnormalizable rows are discarded with a bounded warning and force an
   authoritative account-state refresh, while valid rows in the same message are processed without
   reconnecting. Bitget side-attribution failures now use this path without logging raw payloads.
+- Hyperliquid sparse private order updates now recover mandatory one-way position-side and
+  close-only semantics by exact exchange order ID from the current authoritative REST open-order
+  snapshot. Orders already resting at bot startup therefore avoid repeated semantic-rejection REST
+  refreshes. A bounded recent copy covers terminal updates arriving just after reconciliation
+  removes the order. Exchange-ID and client-ID aliases must agree, authoritative contradictions
+  invalidate older cached semantics and cannot fall back to local acknowledgements, and
+  snapshot-recovered rows still force account refresh because the snapshot proves semantics rather
+  than local ownership. Missing, ambiguous, stale, and contradictory identities remain fail-closed.
 - Binance's explicit `MarginModeAlreadySet` response is now treated as a successful configuration
   no-op at DEBUG instead of an ERROR; unknown margin-mode failures retain their existing loud
   handling.

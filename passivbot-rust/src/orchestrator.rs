@@ -28,6 +28,7 @@ pub struct ForagerHysteresisState {
 }
 
 mod core {
+    use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
         select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
@@ -44,10 +45,11 @@ mod core {
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
         strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-        strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
-        EmaGateMode, NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest,
-        StrategySide,
+        strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1h_for_request, strategy_needs_log_range_1m,
+        strategy_needs_log_range_1m_for_request, strategy_offset_volatility_span_minutes,
+        strategy_requires_sequential_entry_staging, EmaGateMode, NextStepHint, PeekBehavior,
+        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -104,6 +106,15 @@ mod core {
         RiskCritical,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum StrategyInputScope {
+        ForagerSelection,
+        OneWayArbitration,
+        StrategyOrders,
+        Unstuck,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct IdealOrder {
@@ -137,6 +148,11 @@ mod core {
         NonTradableHasPosition {
             symbol_idx: usize,
             pside: PositionSide,
+        },
+        StrategyInputUnavailable {
+            symbol_idx: usize,
+            pside: PositionSide,
+            scope: StrategyInputScope,
         },
         TwelRepairBlockedByLossGate {
             pside: PositionSide,
@@ -389,6 +405,11 @@ mod core {
         pub order_book: OrderBook, // must have bid>0 and ask>0
         pub exchange: ExchangeParams,
         pub tradable: bool,
+        /// Live-only authorization to scope absent EMA inputs to the strategy
+        /// actions that consume them. Defaults to strict for backtests and all
+        /// callers that do not explicitly establish live data unavailability.
+        #[serde(default)]
+        pub allow_missing_strategy_inputs: bool,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -2042,6 +2063,20 @@ mod core {
         }
     }
 
+    fn unavailable_forager_candidate(index: usize) -> ForagerCandidate {
+        ForagerCandidate {
+            index,
+            enabled: false,
+            volume_score: 0.0,
+            volatility_score: 0.0,
+            bid: 0.0,
+            ask: 0.0,
+            ema_lower: 0.0,
+            ema_upper: 0.0,
+            entry_initial_ema_dist: 0.0,
+        }
+    }
+
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
@@ -2125,46 +2160,54 @@ mod core {
                         strategy_initial_qty_pct(&strategy_params),
                     );
                 }
-                out.push(ForagerCandidate {
-                    index: s.symbol_idx,
-                    enabled: false,
-                    volume_score: 0.0,
-                    volatility_score: 0.0,
-                    bid: 0.0,
-                    ask: 0.0,
-                    ema_lower: 0.0,
-                    ema_upper: 0.0,
-                    entry_initial_ema_dist: 0.0,
-                });
+                out.push(unavailable_forager_candidate(s.symbol_idx));
                 continue;
             }
             let volume_score = if volume_required {
-                require_forager_input(
-                    s.symbol_idx,
-                    "forager_volume_score",
-                    ema_lookup(
-                        &forager_m1.volume,
-                        side.bot_params.filter_volume_ema_span_1m,
-                    )
-                    .ok_or(OrchestratorError::MissingEma {
-                        symbol_idx: s.symbol_idx,
-                    })?,
-                )?
+                let value = match ema_lookup(
+                    &forager_m1.volume,
+                    side.bot_params.filter_volume_ema_span_1m,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        handle_strategy_input_error(
+                            OrchestratorError::MissingEma {
+                                symbol_idx: s.symbol_idx,
+                            },
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
+                        )?;
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        continue;
+                    }
+                };
+                require_forager_input(s.symbol_idx, "forager_volume_score", value)?
             } else {
                 0.0
             };
             let volatility_score = if volatility_required {
-                require_forager_input(
-                    s.symbol_idx,
-                    "forager_volatility_score",
-                    ema_lookup(
-                        &forager_m1.log_range,
-                        side.bot_params.filter_volatility_ema_span_1m,
-                    )
-                    .ok_or(OrchestratorError::MissingEma {
-                        symbol_idx: s.symbol_idx,
-                    })?,
-                )?
+                let value = match ema_lookup(
+                    &forager_m1.log_range,
+                    side.bot_params.filter_volatility_ema_span_1m,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        handle_strategy_input_error(
+                            OrchestratorError::MissingEma {
+                                symbol_idx: s.symbol_idx,
+                            },
+                            s,
+                            pside,
+                            StrategyInputScope::ForagerSelection,
+                            diagnostics,
+                        )?;
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        continue;
+                    }
+                };
+                require_forager_input(s.symbol_idx, "forager_volatility_score", value)?
             } else {
                 0.0
             };
@@ -2181,17 +2224,7 @@ mod core {
                     | Err(OrchestratorError::NonFiniteInput {
                         field: "ema_bands", ..
                     }) => {
-                        out.push(ForagerCandidate {
-                            index: s.symbol_idx,
-                            enabled: false,
-                            volume_score: 0.0,
-                            volatility_score: 0.0,
-                            bid: 0.0,
-                            ask: 0.0,
-                            ema_lower: 0.0,
-                            ema_upper: 0.0,
-                            entry_initial_ema_dist: 0.0,
-                        });
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
                         continue;
                     }
                     Err(err) => return Err(err),
@@ -2204,17 +2237,7 @@ mod core {
                 ) {
                     Ok(v) => v,
                     Err(_) => {
-                        out.push(ForagerCandidate {
-                            index: s.symbol_idx,
-                            enabled: false,
-                            volume_score: 0.0,
-                            volatility_score: 0.0,
-                            bid: 0.0,
-                            ask: 0.0,
-                            ema_lower: 0.0,
-                            ema_upper: 0.0,
-                            entry_initial_ema_dist: 0.0,
-                        });
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
                         continue;
                     }
                 };
@@ -2303,6 +2326,30 @@ mod core {
         }
     }
 
+    fn handle_strategy_input_error(
+        err: OrchestratorError,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        scope: StrategyInputScope,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) -> Result<(), OrchestratorError> {
+        if symbol.allow_missing_strategy_inputs
+            && matches!(err, OrchestratorError::MissingEma { .. })
+        {
+            let warning = OrchestratorWarning::StrategyInputUnavailable {
+                symbol_idx: symbol.symbol_idx,
+                pside,
+                scope,
+            };
+            if !diagnostics.warnings.contains(&warning) {
+                diagnostics.warnings.push(warning);
+            }
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
     fn strategy_order_generation_needs_ema_for_symbol_side(
         params: &StrategyParams,
         pside: PositionSide,
@@ -2355,7 +2402,7 @@ mod core {
                 }
             }
             StrategyParams::EmaAnchor(_) => wants_entries || wants_closes,
-            StrategyParams::TrailingGridV7(_) => wants_entries || wants_closes,
+            StrategyParams::TrailingGridV7(_) => wants_entries,
         }
     }
 
@@ -2386,6 +2433,224 @@ mod core {
                 order_type: order.order_type,
             });
         }
+    }
+
+    fn calc_independent_wel_ideal_order(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        runtime_budget: RuntimeBudgetState,
+    ) -> Option<IdealOrder> {
+        if !matches!(
+            input.global.strategy_kind,
+            StrategyKind::TrailingMartingale | StrategyKind::TrailingGridV7
+        ) {
+            return None;
+        }
+        let side = match pside {
+            PositionSide::Long => &symbol.long,
+            PositionSide::Short => &symbol.short,
+        };
+        if side.position.size == 0.0 {
+            return None;
+        }
+        let state = StateParams {
+            balance: input.balance,
+            order_book: symbol.order_book,
+            ..Default::default()
+        };
+        let runtime_context = RuntimeOrderContext {
+            effective_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
+        };
+        let wallet_exposure = calc_wallet_exposure(
+            symbol.exchange.c_mult,
+            input.balance,
+            side.position.size.abs(),
+            side.position.price,
+        );
+        let order = match pside {
+            PositionSide::Long => calc_wel_auto_reduce_long(
+                &symbol.exchange,
+                &state,
+                &side.bot_params,
+                &runtime_context,
+                &side.position,
+                wallet_exposure,
+            ),
+            PositionSide::Short => calc_wel_auto_reduce_short(
+                &symbol.exchange,
+                &state,
+                &side.bot_params,
+                &runtime_context,
+                &side.position,
+                wallet_exposure,
+            ),
+        }?;
+        Some(IdealOrder {
+            symbol_idx: symbol.symbol_idx,
+            pside,
+            qty: order.qty,
+            price: order.price,
+            order_type: order.order_type,
+        })
+    }
+
+    fn generate_strategy_ideal_orders(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        cache: &mut [CachedSideDerived],
+        runtime_budget: RuntimeBudgetState,
+        wants_entries: bool,
+        wants_closes: bool,
+    ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>), OrchestratorError> {
+        let (strategy_side, side) = match pside {
+            PositionSide::Long => (StrategySide::Long, &symbol.long),
+            PositionSide::Short => (StrategySide::Short, &symbol.short),
+        };
+        let strategy_params = cached_strategy_params_for_symbol_side(
+            cache,
+            symbol.symbol_idx,
+            input.global.strategy_kind,
+            strategy_side,
+            side,
+        )?;
+        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
+            &strategy_params,
+            pside,
+            wants_entries,
+            wants_closes,
+            &side.position,
+            &symbol.exchange,
+            &symbol.order_book,
+            &side.bot_params,
+            runtime_budget,
+            input.balance,
+        ) {
+            cached_ema_bands(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            EMABands::default()
+        };
+        let volatility_ema_1h = if strategy_needs_log_range_1h_for_request(
+            &strategy_params,
+            wants_entries,
+            wants_closes,
+        ) {
+            cached_volatility_ema_1h(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            0.0
+        };
+        let volatility_ema_1m = if strategy_needs_log_range_1m_for_request(
+            &strategy_params,
+            wants_entries,
+            wants_closes,
+        ) {
+            cached_volatility_ema_1m(cache, symbol.symbol_idx, &symbol.emas, &strategy_params)?
+        } else {
+            0.0
+        };
+        let state = StateParams {
+            balance: input.balance,
+            order_book: symbol.order_book,
+            ema_bands,
+            volatility_ema_1m,
+            volatility_ema_1h,
+        };
+        let generated = generate_strategy_orders(
+            strategy_kind_for_symbol_side(&input.global),
+            strategy_side,
+            StrategyRequest {
+                wants_entries,
+                wants_closes,
+                exchange: &symbol.exchange,
+                state: &state,
+                bot_params: &side.bot_params,
+                strategy_params: &strategy_params,
+                runtime_budget,
+                position: &side.position,
+                trailing: &side.trailing,
+                next_candle: symbol.next_candle.as_ref().map(|candle| NextStepHint {
+                    low: candle.low,
+                    high: candle.high,
+                    tradable: candle.tradable,
+                }),
+                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
+                    expand_entries: match pside {
+                        PositionSide::Long => hints.expand_grid_long.contains(&symbol.symbol_idx),
+                        PositionSide::Short => hints.expand_grid_short.contains(&symbol.symbol_idx),
+                    },
+                    expand_closes: match pside {
+                        PositionSide::Long => hints.expand_close_long.contains(&symbol.symbol_idx),
+                        PositionSide::Short => {
+                            hints.expand_close_short.contains(&symbol.symbol_idx)
+                        }
+                    },
+                }),
+            },
+        );
+        let mut entries = Vec::new();
+        append_strategy_orders_as_ideal(&mut entries, generated.entries, symbol.symbol_idx, pside);
+        apply_add_order_gates(
+            &mut entries,
+            pside,
+            input.timestamp_ms,
+            side.last_increase_fill_timestamp_ms,
+            side.bot_params.risk_entry_cooldown_minutes,
+            strategy_requires_sequential_entry_staging(&strategy_params),
+        );
+        let mut closes = Vec::new();
+        append_strategy_orders_as_ideal(&mut closes, generated.closes, symbol.symbol_idx, pside);
+        Ok((entries, closes))
+    }
+
+    fn generate_available_strategy_ideal_orders(
+        input: &OrchestratorInput,
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        cache: &mut [CachedSideDerived],
+        runtime_budget: RuntimeBudgetState,
+        wants_entries: bool,
+        wants_closes: bool,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
+        let requests = if symbol.allow_missing_strategy_inputs && wants_entries && wants_closes {
+            [(true, false), (false, true)]
+        } else {
+            [(wants_entries, wants_closes), (false, false)]
+        };
+        let mut entries = Vec::new();
+        let mut closes = Vec::new();
+        let mut close_inputs_unavailable = false;
+        for (request_entries, request_closes) in requests {
+            if !request_entries && !request_closes {
+                continue;
+            }
+            match generate_strategy_ideal_orders(
+                input,
+                symbol,
+                pside,
+                cache,
+                runtime_budget,
+                request_entries,
+                request_closes,
+            ) {
+                Ok((generated_entries, generated_closes)) => {
+                    entries.extend(generated_entries);
+                    closes.extend(generated_closes);
+                }
+                Err(err) => {
+                    handle_strategy_input_error(
+                        err,
+                        symbol,
+                        pside,
+                        StrategyInputScope::StrategyOrders,
+                        diagnostics,
+                    )?;
+                    close_inputs_unavailable |= request_closes;
+                }
+            }
+        }
+        Ok((entries, closes, close_inputs_unavailable))
     }
 
     #[derive(Clone)]
@@ -3075,14 +3340,46 @@ mod core {
                     );
                     let params_long = strategy_params_long?;
                     let params_short = strategy_params_short?;
-                    let bands_long =
-                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, &params_long)?;
-                    let bands_short = cached_ema_bands(
+                    let bands_long = match cached_ema_bands(
+                        &mut workspace.derived_long,
+                        idx,
+                        &s.emas,
+                        &params_long,
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Long,
+                                StrategyInputScope::OneWayArbitration,
+                                &mut diagnostics,
+                            )?;
+                            workspace.one_way_block_initial_long[idx] = true;
+                            workspace.one_way_block_initial_short[idx] = true;
+                            continue;
+                        }
+                    };
+                    let bands_short = match cached_ema_bands(
                         &mut workspace.derived_short,
                         idx,
                         &s.emas,
                         &params_short,
-                    )?;
+                    ) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                PositionSide::Short,
+                                StrategyInputScope::OneWayArbitration,
+                                &mut diagnostics,
+                            )?;
+                            workspace.one_way_block_initial_long[idx] = true;
+                            workspace.one_way_block_initial_short[idx] = true;
+                            continue;
+                        }
+                    };
 
                     let entry_threshold_long =
                         bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
@@ -3178,98 +3475,28 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params = cached_strategy_params_for_symbol_side(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            input.global.strategy_kind,
-                            StrategySide::Long,
-                            &s.long,
-                        )?;
-                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
-                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
-                            &strategy_params,
-                            PositionSide::Long,
-                            wants_entries,
-                            wants_closes,
-                            &s.long.position,
-                            &s.exchange,
-                            &s.order_book,
-                            &s.long.bot_params,
-                            runtime_budget,
-                            input.balance,
-                        ) {
-                            cached_ema_bands(
+                        let (generated_entries, generated_closes, close_inputs_unavailable) =
+                            generate_available_strategy_ideal_orders(
+                                input,
+                                s,
+                                PositionSide::Long,
                                 &mut workspace.derived_long,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?
-                        } else {
-                            EMABands::default()
-                        };
-                        let volatility_ema_1h = cached_volatility_ema_1h(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let volatility_ema_1m = cached_volatility_ema_1m(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let state = StateParams {
-                            balance: input.balance,
-                            order_book: s.order_book,
-                            ema_bands,
-                            volatility_ema_1m,
-                            volatility_ema_1h,
-                        };
-                        let generated = generate_strategy_orders(
-                            strategy_kind_for_symbol_side(&input.global),
-                            StrategySide::Long,
-                            StrategyRequest {
+                                workspace.runtime_budget_long[s.symbol_idx],
                                 wants_entries,
                                 wants_closes,
-                                exchange: &s.exchange,
-                                state: &state,
-                                bot_params: &s.long.bot_params,
-                                strategy_params: &strategy_params,
-                                runtime_budget,
-                                position: &s.long.position,
-                                trailing: &s.long.trailing,
-                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
-                                    low: nc.low,
-                                    high: nc.high,
-                                    tradable: nc.tradable,
-                                }),
-                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
-                                    expand_entries: hints.expand_grid_long.contains(&s.symbol_idx),
-                                    expand_closes: hints.expand_close_long.contains(&s.symbol_idx),
-                                }),
-                            },
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut entries,
-                            generated.entries,
-                            s.symbol_idx,
-                            PositionSide::Long,
-                        );
-                        apply_add_order_gates(
-                            &mut entries,
-                            PositionSide::Long,
-                            input.timestamp_ms,
-                            s.long.last_increase_fill_timestamp_ms,
-                            s.long.bot_params.risk_entry_cooldown_minutes,
-                            strategy_requires_sequential_entry_staging(&strategy_params),
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut closes,
-                            generated.closes,
-                            s.symbol_idx,
-                            PositionSide::Long,
-                        );
+                                &mut diagnostics,
+                            )?;
+                        (entries, closes) = (generated_entries, generated_closes);
+                        if close_inputs_unavailable {
+                            if let Some(order) = calc_independent_wel_ideal_order(
+                                input,
+                                s,
+                                PositionSide::Long,
+                                workspace.runtime_budget_long[s.symbol_idx],
+                            ) {
+                                closes.push(order);
+                            }
+                        }
                     }
                 }
 
@@ -3344,98 +3571,28 @@ mod core {
                     let wants_entries = should_generate_entries(mode, has_pos, allow_initial);
                     let wants_closes = should_generate_closes(mode, has_pos);
                     if wants_entries || wants_closes {
-                        let strategy_params = cached_strategy_params_for_symbol_side(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            input.global.strategy_kind,
-                            StrategySide::Short,
-                            &s.short,
-                        )?;
-                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
-                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
-                            &strategy_params,
-                            PositionSide::Short,
-                            wants_entries,
-                            wants_closes,
-                            &s.short.position,
-                            &s.exchange,
-                            &s.order_book,
-                            &s.short.bot_params,
-                            runtime_budget,
-                            input.balance,
-                        ) {
-                            cached_ema_bands(
+                        let (generated_entries, generated_closes, close_inputs_unavailable) =
+                            generate_available_strategy_ideal_orders(
+                                input,
+                                s,
+                                PositionSide::Short,
                                 &mut workspace.derived_short,
-                                s.symbol_idx,
-                                &s.emas,
-                                &strategy_params,
-                            )?
-                        } else {
-                            EMABands::default()
-                        };
-                        let volatility_ema_1h = cached_volatility_ema_1h(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let volatility_ema_1m = cached_volatility_ema_1m(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            &s.emas,
-                            &strategy_params,
-                        )?;
-                        let state = StateParams {
-                            balance: input.balance,
-                            order_book: s.order_book,
-                            ema_bands,
-                            volatility_ema_1m,
-                            volatility_ema_1h,
-                        };
-                        let generated = generate_strategy_orders(
-                            strategy_kind_for_symbol_side(&input.global),
-                            StrategySide::Short,
-                            StrategyRequest {
+                                workspace.runtime_budget_short[s.symbol_idx],
                                 wants_entries,
                                 wants_closes,
-                                exchange: &s.exchange,
-                                state: &state,
-                                bot_params: &s.short.bot_params,
-                                strategy_params: &strategy_params,
-                                runtime_budget,
-                                position: &s.short.position,
-                                trailing: &s.short.trailing,
-                                next_candle: s.next_candle.as_ref().map(|nc| NextStepHint {
-                                    low: nc.low,
-                                    high: nc.high,
-                                    tradable: nc.tradable,
-                                }),
-                                peek: input.peek_hints.as_ref().map(|hints| PeekBehavior {
-                                    expand_entries: hints.expand_grid_short.contains(&s.symbol_idx),
-                                    expand_closes: hints.expand_close_short.contains(&s.symbol_idx),
-                                }),
-                            },
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut entries,
-                            generated.entries,
-                            s.symbol_idx,
-                            PositionSide::Short,
-                        );
-                        apply_add_order_gates(
-                            &mut entries,
-                            PositionSide::Short,
-                            input.timestamp_ms,
-                            s.short.last_increase_fill_timestamp_ms,
-                            s.short.bot_params.risk_entry_cooldown_minutes,
-                            strategy_requires_sequential_entry_staging(&strategy_params),
-                        );
-                        append_strategy_orders_as_ideal(
-                            &mut closes,
-                            generated.closes,
-                            s.symbol_idx,
-                            PositionSide::Short,
-                        );
+                                &mut diagnostics,
+                            )?;
+                        (entries, closes) = (generated_entries, generated_closes);
+                        if close_inputs_unavailable {
+                            if let Some(order) = calc_independent_wel_ideal_order(
+                                input,
+                                s,
+                                PositionSide::Short,
+                                workspace.runtime_budget_short[s.symbol_idx],
+                            ) {
+                                closes.push(order);
+                            }
+                        }
                     }
                 }
 
@@ -3473,12 +3630,24 @@ mod core {
                     StrategySide::Long,
                     &sym.long,
                 )?;
-                cached_ema_bands(
+                match cached_ema_bands(
                     &mut workspace.derived_long,
                     s.symbol_idx,
                     &sym.emas,
                     &strategy_params,
-                )?
+                ) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err,
+                            sym,
+                            PositionSide::Long,
+                            StrategyInputScope::Unstuck,
+                            &mut diagnostics,
+                        )?;
+                        continue;
+                    }
+                }
             } else {
                 EMABands::default()
             };
@@ -3530,12 +3699,24 @@ mod core {
                     StrategySide::Short,
                     &sym.short,
                 )?;
-                cached_ema_bands(
+                match cached_ema_bands(
                     &mut workspace.derived_short,
                     s.symbol_idx,
                     &sym.emas,
                     &strategy_params,
-                )?
+                ) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err,
+                            sym,
+                            PositionSide::Short,
+                            StrategyInputScope::Unstuck,
+                            &mut diagnostics,
+                        )?;
+                        continue;
+                    }
+                }
             } else {
                 EMABands::default()
             };
@@ -4162,6 +4343,7 @@ mod core {
                     ..Default::default()
                 },
                 tradable: true,
+                allow_missing_strategy_inputs: false,
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,

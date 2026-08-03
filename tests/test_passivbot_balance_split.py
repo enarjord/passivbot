@@ -40,7 +40,7 @@ from passivbot import Passivbot
 import passivbot as passivbot_module
 import fill_events_manager as fem
 from config import get_template_config, prepare_config
-from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from freshness_ledger import ACCOUNT_SURFACES, FreshnessLedger
 from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
 from market_snapshot import MarketSnapshot
 from planning_snapshot import (
@@ -9933,7 +9933,7 @@ def test_staged_planner_preconditions_require_current_epoch_surfaces():
     bot._begin_authoritative_refresh_epoch()
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
     assert ok is False
-    assert details["missing"] == sorted(ACCOUNT_SURFACES | {"completed_candles"})
+    assert details["missing"] == sorted(ACCOUNT_SURFACES)
 
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -9950,7 +9950,7 @@ def test_staged_planner_preconditions_require_current_epoch_surfaces():
     bot._record_authoritative_surface("market_snapshot", ("market", "fresh"))
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
     assert ok is True
-    assert set(details["required"]) == set(LIVE_STATE_SURFACES)
+    assert set(details["required"]) == set(ACCOUNT_SURFACES) | {"market_snapshot"}
 
 
 def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch():
@@ -10010,7 +10010,7 @@ def test_staged_planner_preconditions_raise_before_rust_planning():
         )
 
 
-def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
+def test_staged_planner_preconditions_do_not_gate_on_stale_completed_candles():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
@@ -10039,12 +10039,13 @@ def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
 
-    assert ok is False
-    assert "completed_candles" in details["missing"]
-    assert details["invalid"]["completed_candles"][0]["symbol"] == "BTC/USDT:USDT"
+    assert ok is True
+    assert details["missing"] == []
+    assert "completed_candles" not in details["required"]
+    assert details["invalid"] == {}
 
 
-def test_staged_planner_preconditions_explain_completed_candle_signature_mismatch():
+def test_staged_planner_preconditions_ignore_completed_candle_universe_changes():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
@@ -10080,14 +10081,10 @@ def test_staged_planner_preconditions_explain_completed_candle_signature_mismatc
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
 
-    assert ok is False
-    mismatch = details["invalid"]["completed_candles"][0]
-    assert mismatch["reason"] == "signature_mismatch"
-    assert mismatch["mismatch_type"] == "planning_universe_changed"
-    assert mismatch["expected_count"] == 2
-    assert mismatch["stamped_count"] == 1
-    assert mismatch["missing_symbols"] == ["ETH/USDT:USDT"]
-    assert mismatch["changed_symbols"] == ["BTC/USDT:USDT"]
+    assert ok is True
+    assert details["missing"] == []
+    assert "completed_candles" not in details["required"]
+    assert details["invalid"] == {}
 
 
 def test_completed_candle_signature_ignores_later_cache_improvements():
@@ -10286,7 +10283,9 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     assert planning_snapshot.symbols == (symbol,)
     assert planning_snapshot.last_prices() == {symbol: 100.5}
     assert planning_snapshot.completed_candle_signature == candle_signature
-    assert set(planning_snapshot.required_surfaces) == set(LIVE_STATE_SURFACES)
+    assert set(planning_snapshot.required_surfaces) == set(ACCOUNT_SURFACES) | {
+        "market_snapshot"
+    }
     assert planning_snapshot.invalid_details(now_ms=passivbot_module.utc_ms()) == []
 
 
@@ -10548,9 +10547,8 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(mon
     assert diagnostic_build_calls[-1][1]["cycle_id"] == "cy_snapshot"
     assert diagnostic_build_calls[-1][1]["snapshot_id"] == planning_snapshot.snapshot_id
     surface_age_names = {item["name"] for item in snapshot_payload["surface_ages"]}
-    assert {"balance", "positions", "open_orders", "completed_candles", "market_snapshot"} <= (
-        surface_age_names
-    )
+    assert {"balance", "positions", "open_orders", "market_snapshot"} <= surface_age_names
+    assert "completed_candles" not in surface_age_names
     market_summary = snapshot_payload["market_snapshot_summary"]
     assert market_summary["count"] == 1
     assert market_summary["symbol_count"] == 1
@@ -12247,7 +12245,7 @@ async def test_run_execution_loop_does_not_reinitialize_coin_hsl_after_startup()
 
 
 @pytest.mark.asyncio
-async def test_run_execution_loop_defers_staged_precondition_without_error_count():
+async def test_run_execution_loop_does_not_defer_for_completed_candles():
     bot = Passivbot.__new__(Passivbot)
     cycle = {"n": 0}
     executes = []
@@ -12303,13 +12301,11 @@ async def test_run_execution_loop_defers_staged_precondition_without_error_count
 
     result = await bot.run_execution_loop()
 
-    assert result == {"executed_cycle": 2}
+    assert result == {"executed_cycle": 1}
     assert executes == [
         ("universe", 1),
         ("market", 1),
-        ("universe", 2),
-        ("market", 2),
-        ("execute", False, 2),
+        ("execute", False, 1),
     ]
     bot.restart_bot_on_too_many_errors.assert_not_called()
 

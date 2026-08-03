@@ -88,8 +88,8 @@ def _single_symbol_orchestrator_output(
                     "allow_initial": True,
                 },
                 "short": {
-                    "input_mode": None,
-                    "effective_mode": "normal",
+                    "input_mode": "manual",
+                    "effective_mode": "manual",
                     "active": False,
                     "allow_initial": False,
                 },
@@ -779,7 +779,11 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.ineligible_symbols = {}
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
-            self.PB_mode_stop = {"long": "manual", "short": "manual"}
+            auto_gs = bool(cfg["live"]["auto_gs"])
+            self.PB_mode_stop = {
+                "long": "graceful_stop" if auto_gs else "manual",
+                "short": "graceful_stop" if auto_gs else "manual",
+            }
             self._runtime_forced_modes = {"long": {}, "short": {}}
             self.inactive_coin_candle_ttl_ms = 60_000
             self.trailing_prices = {}
@@ -1169,6 +1173,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     captured = {}
 
     async def fake_load_bundle(self, symbols, modes):
+        self._orchestrator_allow_missing_strategy_inputs_symbols = {symbol}
         m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
         m1_volume = {symbol: {10.0: 1_000.0}}
         m1_log_range = {symbol: {10.0: 0.01}}
@@ -1189,6 +1194,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
+    assert rust_symbol["allow_missing_strategy_inputs"] is True
     assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     rust_events = [
@@ -1207,6 +1213,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     assert {event.cycle_id for event in rust_events} == {"cy_live"}
     assert rust_events[0].remote_call_id == rust_events[1].remote_call_id
     assert rust_events[0].data["input_hash"] == rust_events[1].data["input_hash"]
+    assert rust_events[0].data["ema_unavailable_count"] == 1
     assert rust_events[1].data["order_count"] == 0
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -3344,6 +3351,9 @@ async def test_orchestrator_invalid_output_emits_correlated_failed_return(
     monkeypatch, rust_output, error
 ):
     cfg = _dummy_config()
+    # Keep this malformed-envelope test focused on the requested diagnostic
+    # failure rather than auto-GS changing the synthetic symbol-state modes.
+    cfg["live"]["auto_gs"] = False
     bot = _make_dummy_bot(cfg)
     bot._bot_value_defaults["n_positions"] = 1
     bot._bot_value_defaults["total_wallet_exposure_limit"] = 1.0

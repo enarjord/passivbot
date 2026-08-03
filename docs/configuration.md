@@ -33,7 +33,18 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
   config. `intersection` (default) keeps the config's requested coins/date
   window clipped to the verified dataset. `dataset` adopts the dataset's
   effective coins and timestamp window for exact artifact replay.
-- **volume_normalization**: When `true` (default), normalize volume data across exchanges to make combined datasets comparable.
+- **volume_normalization**: When `true` (default), normalize volume data across exchanges using
+  the median of per-coin median daily log-volume ratios over each coin/exchange pair's latest
+  complete-overlap UTC days. Daily estimates require at least 95% common minute coverage, and
+  underdetermined exchange links fail loudly instead of silently using an unstable factor. Forced
+  source exchanges contribute normalization-only overlap candidates, bounded to the normalization
+  lookback, without entering unrelated source selection. `coin_sources` overrides outside the
+  effective coin universe do not trigger candle preparation. Set to `false` to preserve each selected
+  exchange's native volume. The first selected exchange in `backtest.exchanges` is the stable
+  normalization reference. Equivalent full-range candle sources are also selected by that
+  configured order; total volume is never a source-selection tie-breaker. Cache manifests and
+  backtest `dataset.json` artifacts record the chosen sources, reasons, estimation window,
+  contributors, dispersion, exclusions, reference exchange, and full-precision scale factors.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
@@ -430,6 +441,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **enable_archive_candle_fetch**: Enables the archive-candle fallback path in live mode. Keep `false` unless you specifically want the live bot to supplement its local candle state from exchange archive endpoints.
 - **enable_forager_ws_candles**: Persists proven-final public 1m WebSocket candles for flat forager candidates when the exchange supports CCXT Pro `watchOHLCV`. The first nonempty snapshot of each watcher session only primes provenance. Changed values may correct an existing canonical timestamp, but extending canonical history requires fresh-successor proof, and persistence is read-verified before cache/EMA exposure. REST remains the complete fallback for startup basis, gaps, reconnect recovery, prolonged silence, and forced periodic integrity overlaps. WebSocket silence never proves a no-trade candle, and unstable streams cool down while REST maintenance continues. The lightweight reconciler stays ready for later runtime transitions into forager mode. Default is `true`; set `false` to use REST-only candidate maintenance. A zero `max_ohlcv_fetches_per_minute` disables this network path too.
 - **execution_delay_seconds**: Wait `x` seconds after executing to exchange.
+- **exchange_symbol_unavailable_cooldown_hours**: RAM-only, per-symbol entry cooldown after a connector proves from an exact exchange-specific error code that API trading is temporarily unavailable for that symbol. Default is `6.0` hours; `0` disables the cooldown; the maximum is `876600` hours (100 years). Flat affected symbols are excluded from new planning, while held symbols retain close and panic management with normal entries suppressed. Expiry retries the symbol automatically, a repeated qualifying response starts a fresh cooldown, and restarting the bot deliberately clears all cooldowns so the symbol is tried immediately. WEEX currently classifies only structured error code `-1058`; other exchanges require their own exact, fixture-tested classifier before using this policy.
 - **hedge_mode**: Requests simultaneous long and short positions on the same coin when the exchange supports it. Effective behavior is `config.live.hedge_mode AND exchange_capability`; on one-way-only venues the live bot will still run one-way even if this is `true`.
 - **hsl_position_during_cooldown_policy**: Live-only policy for a position that appears on a halted `pside` during HSL RED cooldown.
   - `panic`: panic-close it again and restart the cooldown from the fill that fully flattens the configured HSL scope.

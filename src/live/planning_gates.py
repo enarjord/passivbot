@@ -5,7 +5,7 @@ import logging
 import sys
 from typing import Iterable
 
-from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES
+from live.freshness import ACCOUNT_SURFACES
 from live.market_snapshot import MarketSnapshot
 from live.events import run_diagnostic_step
 from live.planning_snapshot import PlanningSnapshot
@@ -25,9 +25,9 @@ def staged_planner_required_surfaces(
 ) -> frozenset[str]:
     """Return live input surfaces required before staged order planning may proceed."""
     del bot
-    surfaces = set(LIVE_STATE_SURFACES)
-    if not include_market_snapshot:
-        surfaces.discard("market_snapshot")
+    surfaces = set(ACCOUNT_SURFACES)
+    if include_market_snapshot:
+        surfaces.add("market_snapshot")
     return frozenset(surfaces)
 
 
@@ -41,8 +41,6 @@ def staged_planner_surface_min_epochs(
     for surface in required:
         if surface in ACCOUNT_SURFACES:
             min_epochs[surface] = max(1, int(pending.get(surface, 0) or 0))
-        elif surface in {"completed_candles", "market_snapshot"}:
-            min_epochs[surface] = current_epoch
         else:
             min_epochs[surface] = current_epoch
     return min_epochs
@@ -66,32 +64,6 @@ def staged_planner_precondition_state(
         if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
     )
     invalid: dict[str, list] = {}
-    if "completed_candles" in required and "completed_candles" not in missing:
-        expected_symbols = tuple(bot._urgent_active_candle_symbols())
-        candle_check_ms = ledger.surface_updated_ms(
-            "completed_candles"
-        ) or bot._completed_candle_health_now_ms()
-        signature, candle_missing = bot._completed_candle_freshness_signature(
-            expected_symbols, now_ms=candle_check_ms
-        )
-        stamped_signature = ledger.surface_signature("completed_candles")
-        equivalent = (
-            bot._completed_candle_signatures_equivalent(
-                signature,
-                stamped_signature,
-            )
-            if hasattr(bot, "_completed_candle_signatures_equivalent")
-            else stamped_signature == signature
-        )
-        if candle_missing or not equivalent:
-            missing.append("completed_candles")
-            invalid["completed_candles"] = candle_missing or (
-                bot._completed_candle_signature_mismatch_details(
-                    expected_symbols=expected_symbols,
-                    expected_signature=signature,
-                    stamped_signature=stamped_signature,
-                )
-            )
     if (
         include_market_snapshot
         and "market_snapshot" in required

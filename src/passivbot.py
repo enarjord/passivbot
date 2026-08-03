@@ -126,6 +126,7 @@ from config.strategy import (
     normalize_strategy_kind,
 )
 from config.shared_bot import get_grouped_bot_value
+from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
 from risk_limits import (
@@ -1154,6 +1155,11 @@ class Passivbot:
         if not failures:
             return
         for action, order, error in failures:
+            symbol = order.get("symbol") if isinstance(order, dict) else None
+            if symbol:
+                self._activate_exchange_symbol_unavailable_cooldown(
+                    str(symbol), error
+                )
             self._log_order_write_failure(
                 action=action, order=order, error=error
             )
@@ -1622,6 +1628,12 @@ class Passivbot:
         self._entry_cooldown_pos_increase_detected_ts: dict[str, dict[str, int]] = {}
         self._entry_cooldown_delta_guard_last_log_ms: dict[tuple[str, str], int] = {}
         self._entry_cooldown_delta_guard_log_interval_ms = 60_000
+        # Connector-classified, RAM-only venue suspensions. These intentionally
+        # reset on process restart so a restarted bot immediately rechecks the
+        # exchange instead of inheriting stale local availability state.
+        self._exchange_symbol_unavailable_until_ms: dict[str, int] = {}
+        self._exchange_symbol_unavailable_reason_by_symbol: dict[str, str] = {}
+        self._orchestrator_exchange_unavailable_symbols: set[str] = set()
 
         # Health tracking for periodic summary
         self._health_start_ms = utc_ms()
@@ -9842,6 +9854,177 @@ class Passivbot:
             fields.append(f"{key}={value}")
         return " ".join(fields)
 
+    def _classify_exchange_symbol_unavailable_error(
+        self, exc: BaseException
+    ) -> str | None:
+        """Return a connector-owned reason for a proven symbol suspension.
+
+        Exchange error codes are not portable. Supported connectors must
+        override this hook with exact, fixture-tested classifications; generic
+        message matching would turn unrelated write failures into trading policy.
+        """
+        return None
+
+    def _activate_exchange_symbol_unavailable_cooldown(
+        self,
+        symbol: str,
+        exc: BaseException,
+        *,
+        now_ms: int | None = None,
+    ) -> bool:
+        """Temporarily suppress entries after a proven venue suspension.
+
+        The state is deliberately per-process and in memory. Flat symbols are
+        made nontradable for Rust planning. Held symbols remain tradable under
+        entry-blocking mode overrides so closes and panic handling are preserved.
+        """
+        reason = self._classify_exchange_symbol_unavailable_error(exc)
+        if not reason:
+            return False
+        raw_cooldown_hours = self.live_value(
+            "exchange_symbol_unavailable_cooldown_hours"
+        )
+        try:
+            cooldown_hours = float(raw_cooldown_hours)
+        except (TypeError, ValueError, OverflowError):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "value_type=%s action=preserve_original_exchange_failure",
+                type(raw_cooldown_hours).__name__,
+            )
+            return False
+        if (
+            not math.isfinite(cooldown_hours)
+            or cooldown_hours < 0.0
+            or cooldown_hours > MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
+        ):
+            logging.error(
+                "[config] invalid exchange symbol cooldown; not activating | "
+                "hours=%.6g max_hours=%.6g "
+                "action=preserve_original_exchange_failure",
+                cooldown_hours,
+                MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS,
+            )
+            return False
+        if cooldown_hours <= 0.0:
+            return False
+        now = int(utc_ms() if now_ms is None else now_ms)
+        cooldown_ms = max(1, int(cooldown_hours * 60.0 * 60.0 * 1000.0))
+        cooldowns = getattr(self, "_exchange_symbol_unavailable_until_ms", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self._exchange_symbol_unavailable_until_ms = cooldowns
+        existing_until = int(cooldowns.get(symbol, 0) or 0)
+        until_ms = now + cooldown_ms
+        cooldowns[symbol] = until_ms
+        reasons = getattr(
+            self, "_exchange_symbol_unavailable_reason_by_symbol", None
+        )
+        if not isinstance(reasons, dict):
+            reasons = {}
+            self._exchange_symbol_unavailable_reason_by_symbol = reasons
+        reasons[symbol] = str(reason)
+        retry_after = getattr(self, "_exchange_config_retry_after_ms", None)
+        if isinstance(retry_after, dict):
+            retry_after[symbol] = until_ms
+        error_context = bounded_exchange_error_context(exc)
+        logging.warning(
+            "[config] exchange temporarily disabled API trading for symbol | "
+            "symbol=%s reason=%s error_code=%s cooldown_hours=%.6g until_ms=%d "
+            "action=%s",
+            Passivbot._log_symbol(symbol),
+            reason,
+            error_context.get("error_code", "-"),
+            cooldown_hours,
+            until_ms,
+            (
+                "refresh_entry_block_until_retry"
+                if existing_until > now
+                else "block_entries_until_retry"
+            ),
+        )
+        return True
+
+    def _active_exchange_symbol_unavailable_cooldowns(
+        self,
+        symbols: Iterable[str] | None = None,
+        *,
+        now_ms: int | None = None,
+    ) -> dict[str, int]:
+        """Return active cooldowns, expiring them on the bot's live clock."""
+        now = int(utc_ms() if now_ms is None else now_ms)
+        cooldowns = getattr(self, "_exchange_symbol_unavailable_until_ms", None)
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
+            self._exchange_symbol_unavailable_until_ms = cooldowns
+        reasons = getattr(
+            self, "_exchange_symbol_unavailable_reason_by_symbol", None
+        )
+        if not isinstance(reasons, dict):
+            reasons = {}
+            self._exchange_symbol_unavailable_reason_by_symbol = reasons
+        requested = None if symbols is None else {str(symbol) for symbol in symbols}
+        for symbol, raw_until in list(cooldowns.items()):
+            until_ms = int(raw_until or 0)
+            if until_ms > now:
+                continue
+            cooldowns.pop(symbol, None)
+            reason = reasons.pop(symbol, "exchange_symbol_unavailable")
+            retry_after = getattr(self, "_exchange_config_retry_after_ms", None)
+            if isinstance(retry_after, dict):
+                retry_after.pop(symbol, None)
+            retry_attempts = getattr(self, "_exchange_config_retry_attempts", None)
+            if isinstance(retry_attempts, dict):
+                retry_attempts.pop(symbol, None)
+            logging.info(
+                "[config] exchange symbol API-trading cooldown expired | "
+                "symbol=%s reason=%s action=retry_on_demand",
+                Passivbot._log_symbol(symbol),
+                reason,
+            )
+        return {
+            str(symbol): int(until_ms)
+            for symbol, until_ms in cooldowns.items()
+            if int(until_ms or 0) > now
+            and (requested is None or str(symbol) in requested)
+        }
+
+    def _apply_exchange_symbol_unavailable_planning_policy(
+        self,
+        symbols: Iterable[str],
+        mode_overrides: dict[str, dict[str, Optional[str]]],
+        *,
+        now_ms: int | None = None,
+    ) -> set[str]:
+        """Apply entry-only mode overrides and return currently cooled symbols."""
+        unavailable_symbols = set(
+            Passivbot._active_exchange_symbol_unavailable_cooldowns(
+                self, symbols, now_ms=now_ms
+            )
+        )
+        self._orchestrator_exchange_unavailable_symbols = set(unavailable_symbols)
+        for pside in ("long", "short"):
+            pside_overrides = mode_overrides.setdefault(pside, {})
+            for symbol in unavailable_symbols:
+                normalized_mode = self._mode_override_to_orchestrator_mode(
+                    pside_overrides.get(symbol)
+                )
+                has_position = bool(self.has_position(symbol=symbol))
+                cooldown_mode = "tp_only" if has_position else "graceful_stop"
+                if normalized_mode in {None, "normal"} or (
+                    has_position and normalized_mode == "graceful_stop"
+                ):
+                    pside_overrides[symbol] = cooldown_mode
+        return unavailable_symbols
+
+    def _exchange_symbol_cooldown_blocks_tradability(
+        self, symbol: str, unavailable_symbols: set[str]
+    ) -> bool:
+        """Block flat planning while preserving management of held positions."""
+        return bool(
+            symbol in unavailable_symbols and not self.has_position(symbol=symbol)
+        )
+
     async def update_exchange_configs(
         self,
         symbols=None,
@@ -9855,6 +10038,11 @@ class Passivbot:
             self._exchange_config_retry_attempts = {}
         if not hasattr(self, "_exchange_config_retry_after_ms"):
             self._exchange_config_retry_after_ms = {}
+        # This is per-invocation execution evidence, not cumulative state. A
+        # connector may use it immediately after this call to charge only
+        # actual failed writes to its restart budget; retry-backoff skips must
+        # not be counted as new failures.
+        self._last_exchange_config_failed_attempt_symbols = set()
         if symbols is None:
             symbols = self.active_symbols
         symbols = list(dict.fromkeys(symbols or []))
@@ -9888,6 +10076,7 @@ class Passivbot:
                 except RestartBotException:
                     raise
                 except Exception as e:
+                    self._last_exchange_config_failed_attempt_symbols.add(symbol)
                     attempts = (
                         int(self._exchange_config_retry_attempts.get(symbol, 0) or 0)
                         + 1
@@ -9896,6 +10085,15 @@ class Passivbot:
                     backoff_s = self._exchange_config_backoff_seconds(attempts)
                     self._exchange_config_retry_after_ms[symbol] = utc_ms() + int(
                         backoff_s * 1000.0
+                    )
+                    cooldown_handler = getattr(
+                        self,
+                        "_activate_exchange_symbol_unavailable_cooldown",
+                        None,
+                    )
+                    cooldown_activated = bool(
+                        callable(cooldown_handler)
+                        and cooldown_handler(symbol, e, now_ms=retry_check_now_ms)
                     )
                     if self._is_rate_limit_like_exception(e):
                         self._health_rate_limits += 1
@@ -9906,9 +10104,10 @@ class Passivbot:
                         )
                         break
                     logging.warning(
-                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs %s",
+                        "[config] exchange config update failed | symbol=%s retry_in=%.1fs cooldown=%s %s",
                         symbol,
                         backoff_s,
+                        "active" if cooldown_activated else "none",
                         Passivbot._format_exchange_config_error(e),
                     )
                 else:
@@ -16761,10 +16960,10 @@ class Passivbot:
                 if configured_mode:
                     expanded_mode = expand_PB_mode(configured_mode)
                     if expanded_mode != "normal":
-                        return self._apply_ignored_coin_mode(
+                        return self._apply_entry_eligibility_mode(
                             pside, symbol, expanded_mode
                         )
-                return self._apply_ignored_coin_mode(
+                return self._apply_entry_eligibility_mode(
                     pside, symbol, "graceful_stop"
                 )
 
@@ -16772,11 +16971,13 @@ class Passivbot:
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
         if runtime_forced:
-            return self._apply_ignored_coin_mode(pside, symbol, str(runtime_forced))
+            return self._apply_entry_eligibility_mode(
+                pside, symbol, str(runtime_forced)
+            )
 
         forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if forced_mode:
-            return self._apply_ignored_coin_mode(
+            return self._apply_entry_eligibility_mode(
                 pside, symbol, expand_PB_mode(forced_mode)
             )
         if not self.markets_dict.get(symbol, {}).get("active", True):
@@ -16784,7 +16985,7 @@ class Passivbot:
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
-        return self._apply_ignored_coin_mode(pside, symbol)
+        return self._apply_entry_eligibility_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
         self, symbols: Iterable[str]
@@ -16813,20 +17014,21 @@ class Passivbot:
                 )
         return overrides
 
-    def _apply_ignored_coin_mode(
+    def _apply_entry_eligibility_mode(
         self, pside: str, symbol: str, mode: Optional[str] = None
     ) -> Optional[str]:
-        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
-        if symbol not in ignored:
+        """Block initials for managed symbols outside the current entry universe."""
+        if self.is_approved(pside, symbol):
             return mode
         if str(mode or "").strip().lower() in {
             "manual",
             "panic",
+            "graceful_stop",
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         }:
             return mode
-        return "graceful_stop"
+        return self.PB_mode_stop[pside]
 
     def _calc_unstuck_allowances_live(self) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
@@ -16891,6 +17093,14 @@ class Passivbot:
             mode_overrides = Passivbot._build_orchestrator_mode_overrides_fallback(
                 self, symbols
             )
+        exchange_unavailable_symbols = (
+            Passivbot._apply_exchange_symbol_unavailable_planning_policy(
+                self,
+                symbols,
+                mode_overrides,
+                now_ms=timestamp_ms,
+            )
+        )
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -16946,6 +17156,11 @@ class Passivbot:
                 raise Exception(f"invalid market price for {symbol}: {mprice}")
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            exchange_cooldown_blocks_symbol = (
+                Passivbot._exchange_symbol_cooldown_blocks_tradability(
+                    self, symbol, exchange_unavailable_symbols
+                )
+            )
             effective_min_cost = float(
                 getattr(self, "effective_min_cost", {}).get(symbol, 0.0) or 0.0
             )
@@ -17010,7 +17225,9 @@ class Passivbot:
                     "order_book": {"bid": mprice, "ask": mprice},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": bool(
-                        active and symbol not in trailing_unavailable_symbols
+                        active
+                        and symbol not in trailing_unavailable_symbols
+                        and not exchange_cooldown_blocks_symbol
                     ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
@@ -17164,6 +17381,7 @@ class Passivbot:
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
         self._orchestrator_ema_unavailable_symbols = set()
+        self._orchestrator_allow_missing_strategy_inputs_symbols = set()
         self._orchestrator_candidate_ema_unavailable_symbols = set()
         self._orchestrator_ema_unavailable_reasons = {}
         previous_ema_entry_cancellation_order_keys = set(
@@ -18216,6 +18434,10 @@ class Passivbot:
                 self.ema_type = ema_type
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -18231,6 +18453,10 @@ class Passivbot:
                 self.symbol = symbol
                 self.missing = list(missing)
                 self.detail = detail
+                self.contains_non_finite = any(
+                    "non-finite" in str(reason).lower()
+                    for _span, reason in self.missing
+                )
 
         def close_ema_reason_detail(reason: str) -> tuple[str, str]:
             if str(reason).startswith("non-finite close EMA value"):
@@ -18591,6 +18817,15 @@ class Passivbot:
                     type(exc).__name__,
                     interval_ms=15 * 60 * 1000,
                 )
+                if isinstance(exc, (TimeoutError, RuntimeError)):
+                    missing = [
+                        (float(span), f"{type(exc).__name__}: projection unavailable")
+                        for span in sorted(need_close_spans[sym])
+                    ]
+                    detail = "; ".join(
+                        [f"span={span:.8g} reason={reason}" for span, reason in missing]
+                    )
+                    raise MissingCloseEma(sym, missing, detail) from exc
                 raise
             close = dict(projected.get("close", {}))
             if is_forager_mode() and not project_strategy_log_range:
@@ -18615,26 +18850,59 @@ class Passivbot:
                     ),
                     "m1_log_range",
                 )
-            missing_close = [
+            nonfinite_close = [
                 span
                 for span in sorted(need_close_spans[sym])
-                if span not in close or not math.isfinite(float(close[span]))
+                if span in close and not math.isfinite(float(close[span]))
+            ]
+            if nonfinite_close:
+                raise RuntimeError(
+                    "[ema] non-finite projected open-tail close EMA for "
+                    f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_close)}"
+                )
+            missing_close = [
+                span for span in sorted(need_close_spans[sym]) if span not in close
             ]
             if missing_close:
-                raise RuntimeError(
-                    "[ema] projected open-tail close EMA incomplete for "
-                    f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
+                missing = [
+                    (float(span), "projected close EMA missing")
+                    for span in missing_close
+                ]
+                detail = "; ".join(
+                    [f"span={span:.8g} reason={reason}" for span, reason in missing]
                 )
+                raise MissingCloseEma(sym, missing, detail)
             if not is_forager_mode() or project_strategy_log_range:
+                projected_lr1m = projected.get("log_range", {}) or {}
+                nonfinite_required_lr1m = [
+                    span
+                    for span in required_m1_lr_for_symbol
+                    if span in projected_lr1m
+                    and not math.isfinite(float(projected_lr1m[span]))
+                ]
+                if nonfinite_required_lr1m:
+                    raise RuntimeError(
+                        "[ema] non-finite projected open-tail m1 log-range EMA for "
+                        f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_required_lr1m)}"
+                    )
                 missing_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
-                    if span not in lr1m or not math.isfinite(float(lr1m[span]))
+                    if span not in projected_lr1m
                 ]
                 if missing_required_lr1m:
-                    raise RuntimeError(
-                        "[ema] projected open-tail m1 log-range EMA incomplete for "
-                        f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
+                    missing = [
+                        (float(span), "projected m1 log-range EMA missing")
+                        for span in missing_required_lr1m
+                    ]
+                    detail = "; ".join(
+                        [
+                            f"span={span:.8g} reason={reason}"
+                            for span, reason in missing
+                        ]
+                    )
+                    raise MissingRequiredEma(
+                        sym, "m1_log_range", missing, detail
                     )
             self._orchestrator_ema_projection_symbols.add(sym)
             self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
@@ -18680,41 +18948,76 @@ class Passivbot:
             requested_m1_lr_spans = sorted(
                 set(m1_lr_spans) | set(required_m1_lr_for_symbol)
             )
+            close: dict[float, float] = {}
+            vol: Optional[dict[float, float]] = None
+            lr1m: Optional[dict[float, float]] = None
+            h1: dict[float, float] = {}
             forager_lr1m: Optional[dict[float, float]] = None
+            input_unavailability: list[Exception] = []
+
+            def collect_input_unavailability(exc: Exception) -> bool:
+                if not isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                    return False
+                if exc.contains_non_finite:
+                    return False
+                input_unavailability.append(exc)
+                return True
+
             try:
                 projection_ctx = projection_contexts.get(sym)
                 if projection_ctx is not None:
-                    close, vol, lr1m = await load_projected_open_tail_bundle(
-                        sym,
-                        projection_ctx,
-                        required_m1_lr_for_symbol,
-                        requested_m1_lr_spans,
-                    )
+                    try:
+                        close, vol, lr1m = await load_projected_open_tail_bundle(
+                            sym,
+                            projection_ctx,
+                            required_m1_lr_for_symbol,
+                            requested_m1_lr_spans,
+                        )
+                    except Exception as exc:
+                        if not collect_input_unavailability(exc):
+                            raise
                 else:
                     try:
                         close = await fetch_close_map(
                             sym, sorted(need_close_spans[sym]), log_on_missing=False
                         )
                     except MissingCloseEma as exc:
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = projection_contexts.get(
                             sym
                         ) or refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
                             log_missing_close_ema(sym, exc.missing)
-                            raise
-                        close, vol, lr1m = await load_projected_open_tail_bundle(
-                            sym,
-                            late_projection_ctx,
-                            required_m1_lr_for_symbol,
-                            requested_m1_lr_spans,
-                        )
+                            if not collect_input_unavailability(exc):
+                                raise
+                        else:
+                            try:
+                                close, vol, lr1m = (
+                                    await load_projected_open_tail_bundle(
+                                        sym,
+                                        late_projection_ctx,
+                                        required_m1_lr_for_symbol,
+                                        requested_m1_lr_spans,
+                                    )
+                                )
+                            except Exception as projection_exc:
+                                if not collect_input_unavailability(projection_exc):
+                                    raise
                     else:
                         vol = None
                         lr1m = None
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                h1 = await fetch_required_map(
-                    sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
-                )
+                try:
+                    h1 = await fetch_required_map(
+                        sym,
+                        sorted(need_h1_lr_spans[sym]),
+                        ema_lr_1h,
+                        "h1_log_range",
+                    )
+                except Exception as exc:
+                    if not collect_input_unavailability(exc):
+                        raise
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if vol is None:
                     vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
@@ -18728,7 +19031,11 @@ class Passivbot:
                             "m1_log_range",
                             log_on_missing=False,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        if not isinstance(exc, MissingRequiredEma):
+                            raise
+                        if exc.contains_non_finite:
+                            raise
                         late_projection_ctx = refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
                             log_ema_issue(
@@ -18744,22 +19051,30 @@ class Passivbot:
                                     sym, "m1_log_range", required_m1_lr_for_symbol
                                 ),
                             )
-                            raise
-                        projected_close, projected_vol, projected_lr1m = (
-                            await load_projected_open_tail_bundle(
-                                sym,
-                                late_projection_ctx,
-                                required_m1_lr_for_symbol,
-                                requested_m1_lr_spans,
-                            )
-                        )
-                        close = projected_close
-                        if projected_vol is not None:
-                            vol = projected_vol
-                        if projected_lr1m is not None:
-                            lr1m = projected_lr1m
-                        else:
+                            collect_input_unavailability(exc)
                             lr1m = {}
+                        else:
+                            try:
+                                projected_close, projected_vol, projected_lr1m = (
+                                    await load_projected_open_tail_bundle(
+                                        sym,
+                                        late_projection_ctx,
+                                        required_m1_lr_for_symbol,
+                                        requested_m1_lr_spans,
+                                    )
+                                )
+                            except Exception as projection_exc:
+                                if not collect_input_unavailability(projection_exc):
+                                    raise
+                                lr1m = {}
+                            else:
+                                close = projected_close
+                                if projected_vol is not None:
+                                    vol = projected_vol
+                                if projected_lr1m is not None:
+                                    lr1m = projected_lr1m
+                                else:
+                                    lr1m = {}
                     else:
                         optional_lr1m = await fetch_map(
                             sym,
@@ -18787,8 +19102,32 @@ class Passivbot:
                     }
                 if forager_lr1m is None:
                     forager_lr1m = {}
+                if input_unavailability:
+                    raise input_unavailability[0]
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
+                    if isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
+                        if exc.contains_non_finite:
+                            raise
+                        self._orchestrator_allow_missing_strategy_inputs_symbols.add(
+                            sym
+                        )
+                        log_ema_issue(
+                            ("strategy_inputs_unavailable", sym),
+                            logging.WARNING,
+                            "[ema] strategy inputs unavailable %s action=scope_consumers_in_rust error_type=%s | %s",
+                            Passivbot._log_symbol(sym),
+                            ema_error_type(exc),
+                            ema_candle_health_context(sym),
+                            interval_ms=15 * 60 * 1000,
+                        )
+                        return (
+                            close,
+                            vol or {},
+                            lr1m or {},
+                            h1,
+                            forager_lr1m or {},
+                        )
                     raise
                 if sym in cache_only_symbols:
                     reason = "cache_only_fetch_failed"
@@ -19273,6 +19612,11 @@ class Passivbot:
         if not symbols:
             return ({}, None) if return_snapshot else {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
+        exchange_unavailable_symbols = (
+            self._apply_exchange_symbol_unavailable_planning_policy(
+                symbols, mode_overrides, now_ms=utc_ms()
+            )
+        )
         self._assert_staged_planner_preconditions(
             include_market_snapshot=False,
             context="market snapshot refresh",
@@ -19304,6 +19648,13 @@ class Passivbot:
             self._forager_new_normal_warmup_symbols = pending
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
+        )
+        allow_missing_strategy_inputs_symbols = set(
+            getattr(
+                self,
+                "_orchestrator_allow_missing_strategy_inputs_symbols",
+                set(),
+            )
         )
         forager_m1_log_range_emas = getattr(
             self, "_orchestrator_forager_m1_log_range_emas", {}
@@ -19402,10 +19753,16 @@ class Passivbot:
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
+            exchange_cooldown_blocks_symbol = (
+                self._exchange_symbol_cooldown_blocks_tradability(
+                    symbol, exchange_unavailable_symbols
+                )
+            )
             tradable = bool(
                 active
                 and symbol not in ema_unavailable_symbols
                 and symbol not in trailing_unavailable_symbols
+                and not exchange_cooldown_blocks_symbol
             )
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
@@ -19470,6 +19827,9 @@ class Passivbot:
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
+                    "allow_missing_strategy_inputs": (
+                        symbol in allow_missing_strategy_inputs_symbols
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -19502,7 +19862,9 @@ class Passivbot:
             input_hash=input_hash,
             symbol_count=len(input_dict["symbols"]),
             tradable_count=int(tradable_count),
-            ema_unavailable_count=len(ema_unavailable_symbols),
+            ema_unavailable_count=len(
+                ema_unavailable_symbols | allow_missing_strategy_inputs_symbols
+            ),
             trailing_unavailable_count=len(trailing_unavailable_symbols),
             hedge_mode=bool(effective_hedge_mode),
             strategy_kind=strategy_kind,
@@ -20702,6 +21064,7 @@ class Passivbot:
         for idx, (_priority, sym, timeframe, required_candles, pre_health) in enumerate(
             to_refresh, start=1
         ):
+            surface_time_slice_expired = False
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -20764,13 +21127,43 @@ class Passivbot:
                         max_lookback_candles=int(required_candles),
                     )
                 if max_refresh_ms > 0:
+                    # Share the remaining cycle time across the remaining
+                    # selected surfaces. A sparse market may paginate or repair
+                    # gaps for much longer than a normal refresh; allowing it
+                    # to consume the whole remainder starves every later
+                    # candidate. Fast surfaces return early, so their unused
+                    # share naturally remains available to later work.
+                    elapsed_before_fetch_ms = int(
+                        max(0, utc_ms() - refresh_started_ms)
+                    )
+                    remaining_surface_count = max(
+                        1, len(to_refresh) - idx + 1
+                    )
                     remaining_s = max(
                         0.001,
-                        float(max_refresh_ms - elapsed_ms) / 1000.0,
+                        float(max_refresh_ms - elapsed_before_fetch_ms)
+                        / float(remaining_surface_count)
+                        / 1000.0,
                     )
-                    refreshed = await asyncio.wait_for(
-                        candle_task, timeout=remaining_s
-                    )
+                    candle_fetch_task = asyncio.create_task(candle_task)
+                    try:
+                        completed_tasks, _pending_tasks = await asyncio.wait(
+                            {candle_fetch_task}, timeout=remaining_s
+                        )
+                    except asyncio.CancelledError:
+                        candle_fetch_task.cancel()
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
+                        raise
+                    if not completed_tasks:
+                        surface_time_slice_expired = True
+                        candle_fetch_task.cancel()
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
+                        raise TimeoutError("forager surface time slice expired")
+                    refreshed = candle_fetch_task.result()
                 else:
                     refreshed = await candle_task
                 post_health = Passivbot._candidate_candle_surface_health(
@@ -20879,12 +21272,20 @@ class Passivbot:
                         total_count=len(to_refresh),
                     )
                     break
-                logging.warning(
-                    "Timed out acquiring candle lock for %s; forager refresh will retry "
-                    "| error_type=%s",
-                    Passivbot._log_symbol(sym),
-                    bounded_exception_type(exc),
-                )
+                if surface_time_slice_expired:
+                    logging.debug(
+                        "[candle] forager surface yielded after its fair time share | "
+                        "symbol=%s timeframe=%s action=defer_surface_retry",
+                        Passivbot._log_symbol(sym),
+                        timeframe,
+                    )
+                else:
+                    logging.warning(
+                        "Timed out refreshing candles for %s; forager refresh will retry "
+                        "| error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        bounded_exception_type(exc),
+                    )
             except Exception as exc:
                 error_type = bounded_exception_type(exc)
                 if isinstance(exc, OhlcvTerminalEmptyPage):
@@ -21031,7 +21432,7 @@ class Passivbot:
                 Passivbot._log_active_candle_refresh_incomplete(
                     self, ordered_symbols, missing
                 )
-                return False
+                return True
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
                 signature,
