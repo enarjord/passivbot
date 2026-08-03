@@ -437,6 +437,83 @@ async def test_hyperliquid_ws_order_rejects_snapshot_client_id_contradiction(
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_ws_order_rejects_snapshot_exchange_id_contradiction(
+    stubbed_modules,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.open_orders = {
+        "BTC/USDC:USDC": [
+            {
+                "id": "123",
+                "side": "buy",
+                "position_side": "long",
+                "info": {"oid": 456, "side": "B", "reduceOnly": False},
+            }
+        ]
+    }
+    bot._hl_open_order_semantics_by_exchange_id = {
+        "123": {
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "client_id": "",
+            "last_seen_ms": 1,
+        }
+    }
+    bot.orders_emitted_to_exchange = [
+        {
+            "exchange_id": "123",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "status": "acknowledged",
+        }
+    ]
+    sparse = {
+        "id": "123",
+        "side": "buy",
+        "info": {"oid": 123, "side": "B"},
+    }
+
+    snapshot_state, recovered = (
+        bot._hl_open_snapshot_ws_order_semantics_evidence(sparse)
+    )
+
+    assert snapshot_state == "invalid"
+    assert recovered is None
+    assert bot._hl_recover_ws_order_semantics(sparse) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contradiction", ["client_id", "exchange_id"])
+async def test_hyperliquid_authoritative_snapshot_contradiction_invalidates_cache(
+    stubbed_modules,
+    contradiction,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    valid = {
+        "id": "123",
+        "side": "buy",
+        "position_side": "long",
+        "clientOrderId": "entry_initial_normal_long_local",
+        "info": {"oid": 123, "side": "B", "reduceOnly": False},
+    }
+    bot._hl_note_authoritative_open_order_semantics([valid])
+    contradictory = dict(valid)
+    contradictory["info"] = dict(valid["info"])
+    if contradiction == "client_id":
+        contradictory["info"]["cloid"] = "entry_initial_normal_long_different"
+    else:
+        contradictory["info"]["oid"] = 456
+
+    bot._hl_note_authoritative_open_order_semantics([contradictory])
+
+    assert "123" not in bot._hl_open_order_semantics_by_exchange_id
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_ws_order_rejects_expired_open_snapshot_semantics(
     stubbed_modules,
     monkeypatch,

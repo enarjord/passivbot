@@ -863,14 +863,21 @@ class HyperliquidBot(CCXTBot):
         if len(exchange_ids) != 1:
             return "invalid", None
         exchange_id = next(iter(exchange_ids))
-        matches = [
-            existing
-            for orders in (getattr(self, "open_orders", {}) or {}).values()
-            if isinstance(orders, list)
-            for existing in orders
-            if isinstance(existing, dict)
-            and self._extract_order_exchange_id(existing) == exchange_id
-        ]
+        matches = []
+        for orders in (getattr(self, "open_orders", {}) or {}).values():
+            if not isinstance(orders, list):
+                continue
+            for existing in orders:
+                if not isinstance(existing, dict):
+                    continue
+                existing_exchange_ids = self._hl_ws_order_exchange_ids(
+                    existing, self._hl_ws_order_raw_sources(existing)
+                )
+                if exchange_id not in existing_exchange_ids:
+                    continue
+                if existing_exchange_ids != {exchange_id}:
+                    return "invalid", None
+                matches.append(existing)
         if len(matches) > 1:
             return "invalid", None
         if len(matches) == 1:
@@ -1136,7 +1143,14 @@ class HyperliquidBot(CCXTBot):
             and int(value.get("last_seen_ms", 0) or 0) >= cutoff_ms
         }
         for order in orders:
-            exchange_id = self._extract_order_exchange_id(order)
+            exchange_ids = self._hl_ws_order_exchange_ids(
+                order, self._hl_ws_order_raw_sources(order)
+            )
+            if len(exchange_ids) != 1:
+                for exchange_id in exchange_ids:
+                    cache.pop(exchange_id, None)
+                continue
+            exchange_id = next(iter(exchange_ids))
             side = str(order.get("side") or "").lower()
             position_side = str(order.get("position_side") or "").lower()
             reduce_only = self._canonical_open_order_reduce_only(order)
@@ -1150,6 +1164,7 @@ class HyperliquidBot(CCXTBot):
                 or not isinstance(reduce_only, bool)
                 or len(client_ids) > 1
             ):
+                cache.pop(exchange_id, None)
                 continue
             cache[exchange_id] = {
                 "side": side,
