@@ -113,8 +113,12 @@
    candidate's 1m and native 1h health surfaces,
    keep discovered-but-unfetched stale surfaces pending, and charge one token immediately before
    each actual fetch attempt rather than reserving tokens for a batch which may be cut short by
-   the wall-time cap. A timed-out candidate surface receives a short in-memory retry delay so one
-   blocked symbol cannot monopolize successive refresh cycles. Completed-candle health reports
+   the wall-time cap. The remaining wall time is divided across the remaining selected surfaces;
+   a fast refresh leaves its unused share available to later work, while one slow sparse-history
+   refresh cannot consume the entire cycle and starve the rest of the batch. A timed-out candidate
+   surface receives a short in-memory retry delay so one blocked symbol cannot monopolize
+   successive refresh cycles. Exhausting an assigned scheduler time share is an expected DEBUG
+   yield; a timeout raised by the candle operation itself remains a warning. Completed-candle health reports
    whether missing minutes are currently refreshable separately
    from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry
    cooldown is active do not spend background REST budget. This scheduler classification never

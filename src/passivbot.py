@@ -20702,6 +20702,7 @@ class Passivbot:
         for idx, (_priority, sym, timeframe, required_candles, pre_health) in enumerate(
             to_refresh, start=1
         ):
+            surface_time_slice_expired = False
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -20764,13 +20765,37 @@ class Passivbot:
                         max_lookback_candles=int(required_candles),
                     )
                 if max_refresh_ms > 0:
+                    # Share the remaining cycle time across the remaining
+                    # selected surfaces. A sparse market may paginate or repair
+                    # gaps for much longer than a normal refresh; allowing it
+                    # to consume the whole remainder starves every later
+                    # candidate. Fast surfaces return early, so their unused
+                    # share naturally remains available to later work.
+                    elapsed_before_fetch_ms = int(
+                        max(0, utc_ms() - refresh_started_ms)
+                    )
+                    remaining_surface_count = max(
+                        1, len(to_refresh) - idx + 1
+                    )
                     remaining_s = max(
                         0.001,
-                        float(max_refresh_ms - elapsed_ms) / 1000.0,
+                        float(max_refresh_ms - elapsed_before_fetch_ms)
+                        / float(remaining_surface_count)
+                        / 1000.0,
                     )
-                    refreshed = await asyncio.wait_for(
-                        candle_task, timeout=remaining_s
+                    candle_fetch_task = asyncio.create_task(candle_task)
+                    completed_tasks, _pending_tasks = await asyncio.wait(
+                        {candle_fetch_task}, timeout=remaining_s
                     )
+                    if not completed_tasks:
+                        surface_time_slice_expired = True
+                        candle_fetch_task.cancel()
+                        try:
+                            await candle_fetch_task
+                        except asyncio.CancelledError:
+                            pass
+                        raise TimeoutError("forager surface time slice expired")
+                    refreshed = candle_fetch_task.result()
                 else:
                     refreshed = await candle_task
                 post_health = Passivbot._candidate_candle_surface_health(
@@ -20879,12 +20904,20 @@ class Passivbot:
                         total_count=len(to_refresh),
                     )
                     break
-                logging.warning(
-                    "Timed out acquiring candle lock for %s; forager refresh will retry "
-                    "| error_type=%s",
-                    Passivbot._log_symbol(sym),
-                    bounded_exception_type(exc),
-                )
+                if surface_time_slice_expired:
+                    logging.debug(
+                        "[candle] forager surface yielded after its fair time share | "
+                        "symbol=%s timeframe=%s action=defer_surface_retry",
+                        Passivbot._log_symbol(sym),
+                        timeframe,
+                    )
+                else:
+                    logging.warning(
+                        "Timed out refreshing candles for %s; forager refresh will retry "
+                        "| error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        bounded_exception_type(exc),
+                    )
             except Exception as exc:
                 error_type = bounded_exception_type(exc)
                 if isinstance(exc, OhlcvTerminalEmptyPage):

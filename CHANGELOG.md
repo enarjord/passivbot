@@ -90,6 +90,9 @@ All notable user-facing changes will be documented in this file.
   symbol/timeframe fetch instead of reserving a whole batch before execution.
   Wall-time or lock timeouts briefly defer only the affected surface, preventing
   one slow symbol from consuming the batch budget and starving other candidates.
+  The remaining cycle time is also shared across the remaining selected surfaces,
+  so sparse-history pagination cannot consume the entire wall-time allowance before
+  later candidates receive a refresh attempt.
 - Added production Bitunix USDT perpetual-futures support through a native signed REST and
   WebSocket connector, including complete market metadata and top-of-book coverage, live-candle
   pagination, hedge-mode order and position reconciliation, account configuration, realized-PnL
