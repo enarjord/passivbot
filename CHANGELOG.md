@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
+  suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
+  flat symbols stop generating entries, held symbols retain close and panic management, expiry
+  retries automatically, and bot restart retries immediately. The shared policy is available to
+  future connectors only through their own exact exchange-code classifiers.
 - Speed up combined backtest and optimizer-suite candle materialization by writing bounded
   time-major chunks instead of repeatedly sweeping the full memmap once per coin.
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.

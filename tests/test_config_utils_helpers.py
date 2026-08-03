@@ -195,6 +195,29 @@ def test_limit_order_create_market_distance_default_and_validation():
             validate_config(invalid, verbose=False)
 
 
+def test_exchange_symbol_unavailable_cooldown_default_and_validation():
+    config = get_template_config()
+
+    assert config["live"]["exchange_symbol_unavailable_cooldown_hours"] == pytest.approx(
+        6.0
+    )
+    validate_config(config, verbose=False)
+
+    for value in (True, -0.01, float("nan"), float("inf"), "invalid"):
+        invalid = get_template_config()
+        invalid["live"]["exchange_symbol_unavailable_cooldown_hours"] = value
+
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="exchange_symbol_unavailable_cooldown_hours",
+        ):
+            validate_config(invalid, verbose=False)
+
+    disabled = get_template_config()
+    disabled["live"]["exchange_symbol_unavailable_cooldown_hours"] = 0.0
+    validate_config(disabled, verbose=False)
+
+
 def test_order_replacement_churn_gate_defaults_and_validation():
     config = get_template_config()
     live = config["live"]

@@ -389,6 +389,7 @@ def get_template_config():
                 "enable_archive_candle_fetch": False,
                 "enable_forager_ws_candles": True,
                 "execution_delay_seconds": 2,
+                "exchange_symbol_unavailable_cooldown_hours": 6.0,
                 "fee_conversion_max_age_ms": 86400000,
                 "fee_pct_fallback": 0.0002,
                 "fee_pct_sanity_abs_max": 0.001,

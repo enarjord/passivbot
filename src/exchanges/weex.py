@@ -10,6 +10,7 @@ import ccxt.pro as ccxt_pro
 from config.access import require_live_value
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from exchanges.ipv4_transport import IPv4TransportMixin
+from live.diagnostic_safety import bounded_exchange_error_context
 from passivbot import logging
 from utils import symbol_to_coin
 
@@ -146,6 +147,18 @@ class WeexBot(CCXTBot):
         logging.debug(
             "[config] weex position and margin mode are configured per symbol"
         )
+
+    def _classify_exchange_symbol_unavailable_error(
+        self, exc: BaseException
+    ) -> str | None:
+        """Classify only WEEX's documented API-symbol suspension code.
+
+        Other exchanges must add their own exact code classifier rather than
+        reusing WEEX semantics or matching human-readable response text.
+        """
+        if bounded_exchange_error_context(exc).get("error_code") == "-1058":
+            return "weex_api_symbol_unavailable"
+        return None
 
     async def update_exchange_config_by_symbols(self, symbols: list[str]):
         for symbol in symbols:
