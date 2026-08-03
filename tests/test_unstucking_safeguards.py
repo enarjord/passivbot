@@ -626,6 +626,11 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.ineligible_symbols = {}
             self.approved_coins_minus_ignored_coins = {"long": [], "short": []}
             self.PB_modes = {"long": {}, "short": {}}
+            auto_gs = bool(cfg["live"]["auto_gs"])
+            self.PB_mode_stop = {
+                "long": "graceful_stop" if auto_gs else "manual",
+                "short": "graceful_stop" if auto_gs else "manual",
+            }
             self._runtime_forced_modes = {"long": {}, "short": {}}
             self.inactive_coin_candle_ttl_ms = 60_000
             self.trailing_prices = {}

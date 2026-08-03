@@ -16760,10 +16760,10 @@ class Passivbot:
                 if configured_mode:
                     expanded_mode = expand_PB_mode(configured_mode)
                     if expanded_mode != "normal":
-                        return self._apply_ignored_coin_mode(
+                        return self._apply_entry_eligibility_mode(
                             pside, symbol, expanded_mode
                         )
-                return self._apply_ignored_coin_mode(
+                return self._apply_entry_eligibility_mode(
                     pside, symbol, "graceful_stop"
                 )
 
@@ -16771,11 +16771,13 @@ class Passivbot:
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
         if runtime_forced:
-            return self._apply_ignored_coin_mode(pside, symbol, str(runtime_forced))
+            return self._apply_entry_eligibility_mode(
+                pside, symbol, str(runtime_forced)
+            )
 
         forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if forced_mode:
-            return self._apply_ignored_coin_mode(
+            return self._apply_entry_eligibility_mode(
                 pside, symbol, expand_PB_mode(forced_mode)
             )
         if not self.markets_dict.get(symbol, {}).get("active", True):
@@ -16783,7 +16785,7 @@ class Passivbot:
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
-        return self._apply_ignored_coin_mode(pside, symbol)
+        return self._apply_entry_eligibility_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
         self, symbols: Iterable[str]
@@ -16812,20 +16814,21 @@ class Passivbot:
                 )
         return overrides
 
-    def _apply_ignored_coin_mode(
+    def _apply_entry_eligibility_mode(
         self, pside: str, symbol: str, mode: Optional[str] = None
     ) -> Optional[str]:
-        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
-        if symbol not in ignored:
+        """Block initials for managed symbols outside the current entry universe."""
+        if self.is_approved(pside, symbol):
             return mode
         if str(mode or "").strip().lower() in {
             "manual",
             "panic",
+            "graceful_stop",
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         }:
             return mode
-        return "graceful_stop"
+        return self.PB_mode_stop[pside]
 
     def _calc_unstuck_allowances_live(self) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""

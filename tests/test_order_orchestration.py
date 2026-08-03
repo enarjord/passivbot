@@ -204,7 +204,7 @@ def test_coin_hsl_pending_replay_mode_override_is_pair_scoped():
         "MANUAL/USDT:USDT": {"active": True},
     }
     bot.ineligible_symbols = {}
-    bot._apply_ignored_coin_mode = lambda pside, symbol, mode=None: mode
+    bot._apply_entry_eligibility_mode = lambda pside, symbol, mode=None: mode
 
     assert (
         bot._orchestrator_mode_override("long", "BTC/USDT:USDT")
