@@ -2165,7 +2165,7 @@ def test_pick_best_combined_candidate_uses_config_order_not_volume_for_full_rang
     assert chosen.exchange == "binanceusdm"
 
 
-def test_forced_only_exchanges_do_not_leak_into_unforced_candidates():
+def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
     configured, extras = hp._partition_combined_exchange_roles(
         ["binanceusdm", "bybit", "binanceusdm"],
         {"BTC": "okx", "ETH": "hyperliquid"},
@@ -2179,6 +2179,7 @@ def test_forced_only_exchanges_do_not_leak_into_unforced_candidates():
 
     assert configured == configured_reordered == ["binanceusdm", "bybit"]
     assert extras == extras_reordered == ["gateio", "hyperliquid", "okx"]
+    normalization_exchanges = [*configured, "hyperliquid", "okx"]
 
     unforced = hp._plan_combined_coin(
         coin="SOL",
@@ -2190,6 +2191,7 @@ def test_forced_only_exchanges_do_not_leak_into_unforced_candidates():
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
+        normalization_candidate_exchanges=normalization_exchanges,
     )
     forced = hp._plan_combined_coin(
         coin="BTC",
@@ -2201,12 +2203,25 @@ def test_forced_only_exchanges_do_not_leak_into_unforced_candidates():
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
+        normalization_candidate_exchanges=normalization_exchanges,
     )
 
     assert unforced is not None
-    assert unforced.candidate_exchanges == ("binanceusdm", "bybit")
+    assert unforced.selection_exchanges == ("binanceusdm", "bybit")
+    assert unforced.candidate_exchanges == (
+        "binanceusdm",
+        "bybit",
+        "hyperliquid",
+        "okx",
+    )
     assert forced is not None
-    assert forced.candidate_exchanges == ("okx",)
+    assert forced.selection_exchanges == ("okx",)
+    assert forced.candidate_exchanges == (
+        "okx",
+        "binanceusdm",
+        "bybit",
+        "hyperliquid",
+    )
 
 
 def test_volume_reference_exchange_uses_config_order_not_selected_coin_count():
@@ -2402,7 +2417,58 @@ def test_volume_normalization_excludes_incomplete_final_utc_day_from_denominator
 
     assert window_end == day1
     assert diagnostics["window_days"] == 1
-    assert diagnostics["minimum_eligible_days"] == 1
+    assert diagnostics["minimum_eligible_days_basis"] == (
+        "per_coin_exchange_pair_complete_overlap"
+    )
+    contributor = diagnostics["pair_estimates"]["binance/bybit"]["contributors"]["BTC"]
+    assert contributor["window_days"] == 1
+    assert contributor["minimum_eligible_days"] == 1
+    assert ratios[("binance", "bybit")] == pytest.approx(2.0)
+
+
+def test_volume_normalization_excludes_pair_specific_partial_boundary_days():
+    day0 = month_start_ts(2026, 4)
+    day1 = day0 + 86_400_000
+    day2 = day1 + 86_400_000
+    full_timestamps = np.arange(day0, day2, 60_000, dtype=np.int64)
+    partial_timestamps = np.arange(day0, day1 + 12 * 60 * 60 * 1000, 60_000, dtype=np.int64)
+
+    def candidate(exchange, timestamps, volume):
+        volumes = np.full(len(timestamps), volume, dtype=np.float64)
+        return hp.CombinedExchangeCandidate(
+            exchange=exchange,
+            df=pd.DataFrame(
+                {
+                    "timestamp": timestamps,
+                    "high": np.ones(len(timestamps)),
+                    "low": np.ones(len(timestamps)),
+                    "close": np.ones(len(timestamps)),
+                    "volume": volumes,
+                    "valid": np.ones(len(timestamps), dtype=bool),
+                }
+            ),
+            coverage_count=len(timestamps),
+            gap_count=0,
+            total_volume=float(volumes.sum()),
+        )
+
+    ratios, diagnostics = hp.compute_exchange_volume_ratios_with_diagnostics(
+        ["binance", "bybit"],
+        ["BTC"],
+        {
+            "BTC": (
+                candidate("binance", full_timestamps, 2.0),
+                candidate("bybit", partial_timestamps, 1.0),
+            )
+        },
+        day0,
+        day2,
+    )
+
+    contributor = diagnostics["pair_estimates"]["binance/bybit"]["contributors"]["BTC"]
+    assert contributor["window_days"] == 1
+    assert contributor["minimum_eligible_days"] == 1
+    assert contributor["eligible_days"] == 1
     assert ratios[("binance", "bybit")] == pytest.approx(2.0)
 
 
@@ -2511,6 +2577,7 @@ async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(m
         coin="BTC",
         effective_start_ts=start_ts,
         forced_exchange=None,
+        selection_exchanges=("binanceusdm", "bybit"),
         candidate_exchanges=("binanceusdm", "bybit"),
     )
 
@@ -2558,6 +2625,62 @@ async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(m
 
 
 @pytest.mark.asyncio
+async def test_load_combined_coin_candidates_tolerates_failed_normalization_only_exchange(
+    monkeypatch, tmp_path
+):
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 60_000
+    plan = hp.CombinedCoinPlan(
+        coin="BTC",
+        effective_start_ts=start_ts,
+        forced_exchange=None,
+        selection_exchanges=("binanceusdm",),
+        candidate_exchanges=("binanceusdm", "okx"),
+    )
+
+    class FakeManager:
+        def has_coin(self, coin):
+            return True
+
+        def get_symbol(self, coin):
+            return f"{coin}/USDT:USDT"
+
+    async def fake_fetch(coin, ex, *_args, **_kwargs):
+        if ex == "okx":
+            raise RuntimeError("okx exploded")
+        df = pd.DataFrame(
+            {
+                "timestamp": np.array([start_ts, end_ts], dtype=np.int64),
+                "high": [1.0, 2.0],
+                "low": [1.0, 2.0],
+                "close": [1.0, 2.0],
+                "volume": [10.0, 11.0],
+            }
+        )
+        return ex, df, 2, 0, 21.0
+
+    monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch)
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "ohlcvs", catalog)
+    report = []
+
+    candidates = await hp._load_combined_coin_candidates(
+        plan=plan,
+        om_dict={"binanceusdm": FakeManager(), "okx": FakeManager()},
+        end_ts=end_ts,
+        force_refetch_gaps=False,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchanges_to_consider=("binanceusdm",),
+        candidate_report=report,
+    )
+
+    assert [candidate.exchange for candidate in candidates] == ["binanceusdm"]
+    assert report[-1]["reason"] == "normalization_candidate_fetch_failed:RuntimeError"
+
+
+@pytest.mark.asyncio
 async def test_load_combined_coin_candidates_can_bypass_v2_for_source_dir(monkeypatch, tmp_path):
     start_ts = month_start_ts(2026, 4)
     end_ts = start_ts + 60_000
@@ -2565,6 +2688,7 @@ async def test_load_combined_coin_candidates_can_bypass_v2_for_source_dir(monkey
         coin="BTC",
         effective_start_ts=start_ts,
         forced_exchange=None,
+        selection_exchanges=("binanceusdm",),
         candidate_exchanges=("binanceusdm",),
     )
 
@@ -2625,6 +2749,7 @@ async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
         coin="BTC",
         effective_start_ts=start_ts,
         forced_exchange=None,
+        selection_exchanges=("binanceusdm",),
         candidate_exchanges=("binanceusdm",),
     )
     catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")

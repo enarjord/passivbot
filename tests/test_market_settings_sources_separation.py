@@ -326,3 +326,105 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
     normalization = mss["__preparation_meta__"]["volume_normalization"]
     assert normalization["enabled"] is False
     assert normalization["scale_factors_to_reference"] == {"binance": 1.0, "bybit": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_exchange(
+    monkeypatch, tmp_path
+):
+    import hlcv_preparation as hp
+
+    start_ts = 1_704_067_200_000
+    timestamps = [start_ts + i * 60_000 for i in range(1440)]
+    coins = ["BTC", "ETH", "SOL"]
+
+    class DummyOM:
+        def __init__(self, exchange):
+            self.exchange = exchange
+
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return coin in coins
+
+        def get_symbol(self, coin):
+            return coin
+
+        def get_market_specific_settings(self, _coin):
+            return {"exchange": self.exchange, "min_cost": 1.0}
+
+    async def fake_get_first_timestamps_unified(_coins):
+        return {coin: start_ts for coin in coins}
+
+    async def fake_fetch(coin, exchange, *_args, **_kwargs):
+        volume = 2.0 if exchange == "binanceusdm" else 1.0
+        df = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "high": [2.0] * len(timestamps),
+                "low": [0.5] * len(timestamps),
+                "close": [1.5] * len(timestamps),
+                "volume": [volume] * len(timestamps),
+            }
+        )
+        return exchange, df, len(df), 0, float(df["volume"].sum())
+
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_get_first_timestamps_unified)
+    monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch)
+
+    config = {
+        "backtest": {
+            "gap_tolerance_ohlcvs_minutes": 120,
+            "volume_normalization": True,
+        },
+        "bot": {
+            "long": {
+                "n_positions": 3,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0 / 3.0,
+            },
+            "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "wallet_exposure_limit": 0.0,
+            },
+        },
+        "live": {
+            "approved_coins": {"long": coins, "short": []},
+            "minimum_coin_age_days": 0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+    }
+    om_dict = {
+        "binanceusdm": DummyOM("binanceusdm"),
+        "bybit": DummyOM("bybit"),
+    }
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    mss, _timestamps, values = await hp._prepare_hlcvs_combined_impl(
+        config=config,
+        om_dict=om_dict,
+        base_start_ts=start_ts,
+        _requested_start_ts=start_ts,
+        end_ts=timestamps[-1],
+        forced_sources={"BTC": "bybit"},
+        force_refetch_gaps=False,
+        ohlcv_exchanges=["binanceusdm"],
+        normalization_candidate_exchanges=["binanceusdm", "bybit"],
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+    )
+
+    assert mss["BTC"]["exchange"] == "bybit"
+    assert mss["ETH"]["exchange"] == "binance"
+    assert mss["SOL"]["exchange"] == "binance"
+    normalization = mss["__preparation_meta__"]["volume_normalization"]
+    assert normalization["scale_factors_to_reference"] == {
+        "binance": pytest.approx(1.0),
+        "bybit": pytest.approx(2.0),
+    }
+    assert values["BTC"][:, 3].sum() == pytest.approx(2880.0)

@@ -34,9 +34,11 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
   window clipped to the verified dataset. `dataset` adopts the dataset's
   effective coins and timestamp window for exact artifact replay.
 - **volume_normalization**: When `true` (default), normalize volume data across exchanges using
-  the median of per-coin median daily log-volume ratios over the latest complete UTC days. Daily
-  estimates require at least 95% common minute coverage, and underdetermined exchange links fail
-  loudly instead of silently using an unstable factor. Set to `false` to preserve each selected
+  the median of per-coin median daily log-volume ratios over each coin/exchange pair's latest
+  complete-overlap UTC days. Daily estimates require at least 95% common minute coverage, and
+  underdetermined exchange links fail loudly instead of silently using an unstable factor. Forced
+  source exchanges contribute normalization-only overlap candidates without entering unrelated
+  source selection. Set to `false` to preserve each selected
   exchange's native volume. The first selected exchange in `backtest.exchanges` is the stable
   normalization reference. Equivalent full-range candle sources are also selected by that
   configured order; total volume is never a source-selection tie-breaker. Cache manifests and
