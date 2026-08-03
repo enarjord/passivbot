@@ -297,8 +297,8 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
                 "symbol": "BTC/USDC:USDC",
                 "side": side,
                 "amount": 0.01,
-                # Native WS omits reduceOnly; CCXT synthesizes False.
-                "reduceOnly": False,
+                # Native WS omits reduceOnly; current CCXT synthesizes None.
+                "reduceOnly": None,
                 "info": {"oid": 123, "side": raw_side, "sz": "0.01"},
             }
         ]

@@ -57,8 +57,10 @@ bounded five-minute in-memory copy of those exact semantics covers terminal
 updates which arrive just after reconciliation removes the order; it is rebuilt
 from REST after restart and does not preserve ownership or trading intent.
 Missing, duplicate, expired, or contradictory matches remain rejected and
-trigger a fresh account-state read. Price, quantity, side, or order shape alone
-never prove ownership.
+trigger a fresh account-state read. A unified `reduceOnly` value of `false` or
+`null` is treated as a CCXT placeholder only when the native row omits that
+field; an explicit native value still must agree with the recovered semantics.
+Price, quantity, side, or order shape alone never prove ownership.
 
 A successful private-websocket read and a valid individual order row are separate health
 boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,

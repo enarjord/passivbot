@@ -987,10 +987,10 @@ class HyperliquidBot(CCXTBot):
                 if key not in order:
                     continue
                 value = order[key]
-                # CCXT may synthesize a unified False when the native payload
-                # omits reduceOnly. Preserve that compatibility, but never
-                # discard a supplied True or contradict native semantics.
-                if value is False and not raw_has_explicit_reduce_only:
+                # CCXT may synthesize a unified False or None when the native
+                # payload omits reduceOnly. Preserve those placeholders, but
+                # never discard a supplied True or contradict native semantics.
+                if value in (False, None) and not raw_has_explicit_reduce_only:
                     continue
                 websocket_reduce_only = self._strict_order_reduce_only_response(
                     {"info": {key: value}}
