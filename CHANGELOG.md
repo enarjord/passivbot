@@ -11,6 +11,10 @@ All notable user-facing changes will be documented in this file.
   strategy branches remain independent when their input needs differ, and independent panic,
   WEL, and TWEL reducers may continue when their own inputs are complete.
 
+- Reduce optimizer-suite startup time and peak memory by copying materialized candle datasets
+  directly into shared memory instead of creating a redundant full-size intermediate array.
+- Speed up combined backtest and optimizer-suite candle materialization by writing bounded
+  time-major chunks instead of repeatedly sweeping the full memmap once per coin.
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.
 - Stop refetching every account surface when a known fill only gains authoritative PnL or revised fee evidence, while retaining confirmation for new source identities or structural fill changes; validate realized-PnL history once per Rust planning cycle instead of rescanning it for unstuck eligibility.
 - Scope live fill-history readiness to enabled consumers: PnL risk keeps its configured lookback, entry cooldown proves only its structural-fill horizon, and bots without historical consumers use bounded recent ingestion.

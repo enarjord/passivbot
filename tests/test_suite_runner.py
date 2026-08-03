@@ -563,6 +563,75 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
     )
 
 
+@pytest.mark.asyncio
+async def test_prepare_master_datasets_copies_materialized_arrays_directly_to_shared_memory(
+    monkeypatch,
+):
+    source_hlcvs = np.arange(24, dtype=np.float64).reshape(3, 2, 4)
+    source_btc = np.array([10.0, 11.0, 12.0], dtype=np.float64)
+    timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+        return (
+            ["BTC", "ETH"],
+            source_hlcvs,
+            {
+                "BTC": {"exchange": exchange},
+                "ETH": {"exchange": exchange},
+                "__meta__": {},
+            },
+            "",
+            f"/tmp/{exchange}",
+            source_btc,
+            timestamps,
+        )
+
+    class RecordingSharedArrayManager:
+        def __init__(self):
+            self.sources = []
+
+        def create_from(self, array):
+            self.sources.append(array)
+            copied = np.array(array, copy=True, order="C")
+            spec = SimpleNamespace(
+                name=f"test-{len(self.sources)}",
+                shape=copied.shape,
+                dtype=copied.dtype.str,
+            )
+            return spec, copied
+
+    monkeypatch.setitem(
+        sys.modules,
+        "backtest",
+        SimpleNamespace(prepare_hlcvs_mss=fake_prepare_hlcvs_mss),
+    )
+    manager = RecordingSharedArrayManager()
+    base_config = {
+        "backtest": {
+            "start_date": "1970-01-01T00:00:00",
+            "end_date": "1970-01-01T00:02:00",
+            "exchanges": ["binance"],
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC", "ETH"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+
+    datasets = await prepare_master_datasets(
+        base_config,
+        ["binance"],
+        shared_array_manager=manager,
+    )
+
+    assert len(manager.sources) == 2
+    assert np.shares_memory(manager.sources[0], source_hlcvs)
+    assert np.shares_memory(manager.sources[1], source_btc)
+    np.testing.assert_array_equal(datasets["binance"].hlcvs, source_hlcvs)
+    np.testing.assert_array_equal(datasets["binance"].btc_usd_prices, source_btc)
+
+
 def test_aggregate_metrics_computes_stats():
     scenario_results = [
         ScenarioResult(
