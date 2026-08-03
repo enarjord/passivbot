@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reduce optimizer-suite startup time and peak memory by copying materialized candle datasets
+  directly into shared memory instead of creating a redundant full-size intermediate array.
 - Speed up combined backtest and optimizer-suite candle materialization by writing bounded
   time-major chunks instead of repeatedly sweeping the full memmap once per coin.
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.
