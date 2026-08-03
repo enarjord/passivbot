@@ -20918,16 +20918,22 @@ class Passivbot:
                         / 1000.0,
                     )
                     candle_fetch_task = asyncio.create_task(candle_task)
-                    completed_tasks, _pending_tasks = await asyncio.wait(
-                        {candle_fetch_task}, timeout=remaining_s
-                    )
+                    try:
+                        completed_tasks, _pending_tasks = await asyncio.wait(
+                            {candle_fetch_task}, timeout=remaining_s
+                        )
+                    except asyncio.CancelledError:
+                        candle_fetch_task.cancel()
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
+                        raise
                     if not completed_tasks:
                         surface_time_slice_expired = True
                         candle_fetch_task.cancel()
-                        try:
-                            await candle_fetch_task
-                        except asyncio.CancelledError:
-                            pass
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
                         raise TimeoutError("forager surface time slice expired")
                     refreshed = candle_fetch_task.result()
                 else:

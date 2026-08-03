@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import pytest
@@ -4531,6 +4532,97 @@ async def test_forager_candidate_refresh_shares_wall_time_across_surfaces(
         bot._forager_surface_failure_retry_after_ms[(symbols[0], "1m")]
         == now_ms + pb_mod._FORAGER_TRANSIENT_FAILURE_RETRY_MS
     )
+
+
+@pytest.mark.asyncio
+async def test_forager_candidate_refresh_cancels_child_fetch_with_parent(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 10_000_000
+    symbol = "SLOW/USDT:USDT"
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: ({symbol: 10}, {symbol: 0}, {symbol: True}),
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot, "_urgent_active_candle_symbols", lambda _bot: []
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_candidate_candle_surface_health",
+        lambda _bot, *args, **kwargs: {
+            "age_ms": 60_000,
+            "coverage_ok": False,
+            "no_basis": True,
+        },
+    )
+
+    spawned_tasks = []
+
+    async def cancelled_wait(tasks, *, timeout):
+        del timeout
+        spawned_tasks.extend(tasks)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(pb_mod.asyncio, "wait", cancelled_wait)
+
+    class FakeCM:
+        default_window_candles = 120
+
+        def get_candles(self, symbol, **kwargs):
+            del symbol, kwargs
+
+            async def blocked_fetch():
+                await asyncio.Event().wait()
+
+            return blocked_fetch()
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 1,
+                "max_forager_candle_refresh_seconds": 1.0,
+            }
+        }
+        approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+        stop_signal_received = False
+        _shutdown_in_progress = False
+        start_time_ms = now_ms
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def get_max_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def bp(self, *args, **kwargs):
+            return 0.0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _forager_refresh_budget(self, *args, **kwargs):
+            return 1
+
+        def _forager_target_staleness_ms(self, *args, **kwargs):
+            return 0
+
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    with pytest.raises(asyncio.CancelledError):
+        await pb_mod.Passivbot._refresh_forager_candidate_candles(FakeBot())
+
+    assert len(spawned_tasks) == 1
+    assert spawned_tasks[0].done()
+    assert spawned_tasks[0].cancelled()
 
 
 @pytest.mark.asyncio
