@@ -16933,10 +16933,10 @@ class Passivbot:
                 if configured_mode:
                     expanded_mode = expand_PB_mode(configured_mode)
                     if expanded_mode != "normal":
-                        return self._apply_ignored_coin_mode(
+                        return self._apply_entry_eligibility_mode(
                             pside, symbol, expanded_mode
                         )
-                return self._apply_ignored_coin_mode(
+                return self._apply_entry_eligibility_mode(
                     pside, symbol, "graceful_stop"
                 )
 
@@ -16944,11 +16944,13 @@ class Passivbot:
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
         if runtime_forced:
-            return self._apply_ignored_coin_mode(pside, symbol, str(runtime_forced))
+            return self._apply_entry_eligibility_mode(
+                pside, symbol, str(runtime_forced)
+            )
 
         forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if forced_mode:
-            return self._apply_ignored_coin_mode(
+            return self._apply_entry_eligibility_mode(
                 pside, symbol, expand_PB_mode(forced_mode)
             )
         if not self.markets_dict.get(symbol, {}).get("active", True):
@@ -16956,7 +16958,7 @@ class Passivbot:
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
-        return self._apply_ignored_coin_mode(pside, symbol)
+        return self._apply_entry_eligibility_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
         self, symbols: Iterable[str]
@@ -16985,20 +16987,21 @@ class Passivbot:
                 )
         return overrides
 
-    def _apply_ignored_coin_mode(
+    def _apply_entry_eligibility_mode(
         self, pside: str, symbol: str, mode: Optional[str] = None
     ) -> Optional[str]:
-        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
-        if symbol not in ignored:
+        """Block initials for managed symbols outside the current entry universe."""
+        if self.is_approved(pside, symbol):
             return mode
         if str(mode or "").strip().lower() in {
             "manual",
             "panic",
+            "graceful_stop",
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         }:
             return mode
-        return "graceful_stop"
+        return self.PB_mode_stop[pside]
 
     def _calc_unstuck_allowances_live(self) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager."""
@@ -21035,6 +21038,7 @@ class Passivbot:
         for idx, (_priority, sym, timeframe, required_candles, pre_health) in enumerate(
             to_refresh, start=1
         ):
+            surface_time_slice_expired = False
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -21097,13 +21101,43 @@ class Passivbot:
                         max_lookback_candles=int(required_candles),
                     )
                 if max_refresh_ms > 0:
+                    # Share the remaining cycle time across the remaining
+                    # selected surfaces. A sparse market may paginate or repair
+                    # gaps for much longer than a normal refresh; allowing it
+                    # to consume the whole remainder starves every later
+                    # candidate. Fast surfaces return early, so their unused
+                    # share naturally remains available to later work.
+                    elapsed_before_fetch_ms = int(
+                        max(0, utc_ms() - refresh_started_ms)
+                    )
+                    remaining_surface_count = max(
+                        1, len(to_refresh) - idx + 1
+                    )
                     remaining_s = max(
                         0.001,
-                        float(max_refresh_ms - elapsed_ms) / 1000.0,
+                        float(max_refresh_ms - elapsed_before_fetch_ms)
+                        / float(remaining_surface_count)
+                        / 1000.0,
                     )
-                    refreshed = await asyncio.wait_for(
-                        candle_task, timeout=remaining_s
-                    )
+                    candle_fetch_task = asyncio.create_task(candle_task)
+                    try:
+                        completed_tasks, _pending_tasks = await asyncio.wait(
+                            {candle_fetch_task}, timeout=remaining_s
+                        )
+                    except asyncio.CancelledError:
+                        candle_fetch_task.cancel()
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
+                        raise
+                    if not completed_tasks:
+                        surface_time_slice_expired = True
+                        candle_fetch_task.cancel()
+                        await asyncio.gather(
+                            candle_fetch_task, return_exceptions=True
+                        )
+                        raise TimeoutError("forager surface time slice expired")
+                    refreshed = candle_fetch_task.result()
                 else:
                     refreshed = await candle_task
                 post_health = Passivbot._candidate_candle_surface_health(
@@ -21212,12 +21246,20 @@ class Passivbot:
                         total_count=len(to_refresh),
                     )
                     break
-                logging.warning(
-                    "Timed out acquiring candle lock for %s; forager refresh will retry "
-                    "| error_type=%s",
-                    Passivbot._log_symbol(sym),
-                    bounded_exception_type(exc),
-                )
+                if surface_time_slice_expired:
+                    logging.debug(
+                        "[candle] forager surface yielded after its fair time share | "
+                        "symbol=%s timeframe=%s action=defer_surface_retry",
+                        Passivbot._log_symbol(sym),
+                        timeframe,
+                    )
+                else:
+                    logging.warning(
+                        "Timed out refreshing candles for %s; forager refresh will retry "
+                        "| error_type=%s",
+                        Passivbot._log_symbol(sym),
+                        bounded_exception_type(exc),
+                    )
             except Exception as exc:
                 error_type = bounded_exception_type(exc)
                 if isinstance(exc, OhlcvTerminalEmptyPage):
