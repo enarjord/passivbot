@@ -9,6 +9,15 @@ All notable user-facing changes will be documented in this file.
   flat symbols stop generating entries, held symbols retain close and panic management, expiry
   retries automatically, and bot restart retries immediately. The shared policy is available to
   future connectors only through their own exact exchange-code classifiers.
+- Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the
+  entire planner cycle when one active symbol lacks a completed candle. Known missing EMA inputs
+  remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
+  strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
+  strategy branches remain independent when their input needs differ, and independent panic,
+  WEL, and TWEL reducers may continue when their own inputs are complete.
+
+- Reduce optimizer-suite startup time and peak memory by copying materialized candle datasets
+  directly into shared memory instead of creating a redundant full-size intermediate array.
 - Speed up combined backtest and optimizer-suite candle materialization by writing bounded
   time-major chunks instead of repeatedly sweeping the full memmap once per coin.
 - Prevent unproven fill-history coverage from consuming the generic live restart budget; one reason-aware execution-loop backoff owns fill retries while planning remains fail-closed, and already-latched HSL RED supervision continues during coverage repair.

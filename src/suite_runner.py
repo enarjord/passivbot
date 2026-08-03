@@ -750,8 +750,6 @@ async def prepare_master_datasets(
             coin: str(mss.get(coin, {}).get("exchange", exchange_name)) for coin in coins
         }
         available_exchanges = sorted(set(coin_exchange.values())) or [exchange_name]
-        hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
-        btc_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
         timestamps_array = (
             None
             if timestamps is None
@@ -759,14 +757,19 @@ async def prepare_master_datasets(
         )
         hlcvs_spec = None
         btc_spec = None
-        if shared_array_manager is not None:
-            # Copy to SharedMemory, then reassign to view (frees intermediate copy)
-            hlcvs_spec, hlcvs_view = shared_array_manager.create_from(hlcvs_array)
-            del hlcvs_array  # Free intermediate contiguous array
-            hlcvs_array = hlcvs_view
-            btc_spec, btc_view = shared_array_manager.create_from(btc_array)
-            del btc_array  # Free intermediate contiguous array
-            btc_array = btc_view
+        if shared_array_manager is None:
+            hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
+            btc_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
+        else:
+            # The materialized arrays are already float64 and contiguous in the normal
+            # suite path. Copy them directly into SharedMemory instead of first making
+            # another full-size process-local array.
+            hlcvs_spec, hlcvs_array = shared_array_manager.create_from(
+                np.ascontiguousarray(hlcvs, dtype=np.float64)
+            )
+            btc_spec, btc_array = shared_array_manager.create_from(
+                np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+            )
         release_materialized_payload(hlcvs)
         return ExchangeDataset(
             exchange=exchange_label,

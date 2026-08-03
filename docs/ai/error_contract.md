@@ -52,6 +52,17 @@ Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are 
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
 block protective management of held symbols.
 
+A failed urgent candle refresh is therefore an availability observation, not an account-wide
+planning barrier. Live Python may explicitly mark a symbol's known missing EMA inputs as
+unavailable and pass no invented values. Rust remains strict by default, including backtests, and
+may scope only that explicit live absence to forager selection, one-way arbitration, strategy, or
+unstuck consumers that need it.
+Missing ordinary strategy input produces no ideal orders for the entry or close branch that
+consumes it, so normal Rust-authoritative reconciliation removes any now-stale resting orders from
+that branch. The other strategy branch, independent Rust risk reducers, and panic actions continue
+when their own inputs are complete. Malformed or non-finite producer output is never covered by
+this degradation and remains fatal.
+
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when
 the previous close is known, overlap repair is scheduled, and the gap is within policy. Unknown

@@ -1514,6 +1514,7 @@ impl<'a> Backtest<'a> {
                     order_book,
                     exchange,
                     tradable,
+                    allow_missing_strategy_inputs: false,
                     next_candle,
                     effective_min_cost,
                     emas,

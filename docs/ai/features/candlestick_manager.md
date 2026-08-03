@@ -285,6 +285,10 @@
     range be promoted to verified `no_trades` continuity. Empty, one-sided, terminal, or rejected
     payloads do not prove the gap and start a separate seven-day contextual-proof cooldown. Ordinary
     missing-range retries retain their existing independent schedule.
+15. Urgent active-candle refresh records and reports incomplete symbol coverage but does not itself
+    gate the whole planner cycle. Canonical EMA consumers determine symbol/order-class readiness;
+    unavailable values remain absent, never neutralized. Account surfaces and fresh market
+    snapshots retain their separate execution barriers.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
