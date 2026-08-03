@@ -44,7 +44,8 @@ new planning through `graceful_stop`. An affected symbol with a position uses `t
 `normal` or `graceful_stop`, so all further entries are suppressed while ordinary closes remain
 available without successful leverage refresh. Explicit `panic` and `manual` modes remain stronger.
 The initial failed entry/configuration write retains the normal execution failure/restart-budget
-consequences; the cooldown prevents repeated futile entry writes rather than hiding the fault.
+consequences. Retry-backoff cycles with no authenticated write do not count as additional failures;
+the cooldown prevents repeated futile entry writes rather than hiding the fault.
 Expiry restores on-demand attempts, another classified response starts a new cooldown, and process
 restart deliberately clears the state and retries immediately.
 

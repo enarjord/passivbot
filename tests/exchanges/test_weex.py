@@ -218,7 +218,12 @@ def test_weex_symbol_config_gates_entries_but_not_protective_closes():
     assert not bot._order_requires_exchange_config_before_create(
         {"reduce_only": True}
     )
+    bot._last_exchange_config_failed_attempt_symbols = {SYMBOL}
     assert bot._pending_exchange_config_consumes_error_budget(
+        [{"symbol": SYMBOL, "reduce_only": False}]
+    )
+    bot._last_exchange_config_failed_attempt_symbols = set()
+    assert not bot._pending_exchange_config_consumes_error_budget(
         [{"symbol": SYMBOL, "reduce_only": False}]
     )
     assert not bot._pending_exchange_config_consumes_error_budget([])

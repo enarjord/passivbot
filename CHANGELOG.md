@@ -8,7 +8,8 @@ All notable user-facing changes will be documented in this file.
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
   management, and protective closes bypass failed entry-only leverage setup. The initial failure
-  remains restart-budget-visible; expiry retries automatically and bot restart retries immediately.
+  remains restart-budget-visible without charging skipped retry-backoff cycles; expiry retries
+  automatically and bot restart retries immediately.
   The shared policy is available to future connectors only through their own exact exchange-code
   classifiers.
 - Scope live candle/EMA readiness to the Rust actions that consume it instead of deferring the

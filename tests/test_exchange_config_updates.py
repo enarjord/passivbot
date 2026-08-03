@@ -351,6 +351,68 @@ async def test_update_exchange_configs_retries_failed_symbol_after_backoff(monke
 
 
 @pytest.mark.asyncio
+async def test_update_exchange_configs_records_only_failed_attempts_not_backoff_skips(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 10_000
+
+    class FakeBot:
+        already_updated_exchange_config_symbols = set()
+        _exchange_config_retry_attempts = {}
+        _exchange_config_retry_after_ms = {"SKIP": now_ms + 1_000}
+        active_symbols = ["FAIL", "SKIP"]
+        exchange = "weex"
+        _health_rate_limits = 0
+
+        def _shutdown_requested(self):
+            return False
+
+        async def update_exchange_config_by_symbols(self, symbols):
+            if symbols == ["FAIL"]:
+                raise RuntimeError("failed write")
+            raise AssertionError(f"unexpected configuration attempt: {symbols}")
+
+        def _exchange_config_backoff_seconds(self, _attempt):
+            return 2.0
+
+        def _activate_exchange_symbol_unavailable_cooldown(self, *_args, **_kwargs):
+            return False
+
+        def _is_rate_limit_like_exception(self, _exc):
+            return False
+
+        def _exchange_config_success_pause_seconds(self):
+            return 0.0
+
+        _format_exchange_config_error = staticmethod(
+            pb_mod.Passivbot._format_exchange_config_error
+        )
+
+    bot = FakeBot()
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    configured = await pb_mod.Passivbot.update_exchange_configs(
+        bot,
+        ["FAIL", "SKIP"],
+        eligibility_now_ms=now_ms,
+    )
+
+    assert configured == set()
+    assert bot._last_exchange_config_failed_attempt_symbols == {"FAIL"}
+
+    configured = await pb_mod.Passivbot.update_exchange_configs(
+        bot,
+        ["FAIL", "SKIP"],
+        eligibility_now_ms=now_ms + 1,
+    )
+
+    assert configured == set()
+    assert bot._last_exchange_config_failed_attempt_symbols == set()
+
+
+@pytest.mark.asyncio
 async def test_update_exchange_configs_accepts_symbol_subset(monkeypatch):
     import passivbot as pb_mod
 

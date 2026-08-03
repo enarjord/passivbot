@@ -10012,6 +10012,11 @@ class Passivbot:
             self._exchange_config_retry_attempts = {}
         if not hasattr(self, "_exchange_config_retry_after_ms"):
             self._exchange_config_retry_after_ms = {}
+        # This is per-invocation execution evidence, not cumulative state. A
+        # connector may use it immediately after this call to charge only
+        # actual failed writes to its restart budget; retry-backoff skips must
+        # not be counted as new failures.
+        self._last_exchange_config_failed_attempt_symbols = set()
         if symbols is None:
             symbols = self.active_symbols
         symbols = list(dict.fromkeys(symbols or []))
@@ -10045,6 +10050,7 @@ class Passivbot:
                 except RestartBotException:
                     raise
                 except Exception as e:
+                    self._last_exchange_config_failed_attempt_symbols.add(symbol)
                     attempts = (
                         int(self._exchange_config_retry_attempts.get(symbol, 0) or 0)
                         + 1

@@ -167,8 +167,16 @@ class WeexBot(CCXTBot):
     def _pending_exchange_config_consumes_error_budget(
         self, blocked_orders: list[dict]
     ) -> bool:
-        """Keep WEEX entry-configuration failures visible to restart supervision."""
-        return bool(blocked_orders)
+        """Charge only WEEX configuration writes that failed in this executor cycle."""
+        failed_symbols = set(
+            getattr(self, "_last_exchange_config_failed_attempt_symbols", set())
+            or set()
+        )
+        return any(
+            str(order.get("symbol") or "") in failed_symbols
+            for order in blocked_orders
+            if isinstance(order, dict)
+        )
 
     async def update_exchange_config_by_symbols(self, symbols: list[str]):
         for symbol in symbols:
