@@ -49,6 +49,11 @@ Backtest loads config and OHLCV, invokes the Rust simulation, and emits results.
 candidate configs and evaluates them through the same Rust backtest contract. Differences between
 live and backtest runtime inputs require explicit parity tests rather than duplicated assumptions.
 
+Live may annotate a known missing symbol EMA bundle so Rust can scope only consumers that actually
+need it. The annotation is not a fallback value: backtest and unannotated inputs stay strict, Rust
+still owns the resulting ideal-order set, and reconciliation cancels resting orders absent from
+that set.
+
 ## Configuration Surfaces
 
 Use `config.live` only for behavior consumed by live and shared with backtest/optimizer.

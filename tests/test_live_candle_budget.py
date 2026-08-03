@@ -270,7 +270,7 @@ async def test_active_candle_refresh_ignores_broad_graceful_stop_universe(monkey
 
 
 @pytest.mark.asyncio
-async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatch):
+async def test_active_candle_refresh_does_not_block_planning_when_rate_limited(monkeypatch):
     import passivbot as pb_mod
 
     now_ms = 10_000_000
@@ -330,7 +330,7 @@ async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatc
 
     bot = FakeBot()
 
-    assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(bot) is False
+    assert await pb_mod.Passivbot.update_ohlcvs_1m_for_actives(bot) is True
     assert stamps == []
 
 
@@ -1274,19 +1274,29 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     bot_active = FakeBot()
     bot_active.PB_modes = {"long": {symbol: "normal"}, "short": {}}
     bot_active.active_symbols = [symbol]
-    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot_active, [symbol], modes=bot_active.PB_modes
-        )
+
+    async def unavailable_log_range(*args, **kwargs):
+        raise TimeoutError("log range unavailable")
+
+    bot_active.cm.get_latest_ema_log_range = unavailable_log_range
+    active_result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot_active, [symbol], modes=bot_active.PB_modes
+    )
+    assert active_result[2][symbol] == {}
+    assert bot_active._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
 
     bot_with_position = FakeBot()
     bot_with_position.positions = {
         symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}
     }
-    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot_with_position, [symbol], modes=bot_with_position.PB_modes
-        )
+    bot_with_position.cm.get_latest_ema_log_range = unavailable_log_range
+    held_result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot_with_position, [symbol], modes=bot_with_position.PB_modes
+    )
+    assert held_result[2][symbol] == {}
+    assert bot_with_position._orchestrator_allow_missing_strategy_inputs_symbols == {
+        symbol
+    }
 
 
 @pytest.mark.asyncio
@@ -1347,7 +1357,7 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
         ):
             if tf == "1h":
                 return 0.01
-            return float("nan")
+            raise TimeoutError("m1 log range unavailable")
 
         async def get_latest_cached_ema_metrics(
             self,

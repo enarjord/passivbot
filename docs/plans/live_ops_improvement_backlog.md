@@ -1012,6 +1012,11 @@ Related detailed plans:
       producer's existing structured-only feature-unavailability evidence in
       bounded smoke-report projections. It does not change readiness or the
       create-side handoff contract.
+    - 2026-08-01: Architecture-tightening work removes completed candles from
+      the global staged planner barrier and lets strict-by-default Rust scope
+      explicitly absent live EMA inputs to actual consumers. This addresses
+      held-symbol liveness and preserves stale-order cancellation, but does not
+      by itself settle flat-to-active forager ranking readiness.
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
     Status: structured event, smoke projection, performance projection, and live
