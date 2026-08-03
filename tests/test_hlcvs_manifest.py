@@ -49,7 +49,21 @@ def test_build_hlcvs_manifest_hashes_logical_arrays_and_side_membership(tmp_path
     mss = {
         "BTC": {"exchange": "binance", "first_valid_index": 0, "last_valid_index": 2},
         "ETH": {"exchange": "bybit", "first_valid_index": 0, "last_valid_index": 2},
-        "__meta__": {"btc_source_exchange": "binanceusdm"},
+        "__meta__": {
+            "btc_source_exchange": "binanceusdm",
+            "preparation_algorithm_version": 2,
+            "source_selection": {
+                "BTC": {
+                    "selected_exchange": "binance",
+                    "selection_reason": "configured_priority_among_full_range_candidates",
+                }
+            },
+            "volume_normalization": {
+                "enabled": True,
+                "reference_exchange": "binance",
+                "scale_factors_to_reference": {"binance": 1.0, "bybit": 1.23456789},
+            },
+        },
     }
     _write_cache_files(
         cache_dir,
@@ -84,6 +98,13 @@ def test_build_hlcvs_manifest_hashes_logical_arrays_and_side_membership(tmp_path
         "long": ["BTC", "ETH"],
         "short": ["BTC"],
     }
+    assert manifest["sources"]["BTC"]["selection_reason"] == (
+        "configured_priority_among_full_range_candidates"
+    )
+    assert manifest["preparation"]["volume_normalization"][
+        "scale_factors_to_reference"
+    ]["bybit"] == 1.23456789
+    assert manifest["requested"]["hlcv_preparation_algorithm_version"] == 2
     assert verify_hlcvs_manifest(cache_dir)["config_hash"] == "abc123"
 
     changed_btc = btc_usd_prices.copy()

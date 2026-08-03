@@ -102,6 +102,7 @@ from pure_funcs import (
 import pprint
 from copy import deepcopy
 from hlcv_preparation import (
+    HLCV_PREPARATION_ALGORITHM_VERSION,
     prepare_hlcvs,
     prepare_hlcvs_combined,
     try_prepare_hlcvs_v2_local,
@@ -1440,6 +1441,11 @@ def get_cache_hash(config, exchange):
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,
     }
+    if exchange == "combined":
+        to_hash["volume_normalization"] = bool(
+            config.get("backtest", {}).get("volume_normalization", True)
+        )
+        to_hash["hlcv_preparation_algorithm_version"] = HLCV_PREPARATION_ALGORITHM_VERSION
     return calc_hash(to_hash)
 
 

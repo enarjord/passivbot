@@ -62,6 +62,7 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     manifest_schema_version = None
     materialization_schema_version = None
     content_hashes = {}
+    preparation = {}
     cache_build_side_membership = None
     manifest_missing = None
     coins_order = list(coins_from_config)
@@ -101,6 +102,9 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
                     cache_build_side_membership = effective.get("build_side_membership")
                     if not isinstance(cache_build_side_membership, dict):
                         cache_build_side_membership = effective.get("side_membership")
+                manifest_preparation = manifest.get("preparation", {})
+                if isinstance(manifest_preparation, dict):
+                    preparation = manifest_preparation
         if coins_file:
             with open(coins_file) as f:
                 loaded_coins = json.load(f)
@@ -134,6 +138,7 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         "manifest_schema_version": manifest_schema_version,
         "materialization_schema_version": materialization_schema_version,
         "content_hashes": content_hashes,
+        "preparation": preparation,
         "side_membership": (
             runtime_side_membership
             if runtime_side_membership is not None

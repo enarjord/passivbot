@@ -65,6 +65,17 @@ def test_cache_hash_includes_coin_sources():
     assert hash_with != hash_without
 
 
+def test_cache_hash_is_independent_of_coin_sources_mapping_order():
+    cfg1 = _base_config()
+    cfg1["live"]["approved_coins"]["long"] = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    cfg1["backtest"]["coin_sources"] = {"BTC": "okx", "ETH": "hyperliquid"}
+
+    cfg2 = copy.deepcopy(cfg1)
+    cfg2["backtest"]["coin_sources"] = {"ETH": "hyperliquid", "BTC": "okx"}
+
+    assert get_cache_hash(cfg1, "combined") == get_cache_hash(cfg2, "combined")
+
+
 def test_cache_hash_includes_market_settings_sources():
     """Verify market_settings_sources affects the cache hash."""
     cfg = _base_config()

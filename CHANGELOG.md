@@ -25,6 +25,12 @@ All notable user-facing changes will be documented in this file.
   strategy branches remain independent when their input needs differ, and independent panic,
   WEL, and TWEL reducers may continue when their own inputs are complete.
 
+- Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
+  full-range sources now follow configured exchange priority instead of total volume, robust
+  complete-day median-log estimates replace arithmetic volume averaging, and underdetermined
+  normalization fails loudly. `backtest.volume_normalization` now controls scaling and cache
+  identity, while cache manifests and backtest dataset artifacts retain source-selection and
+  normalization provenance.
 - Reduce optimizer-suite startup time and peak memory by copying materialized candle datasets
   directly into shared memory instead of creating a redundant full-size intermediate array.
 - Speed up combined backtest and optimizer-suite candle materialization by writing bounded
