@@ -56,11 +56,16 @@ exchange-ID match in the current authoritative REST open-order snapshot. A
 bounded five-minute in-memory copy of those exact semantics covers terminal
 updates which arrive just after reconciliation removes the order; it is rebuilt
 from REST after restart and does not preserve ownership or trading intent.
-Missing, duplicate, expired, or contradictory matches remain rejected and
-trigger a fresh account-state read. A unified `reduceOnly` value of `false` or
-`null` is treated as a CCXT placeholder only when the native row omits that
-field; an explicit native value still must agree with the recovered semantics.
-Price, quantity, side, or order shape alone never prove ownership.
+Every supplied client-ID alias must agree with the canonical client ID retained
+by the snapshot or its bounded copy. Missing, duplicate, expired, or
+contradictory matches remain rejected and trigger a fresh account-state read;
+authoritative snapshot contradictions must not fall back to process-local
+acknowledgement evidence. A unified `reduceOnly` value of `false` or `null` is
+treated as a CCXT placeholder only when the native row omits that field; an
+explicit native value still must agree with the recovered semantics. All
+snapshot-recovered rows request authoritative refresh because an exact exchange
+ID proves semantics but not local ownership. Price, quantity, side, or order
+shape alone never prove ownership.
 
 A successful private-websocket read and a valid individual order row are separate health
 boundaries. When a supported CCXT connector receives a row whose mandatory side, position-side,

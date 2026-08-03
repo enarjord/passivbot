@@ -270,6 +270,7 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
                 "side": side,
                 "position_side": position_side,
                 "amount": 0.01,
+                "clientOrderId": "entry_initial_normal_long_local",
                 "info": {"oid": 123, "side": raw_side, "reduceOnly": reduce_only},
             }
         ]
@@ -297,6 +298,7 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
                 "symbol": "BTC/USDC:USDC",
                 "side": side,
                 "amount": 0.01,
+                "clientOrderId": "entry_initial_normal_long_local",
                 # Native WS omits reduceOnly; current CCXT synthesizes None.
                 "reduceOnly": None,
                 "info": {"oid": 123, "side": raw_side, "sz": "0.01"},
@@ -313,6 +315,11 @@ async def test_hyperliquid_ws_order_recovers_semantics_from_open_snapshot_after_
         assert order["position_side"] == position_side
         assert order["reduceOnly"] is reduce_only
         assert order["_pb_order_semantics_source"] == "authoritative_open_order_snapshot"
+        assert order["_pb_order_update_requires_authoritative_refresh"] is True
+    bot.order_matches_recent_execution = lambda _order: True
+    bot.order_matches_bot_cancellation = lambda _order: True
+    for batch in handled:
+        assert bot._ws_order_update_is_self_echo(batch) is False
     assert not any(
         "lacked authoritative order semantics" in rec.message
         for rec in caplog.records
@@ -346,8 +353,18 @@ async def test_hyperliquid_ws_order_rejects_ambiguous_open_snapshot_identity(
         "side": "buy",
         "info": {"oid": 123, "side": "B"},
     }
+    bot.orders_emitted_to_exchange = [
+        {
+            "exchange_id": "123",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "status": "acknowledged",
+        }
+    ]
 
     assert bot._hl_open_snapshot_ws_order_semantics(sparse) is None
+    assert bot._hl_recover_ws_order_semantics(sparse) is None
 
 
 @pytest.mark.asyncio
@@ -371,8 +388,52 @@ async def test_hyperliquid_ws_order_rejects_open_snapshot_semantic_contradiction
         "side": "buy",
         "info": {"oid": 123, "side": "B", "reduceOnly": True},
     }
+    bot.orders_emitted_to_exchange = [
+        {
+            "exchange_id": "123",
+            "side": "buy",
+            "position_side": "long",
+            "reduce_only": False,
+            "status": "acknowledged",
+        }
+    ]
 
     assert bot._hl_open_snapshot_ws_order_semantics(sparse) is None
+    assert bot._hl_recover_ws_order_semantics(sparse) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_recent_cache", [False, True])
+async def test_hyperliquid_ws_order_rejects_snapshot_client_id_contradiction(
+    stubbed_modules,
+    use_recent_cache,
+):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    existing = {
+        "id": "123",
+        "side": "buy",
+        "position_side": "long",
+        "clientOrderId": "entry_initial_normal_long_local",
+        "info": {"oid": 123, "side": "B", "reduceOnly": False},
+    }
+    bot.open_orders = {"BTC/USDC:USDC": [existing]}
+    if use_recent_cache:
+        bot._hl_note_authoritative_open_order_semantics([existing])
+        bot.open_orders = {}
+    sparse = {
+        "id": "123",
+        "side": "buy",
+        "clientOrderId": "entry_initial_normal_long_different",
+        "info": {"oid": 123, "side": "B"},
+    }
+
+    snapshot_state, recovered = (
+        bot._hl_open_snapshot_ws_order_semantics_evidence(sparse)
+    )
+
+    assert snapshot_state == "invalid"
+    assert recovered is None
 
 
 @pytest.mark.asyncio
