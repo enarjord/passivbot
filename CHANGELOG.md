@@ -9,8 +9,9 @@ All notable user-facing changes will be documented in this file.
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
   management, and protective closes bypass failed entry-only leverage setup. The initial failure
   remains restart-budget-visible without charging skipped retry-backoff cycles; expiry retries
-  automatically and bot restart retries immediately. Cooldown duration validation is bounded so
-  an extreme numeric value cannot overflow and mask the original exchange failure.
+  automatically, each repeated qualifying response refreshes the deadline, and bot restart retries
+  immediately. Cooldown duration validation is bounded so an extreme numeric value cannot overflow
+  and mask the original exchange failure.
   The shared policy is available to future connectors only through their own exact exchange-code
   classifiers.
 - Prevent symbols retained for existing positions or open-order reconciliation from becoming live

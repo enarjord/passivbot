@@ -152,7 +152,10 @@ def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog)
     assert bot._activate_exchange_symbol_unavailable_cooldown(
         SYMBOL, error, now_ms=now_ms + 60_000
     )
-    assert bot._exchange_symbol_unavailable_until_ms == {SYMBOL: expected_until}
+    refreshed_until = expected_until + 60_000
+    assert bot._exchange_symbol_unavailable_until_ms == {SYMBOL: refreshed_until}
+    assert bot._exchange_config_retry_after_ms == {SYMBOL: refreshed_until}
+    assert "action=refresh_entry_block_until_retry" in caplog.text
 
     modes = {"long": {SYMBOL: None}, "short": {SYMBOL: "panic"}}
     active = bot._apply_exchange_symbol_unavailable_planning_policy(
@@ -182,6 +185,9 @@ def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog)
     with caplog.at_level("INFO"):
         assert bot._active_exchange_symbol_unavailable_cooldowns(
             [SYMBOL], now_ms=expected_until
+        ) == {SYMBOL: refreshed_until}
+        assert bot._active_exchange_symbol_unavailable_cooldowns(
+            [SYMBOL], now_ms=refreshed_until
         ) == {}
     assert bot._exchange_symbol_unavailable_until_ms == {}
     assert bot._exchange_config_retry_after_ms == {}
@@ -189,10 +195,10 @@ def test_weex_symbol_unavailable_cooldown_is_ram_only_scoped_and_expires(caplog)
     assert "cooldown expired" in caplog.text
 
     assert bot._activate_exchange_symbol_unavailable_cooldown(
-        SYMBOL, error, now_ms=expected_until + 1
+        SYMBOL, error, now_ms=refreshed_until + 1
     )
     assert bot._exchange_symbol_unavailable_until_ms == {
-        SYMBOL: expected_until + 1 + 6 * 60 * 60 * 1000
+        SYMBOL: refreshed_until + 1 + 6 * 60 * 60 * 1000
     }
 
 

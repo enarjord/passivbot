@@ -9915,8 +9915,6 @@ class Passivbot:
             cooldowns = {}
             self._exchange_symbol_unavailable_until_ms = cooldowns
         existing_until = int(cooldowns.get(symbol, 0) or 0)
-        if existing_until > now:
-            return True
         until_ms = now + cooldown_ms
         cooldowns[symbol] = until_ms
         reasons = getattr(
@@ -9933,12 +9931,17 @@ class Passivbot:
         logging.warning(
             "[config] exchange temporarily disabled API trading for symbol | "
             "symbol=%s reason=%s error_code=%s cooldown_hours=%.6g until_ms=%d "
-            "action=block_entries_until_retry",
+            "action=%s",
             Passivbot._log_symbol(symbol),
             reason,
             error_context.get("error_code", "-"),
             cooldown_hours,
             until_ms,
+            (
+                "refresh_entry_block_until_retry"
+                if existing_until > now
+                else "block_entries_until_retry"
+            ),
         )
         return True
 
