@@ -1132,6 +1132,7 @@ def prepare_order_churn_evidence(
         window_seconds=window_seconds,
         max_sample_gap_seconds=_order_churn_max_generation_gap_seconds(bot),
     )
+    reset = state.history_reset_during_evaluation or reset
     risk_active_pairs = set(
         getattr(bot, "_order_churn_risk_active_pairs", ()) or ()
     )

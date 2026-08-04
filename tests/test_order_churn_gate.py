@@ -171,6 +171,27 @@ def test_exclusive_switching_needs_stability_duration():
     assert decision.reason == "intermittent_run_short"
 
 
+def test_sustained_drift_overrides_short_switching_interval():
+    state = OrderChurnGateState()
+    for now, orders in (
+        (0.0, [_order(price=99.0)]),
+        (10.0, [_short_order(price=101.0)]),
+        (20.0, [_order(price=99.0)]),
+        (30.0, [_short_order(price=101.0)]),
+        (40.0, [_order(price=99.0)]),
+        (80.0, [_order(price=99.1)]),
+        (120.0, [_order(price=99.2)]),
+        (160.0, [_order(price=99.3)]),
+    ):
+        _evaluate(state, orders, now=now)
+    drifting = _order(price=99.4)
+
+    decision = _evaluate(state, [drifting], now=200.0)[id(drifting)]
+
+    assert decision.churn_evidenced is True
+    assert decision.reason == "continuous_price_drift"
+
+
 def test_continuous_stability_clears_exclusive_switching_evidence():
     state = OrderChurnGateState()
     for now, orders in (
@@ -188,6 +209,8 @@ def test_continuous_stability_clears_exclusive_switching_evidence():
 
     assert decision.churn_evidenced is False
     assert decision.reason == "stable_tight_prefix"
+    assert state.history_reset_during_evaluation is True
+    assert state.reset_count == 1
 
     switched = _short_order(price=101.0)
     decision = _evaluate(state, [switched], now=420.0)[id(switched)]
@@ -228,6 +251,22 @@ def test_continuous_stability_clears_exclusive_switching_evidence():
 def test_uncertain_exclusive_switching_fails_open(snapshots):
     state = OrderChurnGateState()
     for now, orders in snapshots:
+        _evaluate(state, orders, now=now)
+    current = _order(price=99.0)
+
+    decision = _evaluate(state, [current], now=240.0)[id(current)]
+
+    assert decision.churn_evidenced is False
+
+
+def test_alternate_cohort_cardinality_change_breaks_switching_proof():
+    state = OrderChurnGateState()
+    for now, orders in (
+        (0.0, [_order(price=99.0)]),
+        (60.0, [_short_order(price=101.0)]),
+        (120.0, [_order(price=99.0)]),
+        (180.0, [_short_order(price=101.0), _short_order(price=102.0)]),
+    ):
         _evaluate(state, orders, now=now)
     current = _order(price=99.0)
 
@@ -440,6 +479,48 @@ def test_nonzero_position_keeps_churn_history_after_symbol_rotation(monkeypatch)
     )
 
     assert state.symbols_with_history() == {SYMBOL}
+
+
+def test_stable_switching_boundary_is_emitted_as_history_reset(monkeypatch):
+    state = OrderChurnGateState()
+    events = []
+
+    class Bot:
+        _order_churn_gate_state = state
+        _order_churn_risk_active_pairs = ()
+        active_symbols = [SYMBOL]
+        open_orders = {}
+        positions = {}
+        _emit_order_churn_evidence_event = staticmethod(
+            lambda **kwargs: events.append(kwargs)
+        )
+
+        @staticmethod
+        def live_value(key):
+            return {
+                "order_replacement_churn_gate_activation_count": 10,
+                "order_replacement_churn_gate_window_minutes": 10.0,
+                "order_replacement_churn_gate_stability_minutes": 2.0,
+                "order_match_tolerance_pct": 0.0002,
+                "execution_delay_seconds": 2.0,
+            }[key]
+
+    for now, orders in (
+        (0.0, [_order(price=99.0)]),
+        (60.0, [_short_order(price=101.0)]),
+        (120.0, [_order(price=99.0)]),
+        (180.0, [_short_order(price=101.0)]),
+        (240.0, [_order(price=99.0)]),
+        (300.0, [_order(price=99.0)]),
+        (360.0, [_order(price=99.0)]),
+    ):
+        monkeypatch.setattr(reconciler.time, "monotonic", lambda now=now: now)
+        reconciler.prepare_order_churn_evidence(
+            Bot(), {SYMBOL: orders}, generation=state.begin_generation()
+        )
+
+    assert events[-1]["reset"] is True
+    assert events[-1]["reset_count"] == 1
 
 
 def test_active_rust_risk_pair_bypasses_observed_churn(monkeypatch):

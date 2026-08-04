@@ -70,9 +70,10 @@ or cardinality change is insufficient for directional-drift evidence.
 
 Repeated exclusive cohort switching is separate churn evidence. When every
 snapshot in a contiguous sequence contains exactly one semantic cohort, a
-current cohort which appears in at least three distinct runs with unchanged
-ladder cardinality is churn-evidenced when the fixed interval from the preceding
-appearance to the current run's start covers the configured stability interval.
+current cohort which appears in at least three distinct runs while every
+recurring cohort retains its ladder cardinality is churn-evidenced when the
+fixed interval from the preceding appearance to the current run's start covers
+the configured stability interval.
 Time spent unchanged in the current run cannot turn a short switching episode
 into evidence. This catches recurring long/short or order-type replacement
 without merging their identities. The first appearance and first reappearance
@@ -84,7 +85,8 @@ the universal order-match tolerance for the stability interval, it is not
 churn-evidenced. When every order in the sole current cohort completes that
 tight stable interval, snapshots preceding the shared stable prefix are
 discarded for the symbol so a later isolated switch cannot resurrect an older
-switching episode.
+switching episode. This decision-changing history boundary increments and emits
+the existing churn-history reset telemetry.
 
 Uncertain evidence fails open: reconciliation and creation proceed normally.
 

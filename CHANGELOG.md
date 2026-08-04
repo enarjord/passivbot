@@ -10,7 +10,10 @@ All notable user-facing changes will be documented in this file.
   identity; first appearances, isolated switches, uncertain history, and
   recently stable orders remain fail-open. Switching duration stops advancing
   when the current run begins, and a completed stable run prevents an older
-  switching episode from being resurrected by one later transition.
+  switching episode from being resurrected by one later transition while
+  emitting the existing history-reset telemetry. Short switching intervals do
+  not mask later sustained price or quantity drift, and ladder cardinality must
+  remain consistent for every recurring cohort.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
