@@ -268,6 +268,14 @@ Handling in Passivbot:
    does not report that tuple, require an authoritative native `reduceOnly` value.
 4. Keep classic Bitget v2/mix `tradeSide`/`reduceOnly` handling separate.
 
+### UTA public candle history routing
+
+Bitget account-mode detection enables UTA routing for authenticated account and order calls. Public
+OHLCV history is account-independent and must explicitly use classic futures market-data routing;
+the UTA candle endpoint may expose a shorter history and return an empty prefix which is available
+from the public v2 futures history endpoint. Pass `uta=false` only on Bitget OHLCV requests. Do not
+disable UTA on the shared CCXT session or on private account/order requests.
+
 ### `since` is effectively exclusive for OHLCV paging
 
 Problem: naive paging can miss first candle in each page.
