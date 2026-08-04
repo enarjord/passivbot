@@ -16,6 +16,7 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
 _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
     r"(?:authorization|proxy-authorization|cookie|set-cookie|key|sign|signature|"
     r"broker-?key|"
+    r"apca-api-key-id|apca-api-secret-key|"
     r"kc-api-partner-sign|x-bapi-sign|"
     r"(?:[a-z0-9]+-)*(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"

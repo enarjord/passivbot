@@ -116,6 +116,8 @@ def test_sanitized_exception_message_redacts_serialized_authentication_headers()
 
 def test_sanitized_exception_message_redacts_exchange_prefixed_authentication_headers():
     sensitive_headers = {
+        "APCA-API-KEY-ID": "ALPACAKEY",
+        "APCA-API-SECRET-KEY": "ALPACASECRET",
         "KC-API-KEY": "KUCOINKEY",
         "KC-API-PASSPHRASE": "KUCOINPASS",
         "KC-API-SIGN": "KUCOINSIGN",
