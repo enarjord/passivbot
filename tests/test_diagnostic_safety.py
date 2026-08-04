@@ -149,6 +149,21 @@ def test_sanitized_exception_message_redacts_serialized_authentication_headers()
     assert "url=https://example.invalid/orders/abc123" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_complete_unquoted_header_values():
+    sanitized = sanitize_diagnostic_text(
+        "Authorization: ApiKey TOPSECRET, X-Trace: trace-123\n"
+        "Cookie: session=COOKIESECRET; csrf=SECONDSECRET\n"
+        "exchange_reason=price step mismatch"
+    )
+
+    for secret in ("TOPSECRET", "COOKIESECRET", "SECONDSECRET"):
+        assert secret not in sanitized
+    assert "Authorization: [redacted]" in sanitized
+    assert "Cookie: [redacted]" in sanitized
+    assert "X-Trace: trace-123" in sanitized
+    assert "exchange_reason=price step mismatch" in sanitized
+
+
 def test_sanitized_exception_message_redacts_opposite_quotes_inside_header_values():
     sanitized = sanitized_exception_message(
         RuntimeError(

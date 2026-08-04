@@ -3477,6 +3477,21 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     assert "Traceback" not in caplog.text
 
 
+def test_terminal_startup_console_projection_is_bounded():
+    useful_detail = "diagnostic-tail-" + "x" * 4_000
+    rendered = passivbot_module._format_terminal_startup_console_projection(
+        stage="equity_hard_stop_initialize_coin_from_history",
+        error_type="ValueError",
+        status="422",
+        code="10006",
+        message=useful_detail,
+    )
+
+    assert len(rendered) <= passivbot_module._INCIDENT_CONSOLE_MESSAGE_MAX_LEN
+    assert rendered.startswith("[boot] terminal startup validation failure")
+    assert useful_detail not in rendered
+
+
 def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
     sink = ListEventSink()
 
@@ -13701,7 +13716,7 @@ def test_process_failure_log_bounds_long_console_projection(caplog):
 
     records = [record.message for record in caplog.records]
     assert len(records) == 1
-    assert len(records[0]) <= passivbot_module._PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN
+    assert len(records[0]) <= passivbot_module._INCIDENT_CONSOLE_MESSAGE_MAX_LEN
     assert records[0].startswith("passivbot error | error_type=RuntimeError")
     assert useful_detail not in records[0]
 

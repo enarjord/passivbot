@@ -634,8 +634,26 @@ def _log_process_failure(label: str, exc: BaseException) -> None:
     logging.error(
         "%s",
         sanitize_diagnostic_text(
-            projection, max_len=_PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN
+            projection, max_len=_INCIDENT_CONSOLE_MESSAGE_MAX_LEN
         ),
+    )
+
+
+def _format_terminal_startup_console_projection(
+    *,
+    stage: str,
+    error_type: str,
+    status: str,
+    code: str,
+    message: str,
+) -> str:
+    projection = (
+        "[boot] terminal startup validation failure | "
+        f"stage={stage} error_type={error_type} status={status} code={code} "
+        f"message={message}"
+    )
+    return sanitize_diagnostic_text(
+        projection, max_len=_INCIDENT_CONSOLE_MESSAGE_MAX_LEN
     )
 
 
@@ -676,7 +694,7 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
 )
 
 _EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN = 21
-_PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN = 196
+_INCIDENT_CONSOLE_MESSAGE_MAX_LEN = 196
 
 
 def compute_live_warmup_windows(
@@ -3656,13 +3674,14 @@ class Passivbot:
             )
             if self._startup_exception_is_terminal(exc, boot_stage):
                 logging.critical(
-                    "[boot] terminal startup validation failure | "
-                    "stage=%s error_type=%s status=%s code=%s message=%s",
-                    boot_stage,
-                    error_type,
-                    error_status,
-                    error_code,
-                    incident_fields["message"],
+                    "%s",
+                    _format_terminal_startup_console_projection(
+                        stage=boot_stage,
+                        error_type=error_type,
+                        status=error_status,
+                        code=error_code,
+                        message=incident_fields["message"],
+                    ),
                 )
                 raise FatalBotException(
                     f"terminal startup validation failure during {boot_stage}; "
