@@ -999,6 +999,22 @@ def test_redact_payload_redacts_exact_authentication_keys_without_matching_autho
     }
 
 
+def test_redact_payload_redacts_kucoin_broker_signing_key_variants():
+    assert redact_payload(
+        {
+            "broker-key": "hyphen-value",
+            "broker_key": "snake-value",
+            "brokerKey": "camel-value",
+            "broker-name": "passivbotFutures",
+        }
+    ) == {
+        "broker-key": REDACTED,
+        "broker_key": REDACTED,
+        "brokerKey": REDACTED,
+        "broker-name": "passivbotFutures",
+    }
+
+
 def test_payload_hash_raw_hashes_exact_wire_payload():
     assert payload_hash_raw('{"b":2,"a":1}') != payload_hash_raw('{"a":1,"b":2}')
     assert payload_hash_raw("abc") == payload_hash_raw(b"abc")

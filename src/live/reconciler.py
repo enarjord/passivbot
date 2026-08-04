@@ -2560,6 +2560,14 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} qty sign disagrees with pside"
             )
+        block_execution_type = _expected_rust_execution_type(
+            global_input,
+            submitted_order_books[symbol_idx],
+            order_type,
+            pside,
+            qty,
+            finite_values["price"],
+        )
         _validate_rust_close_exchange_constraints(
             qty,
             submitted_position_sizes[pair],
@@ -2568,7 +2576,7 @@ def validate_rust_orchestrator_output(
             f"Rust orchestrator loss_gate_block {block_idx}",
             minimum_price=(
                 finite_values["price"]
-                if order_type.startswith("close_auto_reduce_wel_")
+                if block_execution_type == "limit"
                 else None
             ),
         )

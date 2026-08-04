@@ -15,6 +15,7 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
     r"(?:authorization|proxy-authorization|cookie|set-cookie|key|sign|signature|"
+    r"broker-?key|"
     r"kc-api-partner-sign|x-bapi-sign|"
     r"(?:[a-z0-9]+-)*(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
@@ -33,6 +34,7 @@ _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
     r"(api[-_]?(?:key|secret|signature)|apikey|accessToken|refreshToken|"
     r"clientSecret|privateKey|requestSignature|request[-_]?signature|"
+    r"broker[-_]?key|"
     r"auth[-_]?(?:signature|token)|hmac[-_]?signature|exchange[-_]?signature|"
     r"access[-_]?token|refresh[-_]?token|secret|token|signature|password|passphrase|"
     r"private[-_]?key)"

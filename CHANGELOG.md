@@ -21,9 +21,11 @@ All notable user-facing changes will be documented in this file.
   failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
   tolerance. Serialized native exchange authentication headers, including exchange-prefixed API
   keys, passphrases, and signatures, are redacted while non-secret response context is preserved;
-  exact structured `auth`/`authentication` values and unterminated private-key blocks are also
-  redacted. Short market entries are sized from the executable bid so minimum-notional validation
-  remains consistent across Rust planning, live execution, and backtesting.
+  exact structured `auth`/`authentication` values, KuCoin broker signing keys, and unterminated
+  private-key blocks are also redacted. Short market entries and promoted partial market closes
+  are sized from their executable touch so minimum-notional validation remains consistent across
+  Rust planning, live execution, and backtesting. Blocked loss-gate closes use that same execution
+  price when validating their diagnostic exchange minimum.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic

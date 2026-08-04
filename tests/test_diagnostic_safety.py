@@ -157,6 +157,17 @@ def test_sanitized_exception_message_redacts_exchange_prefixed_authentication_he
         assert f"'{header}': '{value}'" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_kucoin_broker_signing_key():
+    sanitized = sanitize_diagnostic_text(
+        "config={'broker-key': 'hyphen-value', 'broker_key': 'snake-value', "
+        "'brokerKey': 'camel-value', 'broker-name': 'passivbotFutures'}"
+    )
+
+    for secret in ("hyphen-value", "snake-value", "camel-value"):
+        assert secret not in sanitized
+    assert "'broker-name': 'passivbotFutures'" in sanitized
+
+
 def test_sanitized_exception_message_contains_hostile_string_conversion():
     class HostileError(RuntimeError):
         def __str__(self):

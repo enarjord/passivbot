@@ -1635,6 +1635,62 @@ def test_ema_anchor_market_close_uses_executable_touch_minimum():
     assert close["qty"] == pytest.approx(-1.001)
 
 
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_grid_market_close_uses_executable_touch_minimum(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(
+            close={
+                "qty_pct": 0.1,
+                "threshold_base_pct": 0.005,
+                "threshold_we_weight": 0.001,
+            }
+        )
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(
+            close_overrides={
+                "grid_qty_pct": 0.1,
+                "grid_markup_start": 0.005,
+                "grid_markup_end": 0.01,
+            }
+        )
+    )
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.02
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_grid_long"
+    )
+
+    assert close["execution_type"] == "market"
+    assert close["qty"] == pytest.approx(-1.001)
+    assert abs(close["qty"]) * symbol["order_book"]["bid"] >= 100.0
+
+
 def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     import passivbot_rust as pbr
 

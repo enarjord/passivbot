@@ -3014,6 +3014,51 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     ) == []
 
 
+@pytest.mark.parametrize(
+    ("block_overrides", "input_overrides"),
+    [
+        (
+            {"order_type": "close_grid_long", "price": 1.0},
+            {
+                "bid": 100.0,
+                "ask": 101.0,
+                "qty_step": 1.0,
+                "price_step": 1.0,
+                "min_qty": 0.0,
+                "min_cost": 100.0,
+            },
+        ),
+        (
+            {"order_type": "close_grid_long", "price": 100.0},
+            {
+                "bid": 100.0,
+                "ask": 101.0,
+                "qty_step": 0.01,
+                "price_step": 0.01,
+                "min_qty": 0.0,
+                "min_cost": 100.5,
+                "market_orders_allowed": True,
+            },
+        ),
+    ],
+    ids=["limit-price", "market-touch"],
+)
+def test_raw_rust_output_checks_loss_gate_block_minimum_at_execution_price(
+    block_overrides, input_overrides
+):
+    out = _raw_rust_output()
+    out["diagnostics"]["loss_gate_blocks"] = [
+        _raw_loss_gate_block(**block_overrides)
+    ]
+
+    with pytest.raises(FatalBotException, match="close minimum"):
+        reconciler.validate_rust_orchestrator_output(
+            out,
+            {0: SYMBOL},
+            _raw_rust_input(long_pos_size=10.0, **input_overrides),
+        )
+
+
 def test_raw_rust_output_rejects_loss_gate_block_with_off_step_price():
     out = _raw_rust_output()
     out["diagnostics"]["loss_gate_blocks"] = [

@@ -772,18 +772,14 @@ mod core {
         diff <= global.market_order_near_touch_threshold.max(0.0)
     }
 
-    fn size_ema_anchor_market_close_at_executable_touch(
+    fn size_market_close_at_executable_touch(
         order: &mut IdealOrder,
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
         exchange: &ExchangeParams,
         position: &Position,
     ) {
-        if !matches!(
-            order.order_type,
-            OrderType::CloseEmaAnchorLong | OrderType::CloseEmaAnchorShort
-        ) || !should_use_market_execution(order, global, order_book)
-        {
+        if !order.order_type.is_close() || !should_use_market_execution(order, global, order_book) {
             return;
         }
 
@@ -3983,13 +3979,13 @@ mod core {
         let twel_candidate_count_long = twel_selected_long.len();
         let twel_candidate_count_short = twel_selected_short.len();
 
-        // EMA Anchor sizes its passive close at the quoted limit price. If live execution policy
-        // promotes that quote to market, resize from the submitted executable touch before the
-        // aggregate close and realized-loss gates consume the final quantity.
+        // Strategy and risk paths size passive closes at their quoted limit prices. If execution
+        // policy promotes a quote to market, resize from the submitted executable touch before
+        // the aggregate close and realized-loss gates consume the final quantity.
         for side in per_long.iter_mut().filter_map(|value| value.as_mut()) {
             let symbol = &input.symbols[side.symbol_idx];
             for close in &mut side.closes {
-                size_ema_anchor_market_close_at_executable_touch(
+                size_market_close_at_executable_touch(
                     close,
                     &input.global,
                     &symbol.order_book,
@@ -4009,7 +4005,7 @@ mod core {
                 );
             }
             for close in &mut side.closes {
-                size_ema_anchor_market_close_at_executable_touch(
+                size_market_close_at_executable_touch(
                     close,
                     &input.global,
                     &symbol.order_book,
@@ -4659,7 +4655,7 @@ mod core {
         }
 
         #[test]
-        fn ema_anchor_market_close_uses_executable_touch_minimum() {
+        fn promoted_market_closes_use_executable_touch_minimum() {
             let mut global = make_basic_global();
             global.market_orders_allowed = true;
             global.market_order_near_touch_threshold = 0.001;
@@ -4679,23 +4675,33 @@ mod core {
                 size: 10.0,
                 price: 100.0,
             };
-            let mut order = IdealOrder {
-                symbol_idx: 0,
-                pside: PositionSide::Long,
-                qty: -1.0,
-                price: 100.05,
-                order_type: OrderType::CloseEmaAnchorLong,
-            };
+            for order_type in [
+                OrderType::CloseGridLong,
+                OrderType::CloseTrailingLong,
+                OrderType::CloseUnstuckLong,
+                OrderType::CloseAutoReduceTwelLong,
+                OrderType::CloseAutoReduceWelLong,
+                OrderType::CloseEmaAnchorLong,
+            ] {
+                let mut order = IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.0,
+                    price: 100.05,
+                    order_type,
+                };
 
-            size_ema_anchor_market_close_at_executable_touch(
-                &mut order,
-                &global,
-                &order_book,
-                &exchange,
-                &position,
-            );
+                size_market_close_at_executable_touch(
+                    &mut order,
+                    &global,
+                    &order_book,
+                    &exchange,
+                    &position,
+                );
 
-            assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+                assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+            }
+
         }
 
         #[test]
