@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Recognize repeated exclusive switching between complete order cohorts as live
+  order-churn evidence. Alternating long/short or order-type intent can now use
+  the existing account-wide far-order allowance without merging position-side
+  identity; first appearances, isolated switches, uncertain history, and
+  recently stable orders remain fail-open.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic

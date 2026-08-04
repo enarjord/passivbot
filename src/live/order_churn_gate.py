@@ -234,6 +234,62 @@ def _continuous_drift_start_index(
     return run_start_index
 
 
+def _exclusive_cohort_reappearance_start(
+    cohort: OrderCohort,
+    current_group: Sequence[IdealObservation],
+    current_groups: Mapping[OrderCohort, Sequence[IdealObservation]],
+    historical_groups: Sequence[
+        tuple[float, Mapping[OrderCohort, Sequence[IdealObservation]]]
+    ],
+    *,
+    now_monotonic: float,
+    max_sample_gap_seconds: float,
+) -> float | None:
+    """Return the second appearance in a repeated exclusive cohort switch.
+
+    This intentionally recognizes only a narrow shape: each contiguous
+    snapshot contains exactly one semantic cohort, and the current cohort has
+    appeared in at least three distinct runs with unchanged cardinality. The
+    first appearance and first reappearance therefore remain fail-open. Empty
+    snapshots, coexisting cohorts, cadence gaps, and ladder-shape changes break
+    the proof instead of broadening it.
+    """
+    if len(current_groups) != 1:
+        return None
+    current_cardinality = len(current_group)
+    samples_newest_first: list[tuple[float, OrderCohort]] = [
+        (now_monotonic, cohort)
+    ]
+    previous_time = now_monotonic
+    for snapshot_time, groups in historical_groups:
+        time_gap = previous_time - snapshot_time
+        if (
+            time_gap < 0.0
+            or time_gap > max_sample_gap_seconds
+            or len(groups) != 1
+        ):
+            break
+        historical_cohort, historical_group = next(iter(groups.items()))
+        if (
+            historical_cohort == cohort
+            and len(historical_group) != current_cardinality
+        ):
+            break
+        samples_newest_first.append((snapshot_time, historical_cohort))
+        previous_time = snapshot_time
+
+    runs: list[tuple[OrderCohort, float]] = []
+    for sample_time, sample_cohort in reversed(samples_newest_first):
+        if not runs or runs[-1][0] != sample_cohort:
+            runs.append((sample_cohort, sample_time))
+    appearances = [
+        run_start for run_cohort, run_start in runs if run_cohort == cohort
+    ]
+    if len(appearances) < 3:
+        return None
+    return appearances[-2]
+
+
 class OrderChurnGateState:
     def __init__(self) -> None:
         self.history_by_symbol: dict[str, deque[IdealSnapshot]] = {}
@@ -356,6 +412,14 @@ class OrderChurnGateState:
             ]
             by_source_index: dict[int, ChurnDecision] = {}
             for cohort, current_group in current_groups.items():
+                reappearance_start = _exclusive_cohort_reappearance_start(
+                    cohort,
+                    current_group,
+                    current_groups,
+                    historical_groups,
+                    now_monotonic=now_monotonic,
+                    max_sample_gap_seconds=max_sample_gap_seconds,
+                )
                 tracks = [[observation] for observation in current_group]
                 track_times = [now_monotonic]
                 previous_time = now_monotonic
@@ -396,6 +460,24 @@ class OrderChurnGateState:
                             tight_prefix_count=tight_count,
                             tight_prefix_seconds=tight_seconds,
                         )
+                    elif reappearance_start is not None:
+                        reappearance_seconds = max(
+                            0.0, now_monotonic - reappearance_start
+                        )
+                        if reappearance_seconds >= stability_seconds:
+                            decision = ChurnDecision(
+                                True,
+                                "intermittent_cohort_reappearance",
+                                tight_prefix_count=tight_count,
+                                tight_prefix_seconds=tight_seconds,
+                            )
+                        else:
+                            decision = ChurnDecision(
+                                False,
+                                "intermittent_run_short",
+                                tight_prefix_count=tight_count,
+                                tight_prefix_seconds=tight_seconds,
+                            )
                     elif len(track) == 1:
                         decision = ChurnDecision(False, "no_history")
                     elif now_monotonic - track_times[-1] < stability_seconds:

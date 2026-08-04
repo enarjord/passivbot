@@ -55,7 +55,7 @@ Orders are grouped by a stable semantic cohort:
 - Passivbot order type.
 
 Within a cohort, the sorted ladder rank associates successive snapshots. A
-track is usable only while:
+continuous price/quantity track is usable only while:
 
 - the cohort exists in every inspected snapshot;
 - cohort cardinality is unchanged;
@@ -65,8 +65,17 @@ track is usable only while:
 The order is churn-evidenced only when at least two consecutive price or
 quantity moves have the same direction and the current directional run, measured
 from its first changed observation, covers the configured stability interval. A
-one-time jump, oscillation, missing history, cadence gap, cohort change, or
-cardinality change is insufficient.
+one-time jump, price oscillation, missing history, cadence gap, cohort change,
+or cardinality change is insufficient for directional-drift evidence.
+
+Repeated exclusive cohort switching is separate churn evidence. When every
+snapshot in a contiguous sequence contains exactly one semantic cohort, a
+current cohort which appears in at least three distinct runs with unchanged
+ladder cardinality is churn-evidenced once the last two appearances span the
+configured stability interval. This catches recurring long/short or order-type
+replacement without merging their identities. The first appearance and first
+reappearance remain fail-open; empty snapshots, coexisting cohorts, cadence
+gaps, and ladder-shape changes break the proof.
 
 Recent stability clears older drift. If the current ideal has remained within
 the universal order-match tolerance for the stability interval, it is not
@@ -122,14 +131,17 @@ Regression coverage must prove:
 
 1. no history and one-time movement fail open;
 2. sustained monotonic price or quantity drift becomes evidence;
-3. oscillation, gaps, cohort changes, and ladder cardinality changes fail open;
-4. recent stability clears old drift;
-5. near-market, market, risk-critical, and non-churn orders remain admissible;
-6. missing market distance affects only a churn-evidenced candidate;
-7. actual orders outside 0.02% are still cancelled even when their replacement
+3. price oscillation, gaps, isolated cohort changes, and ladder cardinality
+   changes fail open;
+4. repeated exclusive cohort reappearance becomes evidence without merging
+   position sides or other cohort identities;
+5. recent stability clears old drift and exclusive-switching evidence;
+6. near-market, market, risk-critical, and non-churn orders remain admissible;
+7. missing market distance affects only a churn-evidenced candidate;
+8. actual orders outside 0.02% are still cancelled even when their replacement
    carries churn evidence;
-8. matching remains deterministic, one-to-one, and maximum-cardinality;
-9. diagnostics cannot change admission or reconciliation.
+9. matching remains deterministic, one-to-one, and maximum-cardinality;
+10. diagnostics cannot change admission or reconciliation.
 
 ## Operational review
 

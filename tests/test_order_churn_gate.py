@@ -32,6 +32,17 @@ def _order(
     }
 
 
+def _short_order(*, price: float, qty: float = 1.0) -> dict:
+    order = _order(
+        price=price,
+        qty=qty,
+        pb_order_type="entry_ema_anchor_short",
+    )
+    order["position_side"] = "short"
+    order["side"] = "sell"
+    return order
+
+
 def _evaluate(
     state: OrderChurnGateState,
     orders: list[dict],
@@ -117,6 +128,96 @@ def test_oscillation_and_one_time_jump_do_not_prove_continuous_drift():
     decision = _evaluate(one_jump, [current], now=120.0)[id(current)]
     assert decision.churn_evidenced is False
     assert decision.reason == "no_continuous_drift"
+
+
+def test_repeated_exclusive_long_short_switching_is_churn_evidence():
+    state = OrderChurnGateState()
+    _evaluate(state, [_order(price=99.0)], now=0.0)
+    _evaluate(state, [_short_order(price=101.0)], now=60.0)
+
+    first_reappearance = _order(price=99.0)
+    decision = _evaluate(state, [first_reappearance], now=120.0)[
+        id(first_reappearance)
+    ]
+    assert decision.churn_evidenced is False
+
+    _evaluate(state, [_short_order(price=101.0)], now=180.0)
+    repeated = _order(price=99.0)
+    decision = _evaluate(state, [repeated], now=240.0)[id(repeated)]
+
+    assert decision.churn_evidenced is True
+    assert decision.reason == "intermittent_cohort_reappearance"
+
+
+def test_exclusive_switching_needs_stability_duration():
+    state = OrderChurnGateState()
+    _evaluate(state, [_order(price=99.0)], now=0.0)
+    _evaluate(state, [_short_order(price=101.0)], now=10.0)
+    _evaluate(state, [_order(price=99.0)], now=20.0)
+    _evaluate(state, [_short_order(price=101.0)], now=30.0)
+    repeated = _order(price=99.0)
+
+    decision = _evaluate(state, [repeated], now=40.0)[id(repeated)]
+
+    assert decision.churn_evidenced is False
+    assert decision.reason == "intermittent_run_short"
+
+
+def test_continuous_stability_clears_exclusive_switching_evidence():
+    state = OrderChurnGateState()
+    for now, orders in (
+        (0.0, [_order(price=99.0)]),
+        (60.0, [_short_order(price=101.0)]),
+        (120.0, [_order(price=99.0)]),
+        (180.0, [_short_order(price=101.0)]),
+        (240.0, [_order(price=99.0)]),
+        (300.0, [_order(price=99.0)]),
+    ):
+        _evaluate(state, orders, now=now)
+    stable = _order(price=99.0)
+
+    decision = _evaluate(state, [stable], now=360.0)[id(stable)]
+
+    assert decision.churn_evidenced is False
+    assert decision.reason == "stable_tight_prefix"
+
+
+@pytest.mark.parametrize(
+    "snapshots",
+    [
+        # An empty ideal snapshot breaks provenance.
+        [
+            (0.0, [_order(price=99.0)]),
+            (60.0, [_short_order(price=101.0)]),
+            (120.0, []),
+            (180.0, [_order(price=99.0)]),
+            (240.0, [_short_order(price=101.0)]),
+        ],
+        # Coexisting cohorts are not mutually exclusive switching.
+        [
+            (0.0, [_order(price=99.0)]),
+            (60.0, [_short_order(price=101.0)]),
+            (120.0, [_order(price=99.0), _short_order(price=101.0)]),
+            (180.0, [_short_order(price=101.0)]),
+        ],
+        # A changed ladder cardinality breaks cohort continuity.
+        [
+            (0.0, [_order(price=98.0), _order(price=99.0)]),
+            (60.0, [_short_order(price=101.0)]),
+            (120.0, [_order(price=98.0), _order(price=99.0)]),
+            (180.0, [_short_order(price=101.0)]),
+        ],
+    ],
+)
+def test_uncertain_exclusive_switching_fails_open(snapshots):
+    state = OrderChurnGateState()
+    for now, orders in snapshots:
+        _evaluate(state, orders, now=now)
+    current = _order(price=99.0)
+
+    decision = _evaluate(state, [current], now=240.0)[id(current)]
+
+    assert decision.churn_evidenced is False
 
 
 def test_recent_stability_clears_older_drift():
