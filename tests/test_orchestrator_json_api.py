@@ -1720,6 +1720,55 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
     assert abs(entry["qty"]) * entry["price"] >= symbol["exchange"]["min_cost"]
 
 
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=0.0)
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_bp=disabled,
+        short_bp=enabled,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=disabled, short_overrides=enabled),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order
+        for order in out["orders"]
+        if order["order_type"].startswith("entry_")
+    )
+
+    assert entry["pside"] == "short"
+    assert entry["execution_type"] == "market"
+    assert entry["price"] == 100.05
+    assert entry["qty"] == pytest.approx(-1.001)
+    assert abs(entry["qty"]) * symbol["order_book"]["bid"] >= 100.0
+
+
 def test_trailing_martingale_partial_entry_preserves_sub_ten_decimal_price_step():
     import passivbot_rust as pbr
 

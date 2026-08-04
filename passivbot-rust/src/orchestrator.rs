@@ -812,6 +812,28 @@ mod core {
         };
     }
 
+    fn size_short_market_entry_at_executable_touch(
+        order: &mut IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+        exchange: &ExchangeParams,
+    ) {
+        if order.pside != PositionSide::Short
+            || !order.order_type.is_entry()
+            || order.qty >= 0.0
+            || !should_use_market_execution(order, global, order_book)
+        {
+            return;
+        }
+
+        let minimum_qty = calc_min_entry_qty(order_book.bid, exchange);
+        let quantity_abs = order.qty.abs();
+        let tolerance = f64::EPSILON * quantity_abs.max(minimum_qty) * 4.0;
+        if quantity_abs + tolerance < minimum_qty {
+            order.qty = -minimum_qty;
+        }
+    }
+
     fn to_executable_order(
         order: IdealOrder,
         global: &OrchestratorGlobal,
@@ -3978,6 +4000,14 @@ mod core {
         }
         for side in per_short.iter_mut().filter_map(|value| value.as_mut()) {
             let symbol = &input.symbols[side.symbol_idx];
+            for entry in &mut side.entries {
+                size_short_market_entry_at_executable_touch(
+                    entry,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                );
+            }
             for close in &mut side.closes {
                 size_ema_anchor_market_close_at_executable_touch(
                     close,
@@ -4663,6 +4693,41 @@ mod core {
                 &order_book,
                 &exchange,
                 &position,
+            );
+
+            assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+        }
+
+        #[test]
+        fn short_market_entry_uses_executable_touch_minimum() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: -1.0,
+                price: 100.05,
+                order_type: OrderType::EntryInitialNormalShort,
+            };
+
+            size_short_market_entry_at_executable_touch(
+                &mut order,
+                &global,
+                &order_book,
+                &exchange,
             );
 
             assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);

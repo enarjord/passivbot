@@ -955,7 +955,7 @@ def test_redact_payload_recurses_and_payload_hash_is_stable():
 
     assert redact_payload(payload) == {
         "safe": 1,
-        "auth": {"token": REDACTED},
+        "auth": REDACTED,
         "authoritative_epoch": 7,
         "completed_candle_signature": [1, 2, 3],
         "request_signature": REDACTED,
@@ -982,6 +982,20 @@ def test_redact_payload_redacts_camel_case_credential_keys():
         "clientSecret": REDACTED,
         "requestSignature": REDACTED,
         "planningSignature": "plan-hash",
+    }
+
+
+def test_redact_payload_redacts_exact_authentication_keys_without_matching_authority():
+    assert redact_payload(
+        {
+            "auth": "opaque-auth-value",
+            "authentication": "opaque-authentication-value",
+            "authoritative_epoch": 7,
+        }
+    ) == {
+        "auth": REDACTED,
+        "authentication": REDACTED,
+        "authoritative_epoch": 7,
     }
 
 

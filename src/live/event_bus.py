@@ -689,7 +689,16 @@ def _is_sensitive_key(key: object) -> bool:
         return True
     parts = tuple(part for part in cleaned.split("_") if part)
     if (
-        compact in {"cookie", "secret", "setcookie", "signature", "token"}
+        compact
+        in {
+            "auth",
+            "authentication",
+            "cookie",
+            "secret",
+            "setcookie",
+            "signature",
+            "token",
+        }
         or compact.endswith(("cookie", "secret", "token"))
     ):
         return True

@@ -21,7 +21,9 @@ All notable user-facing changes will be documented in this file.
   failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
   tolerance. Serialized native exchange authentication headers, including exchange-prefixed API
   keys, passphrases, and signatures, are redacted while non-secret response context is preserved;
-  unterminated private-key blocks are redacted through the end of the available diagnostic text.
+  exact structured `auth`/`authentication` values and unterminated private-key blocks are also
+  redacted. Short market entries are sized from the executable bid so minimum-notional validation
+  remains consistent across Rust planning, live execution, and backtesting.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
