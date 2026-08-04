@@ -1005,6 +1005,22 @@ def test_redact_payload_redacts_exact_authentication_keys_without_matching_autho
     }
 
 
+def test_redact_payload_redacts_delimited_cookie_keys_without_matching_substrings():
+    assert redact_payload(
+        {
+            "cookie_header": "snake-value",
+            "cookie-value": "hyphen-value",
+            "header_cookie": "suffix-value",
+            "cookietown": "non-credential-value",
+        }
+    ) == {
+        "cookie_header": REDACTED,
+        "cookie-value": REDACTED,
+        "header_cookie": REDACTED,
+        "cookietown": "non-credential-value",
+    }
+
+
 def test_redact_payload_redacts_kucoin_broker_signing_key_variants():
     assert redact_payload(
         {

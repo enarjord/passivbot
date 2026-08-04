@@ -25,7 +25,7 @@ _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
 )
 _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
-    r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|[^\"'])*\4"
+    r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|(?!\4)[\s\S])*\4"
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"

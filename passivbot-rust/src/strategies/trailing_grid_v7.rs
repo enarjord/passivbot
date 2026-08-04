@@ -1906,7 +1906,7 @@ fn calc_entries_long(
         entry.price = quantize_price(
             entry.price,
             exchange.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Floor,
             "trailing_grid_v7::entries_long_price",
         );
         if entry.qty != 0.0 {
@@ -1973,7 +1973,7 @@ fn calc_entries_short(
         entry.price = quantize_price(
             entry.price,
             exchange.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Ceil,
             "trailing_grid_v7::entries_short_price",
         );
         if entry.qty != 0.0 {

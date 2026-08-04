@@ -1776,6 +1776,62 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
     assert abs(entry["qty"]) * entry["price"] >= symbol["exchange"]["min_cost"]
 
 
+@pytest.mark.parametrize(
+    ("strategy_kind", "pside", "bid", "ask", "expected_price"),
+    [
+        ("trailing_martingale", "long", 100.006, 100.014, 100.0),
+        ("trailing_martingale", "short", 100.006, 100.014, 100.02),
+        ("trailing_grid_v7", "long", 100.006, 100.014, 100.0),
+        ("trailing_grid_v7", "short", 100.006, 100.014, 100.02),
+    ],
+)
+def test_off_tick_strategy_entries_quantize_away_from_the_spread(
+    strategy_kind, pside, bid, ask, expected_price
+):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params()
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params()
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    long_bp = enabled if pside == "long" else disabled
+    short_bp = enabled if pside == "short" else disabled
+    symbol = make_symbol(
+        0,
+        bid=bid,
+        ask=ask,
+        long_bp=long_bp,
+        short_bp=short_bp,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"]["price_step"] = 0.01
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides=long_bp, short_overrides=short_bp
+        ),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(order for order in out["orders"] if order["pside"] == pside)
+
+    assert entry["execution_type"] == "limit"
+    assert entry["price"] == expected_price
+    if pside == "long":
+        assert entry["price"] <= bid
+    else:
+        assert entry["price"] >= ask
+
+
 @pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
 def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
     import passivbot_rust as pbr

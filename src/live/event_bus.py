@@ -705,7 +705,7 @@ def _is_sensitive_key(key: object) -> bool:
         or compact.endswith(("cookie", "secret", "token"))
     ):
         return True
-    if "secret" in parts or (parts and parts[-1] in {"cookie", "token"}):
+    if "cookie" in parts or "secret" in parts or (parts and parts[-1] == "token"):
         return True
     return bool(
         parts

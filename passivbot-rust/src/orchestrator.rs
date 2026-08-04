@@ -4701,7 +4701,6 @@ mod core {
 
                 assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
             }
-
         }
 
         #[test]

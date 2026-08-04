@@ -114,6 +114,20 @@ def test_sanitized_exception_message_redacts_serialized_authentication_headers()
     assert "url=https://example.invalid/orders/abc123" in sanitized
 
 
+def test_sanitized_exception_message_redacts_opposite_quotes_inside_header_values():
+    sanitized = sanitized_exception_message(
+        RuntimeError(
+            'headers={"Cookie": "session=DOUBLE\'QUOTESECRET; csrf=SECOND"} '
+            "fallback={'Set-Cookie': 'session=SINGLE\"QUOTESECRET; Path=/'}"
+        )
+    )
+
+    assert "QUOTESECRET" not in sanitized
+    assert "SECOND" not in sanitized
+    assert '"Cookie": "[redacted]"' in sanitized
+    assert "'Set-Cookie': '[redacted]'" in sanitized
+
+
 def test_sanitized_exception_message_redacts_exchange_prefixed_authentication_headers():
     sensitive_headers = {
         "APCA-API-KEY-ID": "ALPACAKEY",

@@ -1045,7 +1045,7 @@ pub fn calc_entries_long(
         entry.price = quantize_price(
             entry.price,
             exchange_params.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Floor,
             "calc_entries_long::price",
         );
         if entry.qty != 0.0 {
@@ -1119,7 +1119,7 @@ pub fn calc_entries_short(
         entry.price = quantize_price(
             entry.price,
             exchange_params.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Ceil,
             "calc_entries_short::price",
         );
         if entry.qty != 0.0 {
@@ -1274,6 +1274,60 @@ mod tests {
         assert_eq!(orders[0].price, 3.0);
         assert!((orders[0].qty - 1.667).abs() < 1e-12);
         assert!(orders[0].qty * orders[0].price >= exchange.min_cost);
+    }
+
+    #[test]
+    fn final_entry_price_quantization_remains_passive_for_both_sides() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 100.006,
+                ask: 100.014,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let entry = TrailingMartingaleEntryParams {
+            ema_gate_mode: EmaGateMode::Disabled,
+            initial_qty_pct: 0.01,
+            ..Default::default()
+        };
+
+        let long_orders = calc_entries_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+        let short_orders = calc_entries_short(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(long_orders[0].price, 100.0);
+        assert!(long_orders[0].price <= state.order_book.bid);
+        assert_eq!(short_orders[0].price, 100.02);
+        assert!(short_orders[0].price >= state.order_book.ask);
     }
 
     #[test]
