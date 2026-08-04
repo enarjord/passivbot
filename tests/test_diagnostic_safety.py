@@ -59,6 +59,19 @@ def test_sanitize_diagnostic_text_redacts_cli_userinfo_and_private_key_block():
     assert "exchange_reason=price step mismatch" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_unterminated_private_key_block():
+    sanitized = sanitize_diagnostic_text(
+        "parser failed exchange_reason=invalid key material "
+        "-----BEGIN RSA PRIVATE KEY-----\nprivate-key-body\npartial-tail"
+    )
+
+    assert "parser failed exchange_reason=invalid key material" in sanitized
+    assert "BEGIN RSA PRIVATE KEY" not in sanitized
+    assert "private-key-body" not in sanitized
+    assert "partial-tail" not in sanitized
+    assert sanitized.endswith("[redacted]")
+
+
 def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
     sanitized = sanitize_diagnostic_text(
         'accessToken="access-value" clientSecret=client-value '

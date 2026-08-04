@@ -10,7 +10,7 @@ DIAGNOSTIC_MESSAGE_UNAVAILABLE = "<unavailable>"
 DIAGNOSTIC_REDACTED = "[redacted]"
 _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----.*?"
-    r"-----END(?: [A-Z0-9]+)* PRIVATE KEY-----",
+    r"(?:-----END(?: [A-Z0-9]+)* PRIVATE KEY-----|\Z)",
     re.DOTALL,
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
