@@ -493,6 +493,8 @@ class _BundleReproBot:
                     raise TimeoutError("log range timeout")
                 if self.outer.lr1m_mode == "nan":
                     return float("nan")
+                if self.outer.lr1m_mode == "inf":
+                    return float("inf")
                 return 0.0015
 
             def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
@@ -665,7 +667,8 @@ class _BundleReproBot:
 
 
 @pytest.mark.asyncio
-async def test_held_symbol_missing_ema_is_explicitly_scoped_for_rust():
+@pytest.mark.parametrize("close_mode", ["timeout", "nan"])
+async def test_held_symbol_missing_ema_is_explicitly_scoped_for_rust(close_mode):
     try:
         import passivbot as pb_mod
         import passivbot_rust as pbr
@@ -676,7 +679,7 @@ async def test_held_symbol_missing_ema_is_explicitly_scoped_for_rust():
         pytest.skip("requires real passivbot_rust extension")
 
     symbol = "AVAX/USDT:USDT"
-    bot = _BundleReproBot(symbol, close_mode="timeout")
+    bot = _BundleReproBot(symbol, close_mode=close_mode)
     (
         m1_close_emas,
         m1_volume_emas,
@@ -707,15 +710,55 @@ async def test_held_symbol_missing_ema_is_explicitly_scoped_for_rust():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("close_mode", ["nan", "inf"])
-async def test_held_symbol_nonfinite_close_ema_remains_fatal(close_mode):
+async def test_nan_close_ema_scopes_only_the_affected_symbol():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    unavailable_symbol = "AVAX/USDT:USDT"
+    ready_symbol = "SOL/USDT:USDT"
+    symbols = [unavailable_symbol, ready_symbol]
+    bot = _BundleReproBot(unavailable_symbol, close_mode="value")
+    bot.PB_modes = {
+        "long": {symbol: "normal" for symbol in symbols},
+        "short": {symbol: "manual" for symbol in symbols},
+    }
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+        for symbol in symbols
+    }
+
+    async def symbol_close(symbol, span, **_kwargs):
+        del span
+        return float("nan") if symbol == unavailable_symbol else 123.0
+
+    bot.cm.get_latest_ema_close = symbol_close
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, symbols, bot.PB_modes
+    )
+
+    assert result[0][unavailable_symbol] == {}
+    assert result[0][ready_symbol]
+    assert set(result[0][ready_symbol].values()) == {123.0}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {
+        unavailable_symbol
+    }
+
+
+@pytest.mark.asyncio
+async def test_held_symbol_infinite_close_ema_remains_fatal():
     try:
         import passivbot as pb_mod
     except ImportError:
         pytest.skip("passivbot module not importable in test environment")
 
     symbol = "AVAX/USDT:USDT"
-    bot = _BundleReproBot(symbol, close_mode=close_mode)
+    bot = _BundleReproBot(symbol, close_mode="inf")
 
     with pytest.raises(RuntimeError, match="non-finite close EMA value"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
@@ -2043,7 +2086,7 @@ async def test_open_tail_projection_precedes_previous_close_ema_fallback():
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_does_not_mask_nonfinite_close_ema():
+async def test_late_open_tail_projection_recovers_nan_close_ema():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2062,18 +2105,18 @@ async def test_late_open_tail_projection_does_not_mask_nonfinite_close_ema():
     )
     bot.projected_open_tail_called = False
 
-    with pytest.raises(RuntimeError, match="non-finite close EMA value"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot, [symbol], bot.PB_modes
-        )
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
 
     assert bot.completed_candle_health_calls >= 2
-    assert bot.projected_open_tail_called is False
+    assert bot.projected_open_tail_called is True
+    assert result[0][symbol] == pytest.approx(projected)
     assert bot._orchestrator_close_ema_fallback_counts == {}
 
 
 @pytest.mark.asyncio
-async def test_nonfinite_close_ema_is_fatal_before_projection_or_previous_fallback():
+async def test_infinite_close_ema_is_fatal_before_projection_or_previous_fallback():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2084,13 +2127,10 @@ async def test_nonfinite_close_ema_is_fatal_before_projection_or_previous_fallba
     span1 = 20.0
     span2 = (span0 * span1) ** 0.5
     prev = {span0: 100.04, span1: 100.03, span2: 100.02}
-    projected = {span0: 201.0, span1: 202.0, span2: 203.0}
     bot = _BundleReproBot(
         symbol,
-        close_mode="nan",
+        close_mode="inf",
         prev_close_ema=prev,
-        project_open_tail_after_health_calls=1,
-        projected_close_ema=projected,
     )
     bot.projected_open_tail_called = False
 
@@ -2099,13 +2139,12 @@ async def test_nonfinite_close_ema_is_fatal_before_projection_or_previous_fallba
             bot, [symbol], bot.PB_modes
         )
 
-    assert bot.completed_candle_health_calls >= 2
     assert bot.projected_open_tail_called is False
     assert bot._orchestrator_close_ema_fallback_counts == {}
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_does_not_mask_nonfinite_m1_log_range():
+async def test_late_open_tail_projection_recovers_nan_m1_log_range():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2126,13 +2165,35 @@ async def test_late_open_tail_projection_does_not_mask_nonfinite_m1_log_range():
     )
     bot.projected_open_tail_called = False
 
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert bot.completed_candle_health_calls >= 2
+    assert bot.projected_open_tail_called is True
+    assert result[0][symbol][span0] == pytest.approx(201.0)
+    assert result[2][symbol][60.0] == pytest.approx(0.0042)
+
+
+@pytest.mark.asyncio
+async def test_required_m1_log_range_infinite_output_remains_fatal():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "WLD/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        lr1m_mode="inf",
+        entry_m1_weight=1.0,
+    )
+
     with pytest.raises(RuntimeError, match="non-finite m1_log_range value"):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], bot.PB_modes
         )
-
-    assert bot.completed_candle_health_calls == 1
-    assert bot.projected_open_tail_called is False
 
 
 @pytest.mark.asyncio
@@ -2221,7 +2282,7 @@ async def test_open_tail_projection_missing_close_span_scopes_only_its_consumers
 
 
 @pytest.mark.asyncio
-async def test_open_tail_projection_nonfinite_close_remains_fatal():
+async def test_open_tail_projection_nan_close_is_scoped_unavailable():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2238,7 +2299,61 @@ async def test_open_tail_projection_nonfinite_close_remains_fatal():
         projected_close_ema={span0: float("nan"), span1: 202.0, span2: 203.0},
     )
 
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert result[0][symbol] == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
+
+
+@pytest.mark.asyncio
+async def test_open_tail_projection_infinite_close_remains_fatal():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        project_open_tail=True,
+        projected_close_ema={span0: float("inf"), span1: 202.0, span2: 203.0},
+    )
+
     with pytest.raises(RuntimeError, match="non-finite projected open-tail close EMA"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+
+@pytest.mark.asyncio
+async def test_open_tail_projection_infinite_m1_log_range_remains_fatal():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        entry_m1_weight=1.0,
+        project_open_tail=True,
+        projected_close_ema={span0: 201.0, span1: 202.0, span2: 203.0},
+        projected_log_range_ema={10.0: 0.0015, 60.0: float("inf")},
+    )
+
+    with pytest.raises(
+        RuntimeError, match="non-finite projected open-tail m1 log-range EMA"
+    ):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], bot.PB_modes
         )
@@ -2466,7 +2581,8 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
 
 
 @pytest.mark.asyncio
-async def test_required_h1_log_range_ema_is_scoped_when_missing():
+@pytest.mark.parametrize("h1_mode", ["timeout", "nan"])
+async def test_required_h1_log_range_ema_is_scoped_when_missing(h1_mode):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2476,7 +2592,7 @@ async def test_required_h1_log_range_ema_is_scoped_when_missing():
     bot = _BundleReproBot(
         symbol,
         close_mode="value",
-        h1_mode="timeout",
+        h1_mode=h1_mode,
         entry_h1_span_hours=4.0,
         entry_m1_weight=1.0,
     )
@@ -2492,8 +2608,7 @@ async def test_required_h1_log_range_ema_is_scoped_when_missing():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("h1_mode", ["nan", "inf"])
-async def test_required_h1_log_range_nonfinite_output_remains_fatal(h1_mode):
+async def test_required_h1_log_range_infinite_output_remains_fatal():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -2503,7 +2618,7 @@ async def test_required_h1_log_range_nonfinite_output_remains_fatal(h1_mode):
     bot = _BundleReproBot(
         symbol,
         close_mode="value",
-        h1_mode=h1_mode,
+        h1_mode="inf",
         entry_h1_span_hours=4.0,
     )
 

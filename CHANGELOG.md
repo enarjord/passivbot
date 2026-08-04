@@ -34,7 +34,9 @@ All notable user-facing changes will be documented in this file.
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
   strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
   strategy branches remain independent when their input needs differ, and independent panic,
-  WEL, and TWEL reducers may continue when their own inputs are complete.
+  WEL, and TWEL reducers may continue when their own inputs are complete. A `NaN` returned by the
+  completed-candle EMA API now follows that unavailable-input path instead of restarting the whole
+  execution cycle; positive or negative infinity remains fatal.
 
 - Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
   full-range sources now follow configured exchange priority instead of total volume, robust
