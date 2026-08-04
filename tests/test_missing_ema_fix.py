@@ -467,6 +467,8 @@ class _BundleReproBot:
                     raise TimeoutError("quote volume timeout")
                 if self.outer.qv_mode == "nan":
                     return float("nan")
+                if self.outer.qv_mode == "inf":
+                    return float("inf")
                 return 250000.0
 
             async def get_latest_ema_log_range(
@@ -1339,7 +1341,10 @@ def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
 
 
 @pytest.mark.asyncio
-async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price(caplog):
+@pytest.mark.parametrize("close_mode", ["timeout", "nan"])
+async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price(
+    caplog, close_mode
+):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -1350,7 +1355,12 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price(caplog
     span1 = 20.0
     span2 = (span0 * span1) ** 0.5
     prev = {span0: 100.04, span1: 100.03, span2: 100.02}
-    bot = _BundleReproBot(symbol, close_mode="timeout", close_value=110.37, prev_close_ema=prev)
+    bot = _BundleReproBot(
+        symbol,
+        close_mode=close_mode,
+        close_value=110.37,
+        prev_close_ema=prev,
+    )
 
     with caplog.at_level(logging.WARNING):
         (
@@ -1755,6 +1765,42 @@ async def test_active_forager_required_features_use_bounded_cached_carry_forward
         int(call["max_staleness_ms"]) >= 60_000
         for call in bot.cached_metric_calls
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("qv_mode", "lr1m_mode", "error_match"),
+    [
+        ("inf", "value", "non-finite m1_volume value"),
+        ("value", "inf", "non-finite m1_log_range value"),
+    ],
+)
+async def test_required_forager_infinity_is_fatal_before_cached_carry_forward(
+    qv_mode, lr1m_mode, error_match
+):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        qv_mode=qv_mode,
+        lr1m_mode=lr1m_mode,
+        cached_qv_ema={10.0: 250000.0},
+        cached_log_range_ema={10.0: 0.0015},
+    )
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+
+    with pytest.raises(RuntimeError, match=error_match):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], mode_overrides
+        )
+
+    assert bot.cached_metric_calls == []
 
 
 @pytest.mark.asyncio

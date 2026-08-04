@@ -61,7 +61,9 @@ Missing ordinary strategy input produces no ideal orders for the entry or close 
 consumes it, so normal Rust-authoritative reconciliation removes any now-stale resting orders from
 that branch. The other strategy branch, independent Rust risk reducers, and panic actions continue
 when their own inputs are complete. Malformed or non-finite producer output is never covered by
-this degradation and remains fatal.
+this degradation and remains fatal. Here, producer output means the Rust ideal-order/result
+envelope. A documented live input-reader availability sentinel is classified before that boundary,
+must never reach Rust, and retains only its explicitly bounded recovery and scoped-defer policies.
 
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when

@@ -18301,6 +18301,11 @@ class Passivbot:
                         ema_type, symbol, span, "exception", ema_error_type(e)
                     )
                     continue
+                if math.isinf(val):
+                    raise RuntimeError(
+                        f"[ema] non-finite {ema_type} value {val} "
+                        f"for {symbol} span={span:.8g}"
+                    )
                 if math.isfinite(val):
                     out[span] = val
                 else:

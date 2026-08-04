@@ -293,10 +293,12 @@
     gate the whole planner cycle. Canonical EMA consumers determine symbol/order-class readiness;
     unavailable values remain absent, never neutralized. Account surfaces and fresh market
     snapshots retain their separate execution barriers.
-16. A `NaN` returned by a completed-candle EMA API represents an empty or incomplete EMA window and
-    is translated by the live consumer into explicit symbol- or action-scoped unavailability. It is
-    never passed to Rust or replaced with a numeric value. Positive or negative infinity is not an
-    availability sentinel and remains a fatal invalid calculation result.
+16. A `NaN` returned by a completed-candle EMA API represents an empty or incomplete EMA window.
+    The live consumer may recover it only through the explicitly bounded open-tail projection or
+    carry-forward policies above; without such a recovery, it becomes symbol- or action-scoped
+    unavailability. It is never passed to Rust or replaced by an unbounded or fabricated value.
+    Positive or negative infinity is not an availability sentinel and remains a fatal invalid
+    calculation result before any fallback.
 
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
