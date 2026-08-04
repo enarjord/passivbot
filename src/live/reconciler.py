@@ -1237,7 +1237,10 @@ def _validate_rust_limit_price_exchange_constraints(
     price_tolerance = _rust_representation_tolerance(price, rounded_price)
     if not math.isclose(price, rounded_price, rel_tol=0.0, abs_tol=price_tolerance):
         raise FatalBotException(
-            f"{context} price is inconsistent with submitted price_step"
+            f"{context} price is inconsistent with submitted price_step: "
+            f"price={price!r} price_step={price_step!r} "
+            f"nearest_price={rounded_price!r} "
+            f"delta={abs(price - rounded_price)!r} tolerance={price_tolerance!r}"
         )
 
 
@@ -2025,7 +2028,8 @@ def validate_rust_orchestrator_output(
             _validate_rust_limit_price_exchange_constraints(
                 price,
                 submitted_exchange_constraints[symbol_idx],
-                f"Rust orchestrator order {order_idx}",
+                f"Rust orchestrator order {order_idx} symbol_idx={symbol_idx} "
+                f"order_type={order_type}",
             )
         expected_execution_type = _expected_rust_execution_type(
             global_input,

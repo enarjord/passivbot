@@ -17,7 +17,7 @@ import weakref
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
-from live.diagnostic_safety import bounded_exception_type
+from live.diagnostic_safety import bounded_exception_type, sanitize_diagnostic_text
 
 
 SCHEMA_VERSION = 1
@@ -607,10 +607,6 @@ _REGISTERED_EVENT_TYPES = frozenset(
     if name.isupper() and type(value) is str
 )
 _DIAGNOSTIC_EVENT_TYPE_MAX_LEN = 120
-_DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE = re.compile(
-    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
-    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
-)
 _UNKNOWN_DIAGNOSTIC_EVENT_TYPE = "unknown_event"
 
 
@@ -626,26 +622,23 @@ VALID_STATUSES = {
 }
 
 
-_SENSITIVE_KEY_FRAGMENTS = {
+_SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "apikey",
-    "api_key",
-    "api-key",
+    "apisecret",
+    "apisignature",
+    "authsignature",
     "authorization",
-    "auth",
-    "cookie",
+    "exchangesignature",
+    "credential",
+    "hmacsignature",
     "passphrase",
     "password",
     "privatekey",
-    "private_key",
-    "private-key",
-    "secret",
-    "signature",
-    "token",
-    "walletaddress",
-    "wallet_address",
-    "wallet-address",
-    "x-mbx-apikey",
-}
+    "requestsignature",
+    "secretkey",
+    "xmbxapikey",
+)
+_SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
 
 
 def utc_ms() -> int:
@@ -668,7 +661,6 @@ def bounded_diagnostic_event_type(event_type: object) -> str:
     normalized = LEGACY_EVENT_TYPE_ALIASES.get(event_type, event_type)
     if (
         len(normalized) > _DIAGNOSTIC_EVENT_TYPE_MAX_LEN
-        or _DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE.search(normalized)
         or normalized not in _REGISTERED_EVENT_TYPES
     ):
         return _UNKNOWN_DIAGNOSTIC_EVENT_TYPE
@@ -691,11 +683,22 @@ def payload_hash_raw(payload: bytes | str) -> str:
 
 
 def _is_sensitive_key(key: object) -> bool:
-    cleaned = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch in "_-")
-    compact = cleaned.replace("-", "").replace("_", "")
-    return any(
-        fragment in cleaned or fragment.replace("-", "").replace("_", "") in compact
-        for fragment in _SENSITIVE_KEY_FRAGMENTS
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+    compact = cleaned.replace("_", "")
+    if any(marker in compact for marker in _SENSITIVE_KEY_STRONG_COMPACT_MARKERS):
+        return True
+    parts = tuple(part for part in cleaned.split("_") if part)
+    if (
+        compact in {"cookie", "secret", "setcookie", "signature", "token"}
+        or compact.endswith(("cookie", "secret", "token"))
+    ):
+        return True
+    if "secret" in parts or (parts and parts[-1] in {"cookie", "token"}):
+        return True
+    return bool(
+        parts
+        and parts[-1] == "signature"
+        and any(part in _SENSITIVE_SIGNATURE_QUALIFIERS for part in parts[:-1])
     )
 
 
@@ -709,6 +712,8 @@ def redact_payload(value: Any) -> Any:
         return [redact_payload(item) for item in value]
     if isinstance(value, tuple):
         return [redact_payload(item) for item in value]
+    if isinstance(value, str):
+        return sanitize_diagnostic_text(value, max_len=LIVE_EVENT_MAX_STRING_CHARS)
     return value
 
 
@@ -895,10 +900,13 @@ def _bounded_live_event_value(
     if value is None or type(value) is bool:
         return value
     if isinstance(value, str):
+        sanitized = sanitize_diagnostic_text(
+            value,
+            max_len=LIVE_EVENT_MAX_STRING_CHARS,
+        )
         if len(value) > LIVE_EVENT_MAX_STRING_CHARS:
             state.add("truncated_strings")
-            return _truncate_live_event_text(value, LIVE_EVENT_MAX_STRING_CHARS)
-        return value
+        return sanitized
     if type(value) is int:
         if value.bit_length() <= _LIVE_EVENT_MAX_INTEGER_BITS:
             return value
@@ -1894,6 +1902,9 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
+    message = _data_str(data, "message")
+    if message:
+        parts.append(f"message={message[:512]}")
     return parts
 
 

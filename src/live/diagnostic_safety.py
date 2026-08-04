@@ -5,18 +5,44 @@ import re
 import sys
 
 EXCEPTION_TYPE_MAX_LEN = 80
-_SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
-    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
-    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
+DIAGNOSTIC_MESSAGE_MAX_LEN = 4096
+DIAGNOSTIC_MESSAGE_UNAVAILABLE = "<unavailable>"
+DIAGNOSTIC_REDACTED = "[redacted]"
+_DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----.*?"
+    r"-----END(?: [A-Z0-9]+)* PRIVATE KEY-----",
+    re.DOTALL,
+)
+_DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
+    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
+    r"(\s*[:=]\s*)(?:bearer|basic)?\s*[^,\s;]+"
+)
+_DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"(api[-_]?(?:key|secret|signature)|apikey|accessToken|refreshToken|"
+    r"clientSecret|privateKey|requestSignature|request[-_]?signature|"
+    r"auth[-_]?(?:signature|token)|hmac[-_]?signature|exchange[-_]?signature|"
+    r"access[-_]?token|refresh[-_]?token|secret|token|signature|password|passphrase|"
+    r"private[-_]?key)"
+    r"([\"']?\s*(?:[:=/])\s*)(?:[\"'][^\"']*[\"']|[^,\s;&\"'}]+)"
+)
+_DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
+    r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
+    r"passphrase|private[-_]?key)\s+)(?:\"[^\"]*\"|'[^']*'|\S+)"
+)
+_DIAGNOSTIC_AUTH_SCHEME_RE = re.compile(
+    r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
+)
+_DIAGNOSTIC_STANDALONE_SECRET_RE = re.compile(
+    r"(?i)\b(?:sk_(?:live|test)_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{16,}|"
+    r"AKIA[0-9A-Z]{16})\b"
+)
+_DIAGNOSTIC_URL_USERINFO_RE = re.compile(
+    r"(?i)\b(https?://)[^/@\s:]+:[^/@\s]+@"
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
-_EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
-_EXCHANGE_ERROR_EMAIL_RE = re.compile(
-    r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
-)
-_EXCHANGE_ERROR_URL_RE = re.compile(r"(?i)\bhttps?://[^\s]+")
 _EXCHANGE_ERROR_PAYLOAD_MAX_LEN = 8192
 _EXCHANGE_ERROR_REASON_MAX_LEN = 160
 _TRUSTED_EXCEPTION_MODULE_PREFIXES = (
@@ -77,13 +103,76 @@ def bounded_exception_type(exc: BaseException) -> str:
                 and name
                 and name.isascii()
                 and name.isidentifier()
-                and not _SENSITIVE_EXCEPTION_TYPE_RE.search(name)
                 and _module_exports_exception_class(module, name, cls)
             ):
                 return name[:EXCEPTION_TYPE_MAX_LEN]
         return "Error"
     except BaseException:
         return "Error"
+
+
+def sanitize_diagnostic_text(
+    value: str,
+    *,
+    max_len: int = DIAGNOSTIC_MESSAGE_MAX_LEN,
+) -> str:
+    """Return bounded one-line diagnostics with authentication secrets redacted.
+
+    Operational values such as symbols, prices, quantities, order identifiers,
+    exchange messages, URLs, and account state are intentionally retained.  The
+    sanitizer removes only credential-bearing values and private-key material.
+    """
+    if type(value) is not str or type(max_len) is not int or max_len <= 0:
+        return DIAGNOSTIC_MESSAGE_UNAVAILABLE
+    try:
+        scan_len = max(16_384, max_len * 4)
+        truncated = len(value) > scan_len
+        text = value[:scan_len]
+        text = _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE.sub(
+            DIAGNOSTIC_REDACTED, text
+        )
+        text = _DIAGNOSTIC_SENSITIVE_HEADER_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_SENSITIVE_VALUE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_SENSITIVE_CLI_RE.sub(
+            rf"\1{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_AUTH_SCHEME_RE.sub(
+            rf"\1 {DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_STANDALONE_SECRET_RE.sub(
+            DIAGNOSTIC_REDACTED, text
+        )
+        text = _DIAGNOSTIC_URL_USERINFO_RE.sub(
+            rf"\1{DIAGNOSTIC_REDACTED}@", text
+        )
+        text = " ".join(text.split())
+        if not text:
+            return "<empty>"
+        suffix = "...<truncated>"
+        if truncated or len(text) > max_len:
+            if max_len <= len(suffix):
+                return suffix[:max_len]
+            return f"{text[: max_len - len(suffix)]}{suffix}"
+        return text
+    except BaseException:
+        return DIAGNOSTIC_MESSAGE_UNAVAILABLE
+
+
+def sanitized_exception_message(
+    exc: BaseException,
+    *,
+    max_len: int = DIAGNOSTIC_MESSAGE_MAX_LEN,
+) -> str:
+    """Render an exception without allowing hostile accessors or secrets to escape."""
+    try:
+        message = str(exc)
+    except BaseException:
+        return DIAGNOSTIC_MESSAGE_UNAVAILABLE
+    return sanitize_diagnostic_text(message, max_len=max_len)
 
 
 def _text_contains(
@@ -176,7 +265,6 @@ def _bounded_exception_attribute(
                 and len(text) <= 80
                 and text.isascii()
                 and pattern.fullmatch(text)
-                and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
             ):
                 return text
         try:
@@ -192,7 +280,6 @@ def _bounded_exception_attribute(
                     and len(text) <= 80
                     and text.isascii()
                     and pattern.fullmatch(text)
-                    and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
                 ):
                     return text
         return None
@@ -251,7 +338,6 @@ def _bounded_exchange_error_label(value: object) -> str | None:
         text is None
         or not text.isascii()
         or not _EXCHANGE_ERROR_LABEL_RE.fullmatch(text)
-        or _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
     ):
         return None
     return text
@@ -260,13 +346,11 @@ def _bounded_exchange_error_label(value: object) -> str | None:
 def _bounded_exchange_error_reason(value: object) -> str | None:
     if type(value) is not str or not value or len(value) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
         return None
-    if _SENSITIVE_EXCEPTION_TYPE_RE.search(value):
-        return None
     try:
-        text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", value)
-        text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
-        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub("<redacted>", text)
-        text = " ".join(text.split())
+        text = sanitize_diagnostic_text(
+            value,
+            max_len=_EXCHANGE_ERROR_REASON_MAX_LEN,
+        )
         text = "".join(
             char if char.isascii() and char.isprintable() and char not in {"|"} else "_"
             for char in text
@@ -275,8 +359,6 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         return None
     if not text:
         return None
-    if len(text) > _EXCHANGE_ERROR_REASON_MAX_LEN:
-        return f"{text[: _EXCHANGE_ERROR_REASON_MAX_LEN - 3]}..."
     return text
 
 
@@ -292,7 +374,6 @@ def _bounded_payload_scalar(
             and len(text) <= 80
             and text.isascii()
             and pattern.fullmatch(text)
-            and not _SENSITIVE_EXCEPTION_TYPE_RE.search(text)
         ):
             return text
     return None

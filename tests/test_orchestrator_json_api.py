@@ -5,6 +5,32 @@ import math
 import pytest
 
 from live import reconciler
+from passivbot_exceptions import FatalBotException
+
+
+def test_limit_price_step_failure_reports_exact_numeric_and_order_context():
+    with pytest.raises(FatalBotException) as exc_info:
+        reconciler._validate_rust_limit_price_exchange_constraints(
+            12.34,
+            (0.001, 0.1, 0.001, 5.0, 1.0),
+            (
+                "Rust orchestrator order 2 symbol_idx=4 "
+                "order_type=entry_initial_normal_long"
+            ),
+        )
+
+    message = str(exc_info.value)
+    for expected in (
+        "Rust orchestrator order 2",
+        "symbol_idx=4",
+        "order_type=entry_initial_normal_long",
+        "price=12.34",
+        "price_step=0.1",
+        "nearest_price=12.3",
+        "delta=",
+        "tolerance=",
+    ):
+        assert expected in message
 
 
 @pytest.fixture(scope="module", autouse=True)

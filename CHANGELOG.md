@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live fatal, startup, execution-loop, monitor-error, and Rust-orchestrator failure diagnostics now
+  retain bounded exception causes in console, text, and structured event history after centralized
+  credential-only sanitization. Non-secret order context, prices, quantities, identifiers, wallet
+  addresses, URLs, and exchange reasons remain available for diagnosis; Rust price-step validation
+  failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
+  tolerance.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic

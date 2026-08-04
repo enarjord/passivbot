@@ -939,14 +939,50 @@ def test_forager_eligibility_console_route_keeps_event_durable():
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
-    payload = {"safe": 1, "auth": {"token": "secret"}, "items": [{"secret": "x"}]}
+    payload = {
+        "safe": 1,
+        "auth": {"token": "secret"},
+        "authoritative_epoch": 7,
+        "completed_candle_signature": [1, 2, 3],
+        "request_signature": "request-secret",
+        "wallet_address": "0xabc",
+        "message": (
+            "rejected symbol=BTC/USDT:USDT price=12.34 "
+            "https://example.invalid/order/abc?api_key=message-secret"
+        ),
+        "items": [{"secret": "x"}],
+    }
 
     assert redact_payload(payload) == {
         "safe": 1,
-        "auth": REDACTED,
+        "auth": {"token": REDACTED},
+        "authoritative_epoch": 7,
+        "completed_candle_signature": [1, 2, 3],
+        "request_signature": REDACTED,
+        "wallet_address": "0xabc",
+        "message": (
+            "rejected symbol=BTC/USDT:USDT price=12.34 "
+            "https://example.invalid/order/abc?api_key=[redacted]"
+        ),
         "items": [{"secret": REDACTED}],
     }
     assert payload_hash({"b": 2, "a": 1}) == payload_hash({"a": 1, "b": 2})
+
+
+def test_redact_payload_redacts_camel_case_credential_keys():
+    assert redact_payload(
+        {
+            "accessToken": "access-value",
+            "clientSecret": "client-value",
+            "requestSignature": "request-value",
+            "planningSignature": "plan-hash",
+        }
+    ) == {
+        "accessToken": REDACTED,
+        "clientSecret": REDACTED,
+        "requestSignature": REDACTED,
+        "planningSignature": "plan-hash",
+    }
 
 
 def test_payload_hash_raw_hashes_exact_wire_payload():
@@ -3116,6 +3152,29 @@ def test_console_format_summarizes_rust_return():
     )
 
     assert format_console_event(event) == "[rust] succeeded cycle=cy_6 orders=4 elapsed=17ms"
+
+
+def test_console_format_rust_failure_includes_sanitized_cause():
+    event = LiveEvent(
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        status="failed",
+        cycle_id="cy_6",
+        data={
+            "elapsed_ms": 17,
+            "error_type": "FatalBotException",
+            "message": (
+                "Rust orchestrator order 2 symbol_idx=4 order_type=entry_initial_normal_long "
+                "price=12.34 price_step=0.1 nearest_price=12.3 delta=0.04"
+            ),
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[rust] failed cycle=cy_6 elapsed=17ms error_type=FatalBotException "
+        "message=Rust orchestrator order 2 symbol_idx=4 "
+        "order_type=entry_initial_normal_long price=12.34 price_step=0.1 "
+        "nearest_price=12.3 delta=0.04"
+    )
 
 
 def test_console_format_summarizes_forager_selection():

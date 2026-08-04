@@ -6,7 +6,77 @@ from live.diagnostic_safety import (
     bounded_exchange_error_context_from_mapping,
     exception_text_contains,
     exception_type_name_contains,
+    sanitize_diagnostic_text,
+    sanitized_exception_message,
 )
+
+
+def test_sanitize_diagnostic_text_preserves_non_secret_failure_context():
+    raw = (
+        "order rejected symbol=BTC/USDT:USDT order_id=abc123 price=101.25 qty=0.4 "
+        "wallet_address=0xabc url=https://example.invalid/orders/abc123?attempt=2 "
+        "planning_signature=plan-hash request_signature=request-secret "
+        "api_key=key-secret Authorization: Bearer bearer-secret "
+        'private_key="private-secret"'
+    )
+
+    sanitized = sanitize_diagnostic_text(raw)
+
+    for useful in (
+        "symbol=BTC/USDT:USDT",
+        "order_id=abc123",
+        "price=101.25",
+        "qty=0.4",
+        "wallet_address=0xabc",
+        "planning_signature=plan-hash",
+        "https://example.invalid/orders/abc123?attempt=2",
+    ):
+        assert useful in sanitized
+    for secret in (
+        "request-secret",
+        "key-secret",
+        "bearer-secret",
+        "private-secret",
+    ):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 4
+
+
+def test_sanitize_diagnostic_text_redacts_cli_userinfo_and_private_key_block():
+    raw = (
+        "POST https://alice:password@example.invalid/private --api-key cli-secret "
+        "-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY----- "
+        "exchange_reason=price step mismatch"
+    )
+
+    sanitized = sanitize_diagnostic_text(raw)
+
+    assert "alice" not in sanitized
+    assert "password" not in sanitized
+    assert "cli-secret" not in sanitized
+    assert "private-key-body" not in sanitized
+    assert "https://[redacted]@example.invalid/private" in sanitized
+    assert "exchange_reason=price step mismatch" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
+    sanitized = sanitize_diagnostic_text(
+        'accessToken="access-value" clientSecret=client-value '
+        "requestSignature=request-value planning_signature=plan-hash"
+    )
+
+    assert "access-value" not in sanitized
+    assert "client-value" not in sanitized
+    assert "request-value" not in sanitized
+    assert "planning_signature=plan-hash" in sanitized
+
+
+def test_sanitized_exception_message_contains_hostile_string_conversion():
+    class HostileError(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt("api_key=must-not-escape")
+
+    assert sanitized_exception_message(HostileError()) == "<unavailable>"
 
 
 def test_bounded_exception_status_and_code_keep_safe_direct_values():
@@ -86,7 +156,7 @@ def test_bounded_exchange_error_context_extracts_rejected_result_mapping():
         "error_status": "400",
         "error_code": "10001",
         "error_label": "INVALID_PARAM_VALUE",
-        "error_reason": "bad client id <redacted>",
+        "error_reason": "bad client id abcdefghijklmnopqrstuvwxyz012345",
     }
 
 
@@ -112,7 +182,7 @@ def test_bounded_exchange_error_context_prefers_okx_per_order_details():
     }
 
 
-def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reasons():
+def test_bounded_exchange_error_context_preserves_identifiers_and_redacts_secrets():
     error = RuntimeError(
         'gate {"label":"INVALID_PARAM_VALUE",'
         '"message":"bad client id abcdefghijklmnopqrstuvwxyz012345"}'
@@ -123,14 +193,15 @@ def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reason
 
     assert bounded_exchange_error_context(error) == {
         "error_label": "INVALID_PARAM_VALUE",
-        "error_reason": "bad client id <redacted>",
+        "error_reason": "bad client id abcdefghijklmnopqrstuvwxyz012345",
     }
     assert bounded_exchange_error_context(sensitive) == {
-        "error_label": "INVALID_PARAM_VALUE"
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "api_key=[redacted]",
     }
 
 
-def test_bounded_exchange_error_context_redacts_urls_and_email_addresses():
+def test_bounded_exchange_error_context_preserves_urls_and_email_addresses():
     error = RuntimeError(
         'gate {"message":"contact trader@example.com or visit '
         'https://example.invalid/account?id=short"}'
@@ -138,7 +209,8 @@ def test_bounded_exchange_error_context_redacts_urls_and_email_addresses():
 
     assert bounded_exchange_error_context(error) == {
         "error_reason": (
-            "contact <redacted-email> or visit <redacted-url>"
+            "contact trader@example.com or visit "
+            "https://example.invalid/account?id=short"
         )
     }
 

@@ -22,9 +22,9 @@ Use stable text tags such as `[order]`, `[fill]`, `[pos]`, `[balance]`, `[health
 
 ## Redaction And Boundedness
 
-No sink may retain credentials, signatures, private keys, authorization headers, arbitrary URLs,
-raw exchange/account payloads, or unbounded row collections. Treat exception messages and
-tracebacks as potentially containing request or account data.
+No sink may retain credentials, authentication signatures, private keys, bearer/basic
+authorization values, session cookies, passwords, passphrases, or unbounded row collections.
+Exception messages and tracebacks pass through the shared secret sanitizer before retention.
 
 Runtime console, text logs, and structured/monitor artifacts are private operator surfaces. They
 may retain account state and detailed operational diagnostics needed to investigate a normal bot
@@ -32,15 +32,22 @@ run; console selection is about human readability and volume, not public-release
 issues, pull requests, commits, and other repository publications are a separate boundary and must
 never receive private runtime artifacts. The credential prohibition applies to every boundary:
 authentication material must not be copied from its configured credential store into any sink.
+Non-secret runtime evidence is diagnostic data, not secret material: symbols, prices, quantities,
+order and request identifiers, wallet addresses, URLs, exchange reasons and response details,
+account state, diagnostic hashes/signatures, and strategy inputs must not be removed merely because
+they describe a private bot run. Keep those values bounded, and keep the resulting private runtime
+artifact out of public repository surfaces.
 
 - Connector-local and structured execution events retain stable classifications, bounded context,
-  and exception type—not raw responses, exception text, or tracebacks.
-- Outer process/startup failure logs may include a traceback in the protected developer text log
-  when needed for diagnosis, but should sanitize known request and credential material first.
+  and a secret-sanitized exception message. Bounded response detail is retained when it explains
+  the failure; authentication fields inside it are redacted.
+- Outer process/startup failure logs retain the secret-sanitized exception message and may include
+  a bounded traceback in the developer text log.
 - Unexpected runtime incidents must retain a correlated, bounded frame chain in a private durable
-  diagnostic event at normal logging levels. Frame diagnostics exclude exception text, locals, and
-  source lines unless a producer has an explicitly reviewed sanitizer for those values; a rare
-  incident must not require reproducing the failure after restarting with DEBUG.
+  diagnostic event at normal logging levels, including the secret-sanitized message for every
+  exception in the cause/context chain. Locals and unbounded payload dumps remain excluded; the
+  producer must project the relevant values explicitly so a rare incident does not require
+  reproducing the failure after restarting with DEBUG.
 - Structured event debug profiles add bounded shapes, counts, keys, correlation IDs, and samples;
   they do not enable raw-payload persistence.
 - Exchange-config response formatting permits only canonical status, finite numeric leverage,
@@ -106,14 +113,14 @@ test values on both sides; the console sink must not invent a generic threshold 
 
 The normal console projects an incident as a bounded signature, not a traceback:
 
-1. Emit the first occurrence immediately with component, operation, exception class, status/code
-   when safe, affected scope, action, and correlation id. Failed exchange writes may also include
-   a bounded sanitized reason extracted from the exchange's structured error payload.
+1. Emit the first occurrence immediately with component, operation, exception class,
+   secret-sanitized message, status/code when safe, affected scope, action, and correlation id.
+   Failed exchange writes may also include bounded structured response details.
 2. Aggregate equivalent repeats and emit a compact count at most every five minutes. Emit recovery
    once when the condition clears.
-3. Keep sanitized tracebacks in the protected developer text/structured diagnostic path at normal
-   logging levels. A terminal outer-process failure may tell the operator where that detail was
-   retained, but must not dump it into the normal console.
+3. Keep sanitized tracebacks in the developer text/structured diagnostic path at normal logging
+   levels. The normal console keeps the bounded sanitized cause and traceback origin; the full
+   frame chain stays in the correlated detail event for readability.
 
 Distinct safety transitions and distinct failed exchange writes are never coalesced merely to meet
 a volume target.

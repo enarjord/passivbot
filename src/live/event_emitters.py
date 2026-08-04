@@ -24,6 +24,8 @@ from live.diagnostic_safety import (
     bounded_exception_type as _bounded_exception_type,
     bounded_exchange_error_context as _bounded_exchange_error_context,
     bounded_exchange_error_context_from_mapping,
+    sanitize_diagnostic_text as _sanitize_diagnostic_text,
+    sanitized_exception_message as _sanitized_exception_message,
 )
 from candlestick_manager import sanitize_remote_fetch_diagnostic
 
@@ -64,11 +66,6 @@ def next_live_event_remote_call_id(bot: Any, prefix: str = "rc") -> str:
 _REMOTE_CALL_DEFAULT_MAP_MAX = 2048
 _REMOTE_CALL_PER_KEY_MAX = 8
 _REMOTE_CALL_NONTERMINAL_STAGES = {"progress"}
-_SENSITIVE_VALUE_RE = re.compile(
-    r"(?i)\b(api[-_]?key|apikey|secret|token|signature|password|passphrase|authorization|auth|cookie)"
-    r"(\s*(?:[:=]|\s)\s*)([^\s,;&]+)"
-)
-_AUTH_HEADER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
 _EXCHANGE_CONFIG_EVENT_SYMBOL_RE = re.compile(r"[A-Za-z0-9_./:-]{1,160}")
 _EXCHANGE_CONFIG_EVENT_RESPONSE_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_CONFIG_EVENT_ERROR_TYPE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,79}")
@@ -139,12 +136,11 @@ _CYCLE_DEGRADED_INVALID_INT_KEYS = (
 
 
 def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
-    text = str(value)
-    text = _SENSITIVE_VALUE_RE.sub(r"\1\2[redacted]", text)
-    text = _AUTH_HEADER_RE.sub(r"\1 [redacted]", text)
-    if len(text) > max_len:
-        text = f"{text[:max_len]}...<truncated>"
-    return text
+    try:
+        text = str(value)
+    except BaseException:
+        return "<unavailable>"
+    return _sanitize_diagnostic_text(text, max_len=max_len)
 
 
 def _cycle_degraded_bounded_text(value: Any, pattern: re.Pattern[str]) -> str | None:
@@ -2586,6 +2582,7 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         tags.append("error")
         reason_code = error_type
         data["error_type"] = error_type
+        data["message"] = _sanitized_exception_message(err)
     else:
         if output_hash is not None:
             raw_hash = str(output_hash)

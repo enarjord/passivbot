@@ -13,16 +13,18 @@ maintainer uses a five-second minimum cadence to keep degraded state visible
 without turning diagnostic persistence into a high-frequency trading dependency.
 
 `record_error` retains the event kind, tags, known code-owned source/stage classifications, and a
-bounded exception type. It must not persist arbitrary caller strings or numbers, exception messages,
-request URLs, responses, tracebacks, or caller-supplied raw diagnostic aliases. More detailed
-incident context belongs in an explicitly sanitized event or protected developer path; persistence
-behavior and caller control flow remain unchanged.
+bounded exception type plus the bounded secret-sanitized exception message. It ignores arbitrary
+caller-supplied aliases, but does not remove non-secret values merely because the exception contains
+request URLs, exchange reasons, account state, or order context. More detailed incident context
+belongs in an explicitly bounded event; persistence behavior and caller control flow remain
+unchanged.
 
 Private normal-run monitor history may retain an explicitly sanitized incident detail event. The
 startup and execution-loop `error.bot.detail` schema stores a bounded normalized frame chain,
-correlated to its compact `error.bot` summary by incident id, while excluding exception text,
-locals, source lines, URLs, payloads, and credentials. Existing rotation and retention limits bound
-this diagnostic data; its production does not depend on DEBUG logging.
+correlated to its compact `error.bot` summary by incident id, with the secret-sanitized message for
+each exception in the chain. Locals and unbounded payload dumps remain excluded, while useful
+non-secret exception context is retained. Existing rotation and retention limits bound this
+diagnostic data; its production does not depend on DEBUG logging.
 
 During an internal bot restart, a failed or timed-out event-pipeline close may leave its worker
 holding the publisher lock. The restart path therefore abandons that process-local publisher

@@ -79,7 +79,7 @@ from the sink exception. Sink counters and pipeline timings remain available thr
 snapshots independently of the exception payload.
 
 Queue-full and pipeline-closing degradation diagnostics retain a canonical registered event type
-only. Unsafe, malformed, sensitive-marker-bearing, or unregistered labels normalize to
+only. Unsafe, malformed, or unregistered labels normalize to
 `unknown_event` in the drop counter, message, and `dropped_event_type`; canonical event labels are
 unchanged. Monitor-delivery and generic emitter fallback warnings follow the same bounded event-type
 and exception-type rule. These diagnostics remain isolated from event routing, queue semantics,
@@ -332,10 +332,12 @@ complete-price sorting, reconciliation, planning, and trading behavior remain un
 ## Rust Orchestrator Returned Events
 
 Failed `rust_orchestrator.returned` events retain their existing timing, input hash, cycle and
-remote-call correlation, error level/status/tags, and one bounded exception type used for both
-`reason_code` and `data.error_type`. They omit exception text, URLs, credentials, and unsafe class
-metadata. This diagnostic redaction does not change Rust orchestration, event ordering or
-isolation, caller propagation, connector calls, or trading behavior.
+remote-call correlation, error level/status/tags, one bounded exception type used for both
+`reason_code` and `data.error_type`, and `data.message` containing the bounded secret-sanitized
+exception cause. URLs, order context, symbols, prices, quantities, and other non-secret values are
+retained; credentials and unsafe class metadata are not. This diagnostic projection does not
+change Rust orchestration, event ordering or isolation, caller propagation, connector calls, or
+trading behavior.
 
 ## Fresh-Entry Eligibility
 
@@ -418,9 +420,10 @@ per-order `sCode`/`sMsg` takes precedence over a generic OKX envelope code/messa
 structured rejection extraction applies only to failed or ambiguous/degraded outcomes; successful
 outcomes must not project connector-native success codes or messages as errors. This operator-facing reason is
 deliberately retained because the exchange's rejection explanation is often required to repair a
-live order failure. It omits raw response envelopes, unsafe exception class metadata, URLs,
-credentials, sensitive-marked values, long token-like values, and tracebacks. Live event and text
-logs remain private operational artifacts and must not be published without review. This
+live order failure. It omits raw response envelopes, unsafe exception class metadata, tracebacks,
+and credential-bearing values. URLs, account/order identifiers, and other non-secret values remain
+available in the bounded reason. Live event and text logs remain private operational artifacts and
+must not be published without review. This
 diagnostic projection does not alter event routing, emitter isolation, executor retries or
 re-raises, exchange calls, or trading behavior.
 
@@ -519,11 +522,14 @@ helper apply the same type-only boundary.
 
 An execution-loop or startup failure publishes a bounded `error.bot` record and an equivalent
 operator signature. The stable diagnostic fields are incident id, operation/source, exception
-type, optional bounded status/code and endpoint, stage, innermost origin, action, and cycle. A
+type, secret-sanitized message, optional bounded status/code and endpoint, stage, innermost origin,
+action, and cycle. A
 companion private `error.bot.detail` record uses the same incident id and retains the bounded full
 exception-chain frame sequence at normal logging levels so a rare failure remains diagnosable
-without a DEBUG restart. The detail contains normalized file/function/line values but no exception
-text, locals, source lines, request URLs, or response payloads. Startup records use the exact
+without a DEBUG restart. The detail contains normalized file/function/line values plus the
+secret-sanitized message for each raised/cause/context exception. It excludes locals and unbounded
+payload dumps; useful non-secret values, request URLs, and response details are retained when the
+exception or explicit incident fields contain them. Startup records use the exact
 pre-wrapper exception, including deterministic validation failures later wrapped as fatal process
 errors. The normal console keeps only the compact operator signature; its omission of the frame
 chain is a readability and volume decision, not a public/privacy boundary. Traceback projection is
@@ -533,7 +539,8 @@ restart-threshold handling, startup propagation, or backoff.
 
 Equivalent repeats use `health.summary` with the execution-error-burst reason. Its latest-failure
 fields are `latest_error_type`, optional `latest_status`, `latest_code`, and `latest_endpoint`; it
-must not retain `latest_error`. These projections are observability-only: error counting,
+does not repeat the full message because the correlated individual incident retains it. These
+projections are observability-only: error counting,
 timestamp recovery, restart thresholds, backoff, and trading behavior remain owned by the existing
 execution-loop policy.
 
