@@ -13,9 +13,13 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----END(?: [A-Z0-9]+)* PRIVATE KEY-----",
     re.DOTALL,
 )
+_DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
+    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
+    r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|[^\"'])*\4"
+)
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
     r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
-    r"(\s*[:=]\s*)(?:bearer|basic)?\s*[^,\s;]+"
+    r"([\"']?\s*[:=]\s*[\"']?)(?:bearer|basic)?\s*[^,\"'\s;}]+"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
@@ -130,6 +134,9 @@ def sanitize_diagnostic_text(
         text = value[:scan_len]
         text = _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE.sub(
             DIAGNOSTIC_REDACTED, text
+        )
+        text = _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE.sub(
+            rf"\1\2\3\4{DIAGNOSTIC_REDACTED}\4", text
         )
         text = _DIAGNOSTIC_SENSITIVE_HEADER_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text

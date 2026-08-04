@@ -71,6 +71,33 @@ def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
     assert "planning_signature=plan-hash" in sanitized
 
 
+def test_sanitized_exception_message_redacts_serialized_authentication_headers():
+    error = RuntimeError(
+        'request failed headers={"Cookie": "sessionid=TOPSECRET; csrf=SECOND", '
+        '"Authorization": "Bearer AUTHSECRET", "X-Trace": "trace-123"} '
+        "fallback={'Proxy-Authorization': 'Basic PROXYSECRET', "
+        "'Set-Cookie': 'session=COOKIESECRET; Path=/'} "
+        "url=https://example.invalid/orders/abc123"
+    )
+
+    sanitized = sanitized_exception_message(error)
+
+    for secret in (
+        "TOPSECRET",
+        "SECOND",
+        "AUTHSECRET",
+        "PROXYSECRET",
+        "COOKIESECRET",
+    ):
+        assert secret not in sanitized
+    assert '"Cookie": "[redacted]"' in sanitized
+    assert '"Authorization": "[redacted]"' in sanitized
+    assert "'Proxy-Authorization': '[redacted]'" in sanitized
+    assert "'Set-Cookie': '[redacted]'" in sanitized
+    assert '"X-Trace": "trace-123"' in sanitized
+    assert "url=https://example.invalid/orders/abc123" in sanitized
+
+
 def test_sanitized_exception_message_contains_hostile_string_conversion():
     class HostileError(RuntimeError):
         def __str__(self):
