@@ -53,7 +53,7 @@ _DIAGNOSTIC_STANDALONE_SECRET_RE = re.compile(
     r"AKIA[0-9A-Z]{16})\b"
 )
 _DIAGNOSTIC_URL_USERINFO_RE = re.compile(
-    r"(?i)\b(https?://)[^/@\s:]+:[^/@\s]+@"
+    r"(?i)\b(https?://)[^\s/?#]*:[^\s/?#]*@"
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")

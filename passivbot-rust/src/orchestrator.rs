@@ -783,11 +783,7 @@ mod core {
             return;
         }
 
-        let executable_touch = if order.qty > 0.0 {
-            order_book.ask
-        } else {
-            order_book.bid
-        };
+        let executable_touch = executable_touch_for_order_side(order_book, order.qty);
         let minimum_qty = calc_min_entry_qty(executable_touch, exchange);
         let position_abs = position.size.abs();
         let quantity_abs = order.qty.abs();
@@ -1286,6 +1282,14 @@ mod core {
         }
     }
 
+    fn executable_touch_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
+        if qty > 0.0 {
+            ob.ask
+        } else {
+            ob.bid
+        }
+    }
+
     fn order_price_diff_strict(order: &IdealOrder, ob: &OrderBook) -> f64 {
         let market_price = market_price_for_order_side(ob, order.qty);
         if order.qty >= 0.0 {
@@ -1345,7 +1349,7 @@ mod core {
         // may then use the exact-remaining-position exception.
         let minimum_price = |order: &IdealOrder| {
             if global.is_some_and(|policy| should_use_market_execution(order, policy, ob)) {
-                market_price_for_order_side(ob, order.qty)
+                executable_touch_for_order_side(ob, order.qty)
             } else {
                 order.price
             }
@@ -6825,6 +6829,44 @@ mod core {
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty - 1.0).abs() < 1e-12);
             assert!((closes[0].price - 0.99).abs() < 1e-12);
+        }
+
+        #[test]
+        fn promoted_market_buy_close_uses_ask_minimum_when_trimming() {
+            let ob = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let mut closes = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 1.0,
+                price: 100.05,
+                order_type: OrderType::CloseGridShort,
+            }];
+
+            trim_closes_to_position(
+                PositionSide::Short,
+                &mut closes,
+                -10.0,
+                &ob,
+                &exchange,
+                Some(&global),
+            );
+
+            assert_eq!(closes.len(), 1);
+            assert!((closes[0].qty - 1.0).abs() < 1e-12);
         }
 
         #[test]

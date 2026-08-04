@@ -59,6 +59,16 @@ def test_sanitize_diagnostic_text_redacts_cli_userinfo_and_private_key_block():
     assert "exchange_reason=price step mismatch" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_userinfo_through_final_authority_separator():
+    sanitized = sanitize_diagnostic_text(
+        "connect https://alice:p@ssword@example.invalid/db failed"
+    )
+
+    assert "alice" not in sanitized
+    assert "ssword" not in sanitized
+    assert "https://[redacted]@example.invalid/db" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_unterminated_private_key_block():
     sanitized = sanitize_diagnostic_text(
         "parser failed exchange_reason=invalid key material "

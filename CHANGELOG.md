@@ -23,12 +23,13 @@ All notable user-facing changes will be documented in this file.
   keys, passphrases, and signatures, are redacted while non-secret response context is preserved;
   exact structured `auth`/`authentication`/`authKey` values, KuCoin broker signing keys, Alpaca API
   key headers, delimited structured cookie fields, and unterminated private-key blocks are also
-  redacted, including credential labels whose values are separated only by whitespace. Rust producer
+  redacted, including credential labels whose values are separated only by whitespace and URL
+  userinfo passwords containing raw `@` delimiters. Rust producer
   and execution-loop failures retain the full bounded sanitized cause in structured diagnostics while
   keeping their console projection within the operator record budget. Short market entries
-  and promoted partial market closes are sized from their executable touch so minimum-notional
-  validation remains consistent across Rust planning, live execution, and backtesting, including
-  after TWEL entry gating. Blocked
+  and promoted partial market closes are sized and trimmed from their executable touch so
+  minimum-notional validation remains consistent across Rust planning, live execution, and
+  backtesting, including after TWEL entry gating. Blocked
   loss-gate closes use that same execution price when validating their diagnostic exchange minimum.
   Limit-close minimums use each emitted limit price, preserve an exact below-step remaining position
   when that is the only executable full close, and clamp short close prices to the minimum positive
