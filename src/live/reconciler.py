@@ -2148,6 +2148,7 @@ def validate_rust_orchestrator_output(
     warning_shapes = {
         "disabled_pside_has_position": {"symbol_idx", "pside"},
         "non_tradable_has_position": {"symbol_idx", "pside"},
+        "strategy_input_unavailable": {"symbol_idx", "pside", "scope"},
         "twel_repair_blocked_by_loss_gate": {
             "pside",
             "current_twe",
@@ -2181,6 +2182,7 @@ def validate_rust_orchestrator_output(
         if variant in {
             "disabled_pside_has_position",
             "non_tradable_has_position",
+            "strategy_input_unavailable",
         }:
             symbol_idx = details.get("symbol_idx")
             if (
@@ -2191,6 +2193,17 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator {context} has invalid symbol_idx"
                 )
+            if variant == "strategy_input_unavailable":
+                scope = details.get("scope")
+                if not isinstance(scope, str) or scope not in {
+                    "forager_selection",
+                    "one_way_arbitration",
+                    "strategy_orders",
+                    "unstuck",
+                }:
+                    raise FatalBotException(
+                        f"Rust orchestrator {context} has invalid scope"
+                    )
             continue
         for field in (
             "current_twe",

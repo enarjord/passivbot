@@ -13,12 +13,20 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----END(?: [A-Z0-9]+)* PRIVATE KEY-----",
     re.DOTALL,
 )
+_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
+    r"(?:authorization|proxy-authorization|cookie|set-cookie|key|sign|signature|"
+    r"kc-api-partner-sign|x-bapi-sign|"
+    r"(?:[a-z0-9]+-)*(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
+    r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
+    r"auth-(?:key|secret|sign(?:ature)?|token)|"
+    r"security-token|private-key|request-signature))"
+)
 _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
-    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie|sign)"
+    rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|[^\"'])*\4"
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
-    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie|sign)"
+    rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"([\"']?\s*[:=]\s*[\"']?)(?:bearer|basic)?\s*[^,\"'\s;}]+"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(

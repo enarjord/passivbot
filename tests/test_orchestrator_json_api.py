@@ -493,6 +493,9 @@ def test_live_authorized_missing_entry_ema_preserves_independent_closes():
             "scope": "strategy_orders",
         }
     } in out["diagnostics"]["warnings"]
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    ) == out["orders"]
 
 
 def test_live_authorized_missing_entry_volatility_preserves_independent_closes():

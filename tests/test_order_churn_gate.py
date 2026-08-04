@@ -3412,6 +3412,18 @@ def test_raw_rust_output_accepts_forager_selection_losing_one_way_tie_break():
         (
             [
                 {
+                    "strategy_input_unavailable": {
+                        "symbol_idx": 0,
+                        "pside": "long",
+                        "scope": "unknown",
+                    }
+                }
+            ],
+            "invalid scope",
+        ),
+        (
+            [
+                {
                     "non_tradable_has_position": {
                         "symbol_idx": 0,
                         "pside": [],
@@ -3494,6 +3506,13 @@ def test_raw_rust_output_accepts_each_warning_variant():
             "non_tradable_has_position": {
                 "symbol_idx": 0,
                 "pside": "short",
+            }
+        },
+        {
+            "strategy_input_unavailable": {
+                "symbol_idx": 0,
+                "pside": "long",
+                "scope": "strategy_orders",
             }
         },
         {

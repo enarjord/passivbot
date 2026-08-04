@@ -101,6 +101,49 @@ def test_sanitized_exception_message_redacts_serialized_authentication_headers()
     assert "url=https://example.invalid/orders/abc123" in sanitized
 
 
+def test_sanitized_exception_message_redacts_exchange_prefixed_authentication_headers():
+    sensitive_headers = {
+        "KC-API-KEY": "KUCOINKEY",
+        "KC-API-PASSPHRASE": "KUCOINPASS",
+        "KC-API-SIGN": "KUCOINSIGN",
+        "KC-API-PARTNER-SIGN": "KUCOINPARTNERSIGN",
+        "X-BAPI-API-KEY": "BYBITKEY",
+        "X-BAPI-SIGN": "BYBITSIGN",
+        "OK-ACCESS-KEY": "OKXKEY",
+        "OK-ACCESS-PASSPHRASE": "OKXPASS",
+        "OK-ACCESS-SIGN": "OKXSIGN",
+        "ACCESS-KEY": "ACCESSKEY",
+        "ACCESS-PASSPHRASE": "ACCESSPASS",
+        "ACCESS-SIGN": "ACCESSSIGN",
+        "X-MBX-APIKEY": "BINANCEKEY",
+        "api-key": "BITUNIXKEY",
+        "KEY": "GATEKEY",
+        "SIGN": "GATESIGN",
+    }
+    safe_headers = {
+        "KC-API-TIMESTAMP": "kucoin-ts",
+        "KC-API-PARTNER": "passivbotFutures",
+        "KC-API-PARTNER-VERIFY": "true",
+        "X-BAPI-TIMESTAMP": "bybit-ts",
+        "OK-ACCESS-TIMESTAMP": "okx-ts",
+        "ACCESS-TIMESTAMP": "access-ts",
+        "X-Gate-Channel-Id": "broker-code",
+        "X-Trace": "trace-123",
+        "X-Trace-Sign": "diagnostic-sign",
+        "X-Diagnostic-Signature": "diagnostic-signature",
+    }
+    error = RuntimeError(
+        f"request failed headers={sensitive_headers | safe_headers}"
+    )
+
+    sanitized = sanitized_exception_message(error)
+
+    for value in sensitive_headers.values():
+        assert value not in sanitized
+    for header, value in safe_headers.items():
+        assert f"'{header}': '{value}'" in sanitized
+
+
 def test_sanitized_exception_message_contains_hostile_string_conversion():
     class HostileError(RuntimeError):
         def __str__(self):

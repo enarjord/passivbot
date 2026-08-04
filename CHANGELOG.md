@@ -19,8 +19,8 @@ All notable user-facing changes will be documented in this file.
   credential-only sanitization. Non-secret order context, prices, quantities, identifiers, wallet
   addresses, URLs, and exchange reasons remain available for diagnosis; Rust price-step validation
   failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
-  tolerance. Serialized native exchange `sign` authentication headers are redacted with the other
-  credential-bearing headers.
+  tolerance. Serialized native exchange authentication headers, including exchange-prefixed API
+  keys, passphrases, and signatures, are redacted while non-secret response context is preserved.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
@@ -41,7 +41,8 @@ All notable user-facing changes will be documented in this file.
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
   strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
   strategy branches remain independent when their input needs differ, and independent panic,
-  WEL, and TWEL reducers may continue when their own inputs are complete.
+  WEL, and TWEL reducers may continue when their own inputs are complete. The live producer-boundary
+  validator accepts and strictly validates Rust's corresponding scoped-unavailability warning.
 
 - Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
   full-range sources now follow configured exchange priority instead of total volume, robust
