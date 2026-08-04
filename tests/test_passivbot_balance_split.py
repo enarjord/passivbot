@@ -13478,6 +13478,7 @@ async def test_execution_loop_console_projection_is_bounded_without_truncating_e
     )
     bot.restart_bot = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1785832735236.9412)
     useful_detail = "distinct-diagnostic-detail-" * 30
 
     try:
