@@ -1020,6 +1020,16 @@ def _rust_representation_tolerance(value: float, expected: float) -> float:
     return sys.float_info.epsilon * max(abs(value), abs(expected)) * 4.0
 
 
+def _canonical_rust_order_book_value(value: float, price_step: float) -> float:
+    """Snap only representation-noisy aligned books to Rust's submitted tick."""
+    step_count = value / price_step
+    if not math.isfinite(step_count):
+        return value
+    nearest = round(step_count) * price_step
+    tolerance = _rust_representation_tolerance(value, nearest)
+    return nearest if abs(value - nearest) <= tolerance else value
+
+
 _PROTECTIVE_REDUCE_ONLY_FAMILIES = frozenset(
     {
         "close_panic",
@@ -1568,7 +1578,6 @@ def _submitted_rust_input_context(
             raise FatalBotException(
                 f"Rust orchestrator symbol input {input_idx} has invalid order_book"
             )
-        order_books[symbol_idx] = (bid, ask)
         exchange = row.get("exchange")
         if not isinstance(exchange, dict):
             raise FatalBotException(
@@ -1610,6 +1619,10 @@ def _submitted_rust_input_context(
             min_qty,
             min_cost,
             c_mult,
+        )
+        order_books[symbol_idx] = (
+            _canonical_rust_order_book_value(bid, price_step),
+            _canonical_rust_order_book_value(ask, price_step),
         )
         tradable = row.get("tradable")
         if not isinstance(tradable, bool):

@@ -78,6 +78,7 @@ from live.diagnostic_safety import (
     bounded_exchange_error_context,
     exception_text_contains,
     exception_type_name_contains,
+    sanitize_diagnostic_text,
     sanitized_exception_message,
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
@@ -669,6 +670,8 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
         "trades",
     }
 )
+
+_EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN = 23
 
 
 def compute_live_warmup_windows(
@@ -6179,7 +6182,9 @@ class Passivbot:
             fields["origin"],
             incident_action,
             incident_cycle,
-            fields["message"],
+            sanitize_diagnostic_text(
+                fields["message"], max_len=_EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN
+            ),
         )
         self._log_execution_loop_error_burst(fields)
         await self.restart_bot_on_too_many_errors()

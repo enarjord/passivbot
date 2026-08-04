@@ -1441,7 +1441,8 @@ pub fn calc_closes_short(
             exchange_params.price_step,
             RoundingMode::Nearest,
             "calc_closes_short::price",
-        );
+        )
+        .max(exchange_params.price_step);
         close.qty = quantize_qty(
             close.qty,
             exchange_params.qty_step,
@@ -1475,7 +1476,8 @@ pub fn calc_closes_short(
                     exchange_params.price_step,
                     RoundingMode::Nearest,
                     "calc_closes_short::merged_price",
-                );
+                )
+                .max(exchange_params.price_step);
                 merged_close.qty = quantize_qty(
                     merged_close.qty,
                     exchange_params.qty_step,

@@ -13463,6 +13463,45 @@ async def test_execution_loop_error_normal_info_persists_bounded_traceback_detai
     assert all("SECRET" not in message for message in normal_messages)
 
 
+@pytest.mark.asyncio
+async def test_execution_loop_console_projection_is_bounded_without_truncating_event_detail(
+    caplog, monkeypatch
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot._health_errors = 0
+    bot.error_counts = []
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    monitor_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
+        (args, kwargs)
+    )
+    bot.restart_bot = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    useful_detail = "distinct-diagnostic-detail-" * 30
+
+    try:
+        raise RuntimeError(f"{useful_detail} api_key SECRET")
+    except RuntimeError as exc:
+        with caplog.at_level(logging.INFO):
+            assert await bot._handle_execution_loop_failure(
+                exc, allow_time_sync_recovery=False
+            ) is True
+
+    summary = monitor_events[0][0][2]
+    assert useful_detail in summary["message"]
+    assert "SECRET" not in summary["message"]
+    console_records = [
+        record.message
+        for record in caplog.records
+        if "[error] operation=run_execution_loop" in record.message
+    ]
+    assert len(console_records) == 1
+    assert len(console_records[0]) <= 240
+    assert "SECRET" not in console_records[0]
+    assert useful_detail not in console_records[0]
+
+
 def test_bounded_traceback_detail_retains_sanitized_exception_chain_without_locals():
     secret = "api_key=TOP-SECRET"
 

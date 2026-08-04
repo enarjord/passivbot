@@ -84,6 +84,19 @@ def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
     assert "planning_signature=plan-hash" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_whitespace_separated_credentials():
+    sanitized = sanitize_diagnostic_text(
+        "api_key TOPSECRET password OTHERSECRET token THIRDSECRET safe_label visible"
+    )
+
+    for secret in ("TOPSECRET", "OTHERSECRET", "THIRDSECRET"):
+        assert secret not in sanitized
+    assert "api_key [redacted]" in sanitized
+    assert "password [redacted]" in sanitized
+    assert "token [redacted]" in sanitized
+    assert "safe_label visible" in sanitized
+
+
 def test_sanitized_exception_message_redacts_serialized_authentication_headers():
     error = RuntimeError(
         'request failed headers={"Cookie": "sessionid=TOPSECRET; csrf=SECOND", '

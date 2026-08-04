@@ -2099,7 +2099,8 @@ fn calc_closes_short(
             exchange.price_step,
             RoundingMode::Nearest,
             "trailing_grid_v7::closes_short_price",
-        );
+        )
+        .max(exchange.price_step);
         close.qty = quantize_qty(
             close.qty,
             exchange.qty_step,

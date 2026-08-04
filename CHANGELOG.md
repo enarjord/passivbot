@@ -23,11 +23,17 @@ All notable user-facing changes will be documented in this file.
   keys, passphrases, and signatures, are redacted while non-secret response context is preserved;
   exact structured `auth`/`authentication`/`authKey` values, KuCoin broker signing keys, Alpaca API
   key headers, delimited structured cookie fields, and unterminated private-key blocks are also
-  redacted. Rust producer failures retain the full bounded sanitized cause in structured diagnostics
-  while keeping their console projection within the operator record budget. Short market entries
+  redacted, including credential labels whose values are separated only by whitespace. Rust producer
+  and execution-loop failures retain the full bounded sanitized cause in structured diagnostics while
+  keeping their console projection within the operator record budget. Short market entries
   and promoted partial market closes are sized from their executable touch so minimum-notional
-  validation remains consistent across Rust planning, live execution, and backtesting. Blocked
+  validation remains consistent across Rust planning, live execution, and backtesting, including
+  after TWEL entry gating. Blocked
   loss-gate closes use that same execution price when validating their diagnostic exchange minimum.
+  Limit-close minimums use each emitted limit price, preserve an exact below-step remaining position
+  when that is the only executable full close, and clamp short close prices to the minimum positive
+  tick. Live execution-policy validation also canonicalizes only representation-noisy, tick-aligned
+  submitted books to the same float Rust decodes from JSON.
   Off-tick trailing-strategy entry prices now quantize away from the spread so a passive bid is
   never rounded up and a passive ask is never rounded down.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading

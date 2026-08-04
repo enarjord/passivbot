@@ -39,7 +39,7 @@ _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"auth[-_]?(?:signature|token)|hmac[-_]?signature|exchange[-_]?signature|"
     r"access[-_]?token|refresh[-_]?token|secret|token|signature|password|passphrase|"
     r"private[-_]?key)"
-    r"([\"']?\s*(?:[:=/])\s*)(?:[\"'][^\"']*[\"']|[^,\s;&\"'}]+)"
+    r"([\"']?(?:\s*[:=/]\s*|\s+))(?:[\"'][^\"']*[\"']|[^,\s;&\"'}]+)"
 )
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
     r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
