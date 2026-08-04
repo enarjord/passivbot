@@ -627,6 +627,7 @@ _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "apisecret",
     "apisignature",
     "authsignature",
+    "authkey",
     "authorization",
     "brokerkey",
     "exchangesignature",
@@ -640,6 +641,7 @@ _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "xmbxapikey",
 )
 _SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
+_RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT = 64
 
 
 def utc_ms() -> int:
@@ -1914,7 +1916,14 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
         parts.append(f"error_type={error_type}")
     message = _data_str(data, "message")
     if message:
-        parts.append(f"message={message[:512]}")
+        suffix = "...<truncated>"
+        projected_message = (
+            message
+            if len(message) <= _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT
+            else message[: _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT - len(suffix)]
+            + suffix
+        )
+        parts.append(f"message={projected_message}")
     return parts
 
 

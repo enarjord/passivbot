@@ -990,11 +990,17 @@ def test_redact_payload_redacts_exact_authentication_keys_without_matching_autho
         {
             "auth": "opaque-auth-value",
             "authentication": "opaque-authentication-value",
+            "authKey": "camel-auth-key-value",
+            "auth_key": "snake-auth-key-value",
+            "auth-key": "hyphen-auth-key-value",
             "authoritative_epoch": 7,
         }
     ) == {
         "auth": REDACTED,
         "authentication": REDACTED,
+        "authKey": REDACTED,
+        "auth_key": REDACTED,
+        "auth-key": REDACTED,
         "authoritative_epoch": 7,
     }
 
@@ -3199,12 +3205,39 @@ def test_console_format_rust_failure_includes_sanitized_cause():
         },
     )
 
-    assert format_console_event(event) == (
+    rendered = format_console_event(event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert rendered.startswith(
         "[rust] failed cycle=cy_6 elapsed=17ms error_type=FatalBotException "
-        "message=Rust orchestrator order 2 symbol_idx=4 "
-        "order_type=entry_initial_normal_long price=12.34 price_step=0.1 "
-        "nearest_price=12.3 delta=0.04"
+        "message=Rust orchestrator order 2 symbol_idx=4"
     )
+    assert rendered.endswith("...<truncated>")
+    assert len(longest_prefix + rendered) <= 240
+    assert event.data["message"].endswith("nearest_price=12.3 delta=0.04")
+
+
+def test_console_format_rust_failure_bounds_cause_without_mutating_event():
+    event = LiveEvent(
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        status="failed",
+        cycle_id="cy_6",
+        reason_code="FatalBotException",
+        data={
+            "elapsed_ms": 17,
+            "error_type": "FatalBotException",
+            "message": "Rust orchestrator failed " + "x" * 1_000,
+        },
+    )
+    before = event.to_dict()
+
+    rendered = format_console_event(event)
+    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
+
+    assert len(longest_prefix + rendered) <= 240
+    assert "message=Rust orchestrator failed " in rendered
+    assert "...<truncated>" in rendered
+    assert event.to_dict() == before
 
 
 def test_console_format_summarizes_forager_selection():
