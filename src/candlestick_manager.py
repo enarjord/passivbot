@@ -437,8 +437,9 @@ async def fetch_candles_with_resolution_ladder(
     """Fetch exact 1m candles, then cover only older leading history coarsely.
 
     The first available 1m candle is the precision boundary. Higher-timeframe
-    candles may supply minutes before that boundary, but never patch gaps at or
-    after it. Within the older prefix, the finest successful source wins.
+    candles may supply minutes before that boundary only when their full bucket
+    ends there or earlier; they never patch gaps at or after it. Within the
+    older prefix, the finest successful source wins.
     """
     start_minute = _floor_minute(start_ts)
     end_minute = _floor_minute(end_ts)
@@ -480,11 +481,16 @@ async def fetch_candles_with_resolution_ladder(
 
         if fetched.size == 0:
             continue
-        candidates = (
-            fetched
-            if tf_minutes == 1
-            else synthesize_1m_from_higher_tf(fetched, tf_minutes)
-        )
+        if tf_minutes == 1:
+            candidates = fetched
+        else:
+            period_ms = tf_minutes * ONE_MIN_MS
+            complete_before_boundary = (
+                fetched["ts"].astype(np.int64) + period_ms <= precision_boundary
+            )
+            candidates = synthesize_1m_from_higher_tf(
+                fetched[complete_before_boundary], tf_minutes
+            )
         if index == 0:
             exact_timestamps = [
                 int(row["ts"])
