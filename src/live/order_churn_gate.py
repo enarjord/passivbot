@@ -234,6 +234,63 @@ def _continuous_drift_start_index(
     return run_start_index
 
 
+def _exclusive_cohort_reappearance_seconds(
+    cohort: OrderCohort,
+    current_group: Sequence[IdealObservation],
+    current_groups: Mapping[OrderCohort, Sequence[IdealObservation]],
+    historical_groups: Sequence[
+        tuple[float, Mapping[OrderCohort, Sequence[IdealObservation]]]
+    ],
+    *,
+    now_monotonic: float,
+    max_sample_gap_seconds: float,
+) -> float | None:
+    """Return the fixed span between the last two current-cohort runs.
+
+    This intentionally recognizes only a narrow shape: each contiguous
+    snapshot contains exactly one semantic cohort, and the current cohort has
+    appeared in at least three distinct runs with unchanged cardinality. The
+    first appearance and first reappearance therefore remain fail-open. Empty
+    snapshots, coexisting cohorts, cadence gaps, and ladder-shape changes break
+    the proof instead of broadening it.
+    """
+    if len(current_groups) != 1:
+        return None
+    cardinality_by_cohort = {cohort: len(current_group)}
+    samples_newest_first: list[tuple[float, OrderCohort]] = [
+        (now_monotonic, cohort)
+    ]
+    previous_time = now_monotonic
+    for snapshot_time, groups in historical_groups:
+        time_gap = previous_time - snapshot_time
+        if (
+            time_gap < 0.0
+            or time_gap > max_sample_gap_seconds
+            or len(groups) != 1
+        ):
+            break
+        historical_cohort, historical_group = next(iter(groups.items()))
+        historical_cardinality = len(historical_group)
+        expected_cardinality = cardinality_by_cohort.setdefault(
+            historical_cohort, historical_cardinality
+        )
+        if historical_cardinality != expected_cardinality:
+            break
+        samples_newest_first.append((snapshot_time, historical_cohort))
+        previous_time = snapshot_time
+
+    runs: list[tuple[OrderCohort, float]] = []
+    for sample_time, sample_cohort in reversed(samples_newest_first):
+        if not runs or runs[-1][0] != sample_cohort:
+            runs.append((sample_cohort, sample_time))
+    appearances = [
+        run_start for run_cohort, run_start in runs if run_cohort == cohort
+    ]
+    if len(appearances) < 3:
+        return None
+    return max(0.0, appearances[-1] - appearances[-2])
+
+
 class OrderChurnGateState:
     def __init__(self) -> None:
         self.history_by_symbol: dict[str, deque[IdealSnapshot]] = {}
@@ -244,6 +301,7 @@ class OrderChurnGateState:
         self.console_log_state: dict[str, dict[str, object]] = {}
         self.admission_reason_counts: Counter[str] = Counter()
         self.admission_summary_started_at: float | None = None
+        self.history_reset_during_evaluation = False
 
     def should_log_console_event(
         self,
@@ -341,6 +399,7 @@ class OrderChurnGateState:
         window_seconds: float,
         max_sample_gap_seconds: float,
     ) -> dict[int, ChurnDecision]:
+        self.history_reset_during_evaluation = False
         current_by_symbol = {
             str(symbol): normalize_ideal_orders(list(orders))
             for symbol, orders in ideal_orders_by_symbol.items()
@@ -356,6 +415,14 @@ class OrderChurnGateState:
             ]
             by_source_index: dict[int, ChurnDecision] = {}
             for cohort, current_group in current_groups.items():
+                reappearance_seconds = _exclusive_cohort_reappearance_seconds(
+                    cohort,
+                    current_group,
+                    current_groups,
+                    historical_groups,
+                    now_monotonic=now_monotonic,
+                    max_sample_gap_seconds=max_sample_gap_seconds,
+                )
                 tracks = [[observation] for observation in current_group]
                 track_times = [now_monotonic]
                 previous_time = now_monotonic
@@ -396,12 +463,33 @@ class OrderChurnGateState:
                             tight_prefix_count=tight_count,
                             tight_prefix_seconds=tight_seconds,
                         )
+                    elif (
+                        reappearance_seconds is not None
+                        and reappearance_seconds >= stability_seconds
+                    ):
+                        decision = ChurnDecision(
+                            True,
+                            "intermittent_cohort_reappearance",
+                            tight_prefix_count=tight_count,
+                            tight_prefix_seconds=tight_seconds,
+                        )
                     elif len(track) == 1:
-                        decision = ChurnDecision(False, "no_history")
+                        decision = ChurnDecision(
+                            False,
+                            (
+                                "intermittent_run_short"
+                                if reappearance_seconds is not None
+                                else "no_history"
+                            ),
+                        )
                     elif now_monotonic - track_times[-1] < stability_seconds:
                         decision = ChurnDecision(
                             False,
-                            "history_short",
+                            (
+                                "intermittent_run_short"
+                                if reappearance_seconds is not None
+                                else "history_short"
+                            ),
                             tight_prefix_count=tight_count,
                             tight_prefix_seconds=tight_seconds,
                         )
@@ -436,6 +524,8 @@ class OrderChurnGateState:
                             or qty_drift_start is not None
                         ):
                             reason = "drift_run_short"
+                        elif reappearance_seconds is not None:
+                            reason = "intermittent_run_short"
                         else:
                             reason = "no_continuous_drift"
                         decision = ChurnDecision(
@@ -445,6 +535,34 @@ class OrderChurnGateState:
                             tight_prefix_seconds=tight_seconds,
                         )
                     by_source_index[observation.source_index] = decision
+
+            stable_decisions = list(by_source_index.values())
+            if (
+                len(current_groups) == 1
+                and stable_decisions
+                and all(
+                    decision.reason == "stable_tight_prefix"
+                    for decision in stable_decisions
+                )
+            ):
+                # A completed stable exclusive run ends the preceding switching
+                # episode for the whole symbol. Retain the proven stable prefix
+                # as fresh history so one later switch cannot resurrect older
+                # intermittent evidence.
+                stable_prefix_seconds = min(
+                    decision.tight_prefix_seconds for decision in stable_decisions
+                )
+                stable_prefix_start = now_monotonic - stable_prefix_seconds
+                discarded_history = False
+                while (
+                    snapshots
+                    and snapshots[0].monotonic_seconds < stable_prefix_start
+                ):
+                    snapshots.popleft()
+                    discarded_history = True
+                if discarded_history:
+                    self.reset_count += 1
+                    self.history_reset_during_evaluation = True
 
             for observation in current:
                 source_order = ideal_orders_by_symbol[symbol][observation.source_index]
