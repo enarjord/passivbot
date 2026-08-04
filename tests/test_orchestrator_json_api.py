@@ -1580,6 +1580,58 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
     ]
 
 
+def test_ema_anchor_market_close_uses_executable_touch_minimum():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 100.0],
+                [20.0, 100.0],
+                [math.sqrt(10.0 * 20.0), 100.0],
+            ]
+        ),
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_ema_anchor_long"
+    )
+    assert close["execution_type"] == "market"
+    assert close["price"] == 100.05
+    assert close["qty"] == pytest.approx(-1.001)
+
+
 def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
     import passivbot_rust as pbr
 
@@ -1663,6 +1715,36 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
     assert entry["price"] == 3.0
     assert abs(entry["qty"]) == pytest.approx(1.667)
     assert abs(entry["qty"]) * entry["price"] >= symbol["exchange"]["min_cost"]
+
+
+def test_trailing_martingale_partial_entry_preserves_sub_ten_decimal_price_step():
+    import passivbot_rust as pbr
+
+    aligned_bid = 0.999999999999
+    symbol = make_symbol(
+        0,
+        bid=aligned_bid,
+        ask=1.000000000002,
+        long_pos_size=0.5,
+        long_pos_price=1.0,
+        long_strategy=adaptive_strategy_params(entry={"ema_gate_mode": "reentry"}),
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 3e-12, "min_qty": 0.0, "min_cost": 0.0}
+    )
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    partial = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "entry_initial_partial_long"
+    )
+    assert partial["price"] == aligned_bid
 
 
 def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():

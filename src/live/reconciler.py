@@ -1349,7 +1349,12 @@ def _validate_rust_close_exchange_constraints(
     effective_min_qty = _rust_effective_min_qty(
         market_price if minimum_price is None else minimum_price, exchange
     )
-    closes_exact_remaining_position = qty_abs == position_abs
+    closes_exact_remaining_position = math.isclose(
+        qty_abs,
+        position_abs,
+        rel_tol=0.0,
+        abs_tol=_rust_representation_tolerance(qty_abs, position_abs),
+    )
     if closes_exact_remaining_position:
         return
     qty_steps = qty_abs / qty_step
@@ -1998,8 +2003,13 @@ def validate_rust_orchestrator_output(
                     )
             if order_type.startswith("close_panic_"):
                 panic_close_pairs.add(pair)
-            if order_type.startswith("close_panic_") and abs(qty) != abs(
-                submitted_position_sizes[pair]
+            if order_type.startswith("close_panic_") and not math.isclose(
+                abs(qty),
+                abs(submitted_position_sizes[pair]),
+                rel_tol=0.0,
+                abs_tol=_rust_representation_tolerance(
+                    qty, submitted_position_sizes[pair]
+                ),
             ):
                 raise FatalBotException(
                     f"Rust orchestrator order {order_idx} panic quantity does not equal submitted position"

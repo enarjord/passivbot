@@ -772,6 +772,46 @@ mod core {
         diff <= global.market_order_near_touch_threshold.max(0.0)
     }
 
+    fn size_ema_anchor_market_close_at_executable_touch(
+        order: &mut IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+        exchange: &ExchangeParams,
+        position: &Position,
+    ) {
+        if !matches!(
+            order.order_type,
+            OrderType::CloseEmaAnchorLong | OrderType::CloseEmaAnchorShort
+        ) || !should_use_market_execution(order, global, order_book)
+        {
+            return;
+        }
+
+        let executable_touch = if order.qty > 0.0 {
+            order_book.ask
+        } else {
+            order_book.bid
+        };
+        let minimum_qty = calc_min_entry_qty(executable_touch, exchange);
+        let position_abs = position.size.abs();
+        let quantity_abs = order.qty.abs();
+        let tolerance = f64::EPSILON * quantity_abs.max(minimum_qty) * 4.0;
+        if quantity_abs + tolerance >= minimum_qty || position_abs <= quantity_abs {
+            return;
+        }
+
+        let mut resized_abs = minimum_qty.min(position_abs);
+        let remainder = position_abs - resized_abs;
+        if remainder > 0.0 && remainder + tolerance < minimum_qty {
+            resized_abs = position_abs;
+        }
+        order.qty = if order.qty.is_sign_negative() {
+            -resized_abs
+        } else {
+            resized_abs
+        };
+    }
+
     fn to_executable_order(
         order: IdealOrder,
         global: &OrchestratorGlobal,
@@ -3921,6 +3961,34 @@ mod core {
         let twel_candidate_count_long = twel_selected_long.len();
         let twel_candidate_count_short = twel_selected_short.len();
 
+        // EMA Anchor sizes its passive close at the quoted limit price. If live execution policy
+        // promotes that quote to market, resize from the submitted executable touch before the
+        // aggregate close and realized-loss gates consume the final quantity.
+        for side in per_long.iter_mut().filter_map(|value| value.as_mut()) {
+            let symbol = &input.symbols[side.symbol_idx];
+            for close in &mut side.closes {
+                size_ema_anchor_market_close_at_executable_touch(
+                    close,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                    &side.pos,
+                );
+            }
+        }
+        for side in per_short.iter_mut().filter_map(|value| value.as_mut()) {
+            let symbol = &input.symbols[side.symbol_idx];
+            for close in &mut side.closes {
+                size_ema_anchor_market_close_at_executable_touch(
+                    close,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                    &side.pos,
+                );
+            }
+        }
+
         // Select one loss-admissible protective reducer per symbol, cap aggregate close quantity,
         // and apply the global realized-loss gate (all close types except panic).
         gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
@@ -4558,6 +4626,46 @@ mod core {
             assert!(should_use_market_execution(&order, &global, &order_book));
             let executable = to_executable_order(order, &global, &order_book, TradingMode::Normal);
             assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn ema_anchor_market_close_uses_executable_touch_minimum() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            let mut order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: -1.0,
+                price: 100.05,
+                order_type: OrderType::CloseEmaAnchorLong,
+            };
+
+            size_ema_anchor_market_close_at_executable_touch(
+                &mut order,
+                &global,
+                &order_book,
+                &exchange,
+                &position,
+            );
+
+            assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
         }
 
         #[test]

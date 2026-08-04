@@ -14,11 +14,11 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
-    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
+    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie|sign)"
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|[^\"'])*\4"
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
-    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
+    r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie|sign)"
     r"([\"']?\s*[:=]\s*[\"']?)(?:bearer|basic)?\s*[^,\"'\s;}]+"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(

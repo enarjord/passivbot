@@ -74,7 +74,8 @@ def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
 def test_sanitized_exception_message_redacts_serialized_authentication_headers():
     error = RuntimeError(
         'request failed headers={"Cookie": "sessionid=TOPSECRET; csrf=SECOND", '
-        '"Authorization": "Bearer AUTHSECRET", "X-Trace": "trace-123"} '
+        '"Authorization": "Bearer AUTHSECRET", "sign": "SIGNSECRET", '
+        '"X-Trace": "trace-123"} '
         "fallback={'Proxy-Authorization': 'Basic PROXYSECRET', "
         "'Set-Cookie': 'session=COOKIESECRET; Path=/'} "
         "url=https://example.invalid/orders/abc123"
@@ -88,12 +89,14 @@ def test_sanitized_exception_message_redacts_serialized_authentication_headers()
         "AUTHSECRET",
         "PROXYSECRET",
         "COOKIESECRET",
+        "SIGNSECRET",
     ):
         assert secret not in sanitized
     assert '"Cookie": "[redacted]"' in sanitized
     assert '"Authorization": "[redacted]"' in sanitized
     assert "'Proxy-Authorization': '[redacted]'" in sanitized
     assert "'Set-Cookie': '[redacted]'" in sanitized
+    assert '"sign": "[redacted]"' in sanitized
     assert '"X-Trace": "trace-123"' in sanitized
     assert "url=https://example.invalid/orders/abc123" in sanitized
 

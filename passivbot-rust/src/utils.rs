@@ -72,22 +72,20 @@ pub fn tolerant_round_up_preserve_step(value: f64, step: f64) -> f64 {
 /// Rounds up a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_up(n: f64, step: f64) -> f64 {
-    let result = (n / step).ceil() * step;
-    round_to_decimal_places(result, 10)
+    round_up_preserve_step(n, step)
 }
 
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_(n: f64, step: f64) -> f64 {
     let result = (n / step).round() * step;
-    round_to_decimal_places(result, 10)
+    round_to_step_decimal_places(result, step)
 }
 
 /// Rounds down a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_dn(n: f64, step: f64) -> f64 {
-    let result = (n / step).floor() * step;
-    round_to_decimal_places(result, 10)
+    round_dn_preserve_step(n, step)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -452,7 +450,20 @@ pub fn calc_ema_price_ask(
 
 #[cfg(test)]
 mod tests {
-    use super::{ema_last_f64, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step};
+    use super::{
+        ema_last_f64, round_, round_dn, round_up, tolerant_round_dn_preserve_step,
+        tolerant_round_up_preserve_step,
+    };
+
+    #[test]
+    fn public_rounding_cleans_float_noise_without_truncating_tiny_steps() {
+        assert_eq!(round_(64.850000000000093, 0.01), 64.85);
+        assert_eq!(round_(0.06469999999999954, 0.0001), 0.0647);
+
+        assert_eq!(round_(1e-10, 3e-12), 9.9e-11);
+        assert_eq!(round_dn(0.999999999999, 3e-12), 0.999999999999);
+        assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
+    }
 
     #[test]
     fn tolerant_directional_rounding_does_not_snap_genuine_tick_offsets() {

@@ -2605,6 +2605,34 @@ def test_raw_rust_output_accepts_exact_remaining_off_step_full_close():
     ) == [order]
 
 
+@pytest.mark.parametrize("panic", [False, True], ids=["ordinary", "panic"])
+def test_raw_rust_output_accepts_full_close_with_position_representation_noise(panic):
+    position_size = 10 * 1e-6
+    order = _raw_rust_order(
+        qty=-1e-5,
+        price=99.99 if panic else 100.0,
+        order_type="close_panic_long" if panic else "close_grid_long",
+        execution_priority="risk_critical" if panic else "ordinary",
+    )
+    out = (
+        _raw_rust_output_for_long_mode([order], "panic")
+        if panic
+        else _raw_rust_output([order])
+    )
+
+    assert reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: SYMBOL},
+        _raw_rust_input(
+            long_mode="panic" if panic else None,
+            long_pos_size=position_size,
+            qty_step=1e-6,
+            min_qty=0.01,
+            min_cost=0.0,
+        ),
+    ) == [order]
+
+
 def test_raw_rust_output_accepts_aligned_partial_close_at_exchange_minimum():
     order = _raw_rust_order(
         qty=-0.07,

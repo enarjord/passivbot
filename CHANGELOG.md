@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   credential-only sanitization. Non-secret order context, prices, quantities, identifiers, wallet
   addresses, URLs, and exchange reasons remain available for diagnosis; Rust price-step validation
   failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
-  tolerance.
+  tolerance. Serialized native exchange `sign` authentication headers are redacted with the other
+  credential-bearing headers.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
@@ -101,16 +102,20 @@ All notable user-facing changes will be documented in this file.
   already aligned floating-point values, including valid quantities below ten decimal places, or
   collapsing a positive sub-step minimum to zero, including when an aligned step multiplication is
   represented one ULP below the exchange minimum, while quantities genuinely above a step still
-  round up, and recomputes minimum entry quantity after the final strategy price is quantized so
-  minimum-cost orders remain valid. Live validation scales cost tolerance to floating-point
-  precision instead of admitting orders below tiny exchange minimum costs, and quantity-minimum
+  round up, preserves exchange-step precision in all shared Rust rounding paths while retaining
+  ten-decimal cleanup for ordinary steps, and recomputes minimum entry quantity after the final
+  strategy price is quantized so minimum-cost orders remain valid. Live validation scales cost
+  tolerance to floating-point precision instead of admitting orders below tiny exchange minimum
+  costs, and quantity-minimum
   tolerance is likewise restricted to floating representation error for both entries and partial
   closes. Market-entry minimum cost is validated against the submitted executable touch rather
   than the producer's reference price. Positive entry cooldowns retain Rust's single-entry staging
   rule after the time window expires, and positive trailing-martingale entry retracement retains
   Rust's single-entry staging rule even when cooldown is zero, canonical martingale entry and close
   families must match their submitted grid-versus-retracement branches, and EMA Anchor emits at
-  most one entry and one close per symbol-side. Canonical trailing-martingale retracement emits at
+  most one entry and one close per symbol-side. EMA Anchor closes promoted to market execution are
+  resized from the executable touch before aggregate-close and realized-loss gating. Canonical
+  trailing-martingale retracement emits at
   most one trailing close per symbol-side, and close minimum-cost validation uses the emitted limit
   price or executable market touch. Held positions in enabled panic mode require Rust's
   full-position panic close. Loss-gate diagnostic prices must match the submitted exchange step.
@@ -127,7 +132,9 @@ All notable user-facing changes will be documented in this file.
   error, so genuinely off-step values cannot hide inside a fixed fraction of the increment. Close validation rejects
   positions at or below Rust's final
   close-trimming dust threshold before applying the exact-position exception, and panic-limit
-  prices must match Rust's exact one-tick protective formula for the submitted book. Entries are
+  prices must match Rust's exact one-tick protective formula for the submitted book. Full-position
+  close checks tolerate only floating representation noise between Rust's step-rounded quantity
+  and the submitted position. Entries are
   rejected when the submitted fill timestamp and cooldown make Rust's deterministic add-order gate
   active. The complete
   serialized diagnostic envelope now requires and
