@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Redact complete quoted generic credential values in retained diagnostics and keep outer process failure console records within the normal bounded projection budget.
+
 - Recognize repeated exclusive switching between complete order cohorts as live
   order-churn evidence. Alternating long/short or order-type intent can now use
   the existing account-wide far-order allowance without merging position-side

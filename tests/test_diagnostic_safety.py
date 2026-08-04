@@ -107,6 +107,18 @@ def test_sanitize_diagnostic_text_redacts_whitespace_separated_credentials():
     assert "safe_label visible" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_opposite_quotes_inside_generic_credentials():
+    sanitized = sanitize_diagnostic_text(
+        'config={"password": "TOP\'SECRET; SECOND", '
+        "'api_key': 'THIRD\"SECRET; FOURTH'}"
+    )
+
+    for secret in ("SECRET", "SECOND", "FOURTH"):
+        assert secret not in sanitized
+    assert 'password\": [redacted]' in sanitized
+    assert "api_key': [redacted]" in sanitized
+
+
 def test_sanitized_exception_message_redacts_serialized_authentication_headers():
     error = RuntimeError(
         'request failed headers={"Cookie": "sessionid=TOPSECRET; csrf=SECOND", '

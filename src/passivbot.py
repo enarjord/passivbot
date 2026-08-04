@@ -623,15 +623,19 @@ def _bounded_runtime_stage(bot: Any) -> str:
 
 def _log_process_failure(label: str, exc: BaseException) -> None:
     current_bot = globals().get("bot")
+    projection = (
+        f"{label} | error_type={bounded_exception_type(exc)} "
+        f"status={bounded_exception_status(exc) or '-'} "
+        f"code={bounded_exception_code(exc) or '-'} "
+        f"stage={_bounded_runtime_stage(current_bot)} "
+        f"origin={_bounded_traceback_origin(exc)} "
+        f"message={sanitized_exception_message(exc, max_len=1024)}"
+    )
     logging.error(
-        "%s | error_type=%s status=%s code=%s stage=%s origin=%s message=%s",
-        label,
-        bounded_exception_type(exc),
-        bounded_exception_status(exc) or "-",
-        bounded_exception_code(exc) or "-",
-        _bounded_runtime_stage(current_bot),
-        _bounded_traceback_origin(exc),
-        sanitized_exception_message(exc, max_len=1024),
+        "%s",
+        sanitize_diagnostic_text(
+            projection, max_len=_PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN
+        ),
     )
 
 
@@ -672,6 +676,7 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
 )
 
 _EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN = 21
+_PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN = 196
 
 
 def compute_live_warmup_windows(

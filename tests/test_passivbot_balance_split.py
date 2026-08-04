@@ -13692,6 +13692,20 @@ def test_process_failure_log_omits_exception_value_and_traceback(caplog):
     assert "Traceback" not in caplog.text
 
 
+def test_process_failure_log_bounds_long_console_projection(caplog):
+    useful_detail = "diagnostic-tail-" + "x" * 1_000
+    error = RuntimeError(useful_detail)
+
+    with caplog.at_level(logging.ERROR):
+        passivbot_module._log_process_failure("passivbot error", error)
+
+    records = [record.message for record in caplog.records]
+    assert len(records) == 1
+    assert len(records[0]) <= passivbot_module._PROCESS_FAILURE_CONSOLE_MESSAGE_MAX_LEN
+    assert records[0].startswith("passivbot error | error_type=RuntimeError")
+    assert useful_detail not in records[0]
+
+
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     now = {"value": 1_000_000}
