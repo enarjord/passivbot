@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Route Bitget public OHLCV requests through the complete classic futures history endpoint even
+  when the authenticated account uses UTA/Elite v3, preventing older available candles from being
+  omitted from live EMA windows while retaining UTA routing for private account and order calls.
 - Recognize repeated exclusive switching between complete order cohorts as live
   order-churn evidence. Alternating long/short or order-type intent can now use
   the existing account-wide far-order allowance without merging position-side
