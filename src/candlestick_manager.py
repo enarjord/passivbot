@@ -49,7 +49,19 @@ import atexit
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, TYPE_CHECKING
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    TypedDict,
+    TYPE_CHECKING,
+)
 import threading
 from collections import OrderedDict
 
@@ -283,6 +295,23 @@ CANDLE_DTYPE = np.dtype(
     ]
 )
 
+CANDLE_RESOLUTION_LADDER: tuple[tuple[str, int], ...] = (
+    ("1m", 1),
+    ("5m", 5),
+    ("15m", 15),
+    ("1h", 60),
+)
+
+
+@dataclass(frozen=True)
+class CandleResolutionResult:
+    """Candles assembled from the finest available historical resolutions."""
+
+    candles: np.ndarray
+    source_counts: Dict[str, int]
+    failures: Dict[str, Exception]
+
+
 _LIVE_WS_OBSERVATION_RETENTION_MS = 2 * 60 * ONE_MIN_MS
 
 EMA_SERIES_DTYPE = np.dtype(
@@ -390,15 +419,112 @@ def synthesize_1m_from_higher_tf(candles: np.ndarray, tf_minutes: int) -> np.nda
     arr = _ensure_dtype(candles)
     if arr.size == 0:
         return np.empty((0,), dtype=CANDLE_DTYPE)
-    if tf_minutes == 5:
-        expanded = [ohlcv_5m_to_1m(row) for row in arr]
-    elif tf_minutes == 15:
-        expanded = [ohlcv_15m_to_1m(row) for row in arr]
-    else:
-        raise ValueError(f"unsupported tf_minutes={tf_minutes}")
+    if tf_minutes <= 1:
+        raise ValueError(f"tf_minutes must be > 1, got {tf_minutes}")
+    expanded = [ohlcv_xm_to_1m(row, tf_minutes) for row in arr]
     if not expanded:
         return np.empty((0,), dtype=CANDLE_DTYPE)
     return np.sort(np.concatenate(expanded), order="ts")
+
+
+async def fetch_candles_with_resolution_ladder(
+    fetch_candles: Callable[..., Awaitable[np.ndarray]],
+    *,
+    start_ts: int,
+    end_ts: int,
+    supported_timeframes: Optional[Iterable[str]] = None,
+) -> CandleResolutionResult:
+    """Fetch exact 1m candles, then cover only older leading history coarsely.
+
+    The first available 1m candle is the precision boundary. Higher-timeframe
+    candles may supply minutes before that boundary, but never patch gaps at or
+    after it. Within the older prefix, the finest successful source wins.
+    """
+    start_minute = _floor_minute(start_ts)
+    end_minute = _floor_minute(end_ts)
+    if end_minute < start_minute:
+        return CandleResolutionResult(
+            candles=np.empty((0,), dtype=CANDLE_DTYPE),
+            source_counts={},
+            failures={},
+        )
+
+    supported = (
+        {str(timeframe).lower() for timeframe in supported_timeframes}
+        if supported_timeframes is not None
+        else None
+    )
+    rows_by_ts: Dict[int, np.void] = {}
+    sources_by_ts: Dict[int, str] = {}
+    failures: Dict[str, Exception] = {}
+    precision_boundary = end_minute + ONE_MIN_MS
+
+    for index, (timeframe, tf_minutes) in enumerate(CANDLE_RESOLUTION_LADDER):
+        timeframe = str(timeframe).lower()
+        if supported is not None and timeframe not in supported:
+            continue
+        fetch_end = end_minute if index == 0 else precision_boundary - ONE_MIN_MS
+        if fetch_end < start_minute:
+            break
+        try:
+            fetched = _ensure_dtype(
+                await fetch_candles(
+                    timeframe=timeframe,
+                    start_ts=start_minute,
+                    end_ts=fetch_end,
+                )
+            )
+        except Exception as exc:
+            failures[timeframe] = exc
+            continue
+
+        if fetched.size == 0:
+            continue
+        candidates = (
+            fetched
+            if tf_minutes == 1
+            else synthesize_1m_from_higher_tf(fetched, tf_minutes)
+        )
+        if index == 0:
+            exact_timestamps = [
+                int(row["ts"])
+                for row in candidates
+                if start_minute <= int(row["ts"]) <= end_minute
+            ]
+            if exact_timestamps:
+                precision_boundary = min(exact_timestamps)
+
+        for row in candidates:
+            ts = int(row["ts"])
+            if ts < start_minute or ts > end_minute:
+                continue
+            if index > 0 and ts >= precision_boundary:
+                continue
+            if ts in rows_by_ts:
+                continue
+            rows_by_ts[ts] = row
+            sources_by_ts[ts] = timeframe
+
+        if precision_boundary <= start_minute:
+            break
+        expected_prefix = range(start_minute, precision_boundary, ONE_MIN_MS)
+        if all(ts in rows_by_ts for ts in expected_prefix):
+            break
+
+    if not rows_by_ts:
+        candles = np.empty((0,), dtype=CANDLE_DTYPE)
+    else:
+        candles = np.empty((len(rows_by_ts),), dtype=CANDLE_DTYPE)
+        for index, ts in enumerate(sorted(rows_by_ts)):
+            candles[index] = rows_by_ts[ts]
+    source_counts: Dict[str, int] = {}
+    for source in sources_by_ts.values():
+        source_counts[source] = source_counts.get(source, 0) + 1
+    return CandleResolutionResult(
+        candles=candles,
+        source_counts=source_counts,
+        failures=failures,
+    )
 
 
 def get_caller_name(depth: int = 2, logger: Optional[logging.Logger] = None) -> str:

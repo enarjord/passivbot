@@ -39,6 +39,11 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    their gains, losses, and fees cannot affect the retained episode. Unavailable candles before the
    resulting boundary cannot strand an otherwise provable held episode; unavailable required
    candles at or after it still fail closed.
+9. Restart price reconstruction fetches 1m history first. When an exchange cannot provide the
+   older leading portion, it may use 5m, then 15m, then 1h candles for that prefix. This is an
+   explicitly approximate price path: the finest source wins and its contribution is reported.
+   Coarser candles never repair missing rows at or after the first available 1m candle. Fill-based
+   episode boundaries, realized PnL, and fees remain exact.
 
 ## Failure Semantics
 

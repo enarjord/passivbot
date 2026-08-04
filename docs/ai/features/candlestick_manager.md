@@ -212,7 +212,10 @@
     additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
     silently tail-anchors responses. Exchange-independent trailing-extrema and HSL replay-cache
     extension consumers also require exact aligned coverage; incomplete windows become unavailable
-    or fall back to authoritative replay.
+    or fall back to authoritative replay. HSL restart reconstruction is the narrow exception: it
+    fetches 1m candles first, then may cover only the older leading prefix with 5m, 15m, and 1h
+    candles. The finest available source wins, source counts remain visible, and coarser candles
+    never patch a gap at or after the first available 1m candle.
 11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
