@@ -234,7 +234,7 @@ def _continuous_drift_start_index(
     return run_start_index
 
 
-def _exclusive_cohort_reappearance_start(
+def _exclusive_cohort_reappearance_seconds(
     cohort: OrderCohort,
     current_group: Sequence[IdealObservation],
     current_groups: Mapping[OrderCohort, Sequence[IdealObservation]],
@@ -245,7 +245,7 @@ def _exclusive_cohort_reappearance_start(
     now_monotonic: float,
     max_sample_gap_seconds: float,
 ) -> float | None:
-    """Return the second appearance in a repeated exclusive cohort switch.
+    """Return the fixed span between the last two current-cohort runs.
 
     This intentionally recognizes only a narrow shape: each contiguous
     snapshot contains exactly one semantic cohort, and the current cohort has
@@ -287,7 +287,7 @@ def _exclusive_cohort_reappearance_start(
     ]
     if len(appearances) < 3:
         return None
-    return appearances[-2]
+    return max(0.0, appearances[-1] - appearances[-2])
 
 
 class OrderChurnGateState:
@@ -412,7 +412,7 @@ class OrderChurnGateState:
             ]
             by_source_index: dict[int, ChurnDecision] = {}
             for cohort, current_group in current_groups.items():
-                reappearance_start = _exclusive_cohort_reappearance_start(
+                reappearance_seconds = _exclusive_cohort_reappearance_seconds(
                     cohort,
                     current_group,
                     current_groups,
@@ -460,10 +460,7 @@ class OrderChurnGateState:
                             tight_prefix_count=tight_count,
                             tight_prefix_seconds=tight_seconds,
                         )
-                    elif reappearance_start is not None:
-                        reappearance_seconds = max(
-                            0.0, now_monotonic - reappearance_start
-                        )
+                    elif reappearance_seconds is not None:
                         if reappearance_seconds >= stability_seconds:
                             decision = ChurnDecision(
                                 True,
@@ -527,6 +524,29 @@ class OrderChurnGateState:
                             tight_prefix_seconds=tight_seconds,
                         )
                     by_source_index[observation.source_index] = decision
+
+            stable_decisions = list(by_source_index.values())
+            if (
+                len(current_groups) == 1
+                and stable_decisions
+                and all(
+                    decision.reason == "stable_tight_prefix"
+                    for decision in stable_decisions
+                )
+            ):
+                # A completed stable exclusive run ends the preceding switching
+                # episode for the whole symbol. Retain the proven stable prefix
+                # as fresh history so one later switch cannot resurrect older
+                # intermittent evidence.
+                stable_prefix_seconds = min(
+                    decision.tight_prefix_seconds for decision in stable_decisions
+                )
+                stable_prefix_start = now_monotonic - stable_prefix_seconds
+                while (
+                    snapshots
+                    and snapshots[0].monotonic_seconds < stable_prefix_start
+                ):
+                    snapshots.popleft()
 
             for observation in current:
                 source_order = ideal_orders_by_symbol[symbol][observation.source_index]

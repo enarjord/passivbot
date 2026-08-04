@@ -162,6 +162,14 @@ def test_exclusive_switching_needs_stability_duration():
     assert decision.churn_evidenced is False
     assert decision.reason == "intermittent_run_short"
 
+    _evaluate(state, [_order(price=99.0)], now=80.0)
+    _evaluate(state, [_order(price=99.0)], now=120.0)
+    still_stable = _order(price=99.0)
+    decision = _evaluate(state, [still_stable], now=140.0)[id(still_stable)]
+
+    assert decision.churn_evidenced is False
+    assert decision.reason == "intermittent_run_short"
+
 
 def test_continuous_stability_clears_exclusive_switching_evidence():
     state = OrderChurnGateState()
@@ -180,6 +188,14 @@ def test_continuous_stability_clears_exclusive_switching_evidence():
 
     assert decision.churn_evidenced is False
     assert decision.reason == "stable_tight_prefix"
+
+    switched = _short_order(price=101.0)
+    decision = _evaluate(state, [switched], now=420.0)[id(switched)]
+    assert decision.churn_evidenced is False
+
+    returned = _order(price=99.0)
+    decision = _evaluate(state, [returned], now=480.0)[id(returned)]
+    assert decision.churn_evidenced is False
 
 
 @pytest.mark.parametrize(
