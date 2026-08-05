@@ -705,6 +705,8 @@ def payload_hash_raw(payload: bytes | str) -> str:
 def _is_sensitive_key(key: object) -> bool:
     cleaned = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
     compact = cleaned.replace("_", "")
+    if compact in {"apisign", "authsign"}:
+        return True
     if any(marker in compact for marker in _SENSITIVE_KEY_STRONG_COMPACT_MARKERS):
         return True
     parts = tuple(part for part in cleaned.split("_") if part)

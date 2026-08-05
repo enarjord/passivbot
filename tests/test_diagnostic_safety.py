@@ -229,6 +229,11 @@ def test_sanitize_diagnostic_text_preserves_slash_delimited_symbols():
         assert sanitize_diagnostic_text(symbol) == symbol
 
 
+def test_sanitize_diagnostic_text_preserves_credential_named_url_paths():
+    message = "GET https://example.com/api/v1/token/refresh failed"
+    assert sanitize_diagnostic_text(message) == message
+
+
 def test_sanitize_diagnostic_text_redacts_explicit_slash_delimited_credentials():
     for message in (
         "secret/TOPVALUE safe=ok",
@@ -239,6 +244,18 @@ def test_sanitize_diagnostic_text_redacts_explicit_slash_delimited_credentials()
         assert "TOPVALUE" not in sanitized
         assert sanitized.startswith(message.split("/", 1)[0] + "/[redacted]")
         assert "safe=ok" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_remaining_credential_aliases():
+    sanitized = sanitize_diagnostic_text(
+        "apiSign=FIRST api_sign=SECOND access_key_id=THIRD "
+        "session_token=FOURTH secretAccessKey=FIFTH safe=ok"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 5
+    assert "safe=ok" in sanitized
 
 
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():

@@ -8,12 +8,12 @@ All notable user-facing changes will be documented in this file.
   prefixed signature headers inside generic header mappings and header-pair sequences, including
   canonical structured and monitor events. Structured access-key/signature aliases,
   case-insensitive dictionary-shaped header entries, AWS signatures, API key-ID/secret-key aliases,
-  credential-alias CLI flags, prefixed environment credentials, prefixed auth/sign/passphrase
-  aliases, and explicit slash-form credential fields are also redacted. Canonical event strings
-  preserve under-limit whitespace, ordinary status prose, and canonical slash-delimited symbol
-  names while still redacting embedded credentials. TWEL-gated market entries and their final
-  minimum-order guard use executable touch, and next-only short entry quantities are re-cropped
-  after directional price quantization.
+  credential-alias CLI flags, prefixed environment credentials, auth/API-sign aliases, prefixed
+  auth/sign/passphrase aliases, and explicit slash-form credential fields are also redacted.
+  Canonical event strings preserve under-limit whitespace, ordinary status prose, bounded URL
+  paths, and canonical slash-delimited symbol names while still redacting embedded credentials.
+  TWEL-gated market entries and their final minimum-order guard use executable touch, and next-only
+  short entry quantities are re-cropped after directional price quantization.
 
 - Redact complete quoted generic credentials, quote-containing unquoted credentials,
   unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,

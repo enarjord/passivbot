@@ -38,10 +38,11 @@ _DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN = (
 )
 _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
     rf"(?:{_DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN}|"
-    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
-    r"apikey|access[-_]?(?:key|token)|"
+    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|sign(?:ature)?)|"
+    r"apikey|access[-_]?(?:key(?:[-_]?id)?|token)|"
     r"access[-_]?(?:secret|sign(?:ature)?|passphrase)|"
-    r"refreshToken|client[-_]?secret|secret[-_]?key|security[-_]?token|"
+    r"refreshToken|session[-_]?token|client[-_]?secret|secret[-_]?key|"
+    r"secret[-_]?access[-_]?key|security[-_]?token|"
     r"privateKey|requestSignature|request[-_]?signature|"
     r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|"
@@ -72,7 +73,7 @@ _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE = re.compile(
     r")"
 )
 _DIAGNOSTIC_AMBIGUOUS_SLASH_SENSITIVE_VALUE_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_-])"
+    r"(?i)(?<![A-Za-z0-9_/-])"
     r"(secret|token|signature)"
     r"(\s*/\s*)"
     r"(?!([A-Za-z0-9._-]+):\3(?:\b|\Z))"

@@ -991,6 +991,26 @@ def test_redact_payload_redacts_camel_case_credential_keys():
     }
 
 
+def test_live_event_redacts_exact_auth_and_api_sign_aliases():
+    source = {
+        "authSign": "auth-camel",
+        "auth_sign": "auth-snake",
+        "apiSign": "api-camel",
+        "api_sign": "api-snake",
+        "planningSignature": "plan-hash",
+    }
+    expected = {
+        "authSign": REDACTED,
+        "auth_sign": REDACTED,
+        "apiSign": REDACTED,
+        "api_sign": REDACTED,
+        "planningSignature": "plan-hash",
+    }
+
+    assert redact_payload(source) == expected
+    assert LiveEvent(EventTypes.REMOTE_CALL_FAILED, data=source).data == expected
+
+
 def test_redact_payload_redacts_exact_authentication_keys_without_matching_authority():
     assert redact_payload(
         {
