@@ -7,7 +7,7 @@ use crate::types::{
 };
 use crate::utils::{
     calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up,
-    RoundingMode,
+    tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step, RoundingMode,
 };
 use serde::Serialize;
 
@@ -133,7 +133,9 @@ pub(crate) fn calc_wel_auto_reduce_long(
     if market_price <= 0.0 {
         return None;
     }
-    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_price = tolerant_round_up_preserve_step(market_price, exchange_params.price_step)
+        .max(exchange_params.price_step);
+    let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
     let mut close_qty;
     let mut steps = 0usize;
@@ -174,7 +176,7 @@ pub(crate) fn calc_wel_auto_reduce_long(
     }
     Some(Order {
         qty: -close_qty,
-        price: market_price,
+        price: close_price,
         order_type: OrderType::CloseAutoReduceWelLong,
     })
 }
@@ -217,7 +219,9 @@ pub(crate) fn calc_wel_auto_reduce_short(
     if market_price <= 0.0 {
         return None;
     }
-    let min_qty = calc_min_entry_qty(market_price, exchange_params);
+    let close_price = tolerant_round_dn_preserve_step(market_price, exchange_params.price_step)
+        .max(exchange_params.price_step);
+    let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
     let mut close_qty;
     let mut steps = 0usize;
@@ -256,7 +260,7 @@ pub(crate) fn calc_wel_auto_reduce_short(
     }
     Some(Order {
         qty: close_qty,
-        price: market_price,
+        price: close_price,
         order_type: OrderType::CloseAutoReduceWelShort,
     })
 }
@@ -886,7 +890,7 @@ mod tests {
         let state = StateParams {
             balance: 1000.0,
             order_book: crate::types::OrderBook {
-                ask: 100.0,
+                ask: 100.009,
                 bid: 100.0,
                 ..Default::default()
             },
@@ -913,7 +917,9 @@ mod tests {
             we,
         )
         .expect("should emit strict reduce order");
-        assert!(order.qty < 0.0 && order.price > 0.0);
+        assert!(order.qty < 0.0);
+        assert_eq!(order.price, 100.01);
+        assert!(order.price >= state.order_book.ask);
         let new_psize = (pos.size - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
@@ -995,6 +1001,52 @@ mod tests {
     }
 
     #[test]
+    fn test_wel_long_recomputes_minimum_from_quantized_limit_price() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 3.003,
+                bid: 3.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            risk_wel_enforcer_threshold: 1.0,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: 10.001,
+            price: 100.0,
+        };
+        let we = calc_wallet_exposure(exchange.c_mult, state.balance, pos.size, pos.price);
+
+        let order = super::calc_wel_auto_reduce_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &pos,
+            we,
+        )
+        .expect("should emit WEL reducer");
+
+        assert_eq!(order.price, 3.01);
+        assert!((order.qty - -1.662).abs() < 1e-12);
+        assert!(order.price >= state.order_book.ask);
+        assert!(order.qty.abs() * order.price * exchange.c_mult >= exchange.min_cost);
+    }
+
+    #[test]
     fn test_wel_strict_reduce_short_with_rounding() {
         let exchange = ExchangeParams {
             qty_step: 0.5,
@@ -1008,7 +1060,7 @@ mod tests {
             balance: 500.0,
             order_book: crate::types::OrderBook {
                 ask: 50.0,
-                bid: 50.0,
+                bid: 49.991,
                 ..Default::default()
             },
             ..Default::default()
@@ -1035,7 +1087,9 @@ mod tests {
             we,
         )
         .expect("should emit strict reduce order");
-        assert!(order.qty > 0.0 && order.price > 0.0);
+        assert!(order.qty > 0.0);
+        assert_eq!(order.price, 49.5);
+        assert!(order.price <= state.order_book.bid);
         let new_psize = (pos.size.abs() - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
@@ -1390,7 +1444,8 @@ pub fn calc_closes_short(
             exchange_params.price_step,
             RoundingMode::Nearest,
             "calc_closes_short::price",
-        );
+        )
+        .max(exchange_params.price_step);
         close.qty = quantize_qty(
             close.qty,
             exchange_params.qty_step,
@@ -1424,7 +1479,8 @@ pub fn calc_closes_short(
                     exchange_params.price_step,
                     RoundingMode::Nearest,
                     "calc_closes_short::merged_price",
-                );
+                )
+                .max(exchange_params.price_step);
                 merged_close.qty = quantize_qty(
                     merged_close.qty,
                     exchange_params.qty_step,

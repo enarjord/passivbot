@@ -60,7 +60,7 @@ mod core {
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
         calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, qty_to_cost, round_,
-        round_dn, round_up,
+        round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
     };
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -785,6 +785,85 @@ mod core {
         diff <= global.market_order_near_touch_threshold.max(0.0)
     }
 
+    fn size_market_close_at_executable_touch(
+        order: &mut IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+        exchange: &ExchangeParams,
+        position: &Position,
+    ) {
+        if !order.order_type.is_close() || !should_use_market_execution(order, global, order_book) {
+            return;
+        }
+
+        let executable_touch = executable_touch_for_order_side(order_book, order.qty);
+        let minimum_qty = calc_min_entry_qty(executable_touch, exchange);
+        let position_abs = position.size.abs();
+        let quantity_abs = order.qty.abs();
+        let tolerance = f64::EPSILON * quantity_abs.max(minimum_qty) * 4.0;
+        if quantity_abs + tolerance >= minimum_qty || position_abs <= quantity_abs {
+            return;
+        }
+
+        let mut resized_abs = minimum_qty.min(position_abs);
+        let remainder = position_abs - resized_abs;
+        if remainder > 0.0 && remainder + tolerance < minimum_qty {
+            resized_abs = position_abs;
+        }
+        order.qty = if order.qty.is_sign_negative() {
+            -resized_abs
+        } else {
+            resized_abs
+        };
+    }
+
+    fn size_short_market_entry_at_executable_touch(
+        order: &mut IdealOrder,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
+        exchange: &ExchangeParams,
+    ) {
+        if order.pside != PositionSide::Short
+            || !order.order_type.is_entry()
+            || order.qty >= 0.0
+            || !should_use_market_execution(order, global, order_book)
+        {
+            return;
+        }
+
+        let minimum_qty = calc_min_entry_qty(order_book.bid, exchange);
+        let quantity_abs = order.qty.abs();
+        let tolerance = f64::EPSILON * quantity_abs.max(minimum_qty) * 4.0;
+        if quantity_abs + tolerance < minimum_qty {
+            order.qty = -minimum_qty;
+        }
+    }
+
+    fn retain_short_market_entries_at_executable_minimum(
+        entries: &mut Vec<IdealOrder>,
+        global: &OrchestratorGlobal,
+        symbols: &[SymbolInput],
+    ) {
+        entries.retain(|order| {
+            if order.pside != PositionSide::Short
+                || !order.order_type.is_entry()
+                || order.qty >= 0.0
+            {
+                return true;
+            }
+            let Some(symbol) = symbols.get(order.symbol_idx) else {
+                return false;
+            };
+            if !should_use_market_execution(order, global, &symbol.order_book) {
+                return true;
+            }
+            let minimum_qty = calc_min_entry_qty(symbol.order_book.bid, &symbol.exchange);
+            let quantity_abs = order.qty.abs();
+            let tolerance = f64::EPSILON * quantity_abs.max(minimum_qty) * 4.0;
+            quantity_abs + tolerance >= minimum_qty
+        });
+    }
+
     fn to_executable_order(
         order: IdealOrder,
         global: &OrchestratorGlobal,
@@ -1216,6 +1295,14 @@ mod core {
         }
     }
 
+    fn executable_touch_for_order_side(ob: &OrderBook, qty: f64) -> f64 {
+        if qty > 0.0 {
+            ob.ask
+        } else {
+            ob.bid
+        }
+    }
+
     fn order_price_diff_strict(order: &IdealOrder, ob: &OrderBook) -> f64 {
         let market_price = market_price_for_order_side(ob, order.qty);
         if order.qty >= 0.0 {
@@ -1256,6 +1343,7 @@ mod core {
         pos_size: f64,
         ob: &OrderBook,
         exchange: &ExchangeParams,
+        global: Option<&OrchestratorGlobal>,
     ) {
         const EPS: f64 = 1e-12;
         if closes.is_empty() {
@@ -1269,21 +1357,19 @@ mod core {
         // Close orders must respect effective min qty/min cost (via `calc_min_entry_qty`),
         // except when the position itself is smaller than effective min qty, in which case we
         // allow closing the full position size.
-        let close_side_qty = match pside {
-            PositionSide::Long => -1.0,
-            PositionSide::Short => 1.0,
-        };
-        let min_entry_qty =
-            calc_min_entry_qty(market_price_for_order_side(ob, close_side_qty), exchange);
-        let allow_below_min = pos_abs < min_entry_qty - EPS;
-
-        // Drop any dust close orders up-front.
-        if !allow_below_min && min_entry_qty > EPS {
-            closes.retain(|o| o.qty.abs() + EPS >= min_entry_qty);
-            if closes.is_empty() {
-                return;
+        // Limit-close minimums are price-specific. Use the exact-remaining-position exception only
+        // when the authoritative position is below every candidate's effective minimum. In a mixed
+        // ladder, drop each below-min leg before the remaining close wave is trimmed.
+        let minimum_price = |order: &IdealOrder| {
+            if global.is_some_and(|policy| should_use_market_execution(order, policy, ob)) {
+                executable_touch_for_order_side(ob, order.qty)
+            } else {
+                order.price
             }
-        }
+        };
+        let allow_below_min = closes
+            .iter()
+            .all(|order| pos_abs + EPS < calc_min_entry_qty(minimum_price(order), exchange));
 
         // If the position itself is below effective min qty, collapse to a single close which
         // closes the entire position.
@@ -1307,6 +1393,14 @@ mod core {
             return;
         }
 
+        closes.retain(|order| {
+            let minimum_qty = calc_min_entry_qty(minimum_price(order), exchange);
+            order.qty.abs() + EPS >= minimum_qty
+        });
+        if closes.is_empty() {
+            return;
+        }
+
         let enforce_no_dust_remainder = |closes: &mut Vec<IdealOrder>| {
             if closes.is_empty() {
                 return;
@@ -1321,7 +1415,7 @@ mod core {
                     continue;
                 }
                 total_abs += qa;
-                let req = calc_min_entry_qty(o.price, exchange);
+                let req = calc_min_entry_qty(minimum_price(o), exchange);
                 if req.is_finite() && req > 0.0 {
                     min_req = min_req.min(req);
                 }
@@ -1389,7 +1483,8 @@ mod core {
                 }
             }
         }
-        if total <= pos_abs + EPS {
+        let aggregate_tolerance = f64::EPSILON * total.abs().max(pos_abs) * 4.0;
+        if total <= pos_abs + aggregate_tolerance {
             enforce_no_dust_remainder(closes);
             return;
         }
@@ -1426,15 +1521,18 @@ mod core {
         let mut excess = total - pos_abs;
         let mut trimmed: Vec<IdealOrder> = Vec::with_capacity(closes.len());
         for mut o in closes.drain(..) {
-            if excess <= EPS {
+            let excess_tolerance = f64::EPSILON * total.abs().max(pos_abs) * 4.0;
+            if excess <= excess_tolerance {
                 trimmed.push(o);
                 continue;
             }
             let qty_abs = o.qty.abs();
             if qty_abs <= EPS {
+                excess = (excess - qty_abs).max(0.0);
                 continue;
             }
-            if qty_abs <= excess + EPS {
+            let comparison_tolerance = f64::EPSILON * qty_abs.abs().max(excess.abs()) * 4.0;
+            if qty_abs <= excess + comparison_tolerance {
                 // drop whole order
                 excess -= qty_abs;
                 continue;
@@ -1444,9 +1542,11 @@ mod core {
             // avoids occasional one-step under-trims due to float representation noise.
             new_abs = round_(new_abs, exchange.qty_step);
             if new_abs <= EPS {
+                excess = 0.0;
                 continue;
             }
-            if !allow_below_min && new_abs < min_entry_qty {
+            let minimum_qty = calc_min_entry_qty(minimum_price(&o), exchange);
+            if new_abs + EPS < minimum_qty {
                 // Drop; we prefer removing furthest rather than keeping dust.
                 excess = 0.0;
                 continue;
@@ -1642,6 +1742,7 @@ mod core {
         pside: PositionSide,
         position: &Position,
         symbol: &SymbolInput,
+        global: &OrchestratorGlobal,
     ) -> Vec<IdealOrder> {
         let mut finalized = if reducer
             .as_ref()
@@ -1664,6 +1765,7 @@ mod core {
             position.size,
             &symbol.order_book,
             &symbol.exchange,
+            Some(global),
         );
         finalized
     }
@@ -1673,14 +1775,21 @@ mod core {
         pside: PositionSide,
         position: &Position,
         symbol: &SymbolInput,
+        global: &OrchestratorGlobal,
     ) -> Vec<FinalizedReducerCandidate> {
         let mut candidates: Vec<FinalizedReducerCandidate> = closes
             .iter()
             .filter(|order| is_protective_close_reducer(order.order_type, pside))
             .cloned()
             .filter_map(|requested| {
-                let closes =
-                    finalized_closes_with_reducer(closes, Some(requested), pside, position, symbol);
+                let closes = finalized_closes_with_reducer(
+                    closes,
+                    Some(requested),
+                    pside,
+                    position,
+                    symbol,
+                    global,
+                );
                 let reducer = closes
                     .iter()
                     .find(|order| is_protective_close_reducer(order.order_type, pside))
@@ -1703,13 +1812,20 @@ mod core {
             let Some(symbol) = input.symbols.get(s.symbol_idx) else {
                 continue;
             };
-            let closes_without_reducer =
-                finalized_closes_with_reducer(&s.closes, None, pside, &s.pos, symbol);
-            s.closes = finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol)
-                .into_iter()
-                .next()
-                .map(|candidate| candidate.closes)
-                .unwrap_or(closes_without_reducer);
+            let closes_without_reducer = finalized_closes_with_reducer(
+                &s.closes,
+                None,
+                pside,
+                &s.pos,
+                symbol,
+                &input.global,
+            );
+            s.closes =
+                finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol, &input.global)
+                    .into_iter()
+                    .next()
+                    .map(|candidate| candidate.closes)
+                    .unwrap_or(closes_without_reducer);
         }
     }
 
@@ -1727,9 +1843,16 @@ mod core {
             let Some(symbol) = input.symbols.get(s.symbol_idx) else {
                 continue;
             };
-            let closes_without_reducer =
-                finalized_closes_with_reducer(&s.closes, None, pside, &s.pos, symbol);
-            let candidates = finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol);
+            let closes_without_reducer = finalized_closes_with_reducer(
+                &s.closes,
+                None,
+                pside,
+                &s.pos,
+                symbol,
+                &input.global,
+            );
+            let candidates =
+                finalized_reducer_candidates(&s.closes, pside, &s.pos, symbol, &input.global);
             s.closes = closes_without_reducer.clone();
             if !candidates.is_empty() {
                 positions.push(ReducerPositionCandidates {
@@ -2289,8 +2412,15 @@ mod core {
             PositionSide::Short => pos.size.abs(),
         };
         let price = match pside {
-            PositionSide::Long => ob.ask - exchange.price_step,
-            PositionSide::Short => ob.bid + exchange.price_step,
+            PositionSide::Long => {
+                let touch = tolerant_round_dn_preserve_step(ob.ask, exchange.price_step);
+                tolerant_round_dn_preserve_step(touch - exchange.price_step, exchange.price_step)
+                    .max(exchange.price_step)
+            }
+            PositionSide::Short => {
+                let touch = tolerant_round_up_preserve_step(ob.bid, exchange.price_step);
+                tolerant_round_up_preserve_step(touch + exchange.price_step, exchange.price_step)
+            }
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
             return None;
@@ -2723,6 +2853,7 @@ mod core {
         pside: PositionSide,
         balance: f64,
         total_wallet_exposure_limit: f64,
+        global: &OrchestratorGlobal,
         positions: &[GateEntriesPosition],
         entries: &mut Vec<IdealOrder>,
         symbols: &[SymbolInput],
@@ -2745,6 +2876,7 @@ mod core {
             symbol_idx: usize,
             qty: f64,
             price: f64,
+            fill_price: f64,
             qty_step: f64,
             c_mult: f64,
             order_type: OrderType,
@@ -2792,7 +2924,12 @@ mod core {
             };
             let ob = &sym.order_book;
             let exch = &sym.exchange;
-            let effective_min_qty = calc_min_entry_qty(o.price, exch);
+            let fill_price = if should_use_market_execution(o, global, ob) {
+                executable_touch_for_order_side(ob, o.qty)
+            } else {
+                o.price
+            };
+            let effective_min_qty = calc_min_entry_qty(fill_price, exch);
             if effective_min_qty.is_finite()
                 && effective_min_qty > QTY_EPS
                 && qty_abs + QTY_EPS < effective_min_qty
@@ -2813,6 +2950,7 @@ mod core {
                 symbol_idx: o.symbol_idx,
                 qty: qty_abs,
                 price: o.price,
+                fill_price,
                 qty_step: exch.qty_step,
                 c_mult: exch.c_mult,
                 order_type: o.order_type,
@@ -2848,12 +2986,17 @@ mod core {
                     let exp = calc_wallet_exposure(c_mult, balance, psize, pprice);
                     (psize, pprice, c_mult, exp)
                 } else {
-                    (0.0, candidate.price, candidate.c_mult, 0.0)
+                    (0.0, candidate.fill_price, candidate.c_mult, 0.0)
                 };
 
                 let old_exp = if exposure.is_finite() { exposure } else { 0.0 };
-                let (new_psize, new_pprice) =
-                    calc_new_psize_pprice(psize, pprice, qty, candidate.price, candidate.qty_step);
+                let (new_psize, new_pprice) = calc_new_psize_pprice(
+                    psize,
+                    pprice,
+                    qty,
+                    candidate.fill_price,
+                    candidate.qty_step,
+                );
                 let new_psize = new_psize.abs();
                 let new_exp =
                     if new_psize <= QTY_EPS || !(new_pprice.is_finite() && new_pprice > 0.0) {
@@ -2980,11 +3123,16 @@ mod core {
                 };
             }
             // Final dust guard (e.g. binary-search partial could still end up below effective min qty).
-            let exch = match symbols.get(o.symbol_idx).map(|s| &s.exchange) {
+            let sym = match symbols.get(o.symbol_idx) {
                 Some(v) => v,
                 None => continue,
             };
-            let min_qty = calc_min_entry_qty(o.price, exch);
+            let minimum_price = if should_use_market_execution(&o, global, &sym.order_book) {
+                executable_touch_for_order_side(&sym.order_book, o.qty)
+            } else {
+                o.price
+            };
+            let min_qty = calc_min_entry_qty(minimum_price, &sym.exchange);
             if min_qty.is_finite() && min_qty > QTY_EPS && o.qty.abs() + QTY_EPS < min_qty {
                 continue;
             }
@@ -3938,6 +4086,42 @@ mod core {
         let twel_candidate_count_long = twel_selected_long.len();
         let twel_candidate_count_short = twel_selected_short.len();
 
+        // Strategy and risk paths size passive closes at their quoted limit prices. If execution
+        // policy promotes a quote to market, resize from the submitted executable touch before
+        // the aggregate close and realized-loss gates consume the final quantity.
+        for side in per_long.iter_mut().filter_map(|value| value.as_mut()) {
+            let symbol = &input.symbols[side.symbol_idx];
+            for close in &mut side.closes {
+                size_market_close_at_executable_touch(
+                    close,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                    &side.pos,
+                );
+            }
+        }
+        for side in per_short.iter_mut().filter_map(|value| value.as_mut()) {
+            let symbol = &input.symbols[side.symbol_idx];
+            for entry in &mut side.entries {
+                size_short_market_entry_at_executable_touch(
+                    entry,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                );
+            }
+            for close in &mut side.closes {
+                size_market_close_at_executable_touch(
+                    close,
+                    &input.global,
+                    &symbol.order_book,
+                    &symbol.exchange,
+                    &side.pos,
+                );
+            }
+        }
+
         // Select one loss-admissible protective reducer per symbol, cap aggregate close quantity,
         // and apply the global realized-loss gate (all close types except panic).
         gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
@@ -4007,6 +4191,7 @@ mod core {
                 PositionSide::Long,
                 input.balance,
                 twel_entry_cap,
+                &input.global,
                 &workspace.gate_positions_long,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -4058,6 +4243,7 @@ mod core {
                 PositionSide::Short,
                 input.balance,
                 twel_entry_cap,
+                &input.global,
                 &workspace.gate_positions_short,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -4066,6 +4252,11 @@ mod core {
                 &mut workspace.gate_keep,
                 &mut workspace.gate_qty_by_order_idx,
                 &mut workspace.gate_out,
+            );
+            retain_short_market_entries_at_executable_minimum(
+                &mut workspace.all_entries,
+                &input.global,
+                &input.symbols,
             );
             for e in workspace.all_entries.drain(..) {
                 if let Some(s) = per_short.get_mut(e.symbol_idx).and_then(|v| v.as_mut()) {
@@ -4446,6 +4637,7 @@ mod core {
                 pside,
                 balance,
                 total_wallet_exposure_limit,
+                &make_basic_global(),
                 positions,
                 &mut entries,
                 symbols,
@@ -4577,6 +4769,279 @@ mod core {
             assert!(should_use_market_execution(&order, &global, &order_book));
             let executable = to_executable_order(order, &global, &order_book, TradingMode::Normal);
             assert_eq!(executable.execution_type, ExecutionType::Market);
+        }
+
+        #[test]
+        fn promoted_market_closes_use_executable_touch_minimum() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            for order_type in [
+                OrderType::CloseGridLong,
+                OrderType::CloseTrailingLong,
+                OrderType::CloseUnstuckLong,
+                OrderType::CloseAutoReduceTwelLong,
+                OrderType::CloseAutoReduceWelLong,
+                OrderType::CloseEmaAnchorLong,
+            ] {
+                let mut order = IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1.0,
+                    price: 100.05,
+                    order_type,
+                };
+
+                size_market_close_at_executable_touch(
+                    &mut order,
+                    &global,
+                    &order_book,
+                    &exchange,
+                    &position,
+                );
+
+                assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+            }
+        }
+
+        #[test]
+        fn short_market_entry_uses_executable_touch_minimum() {
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: -1.0,
+                price: 100.05,
+                order_type: OrderType::EntryInitialNormalShort,
+            };
+
+            size_short_market_entry_at_executable_touch(
+                &mut order,
+                &global,
+                &order_book,
+                &exchange,
+            );
+
+            assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+        }
+
+        #[test]
+        fn panic_close_quantizes_off_tick_book_prices() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 1.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 100.003,
+                ask: 100.007,
+            };
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 100.0,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+            let short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 100.0,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 99.99);
+            assert_eq!(short.price, 100.02);
+        }
+
+        #[test]
+        fn panic_close_does_not_skip_ticks_from_float_noise() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.1,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook { bid: 0.2, ask: 0.3 };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.4,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+            let short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 0.1,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.2);
+            assert_eq!(short.price, 0.3);
+
+            let genuinely_above_tick_book = OrderBook {
+                bid: 0.1000000005,
+                ask: 0.2,
+            };
+            let genuinely_above_tick_short = calc_panic_close(
+                0,
+                PositionSide::Short,
+                &Position {
+                    size: -1.0,
+                    price: 0.1,
+                },
+                &genuinely_above_tick_book,
+                &exchange,
+            )
+            .unwrap();
+            assert_eq!(genuinely_above_tick_short.price, 0.3);
+        }
+
+        #[test]
+        fn panic_close_keeps_low_off_tick_long_price_positive() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 0.01,
+                ask: 0.015,
+            };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.02,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.01);
+        }
+
+        #[test]
+        fn panic_close_keeps_minimum_tick_long_price_positive() {
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.001,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let order_book = OrderBook {
+                bid: 0.01,
+                ask: 0.01,
+            };
+
+            let long = calc_panic_close(
+                0,
+                PositionSide::Long,
+                &Position {
+                    size: 1.0,
+                    price: 0.02,
+                },
+                &order_book,
+                &exchange,
+            )
+            .unwrap();
+
+            assert_eq!(long.price, 0.01);
+        }
+
+        #[test]
+        fn panic_close_preserves_tiny_tick_short_price() {
+            for price_step in [1e-12, 1e-16] {
+                let exchange = ExchangeParams {
+                    qty_step: 1e-12,
+                    price_step,
+                    min_qty: 1e-12,
+                    min_cost: 0.0,
+                    c_mult: 1.0,
+                    ..Default::default()
+                };
+                let order_book = OrderBook {
+                    bid: price_step,
+                    ask: price_step,
+                };
+
+                let short = calc_panic_close(
+                    0,
+                    PositionSide::Short,
+                    &Position {
+                        size: -1e-12,
+                        price: price_step,
+                    },
+                    &order_book,
+                    &exchange,
+                )
+                .unwrap();
+
+                assert_eq!(short.price, 2.0 * price_step);
+            }
         }
 
         #[test]
@@ -5765,7 +6230,7 @@ mod core {
                     order_type: OrderType::CloseGridLong,
                 },
             ];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange);
+            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange, None);
             let total: f64 = closes.iter().map(|o| o.qty.abs()).sum();
             assert!(total <= 1.5 + 1e-9);
             assert_eq!(closes.len(), 2);
@@ -5779,6 +6244,51 @@ mod core {
                 "expected -0.5, got {}",
                 trimmed.qty
             );
+        }
+
+        #[test]
+        fn trim_closes_caps_tiny_aggregate_without_absolute_slack() {
+            let ob = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 1e-12,
+                price_step: 0.1,
+                min_qty: 1e-12,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1e-12,
+                    price: 101.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -1e-12,
+                    price: 102.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+            ];
+
+            trim_closes_to_position(
+                PositionSide::Long,
+                &mut closes,
+                1.1e-12,
+                &ob,
+                &exchange,
+                None,
+            );
+
+            let total: f64 = closes.iter().map(|order| order.qty.abs()).sum();
+            assert!(total <= 1.1e-12);
+            assert_eq!(closes.len(), 1);
         }
 
         #[test]
@@ -5812,7 +6322,7 @@ mod core {
                 },
             ];
 
-            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange);
+            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange, None);
 
             let reducer = closes
                 .iter()
@@ -6073,6 +6583,7 @@ mod core {
                 PositionSide::Long,
                 balance,
                 total_wel,
+                &make_basic_global(),
                 &positions,
                 &mut entries,
                 &symbols,
@@ -6091,6 +6602,116 @@ mod core {
                 "qty {}",
                 entries[0].qty
             );
+        }
+
+        #[test]
+        fn twel_gating_prices_promoted_market_long_entries_at_executable_ask() {
+            let balance = 100.0;
+            let total_wel = 0.995;
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.01,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym];
+            let positions: Vec<GateEntriesPosition> = Vec::new();
+            let mut entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 0.99,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.01;
+            let mut current_positions = Vec::new();
+            let mut scratch = Vec::new();
+            let mut keep = Vec::new();
+            let mut qty_by_order_idx = Vec::new();
+            let mut out = Vec::new();
+
+            gate_entries_by_twel_deterministic(
+                PositionSide::Long,
+                balance,
+                total_wel,
+                &global,
+                &positions,
+                &mut entries,
+                &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+
+            assert_eq!(entries.len(), 1);
+            assert!((entries[0].qty - 0.98).abs() < 1e-9);
+            assert!(entries[0].qty * symbols[0].order_book.ask / balance < total_wel);
+        }
+
+        #[test]
+        fn twel_gating_final_dust_guard_uses_promoted_market_long_ask() {
+            let balance = 100.0;
+            let total_wel = 1.001;
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym];
+            let positions: Vec<GateEntriesPosition> = Vec::new();
+            let mut entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 2.0,
+                price: 99.95,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let mut current_positions = Vec::new();
+            let mut scratch = Vec::new();
+            let mut keep = Vec::new();
+            let mut qty_by_order_idx = Vec::new();
+            let mut out = Vec::new();
+
+            gate_entries_by_twel_deterministic(
+                PositionSide::Long,
+                balance,
+                total_wel,
+                &global,
+                &positions,
+                &mut entries,
+                &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+
+            assert_eq!(entries.len(), 1);
+            assert!((entries[0].qty - 1.0).abs() < 1e-12);
+            assert!(entries[0].qty * symbols[0].order_book.ask / balance < total_wel);
         }
 
         #[test]
@@ -6239,6 +6860,7 @@ mod core {
                 PositionSide::Long,
                 balance,
                 total_wel,
+                &make_basic_global(),
                 &positions,
                 &mut entries,
                 &symbols,
@@ -6250,6 +6872,60 @@ mod core {
             );
 
             assert!(entries.is_empty(), "expected dust entry to be dropped");
+        }
+
+        #[test]
+        fn post_twel_short_market_entry_must_retain_executable_bid_minimum() {
+            let mut symbol = make_basic_symbol(0);
+            symbol.order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            symbol.exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let global = OrchestratorGlobal {
+                filter_by_min_effective_cost: false,
+                market_orders_allowed: true,
+                market_order_near_touch_threshold: 0.001,
+                market_order_slippage_pct: 0.0,
+                panic_close_market: false,
+                auto_unstuck_allowed: Some(true),
+                unstuck_allowance_long: 0.0,
+                unstuck_allowance_short: 0.0,
+                max_realized_loss_pct: 1.0,
+                realized_pnl_cumsum_max: 0.0,
+                realized_pnl_cumsum_last: 0.0,
+                sort_global: true,
+                global_bot_params: BotParamsPair::default(),
+                hedge_mode: true,
+                strategy_kind: StrategyKind::TrailingMartingale,
+            };
+            let symbols = vec![symbol];
+            let make_entry = |qty| IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty,
+                price: 100.05,
+                order_type: OrderType::EntryTrailingNormalShort,
+            };
+
+            let mut below_minimum = vec![make_entry(-1.0)];
+            retain_short_market_entries_at_executable_minimum(
+                &mut below_minimum,
+                &global,
+                &symbols,
+            );
+            assert!(below_minimum.is_empty());
+
+            let mut at_minimum = vec![make_entry(-1.001)];
+            retain_short_market_entries_at_executable_minimum(&mut at_minimum, &global, &symbols);
+            assert_eq!(at_minimum.len(), 1);
         }
 
         #[test]
@@ -6275,7 +6951,7 @@ mod core {
                 price: 101.0,
                 order_type: OrderType::CloseGridLong,
             }];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 100.0, &ob, &exchange);
+            trim_closes_to_position(PositionSide::Long, &mut closes, 100.0, &ob, &exchange, None);
             assert!(closes.is_empty());
 
             // pos smaller than effective min => allow full close of tiny pos
@@ -6286,9 +6962,114 @@ mod core {
                 price: 101.0,
                 order_type: OrderType::CloseGridLong,
             }];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 5.0, &ob, &exchange);
+            trim_closes_to_position(PositionSide::Long, &mut closes, 5.0, &ob, &exchange, None);
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty + 5.0).abs() < 1e-9);
+        }
+
+        #[test]
+        fn close_minimum_uses_emitted_limit_price_and_preserves_exact_position() {
+            let ob = OrderBook {
+                bid: 1.50,
+                ask: 1.51,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.03,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 1.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 0.99,
+                price: 0.99,
+                order_type: OrderType::CloseGridShort,
+            }];
+
+            trim_closes_to_position(PositionSide::Short, &mut closes, -1.0, &ob, &exchange, None);
+
+            assert_eq!(closes.len(), 1);
+            assert!((closes[0].qty - 1.0).abs() < 1e-12);
+            assert!((closes[0].price - 0.99).abs() < 1e-12);
+        }
+
+        #[test]
+        fn mixed_close_ladder_drops_below_min_leg_and_absorbs_dust() {
+            let ob = OrderBook {
+                bid: 25.0,
+                ask: 25.0,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 1.0,
+                price_step: 1.0,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 4.0,
+                    price: 25.0,
+                    order_type: OrderType::CloseGridShort,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 1.0,
+                    price: 10.0,
+                    order_type: OrderType::CloseGridShort,
+                },
+            ];
+
+            trim_closes_to_position(PositionSide::Short, &mut closes, -5.0, &ob, &exchange, None);
+
+            assert_eq!(closes.len(), 1);
+            assert!((closes[0].qty - 5.0).abs() < 1e-12);
+            assert!((closes[0].price - 25.0).abs() < 1e-12);
+        }
+
+        #[test]
+        fn promoted_market_buy_close_uses_ask_minimum_when_trimming() {
+            let ob = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let mut closes = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 1.0,
+                price: 100.05,
+                order_type: OrderType::CloseGridShort,
+            }];
+
+            trim_closes_to_position(
+                PositionSide::Short,
+                &mut closes,
+                -10.0,
+                &ob,
+                &exchange,
+                Some(&global),
+            );
+
+            assert_eq!(closes.len(), 1);
+            assert!((closes[0].qty - 1.0).abs() < 1e-12);
         }
 
         #[test]
