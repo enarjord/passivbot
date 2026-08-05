@@ -1052,6 +1052,16 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
         },
         "response_headers": {"X-Trace": "response-trace"},
     }
+    assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
+        "headers": {
+            "ACCESS-KEY": REDACTED,
+            "ACCESS-SIGN": REDACTED,
+            "KEY": REDACTED,
+            "SIGN": REDACTED,
+            "X-Trace": "trace-123",
+        },
+        "response_headers": {"X-Trace": "response-trace"},
+    }
 
 
 def test_redact_payload_redacts_exact_bearer_and_jwt_keys():

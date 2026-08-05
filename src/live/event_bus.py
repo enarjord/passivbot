@@ -936,6 +936,7 @@ def _bounded_live_event_value(
     depth: int,
     ancestors: set[int],
     state: _LiveEventBudgetState,
+    header_context: bool = False,
     is_root: bool = False,
     omit_on_limit: bool = False,
     existing_budget_metadata: Mapping[str, int] | None = None,
@@ -1034,7 +1035,11 @@ def _bounded_live_event_value(
                 if normalized_key in normalized and (key_truncated or force_redaction):
                     state.add("omitted_keys")
                     continue
-                if force_redaction or _is_sensitive_key(normalized_key):
+                if (
+                    force_redaction
+                    or _is_sensitive_key(normalized_key)
+                    or (header_context and _is_sensitive_header_key(normalized_key))
+                ):
                     normalized[normalized_key] = REDACTED
                 else:
                     normalized[normalized_key] = _bounded_live_event_value(
@@ -1042,6 +1047,7 @@ def _bounded_live_event_value(
                         depth=depth + 1,
                         ancestors=ancestors,
                         state=state,
+                        header_context=_is_header_container_key(normalized_key),
                     )
             else:
                 state.add(
@@ -1081,6 +1087,7 @@ def _bounded_live_event_value(
                     depth=depth + 1,
                     ancestors=ancestors,
                     state=state,
+                    header_context=header_context,
                     omit_on_limit=True,
                 )
                 if normalized_child is _LIVE_EVENT_OMIT_LIST_ITEM:
