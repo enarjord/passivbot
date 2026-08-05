@@ -21,9 +21,10 @@
    or caused the exchange fill. Refresh and deduplication preserve an existing
    provenance record, including the absence of provenance on legacy cache rows.
    Historical rows are never retroactively attributed.
-8. `last_refresh_ms` records a completed exchange fetch, not local cache loading,
-   normalization, or doctor repair. Preserving that distinction ensures the first
-   incremental refresh after restart covers fills which occurred while the bot was
+8. `last_refresh_ms` records a completed tail-capable exchange fetch, not local cache
+   loading, normalization, doctor repair, or a bounded historical range repair.
+   Preserving that distinction ensures the next incremental refresh covers fills
+   after a repaired historical range and fills which occurred while the bot was
    offline.
 9. A position whose latest fill identity or reconstructed after-state does not
    match the authoritative exchange position remains nontradable. Live orchestration
@@ -77,7 +78,11 @@
     claiming cached rows when no rows loaded, and malformed known-gap bounds, are
     contradictory cache evidence: they are unavailable rather than proof of
     coverage. A window with no fills remains valid when zero oldest/newest metadata
-    and `covered_start_ms` prove that empty result.
+    and `covered_start_ms` prove that empty result. Fill spacing is never gap
+    evidence because executions are irregular. Only a failed bounded exchange
+    fetch records an unproven range; every such range remains retryable under the
+    execution loop's backoff regardless of attempt count, and a successful bounded
+    traversal clears it even when the response contains no fills.
 12. Live coverage requirements follow the enabled consumer. Realized-PnL risk
     features require the configured PnL lookback and authoritative PnL quality.
     Entry cooldown without a PnL consumer requires structural fill coverage only
@@ -169,11 +174,12 @@ quarantine, rebuild, or defer according to `../error_contract.md`; it must not a
 merely because an auxiliary endpoint failed.
 
 Unproven required coverage is a controlled live-planning deferral. The execution loop owns its
-bounded, reason-aware retry cadence, and persistent coverage gaps do not consume the generic
-process-restart budget. A change between coverage and PnL block reasons restarts that reason's
-backoff at its configured base. Already-latched HSL RED supervisors continue protective management
-without fills while coverage repair proceeds. Manager-owned known-gap state remains evidence about
-coverage, not a second orchestration timer.
+bounded, reason-aware retry cadence, and failed coverage ranges do not consume the generic
+process-restart budget or become terminal after an independent manager retry limit. A change
+between coverage and PnL block reasons restarts that reason's backoff at its configured base.
+Already-latched HSL RED supervisors continue protective management without fills while coverage
+repair proceeds. Manager-owned failed-range state remains evidence about coverage, not a second
+orchestration timer.
 
 ## Validation
 
@@ -186,9 +192,10 @@ coverage, not a second orchestration timer.
    authoritative-PnL consumer requires it, authoritative replacement is persisted, and
    unresolved rows defer those consumers without restarts. With every PnL consumer
    disabled, unresolved PnL does not block covered structural fill history.
-6. Coverage verdicts fail closed for contradictory metadata and malformed gaps,
-   while confirmed-legitimate gaps and proven empty windows retain their explicit
-   semantics.
+6. Coverage verdicts fail closed for contradictory metadata and malformed failed
+   ranges. Failed bounded fetches remain retryable, successful empty traversals
+   prove their ranges, fill spacing creates no gap, and legacy
+   confirmed-legitimate metadata retains its explicit semantics.
 
 ## Key Code
 

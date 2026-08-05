@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Stop inferring missing fill history from long periods without executions. Fill lookback
+  coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
+  fetches create unproven ranges, which remain retryable under the live execution loop's backoff
+  until a successful response (including an empty response) clears them.
 - TWEL-gated market entries and their final minimum-order guard use executable touch, and next-only
   short entry quantities are re-cropped after directional price quantization.
 - Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so

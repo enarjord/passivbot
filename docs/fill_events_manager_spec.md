@@ -336,40 +336,29 @@ raw = [
 
 ---
 
-## 11. Cache Self-Healing & Gap Detection
+## 11. Cache Coverage And Failed Ranges
 
-### Gap Classification Challenge
+Fill timestamps are irregular. Time between two fills is therefore not evidence
+of missing history and must not trigger a speculative refetch. Coverage comes
+from successful traversal of the exchange endpoint over the requested interval,
+including a successful response containing no fills.
 
-Unlike candlesticks (predictable 60-second intervals), fill events have irregular timing. A gap could be:
-- **Legitimate:** Bot was stopped, no trading occurred
-- **Illegitimate:** Data fetch failed, events are missing
-
-### Gap Detection Heuristics
-
-1. **Time threshold:** Gaps > 12 hours trigger investigation
-2. **Position discontinuity:** Position size jumps without fills → suspicious
-3. **PnL discontinuity:** Wallet balance change without recorded PnL → suspicious
-
-### Gap Metadata
+Only an actual failed bounded fetch creates an unproven range:
 
 ```python
 class KnownGap(TypedDict):
     start_ts: int           # Gap start timestamp (ms)
     end_ts: int             # Gap end timestamp (ms)
-    retry_count: int        # Fetch attempts (max 3)
-    reason: str             # auto_detected, fetch_failed, confirmed_legitimate, manual
+    retry_count: int        # Diagnostic fetch-attempt count
+    reason: str             # fetch_failed
     added_at: int           # When gap was first detected
-    confidence: float       # 0.0=unknown, 0.3=suspicious, 0.7=likely_ok, 1.0=confirmed
 ```
 
-### Gap Handling Strategy
-
-1. **Initial detection:** Mark with `confidence=0.0`, `retry_count=0`
-2. **Retry logic:** Up to 3 attempts with exponential backoff
-3. **Classification:** After retries:
-   - No new fills found → increase confidence toward legitimate
-   - New fills found → gap was real, filled successfully
-4. **Persistence:** After max retries, mark as known gap to avoid repeated fetches
+The execution loop owns retry timing. Failed ranges remain retryable under that
+bounded backoff regardless of prior attempt count; the fill manager does not
+create a second terminal retry state. A successful bounded fetch clears the
+range even when it returns no fills. Legacy `confirmed_legitimate` metadata
+remains readable but is no longer produced.
 
 ### Gap Metadata Storage
 
@@ -384,9 +373,8 @@ Add `metadata.json` to cache directory:
       "start_ts": 1705200000000,
       "end_ts": 1705250000000,
       "retry_count": 3,
-      "reason": "confirmed_legitimate",
-      "added_at": 1705300000000,
-      "confidence": 0.9
+      "reason": "fetch_failed",
+      "added_at": 1705300000000
     }
   ]
 }

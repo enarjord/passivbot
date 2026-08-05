@@ -1658,6 +1658,7 @@ async def test_refresh_rejects_malformed_fetcher_rows_without_partial_persist(tm
 
     assert FillEventCache(tmp_path).load() == []
     assert FillEventCache(tmp_path).load_metadata()["last_refresh_ms"] == 0
+    assert FillEventCache(tmp_path).get_known_gaps() == []
 
 
 @pytest.mark.asyncio
@@ -1693,6 +1694,64 @@ async def test_refresh_range_empty_bounded_window_does_not_fetch_unbounded_lates
 
     assert fetcher.calls == [(1_000, 2_000)]
     assert FillEventCache(tmp_path).load() == []
+    assert FillEventCache(tmp_path).load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_range_bounded_history_preserves_refresh_checkpoint_with_fills(
+    tmp_path: Path,
+):
+    checkpoint_ms = 777
+    event = {
+        "id": "historical",
+        "timestamp": 1_500,
+        "datetime": "",
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 0.0,
+        "fees": {"currency": "USDC", "cost": 0.01},
+        "pb_order_type": "entry_grid_normal_long",
+        "position_side": "long",
+        "client_order_id": "cid-historical",
+    }
+    cache = FillEventCache(tmp_path)
+    cache.save_metadata({"last_refresh_ms": checkpoint_ms})
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([event]),
+        cache_path=tmp_path,
+    )
+
+    await manager.refresh_range(start_ms=1_000, end_ms=2_000)
+
+    assert [item.id for item in cache.load()] == ["historical"]
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == checkpoint_ms
+    assert metadata["newest_event_ts"] == 1_500
+
+
+@pytest.mark.asyncio
+async def test_refresh_for_lookback_bounded_history_preserves_refresh_checkpoint(
+    tmp_path: Path,
+):
+    checkpoint_ms = 777
+    cache = FillEventCache(tmp_path)
+    cache.save_metadata({"last_refresh_ms": checkpoint_ms})
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path,
+    )
+
+    completed = await manager.refresh_for_lookback(start_ms=1_000, end_ms=2_000)
+
+    assert completed is True
+    assert manager.fetcher.calls == [(1_000, 2_000)]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == checkpoint_ms
 
 
 # ---------------------------------------------------------------------------
@@ -5921,7 +5980,7 @@ async def test_manager_refresh_for_lookback_retries_known_gap_before_latest(tmp_
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_for_lookback_refreshes_latest_when_gap_retries_exhausted(
+async def test_manager_refresh_for_lookback_retries_failed_range_regardless_of_attempt_count(
     tmp_path: Path,
 ):
     cache_dir = tmp_path / "fills_lookback_exhausted_gap"
@@ -5986,8 +6045,80 @@ async def test_manager_refresh_for_lookback_refreshes_latest_when_gap_retries_ex
     completed = await manager.refresh_for_lookback(start_ms=start_ms)
 
     assert completed is True
-    assert fetcher.calls == [(event_ts, None)]
-    assert manager.cache.get_known_gaps()[0]["retry_count"] == 3
+    assert fetcher.calls == [(gap_start, gap_end), (event_ts, None)]
+    assert manager.cache.get_known_gaps() == []
+
+
+@pytest.mark.asyncio
+async def test_manager_known_gap_retry_preserves_checkpoint_when_tail_refresh_fails(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_lookback_gap_tail_failure"
+    cache = FillEventCache(cache_dir)
+    start_ms = int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000)
+    gap_start = start_ms + 60 * 60 * 1000
+    gap_end = start_ms + 2 * 60 * 60 * 1000
+    event_ts = start_ms + 3 * 60 * 60 * 1000
+    event = FillEvent.from_dict(
+        dict(
+            id="post-gap-fill",
+            timestamp=event_ts,
+            datetime="",
+            symbol="BTC/USDT",
+            side="buy",
+            qty=0.1,
+            price=10,
+            pnl=0.0,
+            pb_order_type="entry",
+            position_side="long",
+            client_order_id="cid-post-gap-fill",
+        )
+    )
+    cache.save([event])
+    cache.save_metadata(
+        {
+            "last_refresh_ms": event_ts,
+            "oldest_event_ts": event_ts,
+            "newest_event_ts": event_ts,
+            "covered_start_ms": start_ms,
+            "history_scope": "window",
+            "known_gaps": [
+                {
+                    "start_ts": gap_start,
+                    "end_ts": gap_end,
+                    "retry_count": 3,
+                    "reason": GAP_REASON_FETCH_FAILED,
+                    "confidence": 0.0,
+                }
+            ],
+        }
+    )
+
+    class _TailFailureFetcher(BaseFetcher):
+        def __init__(self):
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            if until_ms is None:
+                raise RuntimeError("tail unavailable")
+            if on_batch:
+                on_batch([])
+            return []
+
+    fetcher = _TailFailureFetcher()
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    with pytest.raises(RuntimeError, match="tail unavailable"):
+        await manager.refresh_for_lookback(start_ms=start_ms)
+
+    assert fetcher.calls == [(gap_start, gap_end), (event_ts, None)]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == event_ts
 
 
 def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
@@ -6042,8 +6173,36 @@ def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
     assert cache.load_metadata()["known_gaps"] == cache.get_known_gaps()
 
 
+def test_failed_range_downgrades_overlapping_legacy_confirmed_gap(tmp_path: Path):
+    cache = FillEventCache(tmp_path / "fills_legacy_confirmed_overlap")
+    cache.save_metadata(
+        {
+            "known_gaps": [
+                {
+                    "start_ts": 1_000,
+                    "end_ts": 2_000,
+                    "retry_count": 0,
+                    "reason": "confirmed_legitimate",
+                    "confidence": 1.0,
+                }
+            ]
+        }
+    )
+
+    cache.add_known_gap(1_500, 2_500, reason=GAP_REASON_FETCH_FAILED)
+
+    assert cache.get_known_gaps() == [
+        {
+            "start_ts": 1_000,
+            "end_ts": 2_500,
+            "retry_count": 1,
+            "reason": GAP_REASON_FETCH_FAILED,
+        }
+    ]
+
+
 @pytest.mark.asyncio
-async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
+async def test_manager_refresh_range_does_not_infer_gaps_from_fill_spacing(tmp_path: Path):
     cache_dir = tmp_path / "fills_range"
     cache = FillEventCache(cache_dir)
     base = int((datetime.now(timezone.utc) - timedelta(hours=48)).timestamp() * 1000)
@@ -6119,12 +6278,10 @@ async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
     start_ms = base - int(6 * 60 * 60 * 1000)
     end_ms = base + int(24 * 60 * 60 * 1000)
 
-    await manager.refresh_range(start_ms=start_ms, end_ms=end_ms, gap_hours=12, overlap=1)
+    await manager.refresh_range(start_ms=start_ms, end_ms=end_ms)
 
-    assert len(fetcher.calls) == 3
-    assert fetcher.calls[0] == (start_ms, events[0].timestamp)
-    assert fetcher.calls[1] == (events[1].timestamp, end_ms)
-    assert fetcher.calls[2] == (events[2].timestamp, None)
+    assert fetcher.calls == [(start_ms, end_ms)]
+    assert manager.cache.get_known_gaps() == []
 
 
 @pytest.mark.asyncio
@@ -6188,23 +6345,31 @@ async def test_hyperliquid_fetcher_raises_after_max_rate_limit_retries(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_registers_gap_and_reraises_rate_limit(tmp_path: Path):
-    cache_dir = tmp_path / "fills_rate_limit_gap"
+@pytest.mark.parametrize(
+    "fetch_error",
+    [RateLimitExceeded("rate limited"), RuntimeError("exchange unavailable")],
+    ids=["rate_limit", "exchange_error"],
+)
+async def test_manager_refresh_registers_gap_and_reraises_fetch_failure(
+    tmp_path: Path,
+    fetch_error: Exception,
+):
+    cache_dir = tmp_path / "fills_fetch_failure_gap"
 
-    class _RateLimitedFetcher(BaseFetcher):
+    class _FailingFetcher(BaseFetcher):
         async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
-            raise RateLimitExceeded("rate limited")
+            raise fetch_error
 
     manager = FillEventsManager(
         exchange="hyperliquid",
         user="default",
-        fetcher=_RateLimitedFetcher(),
+        fetcher=_FailingFetcher(),
         cache_path=cache_dir,
     )
 
     start_ms = 1_700_000_000_000
     end_ms = start_ms + 60_000
-    with pytest.raises(RateLimitExceeded):
+    with pytest.raises(type(fetch_error), match=str(fetch_error)):
         await manager.refresh(start_ms=start_ms, end_ms=end_ms)
 
     gaps = manager.cache.get_known_gaps()
@@ -6212,6 +6377,43 @@ async def test_manager_refresh_registers_gap_and_reraises_rate_limit(tmp_path: P
     assert gaps[0]["start_ts"] == start_ms
     assert gaps[0]["end_ts"] == end_ms
     assert gaps[0]["reason"] == GAP_REASON_FETCH_FAILED
+
+
+@pytest.mark.asyncio
+async def test_manager_pnl_repair_failure_does_not_invalidate_fill_coverage(
+    tmp_path: Path,
+):
+    class _FailingPnlRepairFetcher(BaseFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            return []
+
+        async def fetch_degraded_pnl_repair(
+            self,
+            since_ms,
+            until_ms,
+            aux_start_ms,
+            aux_end_ms,
+            detail_cache,
+            on_batch=None,
+        ):
+            raise RuntimeError("PnL endpoint unavailable")
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_FailingPnlRepairFetcher(),
+        cache_path=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="PnL endpoint unavailable"):
+        await manager.refresh(
+            start_ms=1_000,
+            end_ms=2_000,
+            mark_refreshed=False,
+            degraded_pnl_aux_range=(3_000, 4_000),
+        )
+
+    assert manager.cache.get_known_gaps() == []
 
 
 # ---------------------------------------------------------------------------
