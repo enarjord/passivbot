@@ -145,6 +145,29 @@ def test_sanitize_diagnostic_text_redacts_remote_auth_and_cookie_labels():
     assert "safe_label visible" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_auth_mapping_delimiters():
+    sanitized = sanitize_diagnostic_text(
+        "mapping={'auth': 'TOPSECRET'} auth: SECONDSECRET, safe_label: visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "'auth': '[redacted]'" in sanitized
+    assert "auth: [redacted]" in sanitized
+    assert "safe_label: visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_prefixed_auth_headers_without_colons():
+    sanitized = sanitize_diagnostic_text(
+        "KC-API-KEY=KUCOINKEY, X-MBX-APIKEY BINANCEKEY"
+    )
+
+    assert "KUCOINKEY" not in sanitized
+    assert "BINANCEKEY" not in sanitized
+    assert "KC-API-KEY=[redacted]" in sanitized
+    assert "X-MBX-APIKEY [redacted]" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_unterminated_quoted_credential():
     sanitized = sanitize_diagnostic_text('config={"privateKey": "TOPSECRET')
 

@@ -8,6 +8,8 @@ All notable user-facing changes will be documented in this file.
   unterminated quoted credentials, bearer/JWT fields and structured keys, exact remote auth/cookie
   labels, and unquoted authentication-header values in retained diagnostics. Keep terminal startup
   and outer process failure console records within the normal bounded projection budget.
+- Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
+  limit reducers cannot become crossing orders merely through price-step rounding.
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
   the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent

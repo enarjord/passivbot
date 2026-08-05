@@ -4187,7 +4187,8 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
         for order in out["orders"]
         if order["order_type"] == "close_auto_reduce_wel_long"
     )
-    assert wel_order["price"] == 100.0
+    assert wel_order["price"] == 100.01
+    assert wel_order["price"] >= sym["order_book"]["ask"]
     assert "close_auto_reduce_twel_long" not in order_types
 
 
@@ -4225,8 +4226,8 @@ def test_wel_off_tick_limit_meets_minimum_and_passes_live_validation():
         if order["order_type"] == "close_auto_reduce_wel_long"
     )
 
-    assert wel_order["price"] == 3.0
-    assert wel_order["qty"] == pytest.approx(-1.667)
+    assert wel_order["price"] == 3.01
+    assert wel_order["qty"] == pytest.approx(-1.662)
     assert abs(wel_order["qty"]) * wel_order["price"] >= 5.0
 
 
@@ -4304,7 +4305,8 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
         for order in out["orders"]
         if order["order_type"] == "close_auto_reduce_wel_short"
     )
-    assert wel_order["price"] == 100.0
+    assert wel_order["price"] == 99.99
+    assert wel_order["price"] <= sym["order_book"]["bid"]
     assert "close_unstuck_short" not in order_types
     assert "close_grid_short" in order_types
     assert sum(

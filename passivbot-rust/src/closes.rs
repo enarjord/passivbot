@@ -133,7 +133,7 @@ pub(crate) fn calc_wel_auto_reduce_long(
     if market_price <= 0.0 {
         return None;
     }
-    let close_price = tolerant_round_dn_preserve_step(market_price, exchange_params.price_step)
+    let close_price = tolerant_round_up_preserve_step(market_price, exchange_params.price_step)
         .max(exchange_params.price_step);
     let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
@@ -219,7 +219,7 @@ pub(crate) fn calc_wel_auto_reduce_short(
     if market_price <= 0.0 {
         return None;
     }
-    let close_price = tolerant_round_up_preserve_step(market_price, exchange_params.price_step)
+    let close_price = tolerant_round_dn_preserve_step(market_price, exchange_params.price_step)
         .max(exchange_params.price_step);
     let min_qty = calc_min_entry_qty(close_price, exchange_params);
     // Iteratively increase reduction until resulting WE is strictly below target or pos is fully closed
@@ -918,7 +918,8 @@ mod tests {
         )
         .expect("should emit strict reduce order");
         assert!(order.qty < 0.0);
-        assert_eq!(order.price, 100.0);
+        assert_eq!(order.price, 100.01);
+        assert!(order.price >= state.order_book.ask);
         let new_psize = (pos.size - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
@@ -1039,8 +1040,9 @@ mod tests {
         )
         .expect("should emit WEL reducer");
 
-        assert_eq!(order.price, 3.0);
-        assert_eq!(order.qty, -1.667);
+        assert_eq!(order.price, 3.01);
+        assert!((order.qty - -1.662).abs() < 1e-12);
+        assert!(order.price >= state.order_book.ask);
         assert!(order.qty.abs() * order.price * exchange.c_mult >= exchange.min_cost);
     }
 
@@ -1086,7 +1088,8 @@ mod tests {
         )
         .expect("should emit strict reduce order");
         assert!(order.qty > 0.0);
-        assert_eq!(order.price, 50.0);
+        assert_eq!(order.price, 49.5);
+        assert!(order.price <= state.order_book.bid);
         let new_psize = (pos.size.abs() - order.qty.abs()).max(0.0);
         let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
         assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);

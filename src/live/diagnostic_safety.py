@@ -14,7 +14,8 @@ _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
-    r"(?:authorization|proxy-authorization|cookie|set-cookie|key|sign|signature|"
+    r"(?:auth|authentication|authorization|proxy-authorization|cookie|set-cookie|"
+    r"key|sign|signature|"
     r"broker-?key|"
     r"apca-api-key-id|apca-api-secret-key|"
     r"kc-api-partner-sign|x-bapi-sign|"
@@ -45,6 +46,15 @@ _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
     r"(\s*:\s*)(?:bearer|basic)?\s*[\s\S]*?"
     rf"(?=\r?\n|,\s*[A-Za-z][A-Za-z0-9_-]*\s*:|"
     rf"\s+{_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN}\s*[=:]|\}}|\Z)"
+)
+_DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"((?:apca-api-key-id|apca-api-secret-key|kc-api-partner-sign|x-bapi-sign|"
+    r"(?:[a-z0-9]+-)+(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
+    r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
+    r"auth-(?:key|secret|sign(?:ature)?|token)|security-token|private-key|"
+    r"request-signature)))"
+    r"(\s*=\s*|\s+)(?:bearer|basic)?\s*[^,\s;}}]+"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
@@ -172,6 +182,9 @@ def sanitize_diagnostic_text(
             rf"\1\2\3\4{DIAGNOSTIC_REDACTED}\4", text
         )
         text = _DIAGNOSTIC_SENSITIVE_HEADER_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_VALUE_RE.sub(
