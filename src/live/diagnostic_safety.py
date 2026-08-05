@@ -30,10 +30,11 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
 )
 _DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN = (
     r"(?:[a-z0-9]+[-_])+(?:"
-    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
+    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|sign(?:ature)?|passphrase)|"
     r"access[-_]?(?:key(?:[-_]?id)?|secret|token|sign(?:ature)?|passphrase)|"
-    r"secret[-_]?access[-_]?key|session[-_]?token|client[-_]?secret|"
-    r"security[-_]?token|private[-_]?key)"
+    r"auth[-_]?(?:key|secret|token|sign(?:ature)?)|secret[-_]?access[-_]?key|"
+    r"secret[-_]?key|session[-_]?token|client[-_]?secret|security[-_]?token|"
+    r"private[-_]?key)"
 )
 _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
     rf"(?:{_DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN}|"
@@ -63,11 +64,21 @@ _DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN = (
 )
 _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
-    r"((?:(?:[a-z0-9]+-)*api-?passphrase|access[-_]?passphrase|passphrase))"
+    r"((?:[a-z0-9]+[-_])*(?:(?:api|access)[-_]?)?passphrase)"
     r"([\"']?(?:\s*[:=/]\s*|\s+))"
     r"(?:"
     r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
     rf"|[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r")"
+)
+_DIAGNOSTIC_AMBIGUOUS_SLASH_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"(secret|token|signature)"
+    r"(\s*/\s*)"
+    r"(?!([A-Za-z0-9._-]+):\3(?:\b|\Z))"
+    r"(?:"
+    r"(['\"])(?:\\.|(?!\4)[\s\S])*\4"
+    r"|[^,\s;&\"'}]+"
     r")"
 )
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
@@ -265,6 +276,9 @@ def sanitize_diagnostic_text(
             rf"\1\2\3\4{DIAGNOSTIC_REDACTED}\4", text
         )
         text = _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_AMBIGUOUS_SLASH_SENSITIVE_VALUE_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_HEADER_RE.sub(

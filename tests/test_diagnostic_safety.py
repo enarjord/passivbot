@@ -192,18 +192,53 @@ def test_sanitize_diagnostic_text_redacts_credential_alias_cli_flags():
 def test_sanitize_diagnostic_text_redacts_prefixed_environment_credentials():
     sanitized = sanitize_diagnostic_text(
         "AWS_SECRET_ACCESS_KEY=FIRST AWS_SESSION_TOKEN=SECOND "
-        "EXCHANGE_API_KEY=THIRD planning_signature=visible"
+        "EXCHANGE_API_KEY=THIRD EXCHANGE_AUTH_TOKEN=FOURTH "
+        "EXCHANGE_AUTH_SECRET=FIFTH EXCHANGE_SECRET_KEY=SIXTH "
+        "EXCHANGE_API_SIGN=SEVENTH planning_signature=visible"
     )
 
-    for secret in ("FIRST", "SECOND", "THIRD"):
+    for secret in (
+        "FIRST",
+        "SECOND",
+        "THIRD",
+        "FOURTH",
+        "FIFTH",
+        "SIXTH",
+        "SEVENTH",
+    ):
         assert secret not in sanitized
-    assert sanitized.count("[redacted]") == 3
+    assert sanitized.count("[redacted]") == 7
     assert "planning_signature=visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_prefixed_passphrases_through_field_boundary():
+    sanitized = sanitize_diagnostic_text(
+        "EXCHANGE_API_PASSPHRASE=TOPSECRET safe=ok; "
+        "EXCHANGE_ACCESS_PASSPHRASE=two words next=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "two words" not in sanitized
+    assert "safe=ok" in sanitized
+    assert "next=visible" in sanitized
+    assert sanitized.count("[redacted]") == 2
 
 
 def test_sanitize_diagnostic_text_preserves_slash_delimited_symbols():
     for symbol in ("TOKEN/USDT:USDT", "SECRET/USDC:USDC", "SIGNATURE/BTC:BTC"):
         assert sanitize_diagnostic_text(symbol) == symbol
+
+
+def test_sanitize_diagnostic_text_redacts_explicit_slash_delimited_credentials():
+    for message in (
+        "secret/TOPVALUE safe=ok",
+        "token/TOPVALUE safe=ok",
+        "signature/TOPVALUE safe=ok",
+    ):
+        sanitized = sanitize_diagnostic_text(message)
+        assert "TOPVALUE" not in sanitized
+        assert sanitized.startswith(message.split("/", 1)[0] + "/[redacted]")
+        assert "safe=ok" in sanitized
 
 
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
