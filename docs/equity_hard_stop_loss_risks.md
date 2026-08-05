@@ -46,7 +46,10 @@ from exchange state plus config unless an explicit stateless contract is added.
 With `restart_after_red_policy=always`, HSL startup tolerates missing
 pre-episode fill coverage when the current episode is provable from covered
 fills, because `always` ignores historical no-restart evidence. `threshold`
-and `never` require full configured lookback coverage.
+and `never` require full configured lookback coverage. Coin-mode readiness
+still proves the flat-scope cooldown horizon; a recent fill for a currently
+flat pair keeps the full lookback requirement because that episode may still
+own an active RED cooldown.
 
 `--hsl-accept-incomplete-history` is a dangerous per-run CLI flag that starts
 the bot on incomplete HSL evidence for any policy. While it is active,

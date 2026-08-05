@@ -57,5 +57,5 @@ def test_passivbot_uses_passivbot_hsl_module_for_hsl_methods():
         "_equity_hard_stop_defer_missing_flatten_fill",
         "_equity_hard_stop_flatten_fill_timestamp_with_refresh",
         "_equity_hard_stop_coverage_allow_incomplete",
-        "_equity_hard_stop_coin_episode_start_covered",
+        "_equity_hard_stop_required_fill_history_start_ms",
     } <= assigned_names

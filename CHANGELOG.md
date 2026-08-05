@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Scope coin-mode HSL fill-history readiness for `restart_after_red_policy=always` to the
+  fill-proven held episode plus the flat-scope cooldown horizon. Recent fills for a currently flat
+  scope, ambiguous held reconstruction, `threshold`/`never`, and pside/unified modes retain the full
+  configured lookback; the requirement is rechecked after refresh so delayed fills fail closed.
 - Stop inferring missing fill history from long periods without executions. Fill lookback
   coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
   fetches create unproven ranges, which remain retryable under the live execution loop's backoff

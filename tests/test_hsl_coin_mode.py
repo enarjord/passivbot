@@ -1320,6 +1320,7 @@ def test_forced_mode_refresher_preserves_paused_red(monkeypatch):
 
 def _incomplete_history_bot(*, policy="threshold", override=False, fills=(), position_size=1.0):
     bot = make_coin_bot()
+    bot.get_exchange_time = lambda: 1_000_000
     bot.hsl["long"]["restart_after_red_policy"] = policy
     if override:
         bot.config["live"]["hsl_accept_incomplete_history"] = True
@@ -1329,10 +1330,18 @@ def _incomplete_history_bot(*, policy="threshold", override=False, fills=(), pos
 
     class _Cache:
         def load_metadata(self):
-            return {"covered_start_ms": 0, "oldest_event_ts": 1}
+            return {
+                "covered_start_ms": 1,
+                "oldest_event_ts": 1,
+                "newest_event_ts": 1,
+                "known_gaps": [],
+            }
 
         def get_covered_start_ms(self):
-            return 0
+            return 1
+
+        def get_known_gaps(self):
+            return []
 
         def get_history_scope(self):
             return "window"
@@ -1354,6 +1363,10 @@ def _incomplete_history_bot(*, policy="threshold", override=False, fills=(), pos
             return "window"
 
     bot._pnls_manager = _Manager(fills)
+    bot._pnls_manager.get_coverage_status = MethodType(
+        FillEventsManager.get_coverage_status,
+        bot._pnls_manager,
+    )
     return bot
 
 
@@ -1409,26 +1422,82 @@ def test_incomplete_history_policy_gates_hsl_coverage(caplog):
     assert "INCOMPLETE fill history" in caplog.text
 
 
-def test_coin_episode_start_covered_reconstruction():
-    # Flat scope: trivially provable.
-    bot = _incomplete_history_bot(fills=(), position_size=0.0)
-    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is True
-    # Covered fills reconstruct back to flat: provable.
+def test_coin_always_fill_requirement_covers_held_episode_and_flat_cooldown():
+    pnl_start_ms = 100_000
+    now_ms = 1_000_000
+
+    # Flat scopes need only the still-relevant cooldown horizon when no fill
+    # in that horizon suggests an episode requiring replay.
     bot = _incomplete_history_bot(
-        fills=[
-            _episode_fill(60_000, "increase", 0.6),
-            _episode_fill(120_000, "increase", 0.4),
-        ]
+        policy="always", fills=(), position_size=0.0
     )
-    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is True
-    # Fills do not explain the position: unprovable.
-    bot = _incomplete_history_bot(fills=[_episode_fill(60_000, "increase", 0.4)])
-    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is False
-    # Ambiguous fill (unknown action) poisons the reconstruction.
-    ambiguous = _episode_fill(60_000, "increase", 1.0)
-    ambiguous.action = "unknown"
-    bot = _incomplete_history_bot(fills=[ambiguous])
-    assert bot._equity_hard_stop_coin_episode_start_covered("long", "A") is False
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, 700_000)
+
+    # A recent fill for an authoritatively flat scope may own an active RED
+    # cooldown, so the configured lookback remains mandatory.
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[_episode_fill(800_000, "decrease", 1.0)],
+        position_size=0.0,
+    )
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, pnl_start_ms)
+
+    # With no held position and no configured cooldown, HSL has no historical
+    # fill consumer under the always policy.
+    bot = _incomplete_history_bot(
+        policy="always", fills=(), position_size=0.0
+    )
+    bot.hsl["long"]["cooldown_minutes_after_red"] = 0.0
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (False, None)
+
+    # A held scope uses the one canonical fill-proven episode boundary plus
+    # the flat-scope cooldown horizon.
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[_episode_fill(650_000, "increase", 1.0)],
+    )
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, 650_000)
+
+    # Incomplete or ambiguous held reconstruction falls back to the full
+    # configured lookback.
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[_episode_fill(650_000, "increase", 0.4)],
+    )
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, pnl_start_ms)
+
+
+@pytest.mark.parametrize("policy", ["threshold", "never"])
+def test_coin_non_always_fill_requirement_remains_full_lookback(policy):
+    bot = _incomplete_history_bot(
+        policy=policy,
+        fills=[_episode_fill(650_000, "increase", 1.0)],
+    )
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        1_000_000, pnl_start_ms=100_000
+    ) == (True, 100_000)
+
+
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+def test_non_coin_hsl_fill_requirement_remains_full_lookback(signal_mode):
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[_episode_fill(650_000, "increase", 1.0)],
+    )
+    bot.config["live"]["hsl_signal_mode"] = signal_mode
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        1_000_000, pnl_start_ms=100_000
+    ) == (True, 100_000)
 
 
 def test_cooldown_anchor_uses_scope_flattening_fill():
@@ -2203,7 +2272,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_set_red_paused_runtime_forced_modes",
         "_equity_hard_stop_latest_flatten_fill_timestamp_optional_ms",
         "_equity_hard_stop_coverage_allow_incomplete",
-        "_equity_hard_stop_coin_episode_start_covered",
+        "_equity_hard_stop_required_fill_history_start_ms",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_set_red_runtime_forced_modes",
         "_equity_hard_stop_runtime_red_latched",
