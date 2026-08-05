@@ -78,6 +78,18 @@ def test_sanitize_diagnostic_text_redacts_colonless_userinfo():
     assert "https://[redacted]@example.invalid/db" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_non_http_userinfo():
+    sanitized = sanitize_diagnostic_text(
+        "stream wss://TOPSECRET@example.invalid/ws "
+        "database postgres://user:pass@example.invalid/db"
+    )
+
+    for secret in ("TOPSECRET", "user", "pass"):
+        assert secret not in sanitized
+    assert "wss://[redacted]@example.invalid/ws" in sanitized
+    assert "postgres://[redacted]@example.invalid/db" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_unterminated_private_key_block():
     sanitized = sanitize_diagnostic_text(
         "parser failed exchange_reason=invalid key material "
@@ -185,6 +197,53 @@ def test_sanitize_diagnostic_text_redacts_prefixed_auth_headers_without_colons()
     assert "BINANCEKEY" not in sanitized
     assert "KC-API-KEY=[redacted]" in sanitized
     assert "X-MBX-APIKEY [redacted]" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_quoted_prefixed_header_values_as_a_unit():
+    sanitized = sanitize_diagnostic_text(
+        "KC-API-PASSPHRASE='two words', X-MBX-APIKEY=\"three words\""
+    )
+
+    for secret in ("two", "words", "three"):
+        assert secret not in sanitized
+    assert "KC-API-PASSPHRASE=[redacted]" in sanitized
+    assert "X-MBX-APIKEY=[redacted]" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_exact_headers_without_colons():
+    sanitized = sanitize_diagnostic_text(
+        "KEY=GATEKEY, SIGN GATESIGN, ACCESS-KEY=OKXKEY"
+    )
+
+    for secret in ("GATEKEY", "GATESIGN", "OKXKEY"):
+        assert secret not in sanitized
+    assert "KEY=[redacted]" in sanitized
+    assert "SIGN [redacted]" in sanitized
+    assert "ACCESS-KEY=[redacted]" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_exact_credential_labels():
+    sanitized = sanitize_diagnostic_text(
+        "credential=TOPSECRET credentials SECONDSECRET safe_label=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "credential=[redacted]" in sanitized
+    assert "credentials [redacted]" in sanitized
+    assert "safe_label=visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_equals_style_cli_credentials():
+    sanitized = sanitize_diagnostic_text(
+        "--api-key=TOPSECRET --token=SECONDSECRET --safe-option=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "--api-key=[redacted]" in sanitized
+    assert "--token=[redacted]" in sanitized
+    assert "--safe-option=visible" in sanitized
 
 
 def test_sanitize_diagnostic_text_redacts_unterminated_quoted_credential():

@@ -33,7 +33,7 @@ _DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN = (
     r"clientSecret|privateKey|requestSignature|request[-_]?signature|"
     r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|secret|token|"
-    r"bearer|jwt|signature|password|passphrase|private[-_]?key)"
+    r"bearer|jwt|signature|credentials?|password|passphrase|private[-_]?key)"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN = (
     r"(?:,|;)\s*[\"']?[A-Za-z_][A-Za-z0-9_.-]*[\"']?\s*[:=]"
@@ -54,7 +54,20 @@ _DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE = re.compile(
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
     r"auth-(?:key|secret|sign(?:ature)?|token)|security-token|private-key|"
     r"request-signature)))"
-    r"(\s*=\s*|\s+)(?:bearer|basic)?\s*[^,\s;}}]+"
+    r"(\s*=\s*|\s+)(?:bearer|basic)?\s*"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
+)
+_DIAGNOSTIC_EQUALS_SENSITIVE_HEADER_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    rf"({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
+    r"(\s*=\s*)(?:bearer|basic)?\s*"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
+)
+_DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?=[A-Z0-9_-]+\s)"
+    rf"((?i:{_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN}))"
+    r"(\s+)(?:bearer|basic)?\s*"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
@@ -75,7 +88,8 @@ _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
 )
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
     r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
-    r"passphrase|private[-_]?key)\s+)(?:\"[^\"]*\"|'[^']*'|\S+)"
+    r"passphrase|private[-_]?key)(?:\s+|\s*=\s*))"
+    r"(?:\"[^\"]*\"|'[^']*'|\S+)"
 )
 _DIAGNOSTIC_AUTH_SCHEME_RE = re.compile(
     r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
@@ -85,7 +99,7 @@ _DIAGNOSTIC_STANDALONE_SECRET_RE = re.compile(
     r"AKIA[0-9A-Z]{16})\b"
 )
 _DIAGNOSTIC_URL_USERINFO_RE = re.compile(
-    r"(?i)\b(https?://)[^\s/?#]*@"
+    r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#]*@"
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
@@ -185,6 +199,12 @@ def sanitize_diagnostic_text(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_EQUALS_SENSITIVE_HEADER_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_VALUE_RE.sub(
