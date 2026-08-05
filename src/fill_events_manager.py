@@ -2303,6 +2303,12 @@ class FillEventCache:
                 gap["start_ts"] = min(gap["start_ts"], start_ts)
                 gap["end_ts"] = max(gap["end_ts"], end_ts)
                 gap["retry_count"] = gap.get("retry_count", 0) + 1
+                # A current failed traversal is stronger evidence than a
+                # legacy operator classification. Conservatively retry the
+                # merged range instead of letting confirmed metadata hide a
+                # newly unproven extension.
+                gap["reason"] = reason
+                gap.pop("confidence", None)
                 logger.info(
                     "FillEventCache.add_known_gap: updated gap %s → %s (retry_count=%d)",
                     _format_ms(gap["start_ts"]),
@@ -5464,7 +5470,11 @@ class FillEventsManager:
         await self.ensure_loaded()
         start_ms = int(start_ms)
         if end_ms is not None:
-            await self.refresh(start_ms=start_ms, end_ms=int(end_ms))
+            await self.refresh(
+                start_ms=start_ms,
+                end_ms=int(end_ms),
+                mark_refreshed=False,
+            )
             return True
 
         coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)

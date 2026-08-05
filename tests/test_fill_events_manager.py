@@ -1733,6 +1733,27 @@ async def test_refresh_range_bounded_history_preserves_refresh_checkpoint_with_f
     assert metadata["newest_event_ts"] == 1_500
 
 
+@pytest.mark.asyncio
+async def test_refresh_for_lookback_bounded_history_preserves_refresh_checkpoint(
+    tmp_path: Path,
+):
+    checkpoint_ms = 777
+    cache = FillEventCache(tmp_path)
+    cache.save_metadata({"last_refresh_ms": checkpoint_ms})
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path,
+    )
+
+    completed = await manager.refresh_for_lookback(start_ms=1_000, end_ms=2_000)
+
+    assert completed is True
+    assert manager.fetcher.calls == [(1_000, 2_000)]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == checkpoint_ms
+
+
 # ---------------------------------------------------------------------------
 # Cache tests
 # ---------------------------------------------------------------------------
@@ -6078,6 +6099,34 @@ def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
         },
     ]
     assert cache.load_metadata()["known_gaps"] == cache.get_known_gaps()
+
+
+def test_failed_range_downgrades_overlapping_legacy_confirmed_gap(tmp_path: Path):
+    cache = FillEventCache(tmp_path / "fills_legacy_confirmed_overlap")
+    cache.save_metadata(
+        {
+            "known_gaps": [
+                {
+                    "start_ts": 1_000,
+                    "end_ts": 2_000,
+                    "retry_count": 0,
+                    "reason": "confirmed_legitimate",
+                    "confidence": 1.0,
+                }
+            ]
+        }
+    )
+
+    cache.add_known_gap(1_500, 2_500, reason=GAP_REASON_FETCH_FAILED)
+
+    assert cache.get_known_gaps() == [
+        {
+            "start_ts": 1_000,
+            "end_ts": 2_500,
+            "retry_count": 1,
+            "reason": GAP_REASON_FETCH_FAILED,
+        }
+    ]
 
 
 @pytest.mark.asyncio
