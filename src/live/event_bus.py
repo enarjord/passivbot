@@ -650,6 +650,9 @@ _SENSITIVE_HEADER_KEY_COMPACT_EXACT = {
 _SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES = (
     "accesskey",
     "accesssign",
+    "apisign",
+    "apisignature",
+    "partnersign",
 )
 _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT = 64
 
