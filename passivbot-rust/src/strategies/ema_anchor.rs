@@ -2,7 +2,10 @@ use super::{EmaAnchorParams, GeneratedOrders, StrategyParams, StrategyRequest, S
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
-use crate::utils::{cost_to_qty, qty_to_cost, round_, round_dn, round_up};
+use crate::utils::{
+    cost_to_qty, qty_to_cost, round_, tolerant_round_dn_preserve_step,
+    tolerant_round_up_preserve_step,
+};
 
 #[inline]
 fn calc_signed_wallet_exposure_ratio(
@@ -50,7 +53,13 @@ pub fn calc_bid_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.lower * (1.0 - effective_offset - inventory_shift);
-    f64::min(state.order_book.bid, round_dn(target, exchange.price_step))
+    let selected_price = f64::min(state.order_book.bid, target);
+    if selected_price <= 0.0 {
+        selected_price
+    } else {
+        tolerant_round_dn_preserve_step(selected_price, exchange.price_step)
+            .max(exchange.price_step)
+    }
 }
 
 #[inline]
@@ -71,7 +80,8 @@ pub fn calc_ask_price(
     ) * params.offset_psize_weight;
     let effective_offset = params.offset * calc_offset_multiplier(state, params);
     let target = state.ema_bands.upper * (1.0 + effective_offset - inventory_shift);
-    f64::max(state.order_book.ask, round_up(target, exchange.price_step))
+    let selected_price = f64::max(state.order_book.ask, target);
+    tolerant_round_up_preserve_step(selected_price, exchange.price_step).max(exchange.price_step)
 }
 
 #[inline]
@@ -228,7 +238,10 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                     request.position.size,
                     effective_wallet_exposure_limit,
                 );
-                if bid_price.is_finite() && bid_price > 0.0 && effective_wallet_exposure_limit > 0.0
+                if bid_price.is_finite()
+                    && bid_price > 0.0
+                    && bid_price <= request.state.order_book.bid
+                    && effective_wallet_exposure_limit > 0.0
                 {
                     let mid = (request.state.order_book.bid + request.state.order_book.ask) * 0.5;
                     let qty = calc_entry_qty(
@@ -438,6 +451,210 @@ mod tests {
         assert!(ask >= state.order_book.ask);
         assert_eq!(bid, 99.0);
         assert_eq!(ask, 101.0);
+    }
+
+    #[test]
+    fn off_tick_touch_prices_are_quantized_away_from_the_book() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 98.003,
+                ask: 102.007,
+            },
+            ema_bands: EMABands {
+                lower: 100.0,
+                upper: 100.0,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        let (bid, ask) = calc_quote_prices(&state, &exchange, &params, 0.0, 1.0);
+
+        assert_eq!(bid, 98.0);
+        assert_eq!(ask, 102.01);
+    }
+
+    #[test]
+    fn sub_tick_bid_clamps_to_lowest_positive_tick() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.005,
+                ask: 0.015,
+            },
+            ema_bands: EMABands {
+                lower: 0.005,
+                upper: 0.015,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_bid_price(&state, &exchange, &params, -1.0, 1.0), 0.01);
+    }
+
+    #[test]
+    fn sub_tick_bid_does_not_generate_long_entry_above_the_book() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.005,
+                ask: 0.015,
+            },
+            ema_bands: EMABands {
+                lower: 0.005,
+                upper: 0.015,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let bot_params = BotParams::default();
+        let strategy_params = StrategyParams::EmaAnchor(EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        });
+        let position = Position::default();
+        let trailing = TrailingPriceBundle::default();
+        let request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: false,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(1.0),
+            position: &position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+
+        let generated = generate_orders(StrategySide::Long, request);
+
+        assert!(generated.entries.is_empty());
+    }
+
+    #[test]
+    fn genuinely_above_tick_ask_rounds_up() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 0.09,
+                ask: 0.1000000005,
+            },
+            ema_bands: EMABands {
+                lower: 0.09,
+                upper: 0.1000000005,
+            },
+            ..base_state()
+        };
+        let exchange = ExchangeParams {
+            price_step: 0.1,
+            ..base_exchange()
+        };
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_ask_price(&state, &exchange, &params, 0.0, 1.0), 0.2);
+    }
+
+    #[test]
+    fn nonpositive_bid_target_is_not_converted_into_an_entry_price() {
+        let state = StateParams {
+            balance: 1.0,
+            order_book: OrderBook { bid: 1.0, ask: 1.0 },
+            ema_bands: EMABands {
+                lower: 1.0,
+                upper: 1.0,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 2.0,
+            ..base_params()
+        };
+
+        assert!(calc_bid_price(&state, &exchange, &params, 1.0, 1.0) <= 0.0);
+    }
+
+    #[test]
+    fn tiny_ask_quote_preserves_lowest_positive_tick() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 1e-12,
+                ask: 1e-12,
+            },
+            ema_bands: EMABands {
+                lower: 1e-12,
+                upper: 1e-12,
+            },
+            ..base_state()
+        };
+        let exchange = ExchangeParams {
+            price_step: 1e-12,
+            ..base_exchange()
+        };
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(calc_ask_price(&state, &exchange, &params, 0.0, 1.0), 1e-12);
+    }
+
+    #[test]
+    fn aligned_touch_prices_survive_binary_float_noise() {
+        let bid_state = StateParams {
+            order_book: OrderBook {
+                bid: 0.29,
+                ask: 0.30,
+            },
+            ema_bands: EMABands {
+                lower: 1.0,
+                upper: 1.0,
+            },
+            ..base_state()
+        };
+        let ask_state = StateParams {
+            order_book: OrderBook {
+                bid: 0.06,
+                ask: 0.07,
+            },
+            ema_bands: EMABands {
+                lower: 0.01,
+                upper: 0.01,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+
+        assert_eq!(
+            calc_bid_price(&bid_state, &exchange, &params, 0.0, 1.0),
+            0.29
+        );
+        assert_eq!(
+            calc_ask_price(&ask_state, &exchange, &params, 0.0, 1.0),
+            0.07
+        );
     }
 
     #[test]

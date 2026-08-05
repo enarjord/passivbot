@@ -71,6 +71,58 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 )
 
 
+def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -> str:
+    global_bot_params = payload.get("global", {}).get("global_bot_params", {})
+    symbol_states = []
+    for symbol in payload.get("symbols", []):
+        row = {"symbol_idx": symbol["symbol_idx"]}
+        for pside in ("long", "short"):
+            input_mode = symbol[pside].get("mode")
+            position_size = float(symbol[pside]["position"]["size"])
+            has_position = position_size != 0.0
+            selection_effective_mode = (
+                "normal"
+                if input_mode is None
+                or (input_mode == "graceful_stop" and has_position)
+                else input_mode
+            )
+            side_params = global_bot_params[pside]
+            global_side_enabled = (
+                float(side_params["total_wallet_exposure_limit"]) > 0.0
+                and int(side_params["n_positions"]) > 0
+            )
+            effective_mode = (
+                selection_effective_mode if global_side_enabled else "manual"
+            )
+            symbol_side_eligible = (
+                bool(symbol.get("tradable", False))
+                and float(symbol[pside]["bot_params"]["wallet_exposure_limit"])
+                != 0.0
+            )
+            active = symbol_side_eligible and (
+                (has_position and selection_effective_mode != "manual")
+                or (
+                    not has_position
+                    and global_side_enabled
+                    and selection_effective_mode == "normal"
+                )
+            )
+            row[pside] = {
+                "input_mode": input_mode,
+                "effective_mode": effective_mode,
+                "active": active,
+                "allow_initial": active and effective_mode == "normal",
+            }
+        symbol_states.append(row)
+    out_diagnostics = dict(diagnostics or {})
+    out_diagnostics.setdefault("warnings", [])
+    out_diagnostics["symbol_states"] = symbol_states
+    out_diagnostics.setdefault("loss_gate_blocks", [])
+    out_diagnostics.setdefault("min_effective_cost_blocks", [])
+    out_diagnostics.setdefault("forager_selections", [])
+    return json.dumps({"orders": [], "diagnostics": out_diagnostics})
+
+
 def _set_authoritative_epoch_state(
     bot,
     *,
@@ -8884,7 +8936,11 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -8925,7 +8981,9 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -8967,7 +9025,11 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -9014,7 +9076,9 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -9108,7 +9172,11 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
             raise AssertionError("protective panic path must not load EMA bundles")
 
         def _bot_params_to_rust_dict(self, pside, sym):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, sym):
             return {}
@@ -9130,7 +9198,21 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"warnings": []}})
+        output = json.loads(
+            _empty_orchestrator_output(captured["input"], {"warnings": []})
+        )
+        output["orders"].append(
+            {
+                "symbol_idx": 0,
+                "pside": "long",
+                "qty": -1.0,
+                "price": 100.4,
+                "order_type": "close_panic_long",
+                "execution_type": "limit",
+                "execution_priority": "risk_critical",
+            }
+        )
+        return json.dumps(output)
 
     monkeypatch.setattr(
         pb_mod.planning_gates,
@@ -9157,7 +9239,10 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         FakeBot()
     )
 
-    assert out == {}
+    assert set(out) == {symbol}
+    assert len(out[symbol]) == 1
+    assert out[symbol][0][:3] == (-1.0, 100.4, "close_panic_long")
+    assert out[symbol][0][4:] == ("limit", "risk_critical")
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
     assert rust_symbol["short"]["mode"] == "manual"
@@ -9219,7 +9304,11 @@ async def test_orchestrator_snapshot_payload_does_not_require_backtest_config(mo
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -9266,7 +9355,9 @@ async def test_orchestrator_snapshot_payload_does_not_require_backtest_config(mo
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
@@ -9317,7 +9408,11 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
             return None
 
         def _bot_params_to_rust_dict(self, pside, symbol):
-            return {}
+            return {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            }
 
         def _strategy_params_to_rust_dict(self, pside, symbol):
             return {}
@@ -9364,7 +9459,9 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+        return _empty_orchestrator_output(
+            captured["input"], {"loss_gate_blocks": []}
+        )
 
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 

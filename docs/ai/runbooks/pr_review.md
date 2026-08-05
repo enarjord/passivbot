@@ -41,6 +41,42 @@ diffs, test output, or exchange data.
 5. Report actionable findings first with exact locations, evidence, impact, and a credible fix.
    Avoid style-only findings unless they affect correctness or maintainability.
 
+## Review Feedback Adjudication
+
+Do not silently treat disputed reviewer feedback as addressed. When an agent disagrees with a
+finding and the task authorizes review-comment writes:
+
+1. Reply in the original review thread before moving on. State the decision, cite the exact code
+   and governing contract, explain the regression or authority violation the recommendation would
+   introduce, and identify the narrowest contract-preserving alternative when one exists.
+2. Explicitly ask the reviewer to reconsider or provide counter-evidence. A private agent note or
+   local classification is not a substitute for this visible exchange.
+3. Leave the thread unresolved while the reviewer has an opportunity to respond. Do not resolve it
+   in the same action as the disagreement reply.
+4. Re-evaluate new evidence rather than repeating the prior conclusion. Resolve only after the
+   reviewer acknowledges the rationale, a new exact-head review explicitly clears the dispute, or
+   the user makes the final adjudication after the reviewer was asked to reconsider.
+
+If the task does not authorize GitHub comment writes, draft the same evidence-backed reply and ask
+the user for authorization instead of silently rejecting the finding. Continuous-review state may
+record that adjudication is pending, but it must not record the thread as addressed.
+
+## Architectural Proposal Check
+
+Before recommending a trading-critical fix or fallback:
+
+1. Name the current authority for the decision: Rust intent, exchange truth, canonical input
+   readiness, reconciliation, or execution policy.
+2. Distinguish a valid empty decision from malformed producer output and unavailable input.
+3. Reject proposals that preserve, synthesize, or reinterpret strategy intent outside Rust.
+4. Check restart reproducibility and live/backtest parity under realistic live data delay, including
+   whether selection would favor whichever symbols refreshed first.
+5. Fix a hypothetical producer defect at its producer boundary. Do not add consumer-side trading
+   policy without evidence of the failure and an explicit contract authorizing that policy.
+6. Distinguish bounded schema/cross-field validation from replaying the trading engine. Do not
+   recommend duplicating Rust strategy, sizing, realized-loss, or exposure calculations in Python
+   merely to detect a hypothetical internally consistent Rust decision.
+
 When a new head only incorporates the target branch or resolves a mechanical conflict, prior
 semantic approval may be carried forward after a focused delta review only when:
 

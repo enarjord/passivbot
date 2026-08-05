@@ -684,7 +684,6 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
     }
 )
 
-
 def compute_live_warmup_windows(
     symbols_by_side: Dict[str, set],
     bp_lookup: Callable[[str, str, str], float],
@@ -16561,13 +16560,14 @@ class Passivbot:
                 }
             )
 
-        out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
-        orders = out.get("orders", [])
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            pbr.compute_ideal_orders_json(json.dumps(input_dict)),
+            idx_to_symbol,
+            input_dict,
+        )
         ideal_orders: dict[str, list] = {}
         for order in orders:
-            symbol = idx_to_symbol.get(int(order["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(order["symbol_idx"])]
             order_type = str(order["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in order:
@@ -17308,8 +17308,10 @@ class Passivbot:
                             idx,
                         )
             raise
-        out = json.loads(out_json)
-        orders = out.get("orders", [])
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, idx_to_symbol, input_dict
+        )
+        diagnostics = out["diagnostics"]
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -17321,16 +17323,14 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
-            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(o["symbol_idx"])]
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in o:
@@ -19912,6 +19912,15 @@ class Passivbot:
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
+            out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+                out_json, idx_to_symbol, input_dict
+            )
+            diagnostics = out["diagnostics"]
+            self._order_churn_risk_active_pairs = (
+                reconciler.order_churn_risk_active_pairs_from_rust_output(
+                    out, idx_to_symbol
+                )
+            )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
@@ -19934,16 +19943,8 @@ class Passivbot:
                 error=e,
             )
             raise
-        out = json.loads(out_json)
         elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
         output_hash = payload_hash_raw(out_json)
-        orders = out.get("orders", [])
-        diagnostics = out.get("diagnostics", {})
-        self._order_churn_risk_active_pairs = (
-            reconciler.order_churn_risk_active_pairs_from_rust_output(
-                out, idx_to_symbol
-            )
-        )
         self._emit_rust_orchestrator_returned_event(
             rust_call_id=rust_call_id,
             status="succeeded",
@@ -19973,7 +19974,7 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )
@@ -19990,9 +19991,7 @@ class Passivbot:
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
-            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(o["symbol_idx"])]
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in o:
