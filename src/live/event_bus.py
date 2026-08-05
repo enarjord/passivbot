@@ -757,12 +757,26 @@ def _is_sensitive_header_pair(value: object) -> bool:
 
 
 def _sensitive_header_entry_value_key(value: object) -> str | None:
-    if type(value) is not dict or not dict.__contains__(value, "value"):
+    if type(value) is not dict:
         return None
-    for name_key in ("name", "key", "header"):
-        header_name = dict.get(value, name_key)
-        if type(header_name) is str and _is_sensitive_header_key(header_name):
-            return "value"
+    value_key = next(
+        (
+            key
+            for key in value
+            if type(key) is str and key.lower() == "value"
+        ),
+        None,
+    )
+    if value_key is None:
+        return None
+    for name_key, header_name in value.items():
+        if (
+            type(name_key) is str
+            and name_key.lower() in {"name", "key", "header"}
+            and type(header_name) is str
+            and _is_sensitive_header_key(header_name)
+        ):
+            return value_key
     return None
 
 

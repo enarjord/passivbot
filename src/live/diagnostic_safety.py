@@ -17,7 +17,7 @@ _DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN = (
     r"(?:auth|authentication|authorization|proxy-authorization|cookie|set-cookie|"
     r"key|sign|signature|"
     r"broker-?key|"
-    r"apca-api-key-id|apca-api-secret-key|"
+    r"apca-api-key-id|apca-api-secret-key|x-amz-signature|"
     r"kc-api-partner-sign|x-bapi-sign|"
     r"(?:[a-z0-9]+-)*(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
@@ -70,7 +70,8 @@ _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
 )
 _DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
-    r"((?:apca-api-key-id|apca-api-secret-key|kc-api-partner-sign|x-bapi-sign|"
+    r"((?:apca-api-key-id|apca-api-secret-key|kc-api-partner-sign|x-amz-signature|"
+    r"x-bapi-sign|"
     r"(?:[a-z0-9]+-)+(?:api-?key|api-(?:secret|sign(?:ature)?|passphrase)|"
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
     r"auth-(?:key|secret|sign(?:ature)?|token)|security-token|private-key|"
@@ -139,8 +140,7 @@ _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
     r"|[^,\s;&\"'}]+)"
 )
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
-    r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
-    r"passphrase|private[-_]?key)(?:\s+|\s*=\s*))"
+    rf"(?i)(--{_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN}(?:\s+|\s*=\s*))"
     rf"(?:(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
     r"|\"[^\"]*\"|'[^']*'|\S+)"
 )

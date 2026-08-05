@@ -7,10 +7,11 @@ All notable user-facing changes will be documented in this file.
 - Hardened credential sanitization for multi-word passphrases, exact exchange auth keys, and
   prefixed signature headers inside generic header mappings and header-pair sequences, including
   canonical structured and monitor events. Structured access-key/signature aliases,
-  dictionary-shaped header entries, AWS signatures, and API key-ID/secret-key aliases are also
-  redacted. Canonical event strings preserve under-limit whitespace and ordinary status prose while
-  still redacting embedded credentials. TWEL-gated market entries are priced at executable touch,
-  and next-only short entry quantities are re-cropped after directional price quantization.
+  case-insensitive dictionary-shaped header entries, AWS signatures, API key-ID/secret-key aliases,
+  and credential-alias CLI flags are also redacted. Canonical event strings preserve under-limit
+  whitespace and ordinary status prose while still redacting embedded credentials. TWEL-gated
+  market entries are priced at executable touch, and next-only short entry quantities are
+  re-cropped after directional price quantization.
 
 - Redact complete quoted generic credentials, quote-containing unquoted credentials,
   unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,

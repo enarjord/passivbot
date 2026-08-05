@@ -167,6 +167,28 @@ def test_sanitize_diagnostic_text_redacts_api_key_id_and_secret_key_aliases():
     assert "safe=ok" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_aws_signature_headers():
+    sanitized = sanitize_diagnostic_text(
+        "headers={'X-Amz-Signature': 'AWSSIGN', 'X-Trace': 'visible'}"
+    )
+
+    assert "AWSSIGN" not in sanitized
+    assert "X-Amz-Signature': '[redacted]'" in sanitized
+    assert "'X-Trace': 'visible'" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_credential_alias_cli_flags():
+    sanitized = sanitize_diagnostic_text(
+        "--access-key=FIRST --client-secret SECOND "
+        "--security-token=THIRD --safe-option=ok"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 3
+    assert "--safe-option=ok" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
     sanitized = sanitize_diagnostic_text(
         '{"authKey":"FIRST", "auth_key":"SECOND", "authSecret":"THIRD"}'
