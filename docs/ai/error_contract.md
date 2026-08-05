@@ -53,17 +53,19 @@ order classes whose strategy or risk decision consumes them. Stale flat-symbol c
 block protective management of held symbols.
 
 A failed urgent candle refresh is therefore an availability observation, not an account-wide
-planning barrier. Live Python may explicitly mark a symbol's known missing EMA inputs as
-unavailable and pass no invented values. Rust remains strict by default, including backtests, and
-may scope only that explicit live absence to forager selection, one-way arbitration, strategy, or
-unstuck consumers that need it.
+planning barrier. Live Python may explicitly mark a symbol's known missing EMA inputs or one
+position side's trailing extrema as unavailable. Rust remains strict by default, including
+backtests, and may scope only that explicit live absence to forager selection, one-way arbitration,
+strategy, or unstuck consumers that need it. A structurally required trailing bundle paired with
+`trailing_available=false` is inert transport data and must be rejected before any consuming
+strategy branch can read it.
 Missing ordinary strategy input produces no ideal orders for the entry or close branch that
 consumes it, so normal Rust-authoritative reconciliation removes any now-stale resting orders from
 that branch. The other strategy branch, independent Rust risk reducers, and panic actions continue
 when their own inputs are complete. Malformed or non-finite producer output is never covered by
 this degradation and remains fatal. Here, producer output means the Rust ideal-order/result
-envelope. A documented live input-reader availability sentinel is classified before that boundary,
-must never reach Rust, and retains only its explicitly bounded recovery and scoped-defer policies.
+envelope. A documented live input-reader availability sentinel must be classified before its
+strategy consumer and retains only its explicitly bounded recovery and scoped-defer policies.
 
 For candle-dependent actions, gate on canonical strategy-input readiness rather than raw REST
 candle arrival. A proven no-trade gap may use explicitly synthesized zero-volume continuity when

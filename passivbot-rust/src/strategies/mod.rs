@@ -377,13 +377,23 @@ pub fn strategy_needs_log_range_1h_for_request(
 }
 
 pub fn strategy_has_trailing(params: &StrategyParams) -> bool {
+    strategy_needs_trailing_for_request(params, true, true)
+}
+
+pub fn strategy_needs_trailing_for_request(
+    params: &StrategyParams,
+    wants_entries: bool,
+    wants_closes: bool,
+) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {
-            params.entry.retracement_base_pct > 0.0 || params.close.retracement_base_pct > 0.0
+            (wants_entries && params.entry.retracement_base_pct > 0.0)
+                || (wants_closes && params.close.retracement_base_pct > 0.0)
         }
         StrategyParams::EmaAnchor(_) => false,
         StrategyParams::TrailingGridV7(params) => {
-            params.entry.trailing_grid_ratio != 0.0 || params.close.trailing_grid_ratio != 0.0
+            (wants_entries && params.entry.trailing_grid_ratio != 0.0)
+                || (wants_closes && params.close.trailing_grid_ratio != 0.0)
         }
     }
 }
@@ -404,11 +414,42 @@ pub fn generate_orders(
 mod tests {
     use super::{
         parse_strategy_params, strategy_needs_log_range_1h,
-        strategy_needs_log_range_1h_for_request, StrategyKind, StrategyParams, StrategySide,
-        TrailingGridV7Params,
+        strategy_needs_log_range_1h_for_request, strategy_needs_trailing_for_request,
+        EmaAnchorParams, StrategyKind, StrategyParams, StrategySide, TrailingGridV7Params,
+        TrailingMartingaleParams,
     };
     use crate::types::BotParams;
     use serde_json::json;
+
+    #[test]
+    fn trailing_input_needs_are_request_scoped_for_all_strategy_kinds() {
+        let mut martingale = TrailingMartingaleParams::default();
+        martingale.entry.retracement_base_pct = 0.01;
+        let martingale = StrategyParams::TrailingMartingale(martingale);
+        assert!(strategy_needs_trailing_for_request(
+            &martingale,
+            true,
+            false
+        ));
+        assert!(!strategy_needs_trailing_for_request(
+            &martingale,
+            false,
+            true
+        ));
+
+        let mut v7 = TrailingGridV7Params::default();
+        v7.close.trailing_grid_ratio = 0.5;
+        let v7 = StrategyParams::TrailingGridV7(v7);
+        assert!(!strategy_needs_trailing_for_request(&v7, true, false));
+        assert!(strategy_needs_trailing_for_request(&v7, false, true));
+
+        let ema_anchor = StrategyParams::EmaAnchor(EmaAnchorParams::default());
+        assert!(!strategy_needs_trailing_for_request(
+            &ema_anchor,
+            true,
+            true
+        ));
+    }
 
     #[test]
     fn trailing_grid_v7_parse_rejects_missing_required_leaf() {

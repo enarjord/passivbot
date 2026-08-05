@@ -47,9 +47,10 @@ mod core {
         strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
         strategy_initial_qty_pct, strategy_needs_log_range_1h,
         strategy_needs_log_range_1h_for_request, strategy_needs_log_range_1m,
-        strategy_needs_log_range_1m_for_request, strategy_offset_volatility_span_minutes,
-        strategy_requires_sequential_entry_staging, EmaGateMode, NextStepHint, PeekBehavior,
-        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
+        strategy_needs_log_range_1m_for_request, strategy_needs_trailing_for_request,
+        strategy_offset_volatility_span_minutes, strategy_requires_sequential_entry_staging,
+        EmaGateMode, NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest,
+        StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -255,6 +256,9 @@ mod core {
         MissingEma {
             symbol_idx: usize,
         },
+        MissingTrailing {
+            symbol_idx: usize,
+        },
     }
 
     #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -366,6 +370,10 @@ mod core {
         true
     }
 
+    fn default_trailing_available() -> bool {
+        true
+    }
+
     fn default_market_order_near_touch_threshold() -> f64 {
         0.001
     }
@@ -378,6 +386,11 @@ mod core {
         pub mode: Option<TradingMode>,
         pub position: Position,
         pub trailing: TrailingPriceBundle,
+        /// Explicit live availability for this side's trailing extrema. The
+        /// structurally required bundle is ignored by consuming strategy
+        /// branches while this is false.
+        #[serde(default = "default_trailing_available")]
+        pub trailing_available: bool,
         #[serde(default)]
         pub last_increase_fill_timestamp_ms: Option<u64>,
         /// Per-symbol/per-pside params after applying coin_overrides.
@@ -2321,9 +2334,14 @@ mod core {
         scope: StrategyInputScope,
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(), OrchestratorError> {
-        if symbol.allow_missing_strategy_inputs
-            && matches!(err, OrchestratorError::MissingEma { .. })
-        {
+        let explicitly_unavailable = match &err {
+            OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
+            OrchestratorError::MissingTrailing { .. } => {
+                !symbol_side_input(symbol, pside).trailing_available
+            }
+            _ => false,
+        };
+        if explicitly_unavailable {
             let warning = OrchestratorWarning::StrategyInputUnavailable {
                 symbol_idx: symbol.symbol_idx,
                 pside,
@@ -2503,6 +2521,13 @@ mod core {
             strategy_side,
             side,
         )?;
+        if !side.trailing_available
+            && strategy_needs_trailing_for_request(&strategy_params, wants_entries, wants_closes)
+        {
+            return Err(OrchestratorError::MissingTrailing {
+                symbol_idx: symbol.symbol_idx,
+            });
+        }
         let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
             &strategy_params,
             pside,
@@ -2601,7 +2626,11 @@ mod core {
         wants_closes: bool,
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
-        let requests = if symbol.allow_missing_strategy_inputs && wants_entries && wants_closes {
+        let side = symbol_side_input(symbol, pside);
+        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available)
+            && wants_entries
+            && wants_closes
+        {
             [(true, false), (false, true)]
         } else {
             [(wants_entries, wants_closes), (false, false)]
@@ -4340,6 +4369,7 @@ mod core {
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
+                    trailing_available: true,
                     bot_params: bp.clone(),
                     strategy_params: None,
                     parsed_strategy_params: None,
@@ -4350,6 +4380,7 @@ mod core {
                     mode: None,
                     position: Position::default(),
                     trailing: TrailingPriceBundle::default(),
+                    trailing_available: true,
                     bot_params: bp,
                     strategy_params: None,
                     parsed_strategy_params: None,

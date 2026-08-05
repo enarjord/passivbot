@@ -1523,6 +1523,7 @@ impl<'a> Backtest<'a> {
                         mode: mode_long,
                         position: pos_long,
                         trailing: trailing_long,
+                        trailing_available: true,
                         last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_long
                             [idx],
                         bot_params: self.bot_params[idx].long.clone(),
@@ -1534,6 +1535,7 @@ impl<'a> Backtest<'a> {
                         mode: mode_short,
                         position: pos_short,
                         trailing: trailing_short,
+                        trailing_available: true,
                         last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_short
                             [idx],
                         bot_params: self.bot_params[idx].short.clone(),

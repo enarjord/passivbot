@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Move live trailing-input availability into Rust's side-scoped planning contract. Missing
+  trailing extrema now suppress only entry or close branches that actually consume them while the
+  other branch, other position side, panic, and independent reducers remain available. Remove the
+  Python post-reconciliation exception matrix so stale orders absent from current Rust intent are
+  cancelled normally.
 - Make HSL restart price reconstruction portable across exchanges with limited candle retention.
   Replay now uses the finest available historical resolution in a fixed 1m, 5m, 15m, then 1h
   ladder for the older leading prefix, reports approximate source counts, and never uses coarser
