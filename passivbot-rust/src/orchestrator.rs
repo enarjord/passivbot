@@ -1344,9 +1344,9 @@ mod core {
         // Close orders must respect effective min qty/min cost (via `calc_min_entry_qty`),
         // except when the position itself is smaller than effective min qty, in which case we
         // allow closing the full position size.
-        // Limit-close minimums are price-specific. Keep a below-min candidate only when the
-        // authoritative position itself is below that order's effective minimum; that candidate
-        // may then use the exact-remaining-position exception.
+        // Limit-close minimums are price-specific. Use the exact-remaining-position exception only
+        // when the authoritative position is below every candidate's effective minimum. In a mixed
+        // ladder, drop each below-min leg before the remaining close wave is trimmed.
         let minimum_price = |order: &IdealOrder| {
             if global.is_some_and(|policy| should_use_market_execution(order, policy, ob)) {
                 executable_touch_for_order_side(ob, order.qty)
@@ -1354,13 +1354,6 @@ mod core {
                 order.price
             }
         };
-        closes.retain(|order| {
-            let minimum_qty = calc_min_entry_qty(minimum_price(order), exchange);
-            order.qty.abs() + EPS >= minimum_qty || pos_abs + EPS < minimum_qty
-        });
-        if closes.is_empty() {
-            return;
-        }
         let allow_below_min = closes
             .iter()
             .all(|order| pos_abs + EPS < calc_min_entry_qty(minimum_price(order), exchange));
@@ -1384,6 +1377,14 @@ mod core {
             };
             closes.clear();
             closes.push(keep);
+            return;
+        }
+
+        closes.retain(|order| {
+            let minimum_qty = calc_min_entry_qty(minimum_price(order), exchange);
+            order.qty.abs() + EPS >= minimum_qty
+        });
+        if closes.is_empty() {
             return;
         }
 
@@ -1532,7 +1533,7 @@ mod core {
                 continue;
             }
             let minimum_qty = calc_min_entry_qty(minimum_price(&o), exchange);
-            if !allow_below_min && new_abs + EPS < minimum_qty {
+            if new_abs + EPS < minimum_qty {
                 // Drop; we prefer removing furthest rather than keeping dust.
                 excess = 0.0;
                 continue;
@@ -6829,6 +6830,44 @@ mod core {
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty - 1.0).abs() < 1e-12);
             assert!((closes[0].price - 0.99).abs() < 1e-12);
+        }
+
+        #[test]
+        fn mixed_close_ladder_drops_below_min_leg_and_absorbs_dust() {
+            let ob = OrderBook {
+                bid: 25.0,
+                ask: 25.0,
+            };
+            let exchange = ExchangeParams {
+                qty_step: 1.0,
+                price_step: 1.0,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 4.0,
+                    price: 25.0,
+                    order_type: OrderType::CloseGridShort,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 1.0,
+                    price: 10.0,
+                    order_type: OrderType::CloseGridShort,
+                },
+            ];
+
+            trim_closes_to_position(PositionSide::Short, &mut closes, -5.0, &ob, &exchange, None);
+
+            assert_eq!(closes.len(), 1);
+            assert!((closes[0].qty - 5.0).abs() < 1e-12);
+            assert!((closes[0].price - 25.0).abs() < 1e-12);
         }
 
         #[test]

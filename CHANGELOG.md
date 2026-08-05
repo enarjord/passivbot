@@ -40,9 +40,10 @@ All notable user-facing changes will be documented in this file.
   minimum-notional validation remains consistent across Rust planning, live execution, and
   backtesting, including after TWEL entry gating. Blocked
   loss-gate closes use that same execution price when validating their diagnostic exchange minimum.
-  Limit-close minimums use each emitted limit price, preserve an exact below-step remaining position
-  when that is the only executable full close, and clamp short close prices to the minimum positive
-  tick. Live execution-policy validation also canonicalizes only representation-noisy, tick-aligned
+  Limit-close minimums use each emitted limit price, drop below-minimum legs from mixed ladders before
+  absorbing the remaining position dust, preserve an exact below-step remaining position when that is
+  the only executable full close, and clamp short close prices to the minimum positive tick. Live
+  execution-policy validation also canonicalizes only representation-noisy, tick-aligned
   submitted books to the same float Rust decodes from JSON.
   Off-tick trailing-strategy entry prices now quantize away from the spread so a passive bid is
   never rounded up and a passive ask is never rounded down.
