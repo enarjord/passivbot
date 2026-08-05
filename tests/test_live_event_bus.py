@@ -320,16 +320,12 @@ def test_live_event_data_budget_preserves_under_limit_json_and_redaction_without
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": "secret",
-        "diagnostic": "failed  api_key=TOPSECRET\nsafe=visible",
-        "reason": "price  step\nmismatch",
     }
     expected_source = {
         "planning": {"ready": True, "candidate_count": 3},
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": "secret",
-        "diagnostic": "failed  api_key=TOPSECRET\nsafe=visible",
-        "reason": "price  step\nmismatch",
     }
 
     event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
@@ -341,8 +337,6 @@ def test_live_event_data_budget_preserves_under_limit_json_and_redaction_without
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": REDACTED,
-        "diagnostic": "failed  api_key=[redacted]\nsafe=visible",
-        "reason": "price  step\nmismatch",
     }
     assert LIVE_EVENT_BUDGET_METADATA_KEY not in event.data
     assert event.to_dict()["data"] == event.data
@@ -945,289 +939,14 @@ def test_forager_eligibility_console_route_keeps_event_durable():
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
-    payload = {
-        "safe": 1,
-        "auth": {"token": "secret"},
-        "authoritative_epoch": 7,
-        "completed_candle_signature": [1, 2, 3],
-        "request_signature": "request-secret",
-        "wallet_address": "0xabc",
-        "message": (
-            "rejected symbol=BTC/USDT:USDT price=12.34 "
-            "https://example.invalid/order/abc?api_key=message-secret"
-        ),
-        "items": [{"secret": "x"}],
-    }
+    payload = {"safe": 1, "auth": {"token": "secret"}, "items": [{"secret": "x"}]}
 
     assert redact_payload(payload) == {
         "safe": 1,
         "auth": REDACTED,
-        "authoritative_epoch": 7,
-        "completed_candle_signature": [1, 2, 3],
-        "request_signature": REDACTED,
-        "wallet_address": "0xabc",
-        "message": (
-            "rejected symbol=BTC/USDT:USDT price=12.34 "
-            "https://example.invalid/order/abc?api_key=[redacted]"
-        ),
         "items": [{"secret": REDACTED}],
     }
     assert payload_hash({"b": 2, "a": 1}) == payload_hash({"a": 1, "b": 2})
-
-
-def test_redact_payload_redacts_camel_case_credential_keys():
-    assert redact_payload(
-        {
-            "accessToken": "access-value",
-            "clientSecret": "client-value",
-            "requestSignature": "request-value",
-            "planningSignature": "plan-hash",
-        }
-    ) == {
-        "accessToken": REDACTED,
-        "clientSecret": REDACTED,
-        "requestSignature": REDACTED,
-        "planningSignature": "plan-hash",
-    }
-
-
-def test_live_event_redacts_exact_auth_and_api_sign_aliases():
-    source = {
-        "authSign": "auth-camel",
-        "auth_sign": "auth-snake",
-        "apiSign": "api-camel",
-        "api_sign": "api-snake",
-        "planningSignature": "plan-hash",
-    }
-    expected = {
-        "authSign": REDACTED,
-        "auth_sign": REDACTED,
-        "apiSign": REDACTED,
-        "api_sign": REDACTED,
-        "planningSignature": "plan-hash",
-    }
-
-    assert redact_payload(source) == expected
-    assert LiveEvent(EventTypes.REMOTE_CALL_FAILED, data=source).data == expected
-
-
-def test_live_event_redacts_auth_namespace_alias_matrix():
-    sensitive_aliases = (
-        "apiSign",
-        "authSign",
-        "authenticationKey",
-        "authenticationSecret",
-        "authenticationSign",
-        "authenticationSignature",
-        "authenticationToken",
-        "authenticationHeader",
-        "authorization_key",
-        "authorization_secret",
-        "authorization_sign",
-        "authorization_signature",
-        "authorization_token",
-        "authorization_header",
-        "exchangeApiSign",
-        "exchangeAuthSign",
-        "exchangeAuthenticationToken",
-        "exchangeAuthorizationKey",
-    )
-    source = {alias: f"secret-{index}" for index, alias in enumerate(sensitive_aliases)}
-    source.update(
-        {
-            "planningSign": "planning-sign",
-            "planningSignature": "planning-signature",
-            "diagnosticSignature": "diagnostic-signature",
-        }
-    )
-
-    expected = {alias: REDACTED for alias in sensitive_aliases}
-    expected.update(
-        {
-            "planningSign": "planning-sign",
-            "planningSignature": "planning-signature",
-            "diagnosticSignature": "diagnostic-signature",
-        }
-    )
-
-    assert redact_payload(source) == expected
-    assert LiveEvent(EventTypes.REMOTE_CALL_FAILED, data=source).data == expected
-
-
-def test_redact_payload_redacts_exact_authentication_keys_without_matching_authority():
-    assert redact_payload(
-        {
-            "auth": "opaque-auth-value",
-            "authentication": "opaque-authentication-value",
-            "authKey": "camel-auth-key-value",
-            "auth_key": "snake-auth-key-value",
-            "auth-key": "hyphen-auth-key-value",
-            "authoritative_epoch": 7,
-        }
-    ) == {
-        "auth": REDACTED,
-        "authentication": REDACTED,
-        "authKey": REDACTED,
-        "auth_key": REDACTED,
-        "auth-key": REDACTED,
-        "authoritative_epoch": 7,
-    }
-
-
-def test_redact_payload_redacts_auth_header_containers_before_recursing():
-    source = {
-        "authHeaders": {"KEY": "GATEKEY", "SIGN": "GATESIGN"},
-        "auth_headers": {"ACCESS-KEY": "OKXKEY"},
-        "authenticationHeaders": {"KEY": "GATEKEY"},
-        "authentication_headers": {"ACCESS-KEY": "OKXKEY"},
-        "response_headers": {"X-Trace": "trace-123"},
-    }
-
-    assert redact_payload(source) == {
-        "authHeaders": REDACTED,
-        "auth_headers": REDACTED,
-        "authenticationHeaders": REDACTED,
-        "authentication_headers": REDACTED,
-        "response_headers": {"X-Trace": "trace-123"},
-    }
-    assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
-        "authHeaders": REDACTED,
-        "auth_headers": REDACTED,
-        "authenticationHeaders": REDACTED,
-        "authentication_headers": REDACTED,
-        "response_headers": {"X-Trace": "trace-123"},
-    }
-
-
-def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings():
-    source = {
-        "headers": {
-            "ACCESS-KEY": "OKXKEY",
-            "ACCESS-SIGN": "OKXSIGN",
-            "KC-API-SIGN": "KUCOINSIGN",
-            "KC-API-PARTNER-SIGN": "KUCOINPARTNERSIGN",
-            "KEY": "GATEKEY",
-            "SIGN": "GATESIGN",
-            "X-BAPI-SIGN": "BYBITSIGN",
-            "X-Amz-Signature": "AWSSIGN",
-            "X-Diagnostic-Signature": "diagnostic-signature",
-            "X-Trace-Sign": "trace-sign",
-            "X-Trace": "trace-123",
-        },
-        "request_headers": [
-            ("KC-API-SIGN", "KUCOINPAIR"),
-            ("X-Trace", "pair-trace"),
-            {"name": "KC-API-SIGN", "value": "KUCOINDICT"},
-            {"Name": "KC-API-SIGN", "Value": "KUCOINCASE"},
-            {"header": "X-Trace", "value": "dict-trace"},
-        ],
-        "response_headers": {"X-Trace": "response-trace"},
-        "accessKey": "STRUCTUREDKEY",
-        "access_key": "STRUCTUREDKEY2",
-        "accessSign": "STRUCTUREDSIGN",
-        "access_signature": "STRUCTUREDSIGN2",
-    }
-
-    assert redact_payload(source) == {
-        "headers": {
-            "ACCESS-KEY": REDACTED,
-            "ACCESS-SIGN": REDACTED,
-            "KC-API-SIGN": REDACTED,
-            "KC-API-PARTNER-SIGN": REDACTED,
-            "KEY": REDACTED,
-            "SIGN": REDACTED,
-            "X-BAPI-SIGN": REDACTED,
-            "X-Amz-Signature": REDACTED,
-            "X-Diagnostic-Signature": "diagnostic-signature",
-            "X-Trace-Sign": "trace-sign",
-            "X-Trace": "trace-123",
-        },
-        "request_headers": [
-            ["KC-API-SIGN", REDACTED],
-            ["X-Trace", "pair-trace"],
-            {"name": "KC-API-SIGN", "value": REDACTED},
-            {"Name": "KC-API-SIGN", "Value": REDACTED},
-            {"header": "X-Trace", "value": "dict-trace"},
-        ],
-        "response_headers": {"X-Trace": "response-trace"},
-        "accessKey": REDACTED,
-        "access_key": REDACTED,
-        "accessSign": REDACTED,
-        "access_signature": REDACTED,
-    }
-    assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
-        "headers": {
-            "ACCESS-KEY": REDACTED,
-            "ACCESS-SIGN": REDACTED,
-            "KC-API-SIGN": REDACTED,
-            "KC-API-PARTNER-SIGN": REDACTED,
-            "KEY": REDACTED,
-            "SIGN": REDACTED,
-            "X-BAPI-SIGN": REDACTED,
-            "X-Amz-Signature": REDACTED,
-            "X-Diagnostic-Signature": "diagnostic-signature",
-            "X-Trace-Sign": "trace-sign",
-            "X-Trace": "trace-123",
-        },
-        "request_headers": [
-            ["KC-API-SIGN", REDACTED],
-            ["X-Trace", "pair-trace"],
-            {"name": "KC-API-SIGN", "value": REDACTED},
-            {"Name": "KC-API-SIGN", "Value": REDACTED},
-            {"header": "X-Trace", "value": "dict-trace"},
-        ],
-        "response_headers": {"X-Trace": "response-trace"},
-        "accessKey": REDACTED,
-        "access_key": REDACTED,
-        "accessSign": REDACTED,
-        "access_signature": REDACTED,
-    }
-
-
-def test_redact_payload_redacts_exact_bearer_and_jwt_keys():
-    assert redact_payload(
-        {
-            "bearer": "opaque-bearer-value",
-            "jwt": "opaque-jwt-value",
-            "jwt_expiry": 123456789,
-        }
-    ) == {
-        "bearer": REDACTED,
-        "jwt": REDACTED,
-        "jwt_expiry": 123456789,
-    }
-
-
-def test_redact_payload_redacts_delimited_cookie_keys_without_matching_substrings():
-    assert redact_payload(
-        {
-            "cookie_header": "snake-value",
-            "cookie-value": "hyphen-value",
-            "header_cookie": "suffix-value",
-            "cookietown": "non-credential-value",
-        }
-    ) == {
-        "cookie_header": REDACTED,
-        "cookie-value": REDACTED,
-        "header_cookie": REDACTED,
-        "cookietown": "non-credential-value",
-    }
-
-
-def test_redact_payload_redacts_kucoin_broker_signing_key_variants():
-    assert redact_payload(
-        {
-            "broker-key": "hyphen-value",
-            "broker_key": "snake-value",
-            "brokerKey": "camel-value",
-            "broker-name": "passivbotFutures",
-        }
-    ) == {
-        "broker-key": REDACTED,
-        "broker_key": REDACTED,
-        "brokerKey": REDACTED,
-        "broker-name": "passivbotFutures",
-    }
 
 
 def test_payload_hash_raw_hashes_exact_wire_payload():
@@ -3397,56 +3116,6 @@ def test_console_format_summarizes_rust_return():
     )
 
     assert format_console_event(event) == "[rust] succeeded cycle=cy_6 orders=4 elapsed=17ms"
-
-
-def test_console_format_rust_failure_includes_sanitized_cause():
-    event = LiveEvent(
-        EventTypes.RUST_ORCHESTRATOR_RETURNED,
-        status="failed",
-        cycle_id="cy_6",
-        data={
-            "elapsed_ms": 17,
-            "error_type": "FatalBotException",
-            "message": (
-                "Rust orchestrator order 2 symbol_idx=4 order_type=entry_initial_normal_long "
-                "price=12.34 price_step=0.1 nearest_price=12.3 delta=0.04"
-            ),
-        },
-    )
-
-    rendered = format_console_event(event)
-    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
-
-    assert rendered.startswith(
-        "[rust] failed cycle=cy_6 elapsed=17ms error_type=FatalBotException "
-        "message=Rust orchestrator order 2 symbol_idx=4"
-    )
-    assert rendered.endswith("...<truncated>")
-    assert len(longest_prefix + rendered) <= 240
-    assert event.data["message"].endswith("nearest_price=12.3 delta=0.04")
-
-
-def test_console_format_rust_failure_bounds_cause_without_mutating_event():
-    event = LiveEvent(
-        EventTypes.RUST_ORCHESTRATOR_RETURNED,
-        status="failed",
-        cycle_id="cy_6",
-        reason_code="FatalBotException",
-        data={
-            "elapsed_ms": 17,
-            "error_type": "FatalBotException",
-            "message": "Rust orchestrator failed " + "x" * 1_000,
-        },
-    )
-    before = event.to_dict()
-
-    rendered = format_console_event(event)
-    longest_prefix = "2026-07-15T23:45:40Z WARNING  [hyperliquid] "
-
-    assert len(longest_prefix + rendered) <= 240
-    assert "message=Rust orchestrator failed " in rendered
-    assert "...<truncated>" in rendered
-    assert event.to_dict() == before
 
 
 def test_console_format_summarizes_forager_selection():

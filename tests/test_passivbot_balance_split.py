@@ -3464,12 +3464,10 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     summary = incident_events[0][0][2]
     detail = incident_events[1][0][2]
     assert summary["stage"] == "equity_hard_stop_initialize_coin_from_history"
-    assert summary["message"] == "api_key=[redacted]"
     assert summary["incident_id"] == detail["incident_id"]
     assert summary["origin"] != "unknown"
     assert detail["traceback"]["frame_count"] >= 1
-    assert detail["traceback"]["includes_exception_text"] is True
-    assert detail["traceback"]["exception_text_sanitized"] is True
+    assert detail["traceback"]["includes_exception_text"] is False
     bot._monitor_record_error.assert_not_called()
     assert stop_events[-1][0][0] == "startup_error"
     assert stop_events[-1][1]["payload"] == {
@@ -3478,25 +3476,8 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     }
     assert exc_info.value.__cause__ is failure
     assert secret not in str(exc_info.value)
-    assert "message=api_key=[redacted]" in str(exc_info.value)
     assert secret not in caplog.text
-    assert "message=api_key=[redacted]" in caplog.text
     assert "Traceback" not in caplog.text
-
-
-def test_terminal_startup_console_projection_is_bounded():
-    useful_detail = "diagnostic-tail-" + "x" * 4_000
-    rendered = passivbot_module._format_terminal_startup_console_projection(
-        stage="equity_hard_stop_initialize_coin_from_history",
-        error_type="ValueError",
-        status="422",
-        code="10006",
-        message=useful_detail,
-    )
-
-    assert len(rendered) <= passivbot_module._INCIDENT_CONSOLE_MESSAGE_MAX_LEN
-    assert rendered.startswith("[boot] terminal startup validation failure")
-    assert useful_detail not in rendered
 
 
 def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
@@ -12924,14 +12905,12 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
     summary = monitor_events[0][0][2]
     detail = monitor_events[1][0][2]
     assert summary["error_type"] == "CancelledError"
-    assert summary["message"] == "ccxt load_markets cancelled"
     assert summary["incident_id"] == detail["incident_id"]
     assert summary["origin"].startswith(
         "test_passivbot_balance_split.py:fake_refresh_authoritative_state:"
     )
     assert detail["traceback"]["frame_count"] >= 1
-    assert detail["traceback"]["includes_exception_text"] is True
-    assert detail["traceback"]["exception_text_sanitized"] is True
+    assert detail["traceback"]["includes_exception_text"] is False
     bot.restart_bot_on_too_many_errors.assert_awaited_once()
     bot.execute_to_exchange.assert_not_awaited()
     messages = [record.message for record in caplog.records]
@@ -13389,10 +13368,6 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     detail = monitor_events[1][0][2]
     assert summary["status"] == "500"
     assert summary["code"] == "500000"
-    assert summary["message"] == (
-        "kucoinfutures GET https://example.invalid/account-overview?api_key=[redacted] "
-        "connector said raw-message"
-    )
     assert summary["endpoint"] == "account-overview"
     assert summary["incident_id"] == detail["incident_id"]
     assert summary["origin"].startswith(
@@ -13468,12 +13443,8 @@ async def test_execution_loop_error_normal_info_persists_bounded_traceback_detai
     summary = monitor_events[0][0][2]
     detail = monitor_events[1][0][2]
     assert summary["incident_id"] == detail["incident_id"]
-    assert summary["message"] == (
-        "raw-message https://example.invalid/private?api_key=[redacted]"
-    )
     assert detail["traceback"]["frame_count"] >= 1
-    assert detail["traceback"]["includes_exception_text"] is True
-    assert detail["traceback"]["exception_text_sanitized"] is True
+    assert detail["traceback"]["includes_exception_text"] is False
     assert detail["traceback"]["includes_locals"] is False
     assert raw_error not in str(detail)
     assert "SECRET" not in str(detail)
@@ -13485,47 +13456,7 @@ async def test_execution_loop_error_normal_info_persists_bounded_traceback_detai
     assert all("SECRET" not in message for message in normal_messages)
 
 
-@pytest.mark.asyncio
-async def test_execution_loop_console_projection_is_bounded_without_truncating_event_detail(
-    caplog, monkeypatch
-):
-    bot = Passivbot.__new__(Passivbot)
-    bot.stop_signal_received = False
-    bot._health_errors = 0
-    bot.error_counts = []
-    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
-    monitor_events = []
-    bot._monitor_record_event = lambda *args, **kwargs: monitor_events.append(
-        (args, kwargs)
-    )
-    bot.restart_bot = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
-    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1785832735236.9412)
-    useful_detail = "distinct-diagnostic-detail-" * 30
-
-    try:
-        raise RuntimeError(f"{useful_detail} api_key SECRET")
-    except RuntimeError as exc:
-        with caplog.at_level(logging.INFO):
-            assert await bot._handle_execution_loop_failure(
-                exc, allow_time_sync_recovery=False
-            ) is True
-
-    summary = monitor_events[0][0][2]
-    assert useful_detail in summary["message"]
-    assert "SECRET" not in summary["message"]
-    console_records = [
-        record.message
-        for record in caplog.records
-        if "[error] operation=run_execution_loop" in record.message
-    ]
-    assert len(console_records) == 1
-    assert len(console_records[0]) <= 240
-    assert "SECRET" not in console_records[0]
-    assert useful_detail not in console_records[0]
-
-
-def test_bounded_traceback_detail_retains_sanitized_exception_chain_without_locals():
+def test_bounded_traceback_detail_retains_exception_chain_without_values_or_locals():
     secret = "api_key=TOP-SECRET"
 
     def raise_cause():
@@ -13551,14 +13482,9 @@ def test_bounded_traceback_detail_retains_sanitized_exception_chain_without_loca
         "ValueError",
     ]
     assert detail["frame_count"] >= 3
-    assert detail["includes_exception_text"] is True
-    assert detail["exception_text_sanitized"] is True
+    assert detail["includes_exception_text"] is False
     assert detail["includes_locals"] is False
     assert secret not in str(detail)
-    assert [item["message"] for item in detail["exceptions"]] == [
-        "api_key=[redacted]",
-        "api_key=[redacted]",
-    ]
     assert "raise_outer" in str(detail)
     assert "raise_cause" in str(detail)
 
@@ -13618,9 +13544,6 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
 
     assert fields == {
         "error_type": "RuntimeError",
-        "message": "GET https://example.invalid/"
-        + "x" * 80
-        + "?api_key=[redacted]",
         "status": "429",
         "code": "10006",
         "endpoint": "unknown",
@@ -13629,7 +13552,7 @@ def test_execution_loop_error_fields_are_bounded_and_classify_unknown_endpoint()
     }
     assert "SECRET" not in str(fields)
     assert "SIG" not in str(fields)
-    assert "example.invalid" in fields["message"]
+    assert "example.invalid" not in str(fields)
 
 
 def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
@@ -13641,7 +13564,6 @@ def test_execution_loop_error_fields_reject_credential_shaped_endpoint():
     )
 
     assert fields["endpoint"] == "unknown"
-    assert fields["message"] == "GET https://example.invalid/[redacted]"
     assert secret not in str(fields)
 
 
@@ -13688,7 +13610,6 @@ def test_execution_loop_error_fields_contain_hostile_exception_metadata():
 
     assert bot._execution_loop_error_fields(error) == {
         "error_type": "RuntimeError",
-        "message": "<unavailable>",
         "status": "-",
         "code": "-",
         "endpoint": "unknown",
@@ -13708,24 +13629,9 @@ def test_process_failure_log_omits_exception_value_and_traceback(caplog):
         passivbot_module._log_process_failure("passivbot error", error)
 
     assert "passivbot error | error_type=RuntimeError status=503 code=-" in caplog.text
-    assert "message=api_key=[redacted]" in caplog.text
     assert secret not in caplog.text
     assert "sk_live_7E4v93kR2mN6pQ8t" not in caplog.text
     assert "Traceback" not in caplog.text
-
-
-def test_process_failure_log_bounds_long_console_projection(caplog):
-    useful_detail = "diagnostic-tail-" + "x" * 1_000
-    error = RuntimeError(useful_detail)
-
-    with caplog.at_level(logging.ERROR):
-        passivbot_module._log_process_failure("passivbot error", error)
-
-    records = [record.message for record in caplog.records]
-    assert len(records) == 1
-    assert len(records[0]) <= passivbot_module._INCIDENT_CONSOLE_MESSAGE_MAX_LEN
-    assert records[0].startswith("passivbot error | error_type=RuntimeError")
-    assert useful_detail not in records[0]
 
 
 def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):

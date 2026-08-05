@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-from live.diagnostic_safety import bounded_exception_type, sanitized_exception_message
+from live.diagnostic_safety import bounded_exception_type
 
 
 _MONITOR_EVENT_PHASE_TIMING_KEYS = (
@@ -1206,7 +1206,6 @@ class MonitorPublisher:
     ) -> Optional[dict]:
         error_payload = _safe_monitor_error_context(payload)
         error_payload["error_type"] = bounded_exception_type(error)
-        error_payload["message"] = sanitized_exception_message(error)
         return self.record_event(
             kind,
             tags or ("error",),

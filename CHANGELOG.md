@@ -4,26 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Hardened credential sanitization for multi-word passphrases, exact exchange auth keys, and
-  prefixed signature headers inside generic header mappings and header-pair sequences, including
-  canonical structured and monitor events. Structured access-key/signature aliases,
-  case-insensitive dictionary-shaped header entries, AWS signatures, API key-ID/secret-key aliases,
-  credential-alias CLI flags, prefixed environment credentials, text and structured
-  auth/authentication/authorization/API-sign aliases, prefixed auth/sign/passphrase aliases,
-  credential-bearing exception type metadata, and explicit slash-form credential fields are also
-  redacted.
-  Canonical event strings preserve under-limit whitespace, ordinary status prose, bounded URL
-  paths, and canonical slash-delimited symbol names while still redacting embedded credentials.
-  TWEL-gated market entries and their final minimum-order guard use executable touch, and next-only
+- TWEL-gated market entries and their final minimum-order guard use executable touch, and next-only
   short entry quantities are re-cropped after directional price quantization.
-
-- Redact complete quoted generic credentials, quote-containing unquoted credentials,
-  unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,
-  exact credential and remote auth/cookie labels, quoted and unquoted authentication-header values,
-  auth/authentication-header containers, key/secret aliases, equals-style credential flags, scheme-prefixed
-  unquoted credential values, and URL userinfo across supported schemes with or without a password
-  delimiter in retained diagnostics. Keep terminal startup and outer process failure console
-  records within the normal bounded projection budget.
 - Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
   limit reducers cannot become crossing orders merely through price-step rounding.
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
@@ -54,20 +36,8 @@ All notable user-facing changes will be documented in this file.
   emitting the existing history-reset telemetry. Short switching intervals do
   not mask later sustained price or quantity drift, and ladder cardinality must
   remain consistent for every recurring cohort.
-- Live fatal, startup, execution-loop, monitor-error, and Rust-orchestrator failure diagnostics now
-  retain bounded exception causes in console, text, and structured event history after centralized
-  credential-only sanitization. Non-secret order context, prices, quantities, identifiers, wallet
-  addresses, URLs, and exchange reasons remain available for diagnosis; Rust price-step validation
-  failures include the exact order index/type, symbol index, price, step, nearest price, delta, and
-  tolerance. Serialized native exchange authentication headers, including exchange-prefixed API
-  keys, passphrases, and signatures, are redacted while non-secret response context is preserved;
-  exact structured `auth`/`authentication`/`authKey` values, KuCoin broker signing keys, Alpaca API
-  key headers, delimited structured cookie fields, and unterminated private-key blocks are also
-  redacted, including credential labels whose values are separated only by whitespace and URL
-  userinfo passwords containing raw `@` delimiters. Rust producer
-  and execution-loop failures retain the full bounded sanitized cause in structured diagnostics while
-  keeping their console projection within the operator record budget. Short market entries
-  and promoted partial market closes are sized and trimmed from their executable touch so
+- Short market entries and promoted partial market closes are sized and trimmed from their
+  executable touch so
   minimum-notional validation remains consistent across Rust planning, live execution, and
   backtesting, including after TWEL entry gating. Blocked
   loss-gate closes use that same execution price when validating their diagnostic exchange minimum.

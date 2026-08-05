@@ -78,8 +78,6 @@ from live.diagnostic_safety import (
     bounded_exchange_error_context,
     exception_text_contains,
     exception_type_name_contains,
-    sanitize_diagnostic_text,
-    sanitized_exception_message,
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
@@ -547,7 +545,7 @@ def _bounded_traceback_origin(exc: BaseException) -> str:
 
 
 def _bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
-    """Return a durable frame chain with secret-sanitized exception messages."""
+    """Return a durable frame chain without exception text, locals, or source lines."""
     exceptions: list[dict[str, Any]] = []
     visited: set[int] = set()
     current: BaseException | None = exc
@@ -593,7 +591,6 @@ def _bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
             {
                 "relation": relation,
                 "error_type": bounded_exception_type(current),
-                "message": sanitized_exception_message(current),
                 "frames": frames,
             }
         )
@@ -609,8 +606,7 @@ def _bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
         "exceptions": exceptions,
         "frame_count": total_frames,
         "truncated": truncated,
-        "includes_exception_text": True,
-        "exception_text_sanitized": True,
+        "includes_exception_text": False,
         "includes_locals": False,
     }
 
@@ -626,7 +622,6 @@ def _bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
             "truncated": True,
             "unavailable_reason": "projection_failed",
             "includes_exception_text": False,
-            "exception_text_sanitized": False,
             "includes_locals": False,
         }
 
@@ -642,37 +637,14 @@ def _bounded_runtime_stage(bot: Any) -> str:
 
 def _log_process_failure(label: str, exc: BaseException) -> None:
     current_bot = globals().get("bot")
-    projection = (
-        f"{label} | error_type={bounded_exception_type(exc)} "
-        f"status={bounded_exception_status(exc) or '-'} "
-        f"code={bounded_exception_code(exc) or '-'} "
-        f"stage={_bounded_runtime_stage(current_bot)} "
-        f"origin={_bounded_traceback_origin(exc)} "
-        f"message={sanitized_exception_message(exc, max_len=1024)}"
-    )
     logging.error(
-        "%s",
-        sanitize_diagnostic_text(
-            projection, max_len=_INCIDENT_CONSOLE_MESSAGE_MAX_LEN
-        ),
-    )
-
-
-def _format_terminal_startup_console_projection(
-    *,
-    stage: str,
-    error_type: str,
-    status: str,
-    code: str,
-    message: str,
-) -> str:
-    projection = (
-        "[boot] terminal startup validation failure | "
-        f"stage={stage} error_type={error_type} status={status} code={code} "
-        f"message={message}"
-    )
-    return sanitize_diagnostic_text(
-        projection, max_len=_INCIDENT_CONSOLE_MESSAGE_MAX_LEN
+        "%s | error_type=%s status=%s code=%s stage=%s origin=%s",
+        label,
+        bounded_exception_type(exc),
+        bounded_exception_status(exc) or "-",
+        bounded_exception_code(exc) or "-",
+        _bounded_runtime_stage(current_bot),
+        _bounded_traceback_origin(exc),
     )
 
 
@@ -711,10 +683,6 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
         "trades",
     }
 )
-
-_EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN = 21
-_INCIDENT_CONSOLE_MESSAGE_MAX_LEN = 196
-
 
 def compute_live_warmup_windows(
     symbols_by_side: Dict[str, set],
@@ -3663,7 +3631,6 @@ class Passivbot:
                 "stage": boot_stage,
                 "incident_id": incident_id,
                 "error_type": error_type,
-                "message": sanitized_exception_message(exc),
                 "status": error_status,
                 "code": error_code,
                 "origin": _bounded_traceback_origin(exc),
@@ -3693,19 +3660,16 @@ class Passivbot:
             )
             if self._startup_exception_is_terminal(exc, boot_stage):
                 logging.critical(
-                    "%s",
-                    _format_terminal_startup_console_projection(
-                        stage=boot_stage,
-                        error_type=error_type,
-                        status=error_status,
-                        code=error_code,
-                        message=incident_fields["message"],
-                    ),
+                    "[boot] terminal startup validation failure | "
+                    "stage=%s error_type=%s status=%s code=%s",
+                    boot_stage,
+                    error_type,
+                    error_status,
+                    error_code,
                 )
                 raise FatalBotException(
                     f"terminal startup validation failure during {boot_stage}; "
-                    f"error_type={error_type} status={error_status} code={error_code} "
-                    f"message={incident_fields['message']}"
+                    f"error_type={error_type} status={error_status} code={error_code}"
                 ) from exc
             raise
 
@@ -6077,7 +6041,6 @@ class Passivbot:
         """Return bounded classifications for execution-loop incident projections."""
         return {
             "error_type": bounded_exception_type(exc),
-            "message": sanitized_exception_message(exc),
             "status": bounded_exception_status(exc) or "-",
             "code": bounded_exception_code(exc) or "-",
             "endpoint": self._execution_loop_error_endpoint(exc),
@@ -6215,7 +6178,7 @@ class Passivbot:
             },
         )
         logging.error(
-            "[error] operation=run_execution_loop incident=%s error_type=%s status=%s code=%s endpoint=%s stage=%s origin=%s action=%s cycle=%s message=%s",
+            "[error] operation=run_execution_loop incident=%s error_type=%s status=%s code=%s endpoint=%s stage=%s origin=%s action=%s cycle=%s",
             incident_id,
             fields["error_type"],
             fields["status"],
@@ -6225,9 +6188,6 @@ class Passivbot:
             fields["origin"],
             incident_action,
             incident_cycle,
-            sanitize_diagnostic_text(
-                fields["message"], max_len=_EXECUTION_LOOP_CONSOLE_MESSAGE_MAX_LEN
-            ),
         )
         self._log_execution_loop_error_burst(fields)
         await self.restart_bot_on_too_many_errors()

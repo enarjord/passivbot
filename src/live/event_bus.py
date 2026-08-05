@@ -17,11 +17,7 @@ import weakref
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
-from live.diagnostic_safety import (
-    bounded_exception_type,
-    is_sensitive_diagnostic_key as _is_sensitive_key,
-    sanitize_diagnostic_text,
-)
+from live.diagnostic_safety import bounded_exception_type
 
 
 SCHEMA_VERSION = 1
@@ -611,6 +607,10 @@ _REGISTERED_EVENT_TYPES = frozenset(
     if name.isupper() and type(value) is str
 )
 _DIAGNOSTIC_EVENT_TYPE_MAX_LEN = 120
+_DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE = re.compile(
+    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
+    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
+)
 _UNKNOWN_DIAGNOSTIC_EVENT_TYPE = "unknown_event"
 
 
@@ -626,19 +626,27 @@ VALID_STATUSES = {
 }
 
 
-_SENSITIVE_HEADER_KEY_COMPACT_EXACT = {
-    "key",
-    "sign",
-    "xamzsignature",
+_SENSITIVE_KEY_FRAGMENTS = {
+    "apikey",
+    "api_key",
+    "api-key",
+    "authorization",
+    "auth",
+    "cookie",
+    "passphrase",
+    "password",
+    "privatekey",
+    "private_key",
+    "private-key",
+    "secret",
+    "signature",
+    "token",
+    "walletaddress",
+    "wallet_address",
+    "wallet-address",
+    "x-mbx-apikey",
 }
-_SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES = (
-    "accesskey",
-    "accesssign",
-    "apisign",
-    "apisignature",
-    "partnersign",
-)
-_RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT = 64
+_NON_SENSITIVE_KEY_EXACT = {"authoritative_epoch"}
 
 
 def utc_ms() -> int:
@@ -661,6 +669,7 @@ def bounded_diagnostic_event_type(event_type: object) -> str:
     normalized = LEGACY_EVENT_TYPE_ALIASES.get(event_type, event_type)
     if (
         len(normalized) > _DIAGNOSTIC_EVENT_TYPE_MAX_LEN
+        or _DIAGNOSTIC_EVENT_TYPE_SENSITIVE_RE.search(normalized)
         or normalized not in _REGISTERED_EVENT_TYPES
     ):
         return _UNKNOWN_DIAGNOSTIC_EVENT_TYPE
@@ -682,90 +691,28 @@ def payload_hash_raw(payload: bytes | str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _is_sensitive_header_key(key: object) -> bool:
-    if _is_sensitive_key(key):
-        return True
-    compact = re.sub(r"[^a-z0-9]+", "", str(key).lower())
-    return compact in _SENSITIVE_HEADER_KEY_COMPACT_EXACT or compact.endswith(
-        _SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES
+def _is_sensitive_key(key: object) -> bool:
+    cleaned = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch in "_-")
+    if cleaned in _NON_SENSITIVE_KEY_EXACT:
+        return False
+    compact = cleaned.replace("-", "").replace("_", "")
+    return any(
+        fragment in cleaned or fragment.replace("-", "").replace("_", "") in compact
+        for fragment in _SENSITIVE_KEY_FRAGMENTS
     )
-
-
-def _is_header_container_key(key: object) -> bool:
-    compact = re.sub(r"[^a-z0-9]+", "", str(key).lower())
-    return compact in {"headers", "requestheaders"}
-
-
-def _is_sensitive_header_pair(value: object) -> bool:
-    return (
-        type(value) in {list, tuple}
-        and len(value) == 2
-        and type(value[0]) is str
-        and _is_sensitive_header_key(value[0])
-    )
-
-
-def _sensitive_header_entry_value_key(value: object) -> str | None:
-    if type(value) is not dict:
-        return None
-    value_key = next(
-        (
-            key
-            for key in value
-            if type(key) is str and key.lower() == "value"
-        ),
-        None,
-    )
-    if value_key is None:
-        return None
-    for name_key, header_name in value.items():
-        if (
-            type(name_key) is str
-            and name_key.lower() in {"name", "key", "header"}
-            and type(header_name) is str
-            and _is_sensitive_header_key(header_name)
-        ):
-            return value_key
-    return None
-
-
-def _redact_payload(value: Any, *, header_context: bool) -> Any:
-    if isinstance(value, Mapping):
-        sensitive_header_value_key = (
-            _sensitive_header_entry_value_key(value) if header_context else None
-        )
-        return {
-            str(key): (
-                REDACTED
-                if _is_sensitive_key(key)
-                or (header_context and _is_sensitive_header_key(key))
-                or key == sensitive_header_value_key
-                else _redact_payload(
-                    item,
-                    header_context=_is_header_container_key(key),
-                )
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        if header_context and _is_sensitive_header_pair(value):
-            return [_redact_payload(value[0], header_context=False), REDACTED]
-        return [_redact_payload(item, header_context=header_context) for item in value]
-    if isinstance(value, tuple):
-        if header_context and _is_sensitive_header_pair(value):
-            return [_redact_payload(value[0], header_context=False), REDACTED]
-        return [_redact_payload(item, header_context=header_context) for item in value]
-    if isinstance(value, str):
-        return sanitize_diagnostic_text(
-            value,
-            max_len=LIVE_EVENT_MAX_STRING_CHARS,
-            one_line=False,
-        )
-    return value
 
 
 def redact_payload(value: Any) -> Any:
-    return _redact_payload(value, header_context=False)
+    if isinstance(value, Mapping):
+        return {
+            str(key): REDACTED if _is_sensitive_key(key) else redact_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_payload(item) for item in value]
+    return value
 
 
 _LIVE_EVENT_TRUNCATION_SUFFIX = "...<truncated>"
@@ -937,7 +884,6 @@ def _bounded_live_event_value(
     depth: int,
     ancestors: set[int],
     state: _LiveEventBudgetState,
-    header_context: bool = False,
     is_root: bool = False,
     omit_on_limit: bool = False,
     existing_budget_metadata: Mapping[str, int] | None = None,
@@ -952,14 +898,10 @@ def _bounded_live_event_value(
     if value is None or type(value) is bool:
         return value
     if isinstance(value, str):
-        sanitized = sanitize_diagnostic_text(
-            value,
-            max_len=LIVE_EVENT_MAX_STRING_CHARS,
-            one_line=False,
-        )
         if len(value) > LIVE_EVENT_MAX_STRING_CHARS:
             state.add("truncated_strings")
-        return sanitized
+            return _truncate_live_event_text(value, LIVE_EVENT_MAX_STRING_CHARS)
+        return value
     if type(value) is int:
         if value.bit_length() <= _LIVE_EVENT_MAX_INTEGER_BITS:
             return value
@@ -981,9 +923,6 @@ def _bounded_live_event_value(
             )
         ancestors.add(value_id)
         normalized: dict[str, Any] = {}
-        sensitive_header_value_key = (
-            _sensitive_header_entry_value_key(value) if header_context else None
-        )
         processed_keys = 0
         root_budget_key_present = False
         if is_root:
@@ -1040,12 +979,7 @@ def _bounded_live_event_value(
                 if normalized_key in normalized and (key_truncated or force_redaction):
                     state.add("omitted_keys")
                     continue
-                if (
-                    force_redaction
-                    or _is_sensitive_key(normalized_key)
-                    or (header_context and _is_sensitive_header_key(normalized_key))
-                    or normalized_key == sensitive_header_value_key
-                ):
+                if force_redaction or _is_sensitive_key(normalized_key):
                     normalized[normalized_key] = REDACTED
                 else:
                     normalized[normalized_key] = _bounded_live_event_value(
@@ -1053,7 +987,6 @@ def _bounded_live_event_value(
                         depth=depth + 1,
                         ancestors=ancestors,
                         state=state,
-                        header_context=_is_header_container_key(normalized_key),
                     )
             else:
                 state.add(
@@ -1081,17 +1014,6 @@ def _bounded_live_event_value(
         ancestors.add(value_id)
         normalized_items: list[Any] = []
         try:
-            if header_context and _is_sensitive_header_pair(value):
-                normalized_items.append(
-                    _bounded_live_event_value(
-                        value[0],
-                        depth=depth + 1,
-                        ancestors=ancestors,
-                        state=state,
-                    )
-                )
-                normalized_items.append(REDACTED)
-                return normalized_items
             for index, child in enumerate(value):
                 if index >= LIVE_EVENT_MAX_LIST_ITEMS:
                     state.add(
@@ -1104,7 +1026,6 @@ def _bounded_live_event_value(
                     depth=depth + 1,
                     ancestors=ancestors,
                     state=state,
-                    header_context=header_context,
                     omit_on_limit=True,
                 )
                 if normalized_child is _LIVE_EVENT_OMIT_LIST_ITEM:
@@ -1976,16 +1897,6 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
-    message = _data_str(data, "message")
-    if message:
-        suffix = "...<truncated>"
-        projected_message = (
-            message
-            if len(message) <= _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT
-            else message[: _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT - len(suffix)]
-            + suffix
-        )
-        parts.append(f"message={projected_message}")
     return parts
 
 

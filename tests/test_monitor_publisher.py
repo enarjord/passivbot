@@ -54,7 +54,6 @@ def test_monitor_publisher_writes_manifest_events_and_snapshot(tmp_path):
     events = [json.loads(line) for line in (root / "events" / "current.ndjson").read_text().splitlines()]
     assert [event["kind"] for event in events] == ["bot.start", "error.bot"]
     assert events[1]["payload"]["error_type"] == "RuntimeError"
-    assert events[1]["payload"]["message"] == "boom"
     assert events[1]["payload"]["source"] == "start_bot"
 
     written = publisher.write_snapshot(
@@ -131,10 +130,6 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
         "source": "start_bot",
         "stage": "init_markets",
         "error_type": "RuntimeError",
-        "message": (
-            "https://api.example.test/private?api_key=[redacted] "
-            "Authorization: [redacted]"
-        ),
     }
 
     opaque_event = publisher.record_error(
@@ -149,10 +144,7 @@ def test_monitor_publisher_record_error_redacts_diagnostic_fields_and_keeps_safe
         },
         ts=1_235,
     )
-    assert opaque_event["payload"] == {
-        "error_type": "RuntimeError",
-        "message": "safe",
-    }
+    assert opaque_event["payload"] == {"error_type": "RuntimeError"}
 
     serialized = publisher.current_events_path.read_text()
     assert secret not in serialized
