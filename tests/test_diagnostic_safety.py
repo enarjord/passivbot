@@ -249,12 +249,21 @@ def test_sanitize_diagnostic_text_redacts_explicit_slash_delimited_credentials()
 def test_sanitize_diagnostic_text_redacts_remaining_credential_aliases():
     sanitized = sanitize_diagnostic_text(
         "apiSign=FIRST api_sign=SECOND access_key_id=THIRD "
-        "session_token=FOURTH secretAccessKey=FIFTH safe=ok"
+        "session_token=FOURTH secretAccessKey=FIFTH "
+        "authSign=SIXTH auth_sign=SEVENTH safe=ok"
     )
 
-    for secret in ("FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"):
+    for secret in (
+        "FIRST",
+        "SECOND",
+        "THIRD",
+        "FOURTH",
+        "FIFTH",
+        "SIXTH",
+        "SEVENTH",
+    ):
         assert secret not in sanitized
-    assert sanitized.count("[redacted]") == 5
+    assert sanitized.count("[redacted]") == 7
     assert "safe=ok" in sanitized
 
 

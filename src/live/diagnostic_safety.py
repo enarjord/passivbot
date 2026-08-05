@@ -44,7 +44,7 @@ _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
     r"refreshToken|session[-_]?token|client[-_]?secret|secret[-_]?key|"
     r"secret[-_]?access[-_]?key|security[-_]?token|"
     r"privateKey|requestSignature|request[-_]?signature|"
-    r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
+    r"broker[-_]?key|auth[-_]?(?:key|secret|sign(?:ature)?|token)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|"
     r"bearer|jwt|credentials?|password|passphrase|private[-_]?key)"
 )
