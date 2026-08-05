@@ -7,10 +7,10 @@ All notable user-facing changes will be documented in this file.
 - Redact complete quoted generic credentials, quote-containing unquoted credentials,
   unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,
   exact credential and remote auth/cookie labels, quoted and unquoted authentication-header values,
-  equals-style credential flags, scheme-prefixed unquoted credential values, and URL userinfo
-  across supported schemes with or without a password delimiter in retained diagnostics. Keep
-  terminal startup and outer process failure console records within the normal bounded projection
-  budget.
+  auth-header containers, key/secret aliases, equals-style credential flags, scheme-prefixed
+  unquoted credential values, and URL userinfo across supported schemes with or without a password
+  delimiter in retained diagnostics. Keep terminal startup and outer process failure console
+  records within the normal bounded projection budget.
 - Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
   limit reducers cannot become crossing orders merely through price-step rounding.
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with

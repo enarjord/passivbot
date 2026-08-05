@@ -1005,6 +1005,25 @@ def test_redact_payload_redacts_exact_authentication_keys_without_matching_autho
     }
 
 
+def test_redact_payload_redacts_auth_header_containers_before_recursing():
+    source = {
+        "authHeaders": {"KEY": "GATEKEY", "SIGN": "GATESIGN"},
+        "auth_headers": {"ACCESS-KEY": "OKXKEY"},
+        "response_headers": {"X-Trace": "trace-123"},
+    }
+
+    assert redact_payload(source) == {
+        "authHeaders": REDACTED,
+        "auth_headers": REDACTED,
+        "response_headers": {"X-Trace": "trace-123"},
+    }
+    assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
+        "authHeaders": REDACTED,
+        "auth_headers": REDACTED,
+        "response_headers": {"X-Trace": "trace-123"},
+    }
+
+
 def test_redact_payload_redacts_exact_bearer_and_jwt_keys():
     assert redact_payload(
         {

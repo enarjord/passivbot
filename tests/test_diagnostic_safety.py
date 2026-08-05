@@ -125,6 +125,18 @@ def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
     assert sanitized.count("[redacted]") == 3
 
 
+def test_sanitize_diagnostic_text_redacts_key_secret_aliases():
+    sanitized = sanitize_diagnostic_text(
+        "secretKey=FIRST accessKey=SECOND client_secret=THIRD "
+        "security_token=FOURTH safe_label=visible"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD", "FOURTH"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 4
+    assert "safe_label=visible" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_whitespace_separated_credentials():
     sanitized = sanitize_diagnostic_text(
         "api_key TOPSECRET password OTHERSECRET token THIRDSECRET safe_label visible"
@@ -174,6 +186,19 @@ def test_sanitize_diagnostic_text_redacts_remote_auth_and_cookie_labels():
     assert "authorization [redacted]" in sanitized
     assert "cookie=[redacted]" in sanitized
     assert "safe_label visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_scheme_prefixed_remote_auth_labels():
+    sanitized = sanitize_diagnostic_text(
+        "auth Basic TOPSECRET safe=visible, cookie Token SECONDSECRET other=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "auth [redacted]" in sanitized
+    assert "cookie [redacted]" in sanitized
+    assert "safe=visible" in sanitized
+    assert "other=visible" in sanitized
 
 
 def test_sanitize_diagnostic_text_redacts_auth_mapping_delimiters():

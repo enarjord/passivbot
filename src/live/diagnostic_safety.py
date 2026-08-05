@@ -29,8 +29,9 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|(?!\4)[\s\S])*\4"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN = (
-    r"(?:api[-_]?(?:key|secret|signature)|apikey|accessToken|refreshToken|"
-    r"clientSecret|privateKey|requestSignature|request[-_]?signature|"
+    r"(?:api[-_]?(?:key|secret|signature)|apikey|access[-_]?(?:key|token)|"
+    r"refreshToken|client[-_]?secret|secret[-_]?key|security[-_]?token|"
+    r"privateKey|requestSignature|request[-_]?signature|"
     r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|secret|token|"
     r"bearer|jwt|signature|credentials?|password|passphrase|private[-_]?key)"
@@ -97,7 +98,9 @@ _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_\"'-])"
     r"(auth|authentication|authorization|cookie|set[-_]?cookie)"
     r"(\s*=\s*|\s+)"
-    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;&\"'}]+)"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|[^,\s;&\"'}]+)"
 )
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
     r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
