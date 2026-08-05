@@ -107,6 +107,37 @@ def test_sanitize_diagnostic_text_redacts_whitespace_separated_credentials():
     assert "safe_label visible" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_complete_unquoted_credential_with_quote():
+    sanitized = sanitize_diagnostic_text(
+        "password TOP'SECRET; SECOND token THIRDSECRET safe_label visible"
+    )
+
+    for secret in ("SECRET", "SECOND", "THIRDSECRET"):
+        assert secret not in sanitized
+    assert "password [redacted]" in sanitized
+    assert "token [redacted]" in sanitized
+    assert "safe_label visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_bearer_and_jwt_fields():
+    sanitized = sanitize_diagnostic_text(
+        'params={"bearer": "TOPSECRET", "jwt": "SECONDSECRET", "safe": "visible"}'
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert '"bearer": [redacted]' in sanitized
+    assert '"jwt": [redacted]' in sanitized
+    assert '"safe": "visible"' in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_unterminated_quoted_credential():
+    sanitized = sanitize_diagnostic_text('config={"privateKey": "TOPSECRET')
+
+    assert "TOPSECRET" not in sanitized
+    assert 'privateKey": [redacted]' in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_opposite_quotes_inside_generic_credentials():
     sanitized = sanitize_diagnostic_text(
         'config={"password": "TOP\'SECRET; SECOND", '
