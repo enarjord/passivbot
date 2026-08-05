@@ -5126,6 +5126,14 @@ class CandlestickManager:
             try:
                 params: Dict[str, Any] = {}
                 request_limit = int(limit)
+                # Bitget account-mode detection enables UTA routing on the shared
+                # authenticated CCXT client. Public candle history is account-
+                # independent, and the UTA candle endpoint may expose a shorter
+                # history than the classic futures history endpoint. Override only
+                # this public request so live UTA accounts retain private v3 routing
+                # without losing older strategy candles.
+                if "bitget" in exid:
+                    params["uta"] = False
                 # Provide an end bound for exchanges that support it.
                 # Note: Avoid passing 'until' to Bitget due to API validation errors on non-1m tfs.
                 if is_weex and end_exclusive_ms is not None:

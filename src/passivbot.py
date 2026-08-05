@@ -18295,6 +18295,11 @@ class Passivbot:
                         ema_type, symbol, span, "exception", ema_error_type(e)
                     )
                     continue
+                if math.isinf(val):
+                    raise RuntimeError(
+                        f"[ema] non-finite {ema_type} value {val} "
+                        f"for {symbol} span={span:.8g}"
+                    )
                 if math.isfinite(val):
                     out[span] = val
                 else:
@@ -18375,6 +18380,11 @@ class Passivbot:
                     if math.isfinite(val):
                         out[span] = val
                         continue
+                    if math.isinf(val):
+                        raise RuntimeError(
+                            f"[ema] non-finite {ema_type} value {val} "
+                            f"for {symbol} span={span:.8g}"
+                        )
                     reason = f"non-finite {ema_type} value {val}"
                 if metric_key is not None:
                     fallback = cached_fallbacks.get(span)
@@ -18427,10 +18437,6 @@ class Passivbot:
                 self.ema_type = ema_type
                 self.missing = list(missing)
                 self.detail = detail
-                self.contains_non_finite = any(
-                    "non-finite" in str(reason).lower()
-                    for _span, reason in self.missing
-                )
 
         class MissingCloseEma(RuntimeError):
             def __init__(
@@ -18446,10 +18452,6 @@ class Passivbot:
                 self.symbol = symbol
                 self.missing = list(missing)
                 self.detail = detail
-                self.contains_non_finite = any(
-                    "non-finite" in str(reason).lower()
-                    for _span, reason in self.missing
-                )
 
         def close_ema_reason_detail(reason: str) -> tuple[str, str]:
             if str(reason).startswith("non-finite close EMA value"):
@@ -18557,6 +18559,11 @@ class Passivbot:
                             )
                         self._orchestrator_close_ema_fallback_counts[key] = 0
                     else:
+                        if math.isinf(val):
+                            raise RuntimeError(
+                                f"[ema] non-finite close EMA value {val} "
+                                f"for {symbol} span={span:.8g}"
+                            )
                         reason = f"non-finite close EMA value {val}"
                 if reason is None:
                     continue
@@ -18843,56 +18850,61 @@ class Passivbot:
                     ),
                     "m1_log_range",
                 )
-            nonfinite_close = [
+            infinite_close = [
                 span
                 for span in sorted(need_close_spans[sym])
-                if span in close and not math.isfinite(float(close[span]))
+                if span in close and math.isinf(float(close[span]))
             ]
-            if nonfinite_close:
+            if infinite_close:
                 raise RuntimeError(
                     "[ema] non-finite projected open-tail close EMA for "
-                    f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_close)}"
+                    f"{sym}: spans={','.join(f'{span:.8g}' for span in infinite_close)}"
                 )
-            missing_close = [
-                span for span in sorted(need_close_spans[sym]) if span not in close
-            ]
-            if missing_close:
-                missing = [
-                    (float(span), "projected close EMA missing")
-                    for span in missing_close
-                ]
+            missing = []
+            for span in sorted(need_close_spans[sym]):
+                if span not in close:
+                    missing.append((float(span), "projected close EMA missing"))
+                elif math.isnan(float(close[span])):
+                    missing.append(
+                        (
+                            float(span),
+                            "non-finite projected open-tail close EMA value nan",
+                        )
+                    )
+            if missing:
                 detail = "; ".join(
                     [f"span={span:.8g} reason={reason}" for span, reason in missing]
                 )
                 raise MissingCloseEma(sym, missing, detail)
             if not is_forager_mode() or project_strategy_log_range:
                 projected_lr1m = projected.get("log_range", {}) or {}
-                nonfinite_required_lr1m = [
+                infinite_required_lr1m = [
                     span
                     for span in required_m1_lr_for_symbol
                     if span in projected_lr1m
-                    and not math.isfinite(float(projected_lr1m[span]))
+                    and math.isinf(float(projected_lr1m[span]))
                 ]
-                if nonfinite_required_lr1m:
+                if infinite_required_lr1m:
                     raise RuntimeError(
                         "[ema] non-finite projected open-tail m1 log-range EMA for "
-                        f"{sym}: spans={','.join(f'{span:.8g}' for span in nonfinite_required_lr1m)}"
+                        f"{sym}: spans={','.join(f'{span:.8g}' for span in infinite_required_lr1m)}"
                     )
-                missing_required_lr1m = [
-                    span
-                    for span in required_m1_lr_for_symbol
-                    if span not in projected_lr1m
-                ]
-                if missing_required_lr1m:
-                    missing = [
-                        (float(span), "projected m1 log-range EMA missing")
-                        for span in missing_required_lr1m
-                    ]
+                missing = []
+                for span in required_m1_lr_for_symbol:
+                    if span not in projected_lr1m:
+                        missing.append(
+                            (float(span), "projected m1 log-range EMA missing")
+                        )
+                    elif math.isnan(float(projected_lr1m[span])):
+                        missing.append(
+                            (
+                                float(span),
+                                "non-finite projected open-tail m1_log_range value nan",
+                            )
+                        )
+                if missing:
                     detail = "; ".join(
-                        [
-                            f"span={span:.8g} reason={reason}"
-                            for span, reason in missing
-                        ]
+                        [f"span={span:.8g} reason={reason}" for span, reason in missing]
                     )
                     raise MissingRequiredEma(
                         sym, "m1_log_range", missing, detail
@@ -18951,8 +18963,6 @@ class Passivbot:
             def collect_input_unavailability(exc: Exception) -> bool:
                 if not isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
                     return False
-                if exc.contains_non_finite:
-                    return False
                 input_unavailability.append(exc)
                 return True
 
@@ -18975,8 +18985,6 @@ class Passivbot:
                             sym, sorted(need_close_spans[sym]), log_on_missing=False
                         )
                     except MissingCloseEma as exc:
-                        if exc.contains_non_finite:
-                            raise
                         late_projection_ctx = projection_contexts.get(
                             sym
                         ) or refresh_open_tail_projection_context(sym)
@@ -19026,8 +19034,6 @@ class Passivbot:
                         )
                     except Exception as exc:
                         if not isinstance(exc, MissingRequiredEma):
-                            raise
-                        if exc.contains_non_finite:
                             raise
                         late_projection_ctx = refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
@@ -19100,8 +19106,6 @@ class Passivbot:
             except Exception as exc:
                 if not required_ema_can_mark_nontradable(sym):
                     if isinstance(exc, (MissingCloseEma, MissingRequiredEma)):
-                        if exc.contains_non_finite:
-                            raise
                         self._orchestrator_allow_missing_strategy_inputs_symbols.add(
                             sym
                         )

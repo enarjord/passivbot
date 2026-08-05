@@ -9,6 +9,9 @@ All notable user-facing changes will be documented in this file.
   ladder for the older leading prefix, reports approximate source counts, and never uses coarser
   candles to conceal gaps inside the available 1m era. Fill-based episode boundaries, realized
   PnL, and fees remain exact.
+- Route Bitget public OHLCV requests through the complete classic futures history endpoint even
+  when the authenticated account uses UTA/Elite v3, preventing older available candles from being
+  omitted from live EMA windows while retaining UTA routing for private account and order calls.
 - Recognize repeated exclusive switching between complete order cohorts as live
   order-churn evidence. Alternating long/short or order-type intent can now use
   the existing account-wide far-order allowance without merging position-side
@@ -39,7 +42,9 @@ All notable user-facing changes will be documented in this file.
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
   strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
   strategy branches remain independent when their input needs differ, and independent panic,
-  WEL, and TWEL reducers may continue when their own inputs are complete.
+  WEL, and TWEL reducers may continue when their own inputs are complete. A `NaN` returned by the
+  completed-candle EMA API now follows that unavailable-input path instead of restarting the whole
+  execution cycle; positive or negative infinity remains fatal.
 
 - Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
   full-range sources now follow configured exchange priority instead of total volume, robust
