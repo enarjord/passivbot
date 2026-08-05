@@ -41,6 +41,12 @@ _DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN = (
     r"[\"']?(?:\s*[:=/]\s*|\s+)"
     r"|\}|\Z"
 )
+_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN = (
+    r"(?:,|;)\s*[\"']?[A-Za-z_][A-Za-z0-9_.-]*[\"']?\s*[:=]"
+    r"|\s+--[A-Za-z0-9_-]+(?=\s|=|\Z)"
+    r"|\s+[A-Za-z_][A-Za-z0-9_.-]*\s*[:=]"
+    r"|\}|\Z"
+)
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"(\s*:\s*)(?:bearer|basic)?\s*[\s\S]*?"
@@ -54,20 +60,26 @@ _DIAGNOSTIC_PREFIXED_SENSITIVE_HEADER_RE = re.compile(
     r"access-(?:key|secret|sign(?:ature)?|passphrase)|"
     r"auth-(?:key|secret|sign(?:ature)?|token)|security-token|private-key|"
     r"request-signature)))"
-    r"(\s*=\s*|\s+)(?:bearer|basic)?\s*"
-    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
+    r"(\s*=\s*|\s+)"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|[^,\s;}}]+)"
 )
 _DIAGNOSTIC_EQUALS_SENSITIVE_HEADER_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
     rf"({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
-    r"(\s*=\s*)(?:bearer|basic)?\s*"
-    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
+    r"(\s*=\s*)"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|[^,\s;}}]+)"
 )
 _DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE = re.compile(
     r"(?<![A-Za-z0-9_-])(?=[A-Z0-9_-]+\s)"
     rf"((?i:{_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN}))"
-    r"(\s+)(?:bearer|basic)?\s*"
-    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;}}]+)"
+    r"(\s+)"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|[^,\s;}}]+)"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
@@ -77,6 +89,7 @@ _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
     rf"|(['\"])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
     rf"|(?=[^,\s;&}}]*[\"'])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
     r"|[^,\s;&\"'}]+"
     r")"
 )
@@ -89,7 +102,8 @@ _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
     r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
     r"passphrase|private[-_]?key)(?:\s+|\s*=\s*))"
-    r"(?:\"[^\"]*\"|'[^']*'|\S+)"
+    rf"(?:(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|\"[^\"]*\"|'[^']*'|\S+)"
 )
 _DIAGNOSTIC_AUTH_SCHEME_RE = re.compile(
     r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+"

@@ -222,6 +222,20 @@ def test_sanitize_diagnostic_text_redacts_exact_headers_without_colons():
     assert "ACCESS-KEY=[redacted]" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_scheme_prefixed_exact_header_values():
+    sanitized = sanitize_diagnostic_text(
+        "AUTHORIZATION=ApiKey TOPSECRET safe_label=visible, "
+        "SIGN Basic SECONDSECRET other_label=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "AUTHORIZATION=[redacted]" in sanitized
+    assert "SIGN [redacted]" in sanitized
+    assert "safe_label=visible" in sanitized
+    assert "other_label=visible" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_exact_credential_labels():
     sanitized = sanitize_diagnostic_text(
         "credential=TOPSECRET credentials SECONDSECRET safe_label=visible"
@@ -234,6 +248,20 @@ def test_sanitize_diagnostic_text_redacts_exact_credential_labels():
     assert "safe_label=visible" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_scheme_prefixed_credential_labels():
+    sanitized = sanitize_diagnostic_text(
+        "credential=ApiKey TOPSECRET safe_label=visible, "
+        "credentials=Bearer SECONDSECRET other_label=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "SECONDSECRET" not in sanitized
+    assert "credential=[redacted]" in sanitized
+    assert "credentials=[redacted]" in sanitized
+    assert "safe_label=visible" in sanitized
+    assert "other_label=visible" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_equals_style_cli_credentials():
     sanitized = sanitize_diagnostic_text(
         "--api-key=TOPSECRET --token=SECONDSECRET --safe-option=visible"
@@ -243,6 +271,16 @@ def test_sanitize_diagnostic_text_redacts_equals_style_cli_credentials():
     assert "SECONDSECRET" not in sanitized
     assert "--api-key=[redacted]" in sanitized
     assert "--token=[redacted]" in sanitized
+    assert "--safe-option=visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_scheme_prefixed_equals_cli_values():
+    sanitized = sanitize_diagnostic_text(
+        "--api-secret=Basic TOPSECRET --safe-option=visible"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "--api-secret=[redacted]" in sanitized
     assert "--safe-option=visible" in sanitized
 
 
