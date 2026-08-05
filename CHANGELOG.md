@@ -617,6 +617,12 @@ All notable user-facing changes will be documented in this file.
   effect and close-only effect from position side in effective one-way mode. UTA orders with an
   explicit `posSide` now derive close-only effect directly from the authoritative `side` plus
   `posSide` tuple.
+- Fixed power-of-ten market aliases collapsing distinct contracts when an exchange lists both the
+  prefixed and unprefixed base, such as `1000CAT` and `CAT` on Binance or Bitget. Exact native and
+  CCXT symbols now resolve through distinct canonical names, map output is deterministic, and
+  ordinary single-contract aliases such as `1000SHIB -> SHIB` remain unchanged. Configs that
+  previously used bare `CAT` for Simon's Cat must use `1000CAT`; bare `CAT` now identifies the
+  unprefixed market.
 - Fixed live order-churn evidence treating the execution loop's normal 30-second scheduled wait as
   a provenance gap, which could prevent the account-wide churn gate from activating for slowly
   moving EMA-based orders.
