@@ -131,6 +131,20 @@ def test_sanitize_diagnostic_text_redacts_bearer_and_jwt_fields():
     assert '"safe": "visible"' in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_remote_auth_and_cookie_labels():
+    sanitized = sanitize_diagnostic_text(
+        "auth TOPSECRET authorization SECONDSECRET "
+        "cookie=session=COOKIESECRET safe_label visible"
+    )
+
+    for secret in ("TOPSECRET", "SECONDSECRET", "COOKIESECRET"):
+        assert secret not in sanitized
+    assert "auth [redacted]" in sanitized
+    assert "authorization [redacted]" in sanitized
+    assert "cookie=[redacted]" in sanitized
+    assert "safe_label visible" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_unterminated_quoted_credential():
     sanitized = sanitize_diagnostic_text('config={"privateKey": "TOPSECRET')
 

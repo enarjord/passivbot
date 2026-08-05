@@ -1005,6 +1005,20 @@ def test_redact_payload_redacts_exact_authentication_keys_without_matching_autho
     }
 
 
+def test_redact_payload_redacts_exact_bearer_and_jwt_keys():
+    assert redact_payload(
+        {
+            "bearer": "opaque-bearer-value",
+            "jwt": "opaque-jwt-value",
+            "jwt_expiry": 123456789,
+        }
+    ) == {
+        "bearer": REDACTED,
+        "jwt": REDACTED,
+        "jwt_expiry": 123456789,
+    }
+
+
 def test_redact_payload_redacts_delimited_cookie_keys_without_matching_substrings():
     assert redact_payload(
         {

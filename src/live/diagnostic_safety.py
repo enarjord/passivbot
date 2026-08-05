@@ -57,6 +57,12 @@ _DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
     r"|[^,\s;&\"'}]+"
     r")"
 )
+_DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_\"'-])"
+    r"(auth|authentication|authorization|cookie|set[-_]?cookie)"
+    r"(\s*=\s*|\s+)"
+    r"(?:(['\"])(?:\\.|(?!\3)[\s\S])*\3|[^,\s;&\"'}]+)"
+)
 _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
     r"(?i)(--(?:api[-_]?key|apikey|api[-_]?secret|secret|token|signature|password|"
     r"passphrase|private[-_]?key)\s+)(?:\"[^\"]*\"|'[^']*'|\S+)"
@@ -169,6 +175,9 @@ def sanitize_diagnostic_text(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_VALUE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_CLI_RE.sub(

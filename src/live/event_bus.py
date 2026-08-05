@@ -696,7 +696,9 @@ def _is_sensitive_key(key: object) -> bool:
         in {
             "auth",
             "authentication",
+            "bearer",
             "cookie",
+            "jwt",
             "secret",
             "setcookie",
             "signature",
