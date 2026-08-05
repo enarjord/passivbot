@@ -124,6 +124,33 @@ async def test_resolution_ladder_rejects_coarse_bucket_crossing_1m_boundary():
 
 
 @pytest.mark.asyncio
+async def test_manager_resolution_ladder_reuses_canonical_candle_reads(tmp_path):
+    manager = CandlestickManager(exchange=None, cache_dir=str(tmp_path))
+    manager._now_ms_callback = lambda: 13 * ONE_MIN_MS
+    calls = []
+
+    async def fake_get_candles(
+        symbol, *, start_ts, end_ts, strict, timeframe=None, **_kwargs
+    ):
+        calls.append((symbol, timeframe or "1m", start_ts, end_ts, strict))
+        if timeframe is None:
+            return _resolution_candles(10, 11)
+        if timeframe == "5m":
+            return _resolution_candles(0, 5, close_offset=500.0)
+        return _resolution_candles()
+
+    manager.get_candles = fake_get_candles
+
+    result = await manager.get_candles_with_resolution_ladder(
+        "TEST/USDT", start_ts=0, end_ts=11 * ONE_MIN_MS, strict=False
+    )
+
+    assert [call[1] for call in calls] == ["1m", "5m"]
+    assert result.source_counts == {"5m": 10, "1m": 2}
+    assert result.candles.size == 12
+
+
+@pytest.mark.asyncio
 async def test_resolution_ladder_uses_finer_sources_before_one_hour():
     calls = []
 

@@ -766,6 +766,24 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 },
             )
 
+            async def _get_candles_with_resolution_ladder(
+                symbol, *, start_ts, end_ts=None, strict=False
+            ):
+                from candlestick_manager import CandleResolutionResult
+
+                candles = await self.cm.get_candles(
+                    symbol, start_ts=start_ts, end_ts=end_ts, strict=strict
+                )
+                return CandleResolutionResult(
+                    candles=candles,
+                    source_counts={"1m": int(candles.size)} if candles.size else {},
+                    failures={},
+                )
+
+            self.cm.get_candles_with_resolution_ladder = (
+                _get_candles_with_resolution_ladder
+            )
+
         def bp(self, pside: str, key: str, symbol: str | None = None):
             return self._bp_defaults.get(key, 0.0)
 
@@ -1453,7 +1471,7 @@ async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_
 
     await bot.update_trailing_data()
 
-    assert candle_calls == [(symbol, 120_000, None, False)]
+    assert candle_calls == [(symbol, 180_000, None, False)]
     assert bot._orchestrator_trailing_unavailable_symbols == set()
     assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(101.0)
 
@@ -2890,6 +2908,88 @@ async def test_trailing_extrema_reject_incomplete_post_fill_coverage(rows):
     assert bot.trailing_prices[symbol]["long"] == _trailing_default()
     assert bot._orchestrator_trailing_unavailable_reasons == {
         symbol: ["incomplete_trailing_candle_coverage"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_trailing_extrema_accepts_coarse_old_prefix_with_exact_1m_suffix(caplog):
+    from candlestick_manager import CandleResolutionResult
+
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+    requested = []
+
+    async def mixed_resolution_candles(sym, *, start_ts, end_ts=None, strict=False):
+        requested.append((sym, start_ts, end_ts, strict))
+        return CandleResolutionResult(
+            candles=_make_candles(
+                [
+                    (180_000, 100.0, 101.0, 99.0, 100.0, 1.0),
+                    (240_000, 100.0, 102.0, 98.0, 101.0, 1.0),
+                    (300_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ]
+            ),
+            source_counts={"5m": 2, "1m": 1},
+            failures={},
+        )
+
+    bot.cm.get_candles_with_resolution_ladder = mixed_resolution_candles
+    caplog.set_level(logging.INFO)
+
+    await bot.update_trailing_data()
+
+    assert requested == [(symbol, 180_000, None, False)]
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(103.0)
+    assert bot._trailing_historical_resolution_contexts == {
+        symbol: {
+            "source_counts": {"5m": 2},
+            "approximate_until_ts": 240_000,
+            "exact_from_ts": 300_000,
+        }
+    }
+    assert "using approximate old candle prefix" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_trailing_extrema_rejects_coarse_history_without_exact_1m_suffix():
+    from candlestick_manager import CandleResolutionResult
+
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000, "fill-1")]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    bot.get_exchange_time = lambda: 361_000
+
+    async def coarse_only(*_args, **_kwargs):
+        return CandleResolutionResult(
+            candles=_make_candles(
+                [
+                    (180_000, 100.0, 101.0, 99.0, 100.0, 1.0),
+                    (240_000, 100.0, 102.0, 98.0, 101.0, 1.0),
+                    (300_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ]
+            ),
+            source_counts={"5m": 3},
+            failures={},
+        )
+
+    bot.cm.get_candles_with_resolution_ladder = coarse_only
+
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == _trailing_default()
+    assert bot._orchestrator_trailing_unavailable_reasons == {
+        symbol: ["missing_exact_trailing_candles"]
     }
 
 

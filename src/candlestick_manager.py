@@ -7464,6 +7464,60 @@ class CandlestickManager:
             }
         )
 
+    async def get_candles_with_resolution_ladder(
+        self,
+        symbol: str,
+        *,
+        start_ts: int,
+        end_ts: Optional[int] = None,
+        strict: bool = False,
+    ) -> CandleResolutionResult:
+        """Return exact recent 1m candles with a coarser historical prefix.
+
+        Higher-timeframe candles are read through the same manager and may only
+        fill complete buckets ending inside the requested old-history prefix.
+        Callers remain responsible for requiring an exact recent 1m suffix when
+        their decision contract needs one.
+        """
+        self._raise_if_shutdown_requested("get_candles_with_resolution_ladder")
+        now = self._now_ms()
+        latest_finalized = _floor_minute(now) - ONE_MIN_MS
+        effective_end = (
+            latest_finalized
+            if end_ts is None
+            else min(_floor_minute(int(end_ts)), latest_finalized)
+        )
+        effective_start = _floor_minute(int(start_ts))
+        if effective_end < effective_start:
+            return CandleResolutionResult(
+                candles=np.empty((0,), dtype=CANDLE_DTYPE),
+                source_counts={},
+                failures={},
+            )
+
+        exchange_timeframes = getattr(self.exchange, "timeframes", None)
+        supported_timeframes = (
+            set(exchange_timeframes)
+            if isinstance(exchange_timeframes, dict) and exchange_timeframes
+            else None
+        )
+
+        async def fetch_resolution(*, timeframe: str, start_ts: int, end_ts: int):
+            return await self.get_candles(
+                symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                strict=strict,
+                timeframe=None if timeframe == "1m" else timeframe,
+            )
+
+        return await fetch_candles_with_resolution_ladder(
+            fetch_resolution,
+            start_ts=effective_start,
+            end_ts=effective_end,
+            supported_timeframes=supported_timeframes,
+        )
+
     async def get_candles(
         self,
         symbol: str,
