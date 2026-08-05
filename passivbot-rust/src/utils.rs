@@ -10,33 +10,89 @@ fn round_to_decimal_places(value: f64, decimal_places: usize) -> f64 {
     (value * multiplier).round() / multiplier
 }
 
+fn step_decimal_places(step: f64) -> Option<usize> {
+    let mut multiplier = 1.0;
+    for decimal_places in 0..=15 {
+        let scaled = step.abs() * multiplier;
+        let rounded = scaled.round();
+        if rounded >= 1.0 && (scaled - rounded).abs() <= scaled.abs().max(1.0) * 1e-12 {
+            return Some(decimal_places.max(10));
+        }
+        multiplier *= 10.0;
+    }
+    None
+}
+
+fn round_to_step_decimal_places(value: f64, step: f64) -> f64 {
+    match step_decimal_places(step) {
+        Some(decimal_places) => round_to_decimal_places(value, decimal_places),
+        None => value,
+    }
+}
+
+fn differs_only_by_float_representation(value: f64, aligned_value: f64) -> bool {
+    let scale = value.abs().max(aligned_value.abs());
+    (value - aligned_value).abs() <= f64::EPSILON * scale * 4.0
+}
+
+/// Directionally quantize without truncating valid increments below ten decimals.
+pub fn round_dn_preserve_step(value: f64, step: f64) -> f64 {
+    round_to_step_decimal_places((value / step).floor() * step, step)
+}
+
+/// Directionally quantize without truncating valid increments below ten decimals.
+pub fn round_up_preserve_step(value: f64, step: f64) -> f64 {
+    round_to_step_decimal_places((value / step).ceil() * step, step)
+}
+
+/// Snap ordinary binary noise at an aligned increment before rounding down.
+pub fn tolerant_round_dn_preserve_step(value: f64, step: f64) -> f64 {
+    let step_count = value / step;
+    let nearest_count = step_count.round();
+    let nearest_value = nearest_count * step;
+    if differs_only_by_float_representation(value, nearest_value) {
+        round_to_step_decimal_places(nearest_value, step)
+    } else {
+        round_dn_preserve_step(value, step)
+    }
+}
+
+/// Snap ordinary binary noise at an aligned increment before rounding up.
+pub fn tolerant_round_up_preserve_step(value: f64, step: f64) -> f64 {
+    let step_count = value / step;
+    let nearest_count = step_count.round();
+    let nearest_value = nearest_count * step;
+    if differs_only_by_float_representation(value, nearest_value) {
+        round_to_step_decimal_places(nearest_value, step)
+    } else {
+        round_up_preserve_step(value, step)
+    }
+}
+
 /// Rounds up a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_up(n: f64, step: f64) -> f64 {
-    let result = (n / step).ceil() * step;
-    round_to_decimal_places(result, 10)
+    round_up_preserve_step(n, step)
 }
 
 /// Rounds a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_(n: f64, step: f64) -> f64 {
     let result = (n / step).round() * step;
-    round_to_decimal_places(result, 10)
+    round_to_step_decimal_places(result, step)
 }
 
 /// Rounds down a number to the nearest multiple of the given step.
 #[pyfunction]
 pub fn round_dn(n: f64, step: f64) -> f64 {
-    let result = (n / step).floor() * step;
-    round_to_decimal_places(result, 10)
+    round_dn_preserve_step(n, step)
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum RoundingMode {
     Nearest,
-    //Floor,
-    //Ceil,
-    // uncomment the above to add Floor,Ceil rounding modes
+    Floor,
+    Ceil,
 }
 
 fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f64 {
@@ -45,9 +101,8 @@ fn quantize_value(value: f64, step: f64, mode: RoundingMode, context: &str) -> f
     }
     let rounded = match mode {
         RoundingMode::Nearest => round_(value, step),
-        //RoundingMode::Floor => round_dn(value, step),
-        //RoundingMode::Ceil => round_up(value, step),
-        // uncomment the above to add Floor,Ceil rounding modes
+        RoundingMode::Floor => tolerant_round_dn_preserve_step(value, step),
+        RoundingMode::Ceil => tolerant_round_up_preserve_step(value, step),
     };
     let diff = (value - rounded).abs();
     // Allow for typical floating noise (up to 1e-8 of the step).
@@ -393,7 +448,28 @@ pub fn calc_ema_price_ask(
 
 #[cfg(test)]
 mod tests {
-    use super::ema_last_f64;
+    use super::{
+        ema_last_f64, round_, round_dn, round_up, tolerant_round_dn_preserve_step,
+        tolerant_round_up_preserve_step,
+    };
+
+    #[test]
+    fn public_rounding_cleans_float_noise_without_truncating_tiny_steps() {
+        assert_eq!(round_(64.850000000000093, 0.01), 64.85);
+        assert_eq!(round_(0.06469999999999954, 0.0001), 0.0647);
+
+        assert_eq!(round_(1e-10, 3e-12), 9.9e-11);
+        assert_eq!(round_dn(0.999999999999, 3e-12), 0.999999999999);
+        assert_eq!(round_up(1.000000000001, 3e-12), 1.000000000002);
+    }
+
+    #[test]
+    fn tolerant_directional_rounding_does_not_snap_genuine_tick_offsets() {
+        assert_eq!(tolerant_round_up_preserve_step(0.1000000005, 0.1), 0.2);
+        assert_eq!(tolerant_round_dn_preserve_step(0.0999999995, 0.1), 0.0);
+        assert_eq!(tolerant_round_up_preserve_step(0.1 + 0.2, 0.1), 0.3);
+        assert_eq!(tolerant_round_dn_preserve_step(0.29, 0.01), 0.29);
+    }
 
     #[test]
     fn ema_last_matches_sequential_reference_and_skips_nonfinite_values() {

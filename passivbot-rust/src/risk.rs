@@ -4,7 +4,8 @@ use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
     calc_pprice_diff_int, calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty,
-    quantize_price, quantize_qty, round_dn, round_up, RoundingMode,
+    quantize_price, quantize_qty, round_dn, round_up, tolerant_round_dn_preserve_step,
+    tolerant_round_up_preserve_step, RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -512,7 +513,19 @@ where
             c_mult: input.c_mult,
             ..Default::default()
         };
-        let min_entry_qty = calc_min_entry_qty(input.current_price, &exchange_params);
+        let close_price = if input.price_step > 0.0 {
+            match input.side {
+                LONG => tolerant_round_up_preserve_step(input.current_price, input.price_step),
+                SHORT => tolerant_round_dn_preserve_step(input.current_price, input.price_step),
+                _ => continue,
+            }
+        } else {
+            input.current_price
+        };
+        if !close_price.is_finite() || close_price <= 0.0 {
+            continue;
+        }
+        let min_entry_qty = calc_min_entry_qty(close_price, &exchange_params);
         let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
         let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
@@ -524,7 +537,7 @@ where
                 }
                 let target_qty = cost_to_qty(
                     balance * effective_wel * input.unstuck_close_pct,
-                    input.current_price,
+                    close_price,
                     input.c_mult,
                 );
                 let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
@@ -532,12 +545,8 @@ where
                 if close_qty == 0.0 {
                     continue;
                 }
-                let pnl_if_closed = calc_pnl_long(
-                    input.position_price,
-                    input.current_price,
-                    close_qty,
-                    input.c_mult,
-                );
+                let pnl_if_closed =
+                    calc_pnl_long(input.position_price, close_price, close_qty, input.c_mult);
                 let pnl_abs = pnl_if_closed.abs();
                 if pnl_if_closed < 0.0 && pnl_abs > allowance {
                     let scaled_qty = close_qty.abs() * (allowance / pnl_abs);
@@ -553,7 +562,7 @@ where
                     LONG,
                     Order {
                         qty: close_qty,
-                        price: input.current_price,
+                        price: close_price,
                         order_type: OrderType::CloseUnstuckLong,
                     },
                 ));
@@ -565,7 +574,7 @@ where
                 }
                 let target_qty = cost_to_qty(
                     balance * effective_wel * input.unstuck_close_pct,
-                    input.current_price,
+                    close_price,
                     input.c_mult,
                 );
                 let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
@@ -573,12 +582,8 @@ where
                 if close_qty == 0.0 {
                     continue;
                 }
-                let pnl_if_closed = calc_pnl_short(
-                    input.position_price,
-                    input.current_price,
-                    close_qty,
-                    input.c_mult,
-                );
+                let pnl_if_closed =
+                    calc_pnl_short(input.position_price, close_price, close_qty, input.c_mult);
                 let pnl_abs = pnl_if_closed.abs();
                 if pnl_if_closed < 0.0 && pnl_abs > allowance {
                     let scaled_qty = close_qty * (allowance / pnl_abs);
@@ -594,7 +599,7 @@ where
                     SHORT,
                     Order {
                         qty: close_qty,
-                        price: input.current_price,
+                        price: close_price,
                         order_type: OrderType::CloseUnstuckShort,
                     },
                 ));
@@ -971,6 +976,42 @@ mod tests {
             c_mult,
             market_price,
             order_type,
+        }
+    }
+
+    #[test]
+    fn auto_unstuck_directionally_quantizes_off_tick_close_prices() {
+        for (side, position_size, position_price, expected_price, expected_order_type) in [
+            (LONG, 10.0, 130.0, 120.01, OrderType::CloseUnstuckLong),
+            (SHORT, -10.0, 110.0, 120.0, OrderType::CloseUnstuckShort),
+        ] {
+            let input = UnstuckPositionInput {
+                idx: 0,
+                side,
+                position_size,
+                position_price,
+                wallet_exposure_limit: 1.0,
+                effective_we_excess_allowance_pct: 0.0,
+                unstuck_threshold: 0.5,
+                unstuck_close_pct: 0.1,
+                unstuck_ema_gating_enabled: false,
+                unstuck_ema_dist: 0.0,
+                unstuck_loss_allowance_pct: 0.01,
+                total_wallet_exposure_limit: 1.0,
+                ema_band_upper: 0.0,
+                ema_band_lower: 0.0,
+                current_price: 120.003,
+                price_step: 0.01,
+                qty_step: 0.01,
+                min_qty: 0.01,
+                min_cost: 0.0,
+                c_mult: 1.0,
+            };
+
+            let (_, _, order) = calc_unstucking_action(1_000.0, 1e9, 1e9, &[input])
+                .expect("off-tick candidate should emit a quantized auto-unstuck close");
+            assert_eq!(order.order_type, expected_order_type);
+            assert!((order.price - expected_price).abs() < 1e-12);
         }
     }
 

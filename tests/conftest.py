@@ -230,11 +230,21 @@ def _install_passivbot_rust_stub():
         "close_ema_anchor_short": 29,
         "empty": 65535,
     }
-    stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
-    stub.order_type_id_to_snake = lambda type_id: {v: k for k, v in _order_map.items()}.get(
-        type_id, "other"
-    )
-    stub.order_type_snake_to_id = lambda name: _order_map.get(name, 0)
+    _order_id_map = {v: k for k, v in _order_map.items()}
+
+    def _order_type_snake_to_id(name):
+        if name not in _order_map:
+            raise ValueError("unknown order type name")
+        return _order_map[name]
+
+    def _order_type_id_to_snake(type_id):
+        if type_id not in _order_id_map:
+            raise ValueError("unknown order type id")
+        return _order_id_map[type_id]
+
+    stub.get_order_id_type_from_string = _order_type_snake_to_id
+    stub.order_type_id_to_snake = _order_type_id_to_snake
+    stub.order_type_snake_to_id = _order_type_snake_to_id
 
     stub.run_backtest = lambda *args, **kwargs: {}
     stub.gate_entries_by_twel_py = lambda *args, **kwargs: []
@@ -245,7 +255,135 @@ def _install_passivbot_rust_stub():
         """Stub orchestrator that returns empty orders."""
         import json
 
-        return json.dumps({"orders": []})
+        payload = json.loads(input_json)
+        global_bot_params = payload.get("global", {}).get("global_bot_params", {})
+        symbols = payload.get("symbols", [])
+        hedge_mode = payload.get("global", {}).get("hedge_mode", True)
+        active_indices = {"long": set(), "short": set()}
+        for pside in ("long", "short"):
+            side_params = global_bot_params.get(pside, {})
+            global_side_enabled = (
+                float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                and int(side_params.get("n_positions", 0)) > 0
+            )
+            eligible_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if bool(symbol.get("tradable", False))
+                and float(
+                    symbol[pside]
+                    .get("bot_params", {})
+                    .get("wallet_exposure_limit", 0.0)
+                )
+                != 0.0
+            ]
+            held_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if float(symbol[pside].get("position", {}).get("size", 0.0)) != 0.0
+                and symbol[pside].get("mode") != "manual"
+            ]
+            forced_indices = [
+                symbol["symbol_idx"]
+                for symbol in symbols
+                if symbol["symbol_idx"] in eligible_indices
+                and symbol[pside].get("mode") == "normal"
+            ]
+            effective_n_positions = max(
+                min(int(side_params.get("n_positions", 0)), len(eligible_indices)),
+                len(forced_indices),
+            )
+            active_indices[pside].update(held_indices)
+            if global_side_enabled:
+                candidates = forced_indices + [
+                    symbol_idx
+                    for symbol_idx in eligible_indices
+                    if symbol_idx not in forced_indices
+                ]
+                for symbol_idx in candidates:
+                    if len(active_indices[pside]) >= effective_n_positions:
+                        break
+                    symbol = symbols[symbol_idx]
+                    opposite = "short" if pside == "long" else "long"
+                    if (
+                        not hedge_mode
+                        and float(
+                            symbol[opposite].get("position", {}).get("size", 0.0)
+                        )
+                        != 0.0
+                    ):
+                        continue
+                    if symbol[pside].get("mode") in (None, "normal"):
+                        active_indices[pside].add(symbol_idx)
+        symbol_states = []
+        for symbol in symbols:
+            row = {"symbol_idx": symbol["symbol_idx"]}
+            for pside in ("long", "short"):
+                input_mode = symbol[pside].get("mode")
+                position_size = float(
+                    symbol[pside].get("position", {}).get("size", 0.0)
+                )
+                has_position = position_size != 0.0
+                effective_mode = (
+                    "normal"
+                    if input_mode is None
+                    or (input_mode == "graceful_stop" and has_position)
+                    else input_mode
+                )
+                wallet_exposure_limit = float(
+                    symbol[pside].get("bot_params", {}).get(
+                        "wallet_exposure_limit", 0.0
+                    )
+                )
+                side_params = global_bot_params.get(pside, {})
+                global_side_enabled = (
+                    float(side_params.get("total_wallet_exposure_limit", 0.0)) > 0.0
+                    and int(side_params.get("n_positions", 0)) > 0
+                )
+                symbol_side_eligible = (
+                    bool(symbol.get("tradable", False))
+                    and wallet_exposure_limit != 0.0
+                )
+                active = (
+                    symbol_side_eligible
+                    and symbol["symbol_idx"] in active_indices[pside]
+                )
+                if not global_side_enabled:
+                    effective_mode = "manual"
+                opposite = "short" if pside == "long" else "long"
+                one_way_blocked = not hedge_mode and (
+                    float(symbol[opposite].get("position", {}).get("size", 0.0))
+                    != 0.0
+                    or (
+                        not has_position
+                        and pside == "short"
+                        and symbol["symbol_idx"] in active_indices["long"]
+                    )
+                )
+                row[pside] = {
+                    "input_mode": input_mode,
+                    "effective_mode": effective_mode,
+                    "active": active,
+                    "allow_initial": (
+                        active
+                        and global_side_enabled
+                        and effective_mode == "normal"
+                        and not one_way_blocked
+                    ),
+                }
+            symbol_states.append(row)
+        return json.dumps(
+            {
+                "orders": [],
+                "diagnostics": {
+                    "warnings": [],
+                    "symbol_states": symbol_states,
+                    "loss_gate_blocks": [],
+                    "min_effective_cost_blocks": [],
+                    "forager_selections": [],
+                },
+            }
+        )
 
     stub.compute_ideal_orders_json = _compute_ideal_orders_json
 

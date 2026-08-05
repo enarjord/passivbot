@@ -72,17 +72,88 @@ pub fn calc_initial_entry_qty(
 }
 
 pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) -> f64 {
-    f64::max(
+    let raw_min = f64::max(
         exchange_params.min_qty,
-        round_up(
-            cost_to_qty(
-                exchange_params.min_cost,
-                entry_price,
-                exchange_params.c_mult,
-            ),
-            exchange_params.qty_step,
+        cost_to_qty(
+            exchange_params.min_cost,
+            entry_price,
+            exchange_params.c_mult,
         ),
-    )
+    );
+    let raw_min_steps = raw_min / exchange_params.qty_step;
+    let nearest_step_count = raw_min_steps.round();
+    let nearest_step = nearest_step_count * exchange_params.qty_step;
+    let representation_tolerance = f64::EPSILON * raw_min.abs().max(nearest_step.abs()) * 4.0;
+    if raw_min == 0.0 {
+        0.0
+    } else if nearest_step_count > 0.0
+        && (raw_min_steps - nearest_step_count).abs() <= 1e-8
+        && (nearest_step >= raw_min || raw_min - nearest_step <= representation_tolerance)
+    {
+        nearest_step.max(raw_min)
+    } else {
+        raw_min_steps.ceil() * exchange_params.qty_step
+    }
+}
+
+pub(crate) fn finalize_next_entry(
+    mut entry: Order,
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
+    position: &Position,
+    price_rounding: RoundingMode,
+    context: &str,
+) -> Order {
+    if entry.qty == 0.0 {
+        return entry;
+    }
+    let original_qty_abs = entry.qty.abs();
+    entry.price = quantize_price(
+        entry.price,
+        exchange_params.price_step,
+        price_rounding,
+        context,
+    );
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size.abs(),
+        position.price,
+    );
+    let (_, cropped_qty) = calc_cropped_reentry_qty(
+        exchange_params,
+        bot_params,
+        runtime_context,
+        position,
+        wallet_exposure,
+        state_params.balance,
+        entry.qty.abs(),
+        entry.price,
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
+    );
+    if cropped_qty < original_qty_abs {
+        entry.order_type = match entry.order_type {
+            OrderType::EntryTrailingNormalLong => OrderType::EntryTrailingCroppedLong,
+            OrderType::EntryTrailingNormalShort => OrderType::EntryTrailingCroppedShort,
+            OrderType::EntryGridNormalLong | OrderType::EntryGridInflatedLong => {
+                OrderType::EntryGridCroppedLong
+            }
+            OrderType::EntryGridNormalShort | OrderType::EntryGridInflatedShort => {
+                OrderType::EntryGridCroppedShort
+            }
+            other => other,
+        };
+    }
+    entry.qty = entry.qty.signum() * cropped_qty;
+    entry.qty = quantize_qty(
+        entry.qty,
+        exchange_params.qty_step,
+        RoundingMode::Nearest,
+        context,
+    );
+    entry
 }
 
 fn calc_entry_distance_multiplier(
@@ -485,7 +556,7 @@ pub fn calc_next_entry_long(
     }
     let allowed_wallet_exposure_limit =
         wallet_exposure_limit_with_allowance(bot_params, runtime_context);
-    if entry_params.retracement_base_pct > 0.0 {
+    let entry = if entry_params.retracement_base_pct > 0.0 {
         calc_trailing_entry_long(
             exchange_params,
             state_params,
@@ -506,7 +577,17 @@ pub fn calc_next_entry_long(
             position,
             allowed_wallet_exposure_limit,
         )
-    }
+    };
+    finalize_next_entry(
+        entry,
+        exchange_params,
+        state_params,
+        bot_params,
+        runtime_context,
+        position,
+        RoundingMode::Floor,
+        "calc_next_entry_long",
+    )
 }
 
 pub fn calc_trailing_entry_long(
@@ -978,7 +1059,7 @@ pub fn calc_next_entry_short(
     }
     let allowed_wallet_exposure_limit =
         wallet_exposure_limit_with_allowance(bot_params, runtime_context);
-    if entry_params.retracement_base_pct > 0.0 {
+    let entry = if entry_params.retracement_base_pct > 0.0 {
         calc_trailing_entry_short(
             exchange_params,
             state_params,
@@ -999,7 +1080,17 @@ pub fn calc_next_entry_short(
             position,
             allowed_wallet_exposure_limit,
         )
-    }
+    };
+    finalize_next_entry(
+        entry,
+        exchange_params,
+        state_params,
+        bot_params,
+        runtime_context,
+        position,
+        RoundingMode::Ceil,
+        "calc_next_entry_short",
+    )
 }
 
 pub fn calc_entries_long(
@@ -1034,9 +1125,16 @@ pub fn calc_entries_long(
         entry.price = quantize_price(
             entry.price,
             exchange_params.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Floor,
             "calc_entries_long::price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange_params));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange_params.qty_step,
@@ -1101,9 +1199,16 @@ pub fn calc_entries_short(
         entry.price = quantize_price(
             entry.price,
             exchange_params.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Ceil,
             "calc_entries_short::price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange_params));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange_params.qty_step,
@@ -1140,11 +1245,169 @@ pub fn calc_entries_short(
 mod tests {
     use super::*;
     use crate::strategies::EmaGateMode;
+    use crate::types::OrderBook;
 
     fn make_runtime_context() -> RuntimeOrderContext {
         RuntimeOrderContext {
             effective_wallet_exposure_limit: 1.0,
         }
+    }
+
+    #[test]
+    fn test_min_entry_qty_quantizes_without_overshooting_aligned_minimum() {
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            min_qty: 0.015,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+
+        assert_eq!(calc_min_entry_qty(100.0, &exchange), 0.02);
+
+        let aligned_exchange = ExchangeParams {
+            min_qty: 0.07,
+            ..exchange
+        };
+        assert_eq!(calc_min_entry_qty(100.0, &aligned_exchange), 0.07);
+
+        let multiplication_rounds_down_exchange = ExchangeParams {
+            qty_step: 0.03,
+            min_qty: 0.33,
+            ..exchange
+        };
+        assert_eq!(
+            calc_min_entry_qty(100.0, &multiplication_rounds_down_exchange),
+            0.33
+        );
+
+        let sub_step_exchange = ExchangeParams {
+            qty_step: 1.0,
+            min_qty: 0.0,
+            min_cost: 1.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(calc_min_entry_qty(1e9, &sub_step_exchange), 1.0);
+
+        let tiny_aligned_exchange = ExchangeParams {
+            qty_step: 1e-12,
+            min_qty: 1e-12,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(calc_min_entry_qty(100.0, &tiny_aligned_exchange), 1e-12);
+
+        let genuinely_above_step_exchange = ExchangeParams {
+            qty_step: 0.001,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            calc_min_entry_qty(4999.999975, &genuinely_above_step_exchange),
+            0.002
+        );
+    }
+
+    #[test]
+    fn next_entry_price_quantization_recomputes_minimum_cost_quantity() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 3.003,
+                ask: 3.01,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let entry = TrailingMartingaleEntryParams {
+            ema_gate_mode: EmaGateMode::Disabled,
+            initial_qty_pct: 0.0,
+            ..Default::default()
+        };
+
+        let order = calc_next_entry_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(order.price, 3.0);
+        assert!((order.qty - 1.667).abs() < 1e-12);
+        assert!(order.qty * order.price >= exchange.min_cost);
+    }
+
+    #[test]
+    fn next_entry_price_quantization_remains_passive_for_both_sides() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.001,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 100.006,
+                ask: 100.014,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            ..Default::default()
+        };
+        let entry = TrailingMartingaleEntryParams {
+            ema_gate_mode: EmaGateMode::Disabled,
+            initial_qty_pct: 0.01,
+            ..Default::default()
+        };
+
+        let long_order = calc_next_entry_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+        let short_order = calc_next_entry_short(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(long_order.price, 100.0);
+        assert!(long_order.price <= state.order_book.bid);
+        assert_eq!(short_order.price, 100.02);
+        assert!(short_order.price >= state.order_book.ask);
     }
 
     #[test]

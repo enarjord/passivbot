@@ -6,7 +6,8 @@ use crate::closes::{
     calc_close_qty, calc_wel_auto_reduce_long, calc_wel_auto_reduce_short, sort_closes_by_price,
 };
 use crate::entries::{
-    calc_cropped_reentry_qty, calc_min_entry_qty, wallet_exposure_limit_with_allowance,
+    calc_cropped_reentry_qty, calc_min_entry_qty, finalize_next_entry,
+    wallet_exposure_limit_with_allowance,
 };
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
@@ -437,7 +438,7 @@ fn calc_trailing_entry_long(
     }
 }
 
-fn calc_next_entry_long(
+fn calc_next_entry_long_raw(
     exchange: &ExchangeParams,
     state: &StateParams,
     bot: &BotParams,
@@ -522,6 +523,27 @@ fn calc_next_entry_long(
             allowed_wallet_exposure_limit,
         )
     }
+}
+
+fn calc_next_entry_long(
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    entry: &TrailingGridV7EntryParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> Order {
+    finalize_next_entry(
+        calc_next_entry_long_raw(exchange, state, bot, runtime, entry, position, trailing),
+        exchange,
+        state,
+        bot,
+        runtime,
+        position,
+        RoundingMode::Floor,
+        "trailing_grid_v7::next_entry_long",
+    )
 }
 
 fn calc_grid_entry_short(
@@ -791,7 +813,7 @@ fn calc_trailing_entry_short(
     }
 }
 
-fn calc_next_entry_short(
+fn calc_next_entry_short_raw(
     exchange: &ExchangeParams,
     state: &StateParams,
     bot: &BotParams,
@@ -876,6 +898,27 @@ fn calc_next_entry_short(
             allowed_wallet_exposure_limit,
         )
     }
+}
+
+fn calc_next_entry_short(
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    entry: &TrailingGridV7EntryParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> Order {
+    finalize_next_entry(
+        calc_next_entry_short_raw(exchange, state, bot, runtime, entry, position, trailing),
+        exchange,
+        state,
+        bot,
+        runtime,
+        position,
+        RoundingMode::Ceil,
+        "trailing_grid_v7::next_entry_short",
+    )
 }
 
 fn calc_grid_close_long(
@@ -1906,9 +1949,16 @@ fn calc_entries_long(
         entry.price = quantize_price(
             entry.price,
             exchange.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Floor,
             "trailing_grid_v7::entries_long_price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange.qty_step,
@@ -1966,9 +2016,16 @@ fn calc_entries_short(
         entry.price = quantize_price(
             entry.price,
             exchange.price_step,
-            RoundingMode::Nearest,
+            RoundingMode::Ceil,
             "trailing_grid_v7::entries_short_price",
         );
+        if entry.qty != 0.0 {
+            entry.qty = entry.qty.signum()
+                * entry
+                    .qty
+                    .abs()
+                    .max(calc_min_entry_qty(entry.price, exchange));
+        }
         entry.qty = quantize_qty(
             entry.qty,
             exchange.qty_step,
@@ -2085,7 +2142,8 @@ fn calc_closes_short(
             exchange.price_step,
             RoundingMode::Nearest,
             "trailing_grid_v7::closes_short_price",
-        );
+        )
+        .max(exchange.price_step);
         close.qty = quantize_qty(
             close.qty,
             exchange.qty_step,
@@ -2516,6 +2574,48 @@ mod tests {
             OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceWelShort => "auto_reduce",
             other => panic!("unexpected order type for v7 diagnostic parity: {other:?}"),
         }
+    }
+
+    #[test]
+    fn final_entry_price_quantization_recomputes_minimum_cost_quantity() {
+        let exchange = ExchangeParams {
+            qty_step: 0.001,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 5.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 100.0,
+            order_book: OrderBook {
+                bid: 3.003,
+                ask: 3.01,
+            },
+            ema_bands: EMABands {
+                lower: 3.003,
+                upper: 3.01,
+            },
+            ..Default::default()
+        };
+        let entry = TrailingGridV7EntryParams {
+            initial_qty_pct: 0.0,
+            ..Default::default()
+        };
+
+        let orders = calc_entries_long(
+            &exchange,
+            &state,
+            &bot(),
+            &runtime(),
+            &entry,
+            &Position::default(),
+            &TrailingPriceBundle::default(),
+        );
+
+        assert_eq!(orders[0].price, 3.0);
+        assert!((orders[0].qty - 1.667).abs() < 1e-12);
+        assert!(orders[0].qty * orders[0].price >= exchange.min_cost);
     }
 
     #[test]

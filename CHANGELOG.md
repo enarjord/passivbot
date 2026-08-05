@@ -8,6 +8,10 @@ All notable user-facing changes will be documented in this file.
   coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
   fetches create unproven ranges, which remain retryable under the live execution loop's backoff
   until a successful response (including an empty response) clears them.
+- TWEL-gated market entries and their final minimum-order guard use executable touch, and next-only
+  short entry quantities are re-cropped after directional price quantization.
+- Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
+  limit reducers cannot become crossing orders merely through price-step rounding.
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
   the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent
@@ -36,6 +40,18 @@ All notable user-facing changes will be documented in this file.
   emitting the existing history-reset telemetry. Short switching intervals do
   not mask later sustained price or quantity drift, and ladder cardinality must
   remain consistent for every recurring cohort.
+- Short market entries and promoted partial market closes are sized and trimmed from their
+  executable touch so
+  minimum-notional validation remains consistent across Rust planning, live execution, and
+  backtesting, including after TWEL entry gating. Blocked
+  loss-gate closes use that same execution price when validating their diagnostic exchange minimum.
+  Limit-close minimums use each emitted limit price, drop below-minimum legs from mixed ladders before
+  absorbing the remaining position dust, preserve an exact below-step remaining position when that is
+  the only executable full close, and clamp short close prices to the minimum positive tick. Live
+  execution-policy validation also canonicalizes only representation-noisy, tick-aligned
+  submitted books to the same float Rust decodes from JSON.
+  Off-tick trailing-strategy entry prices now quantize away from the spread in both next-only and
+  expanded-grid paths so a passive bid is never rounded up and a passive ask is never rounded down.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic
@@ -56,10 +72,10 @@ All notable user-facing changes will be documented in this file.
   remain explicit and value-free; backtests and unannotated Rust inputs stay strict, stale resting
   strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
   strategy branches remain independent when their input needs differ, and independent panic,
-  WEL, and TWEL reducers may continue when their own inputs are complete. A `NaN` returned by the
-  completed-candle EMA API now follows that unavailable-input path instead of restarting the whole
-  execution cycle; positive or negative infinity remains fatal.
-
+  WEL, and TWEL reducers may continue when their own inputs are complete. The live producer-boundary
+  validator accepts and strictly validates Rust's corresponding scoped-unavailability warning. A
+  `NaN` returned by the completed-candle EMA API now follows that unavailable-input path instead of
+  restarting the whole execution cycle; positive or negative infinity remains fatal.
 - Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
   full-range sources now follow configured exchange priority instead of total volume, robust
   complete-day median-log estimates replace arithmetic volume averaging, and underdetermined
@@ -85,6 +101,93 @@ All notable user-facing changes will be documented in this file.
   the current run's side membership separately from cache-build provenance, and
   optimizer data preparation derives reachable sides from optimization bounds
   so fixed-bound starts and Pareto restarts resolve consistently.
+- Live Rust orchestrator output now fails fatally before diagnostics or reconciliation when its JSON
+  (including duplicate keys, non-standard numeric constants, exponent-overflow floats, or decoder failures), required order
+  batch, order fields, aggregate
+  close quantity relative to the submitted position using representation-scale tolerance even for
+  tiny contracts, conversion identities, complete per-symbol
+  mode state, or required consumed diagnostic collections are missing or malformed. Diagnostic
+  validation rejects impossible realized-loss blocks. Order-field validation includes overflowing
+  numeric values, execution type
+  inconsistent with the submitted market policy, order book, and near-touch threshold, and priority
+  inconsistent with Rust's order and submitted-mode rule. It also rejects order families forbidden
+  by the submitted mode or flat-side eligibility, rejects all orders for globally disabled sides,
+  requires each flat-side entry batch to contain the strategy's valid initial family while
+  preserving Rust's recursive initial-plus-grid ladders,
+  rejects initial-normal entries for held trailing-strategy sides, multiple initial-partial entries,
+  and multiple EMA Anchor entries for one symbol-side,
+  enforces flat active-set caps, forced-normal active-slot reservations, and one-way initial-side
+  exclusion, requires flat entries to agree
+  with their active/allow-initial diagnostics, rejects foreign-strategy families and competing
+  protective reducers, rejects protective reducers whose direct submitted unstuck, WEL, or TWEL
+  enablement is disabled, requires panic reducers to close the full submitted position, rejects
+  entry quantities below the submitted effective exchange minimum or
+  outside the submitted quantity step, rejects close quantities below their effective minimum or
+  outside the submitted quantity step except for an exact remaining position, rejects limit
+  prices outside the submitted price step, requires diagnostic effective modes to match Rust's
+  submitted mode/position/global-enable rule,
+  requires order-type names to round-trip through Rust's
+  canonical ID mapping, rejects legacy inflated-entry enum variants which have no Rust producer,
+  and validates active-state diagnostics in both directions for ineligible
+  sides and eligible managed positions, while preserving Rust's
+  held-position DCA and configured HSL panic market closes as explicit Rust
+  behavior (the latter is the protective exception to `live.market_orders_allowed`). The bot no longer
+  converts a fabricated empty batch or usable subset which could cancel existing orders. Normal
+  live calls emit a correlated failed-return event before propagating the error, and HSL RED
+  supervisors no longer swallow fatal producer failures. Impossible loss-gate blocks are rejected
+  when Rust bypasses that gate for panic reducers, the submitted policy disables the gate, or the
+  block reports a different loss percentage than the submitted policy, and when the submitted
+  side is flat, manual, panic, globally disabled, or uses a different strategy family. They are
+  also rejected for reducer families disabled by their submitted unstuck, WEL, or TWEL gates,
+  including the global auto-unstuck gate, or when their quantities violate the submitted close
+  step, effective minimum, or position cap. Rust now
+  also quantizes effective minimum quantities to the submitted quantity step without overshooting
+  already aligned floating-point values, including valid quantities below ten decimal places, or
+  collapsing a positive sub-step minimum to zero, including when an aligned step multiplication is
+  represented one ULP below the exchange minimum, while quantities genuinely above a step still
+  round up, preserves exchange-step precision in all shared Rust rounding paths while retaining
+  ten-decimal cleanup for ordinary steps, and recomputes minimum entry quantity after the final
+  strategy price is quantized so minimum-cost orders remain valid. Live validation scales cost
+  tolerance to floating-point precision instead of admitting orders below tiny exchange minimum
+  costs, and quantity-minimum
+  tolerance is likewise restricted to floating representation error for both entries and partial
+  closes. Market-entry minimum cost is validated against the submitted executable touch rather
+  than the producer's reference price. Positive entry cooldowns retain Rust's single-entry staging
+  rule after the time window expires, and positive trailing-martingale entry retracement retains
+  Rust's single-entry staging rule even when cooldown is zero, canonical martingale entry and close
+  families must match their submitted grid-versus-retracement branches, and EMA Anchor emits at
+  most one entry and one close per symbol-side. EMA Anchor closes promoted to market execution are
+  resized from the executable touch before aggregate-close and realized-loss gating. Canonical
+  trailing-martingale retracement emits at
+  most one trailing close per symbol-side, and close minimum-cost validation uses the emitted limit
+  price or executable market touch. Held positions in enabled panic mode require Rust's
+  full-position panic close. Loss-gate diagnostic prices must match the submitted exchange step.
+  WEL and auto-unstuck limit prices are
+  directionally quantized from off-tick book quotes before minimum sizing and
+  loss projection. It quantizes EMA Anchor
+  touch prices in the protective direction without moving float-noisy aligned touches, preserves
+  positive bid and ask ticks below ten decimal places, keeps the minimum positive tick for short
+  closes while suppressing long entries when no positive tick exists at or below the selected bid,
+  restricts aligned-tick snapping to floating representation error, and keeps panic limit prices
+  valid when the submitted top-of-book quote itself is off tick, including low-priced books at or
+  near one price step and valid tiny increments, without skipping a tick because of ordinary
+  floating-point noise. Quantity-step and price-step validation admit only floating representation
+  error, so genuinely off-step values cannot hide inside a fixed fraction of the increment. Close validation rejects
+  positions at or below Rust's final
+  close-trimming dust threshold before applying the exact-position exception, and panic-limit
+  prices must match Rust's exact one-tick protective formula for the submitted book. Full-position
+  close checks tolerate only floating representation noise between Rust's step-rounded quantity
+  and the submitted position. Entries are
+  rejected when the submitted fill timestamp and cooldown make Rust's deterministic add-order gate
+  active. The complete
+  serialized diagnostic envelope now requires and
+  validates every Rust warning variant. Enum-shaped producer fields fail fatally even when
+  malformed as JSON arrays or objects, including loss-gate warning policies, and graceful-stop
+  mode uses Rust's exact nonzero-position rule. Unstuck reducers must agree with Rust's submitted
+  global auto-unstuck gate. Forager selections and flat active state must agree in both directions:
+  selected symbols are flat and active, and every non-forced active flat symbol appears in the
+  corresponding selection, while allowing Rust's later one-way tie-break to disable initial entry
+  on one selected side.
 - Live fill readiness now separates proven structural fill history from realized-PnL
   quality. Pending or synthetic PnL continues to block and repair before enabled HSL,
   auto-unstuck, or realized-loss logic can run, but no longer defers all fill-dependent

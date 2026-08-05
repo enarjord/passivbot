@@ -4,6 +4,34 @@ import math
 
 import pytest
 
+from live import reconciler
+from passivbot_exceptions import FatalBotException
+
+
+def test_limit_price_step_failure_reports_exact_numeric_and_order_context():
+    with pytest.raises(FatalBotException) as exc_info:
+        reconciler._validate_rust_limit_price_exchange_constraints(
+            12.34,
+            (0.001, 0.1, 0.001, 5.0, 1.0),
+            (
+                "Rust orchestrator order 2 symbol_idx=4 "
+                "order_type=entry_initial_normal_long"
+            ),
+        )
+
+    message = str(exc_info.value)
+    for expected in (
+        "Rust orchestrator order 2",
+        "symbol_idx=4",
+        "order_type=entry_initial_normal_long",
+        "price=12.34",
+        "price_step=0.1",
+        "nearest_price=12.3",
+        "delta=",
+        "tolerance=",
+    ):
+        assert expected in message
+
 
 @pytest.fixture(scope="module", autouse=True)
 def require_real_passivbot_rust_module():
@@ -344,6 +372,211 @@ def compute(pbr, inp: dict) -> dict:
     return json.loads(out_json)
 
 
+def test_live_validator_accepts_complete_rust_output():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=101.0)],
+    )
+    out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+        pbr.compute_ideal_orders_json(json.dumps(inp)),
+        {0: "BTC/USDT:USDT"},
+        inp,
+    )
+
+    assert orders == out["orders"]
+    assert orders
+    conversion_identities = {
+        reconciler.rust_order_conversion_identity(
+            "BTC/USDT:USDT", order["qty"], order["price"], order["order_type"]
+        )
+        for order in orders
+    }
+    assert len(conversion_identities) == len(orders)
+    assert out["diagnostics"]["symbol_states"][0]["symbol_idx"] == 0
+    assert "loss_gate_blocks" in out["diagnostics"]
+
+
+def test_real_rust_preserves_tiny_aligned_exchange_minimum():
+    import passivbot_rust as pbr
+
+    assert pbr.calc_min_entry_qty_py(100.0, 1.0, 1e-12, 1e-12, 0.0) == 1e-12
+
+
+def test_real_rust_ceils_minimum_genuinely_above_quantity_step():
+    import passivbot_rust as pbr
+
+    assert pbr.calc_min_entry_qty_py(4999.999975, 1.0, 0.001, 0.0, 5.0) == 0.002
+
+
+def test_execution_validation_matches_rust_for_representation_noisy_aligned_book():
+    import passivbot_rust as pbr
+
+    book_price = 1e-6 * 100
+    symbol = make_symbol(
+        0,
+        bid=book_price,
+        ask=book_price,
+        long_pos_size=1.0,
+        long_pos_price=9.9e-05,
+        long_strategy=adaptive_strategy_params(entry={"initial_qty_pct": 0.0}),
+    )
+    symbol["exchange"].update(
+        price_step=0.0001,
+        qty_step=0.1,
+        min_qty=0.0,
+        min_cost=0.0,
+    )
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+    inp["global"].update(
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.0,
+    )
+
+    raw = pbr.compute_ideal_orders_json(json.dumps(inp))
+    _, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+        raw,
+        {0: "TEST/USDT:USDT"},
+        inp,
+    )
+
+    close = next(order for order in orders if order["order_type"] == "close_grid_long")
+    assert close["price"] == 0.0001
+    assert close["execution_type"] == "market"
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_short_close_rounds_to_positive_minimum_tick(strategy_kind):
+    import passivbot_rust as pbr
+
+    short_strategy = (
+        adaptive_strategy_params(
+            entry={"initial_qty_pct": 0.0},
+            close={"threshold_base_pct": 0.6, "qty_pct": 1.0},
+        )
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(
+            initial_qty_pct=0.0,
+            close_overrides={
+                "grid_markup_start": 0.6,
+                "grid_markup_end": 0.6,
+                "grid_qty_pct": 1.0,
+            },
+        )
+    )
+    symbol_kwargs = {"short_strategy": short_strategy}
+    if strategy_kind == "trailing_grid_v7":
+        symbol_kwargs["long_strategy"] = trailing_grid_v7_strategy_params(
+            initial_qty_pct=0.0
+        )
+    symbol = make_symbol(
+        0,
+        bid=0.1,
+        ask=0.1,
+        short_pos_size=-1.0,
+        short_pos_price=0.1,
+        **symbol_kwargs,
+    )
+    symbol["exchange"].update(
+        price_step=0.1,
+        qty_step=0.1,
+        min_qty=0.0,
+        min_cost=0.0,
+    )
+    global_bp = bot_params_pair(
+        long_overrides={"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+        short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+
+    raw = pbr.compute_ideal_orders_json(json.dumps(inp))
+    _, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+        raw,
+        {0: "TEST/USDT:USDT"},
+        inp,
+    )
+
+    close = next(order for order in orders if order["order_type"] == "close_grid_short")
+    assert close["price"] == 0.1
+    assert close["qty"] == 1.0
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_limit_close_minimum_uses_emitted_price_and_exact_remaining_position(
+    strategy_kind,
+):
+    import passivbot_rust as pbr
+
+    short_strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=0.0)
+    )
+    symbol_kwargs = {"short_strategy": short_strategy}
+    if strategy_kind == "trailing_grid_v7":
+        symbol_kwargs["long_strategy"] = trailing_grid_v7_strategy_params(
+            initial_qty_pct=0.0
+        )
+    symbol = make_symbol(
+        0,
+        bid=1.50,
+        ask=1.51,
+        short_pos_size=-1.0,
+        short_pos_price=1.0,
+        **symbol_kwargs,
+    )
+    symbol["exchange"].update(
+        price_step=0.01,
+        qty_step=0.03,
+        min_qty=0.0,
+        min_cost=1.0,
+    )
+    global_bp = bot_params_pair(
+        long_overrides={"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+        short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=global_bp,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+
+    raw = pbr.compute_ideal_orders_json(json.dumps(inp))
+    _, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+        raw,
+        {0: "TEST/USDT:USDT"},
+        inp,
+    )
+
+    close = next(order for order in orders if order["order_type"] == "close_grid_short")
+    assert close["price"] == 0.99
+    assert close["qty"] == 1.0
+
+
+def test_live_validator_accepts_rust_market_execution_policy():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+    out = compute(pbr, inp)
+
+    assert any(order["execution_type"] == "market" for order in out["orders"])
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    ) == out["orders"]
+
+
 def test_json_rejects_invalid_order_book():
     import passivbot_rust as pbr
 
@@ -539,6 +772,9 @@ def test_live_authorized_missing_entry_ema_preserves_independent_closes():
             "scope": "strategy_orders",
         }
     } in out["diagnostics"]["warnings"]
+    assert reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    ) == out["orders"]
 
 
 def test_live_authorized_missing_entry_volatility_preserves_independent_closes():
@@ -973,6 +1209,43 @@ def test_one_way_flat_tie_break_requires_ema_even_when_entry_gate_disabled():
 
     with pytest.raises(ValueError, match="MissingEma"):
         compute(pbr, inp)
+
+
+def test_live_validator_accepts_one_way_forager_selection_before_tie_break():
+    import passivbot_rust as pbr
+
+    side_enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=side_enabled),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                short_bp=side_enabled,
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = False
+
+    out = compute(pbr, inp)
+    states = out["diagnostics"]["symbol_states"][0]
+    selections = {
+        item["pside"]: item["selected_symbol_indices"]
+        for item in out["diagnostics"]["forager_selections"]
+    }
+
+    assert selections == {"long": [0], "short": [0]}
+    assert states["long"]["active"] is True
+    assert states["long"]["allow_initial"] is True
+    assert states["short"]["active"] is True
+    assert states["short"]["allow_initial"] is False
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT"},
+        inp,
+    )
 
 
 def test_live_authorized_missing_ema_blocks_both_one_way_initial_sides():
@@ -1589,6 +1862,532 @@ def test_ema_anchor_long_position_emits_single_entry_and_close():
     ]
 
 
+def test_ema_anchor_market_close_uses_executable_touch_minimum():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 100.0],
+                [20.0, 100.0],
+                [math.sqrt(10.0 * 20.0), 100.0],
+            ]
+        ),
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_ema_anchor_long"
+    )
+    assert close["execution_type"] == "market"
+    assert close["price"] == 100.05
+    assert close["qty"] == pytest.approx(-1.001)
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_grid_market_close_uses_executable_touch_minimum(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(
+            close={
+                "qty_pct": 0.1,
+                "threshold_base_pct": 0.005,
+                "threshold_we_weight": 0.001,
+            }
+        )
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(
+            close_overrides={
+                "grid_qty_pct": 0.1,
+                "grid_markup_start": 0.005,
+                "grid_markup_end": 0.01,
+            }
+        )
+    )
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.02
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_grid_long"
+    )
+
+    assert close["execution_type"] == "market"
+    assert close["qty"] == pytest.approx(-1.001)
+    assert abs(close["qty"]) * symbol["order_book"]["bid"] >= 100.0
+
+
+def test_off_tick_ema_anchor_touch_prices_pass_live_validation():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        strategy_kind="ema_anchor",
+        symbols=[
+            make_symbol(
+                0,
+                bid=98.003,
+                ask=102.007,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=strategy,
+                short_strategy=strategy,
+                emas=ema_bundle(
+                    m1_close=[
+                        [10.0, 100.0],
+                        [20.0, 100.0],
+                        [math.sqrt(10.0 * 20.0), 100.0],
+                    ],
+                    m1_volume=[[10.0, 1_000.0]],
+                    m1_log_range=[[10.0, 0.01]],
+                ),
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    prices = {order["order_type"]: order["price"] for order in out["orders"]}
+    assert prices["entry_ema_anchor_long"] == 98.0
+    assert prices["close_ema_anchor_long"] == 102.01
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
+    strategy_kind,
+):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=0.0)
+    )
+    symbol = make_symbol(
+        0,
+        bid=3.003,
+        ask=3.01,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 5.0}
+    )
+    inp = make_input(
+        balance=100.0,
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
+
+    assert entry["price"] == 3.0
+    assert abs(entry["qty"]) == pytest.approx(1.667)
+    assert abs(entry["qty"]) * entry["price"] >= symbol["exchange"]["min_cost"]
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "pside", "bid", "ask", "expected_price"),
+    [
+        ("trailing_martingale", "long", 100.006, 100.014, 100.0),
+        ("trailing_martingale", "short", 100.006, 100.014, 100.02),
+        ("trailing_grid_v7", "long", 100.006, 100.014, 100.0),
+        ("trailing_grid_v7", "short", 100.006, 100.014, 100.02),
+    ],
+)
+@pytest.mark.parametrize("next_only", [False, True])
+def test_off_tick_strategy_entries_quantize_away_from_the_spread(
+    strategy_kind, pside, bid, ask, expected_price, next_only
+):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params()
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params()
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    long_bp = enabled if pside == "long" else disabled
+    short_bp = enabled if pside == "short" else disabled
+    symbol = make_symbol(
+        0,
+        bid=bid,
+        ask=ask,
+        long_bp=long_bp,
+        short_bp=short_bp,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"]["price_step"] = 0.01
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides=long_bp, short_overrides=short_bp
+        ),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    if next_only:
+        inp["peek_hints"] = {
+            "expand_grid_long": [],
+            "expand_grid_short": [],
+            "expand_close_long": [],
+            "expand_close_short": [],
+        }
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(order for order in out["orders"] if order["pside"] == pside)
+
+    assert entry["execution_type"] == "limit"
+    assert entry["price"] == expected_price
+    if pside == "long":
+        assert entry["price"] <= bid
+    else:
+        assert entry["price"] >= ask
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_next_only_short_entry_recrops_quantity_after_price_quantization(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 1.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=1.0)
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.01,
+        long_bp=disabled,
+        short_bp=enabled,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 2.0, "min_qty": 0.0, "min_cost": 0.0}
+    )
+    inp = make_input(
+        balance=100.0,
+        global_bp=bot_params_pair(long_overrides=disabled, short_overrides=enabled),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["peek_hints"] = {
+        "expand_grid_long": [],
+        "expand_grid_short": [],
+        "expand_close_long": [],
+        "expand_close_short": [],
+    }
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(order for order in out["orders"] if order["pside"] == "short")
+
+    assert entry["price"] == 102.0
+    assert abs(entry["qty"]) == pytest.approx(0.98)
+    assert entry["order_type"] == "entry_initial_normal_short"
+    assert abs(entry["qty"]) * entry["price"] / inp["balance"] <= 1.0
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 0.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=0.0)
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=99.95,
+        ask=100.05,
+        long_bp=disabled,
+        short_bp=enabled,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 100.0}
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=disabled, short_overrides=enabled),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["global"]["market_orders_allowed"] = True
+    inp["global"]["market_order_near_touch_threshold"] = 0.001
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order
+        for order in out["orders"]
+        if order["order_type"].startswith("entry_")
+    )
+
+    assert entry["pside"] == "short"
+    assert entry["execution_type"] == "market"
+    assert entry["price"] == 100.05
+    assert entry["qty"] == pytest.approx(-1.001)
+    assert abs(entry["qty"]) * symbol["order_book"]["bid"] >= 100.0
+
+
+def test_trailing_martingale_partial_entry_preserves_sub_ten_decimal_price_step():
+    import passivbot_rust as pbr
+
+    aligned_bid = 0.999999999999
+    symbol = make_symbol(
+        0,
+        bid=aligned_bid,
+        ask=1.000000000002,
+        long_pos_size=0.5,
+        long_pos_price=1.0,
+        long_strategy=adaptive_strategy_params(entry={"ema_gate_mode": "reentry"}),
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 3e-12, "min_qty": 0.0, "min_cost": 0.0}
+    )
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    partial = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "entry_initial_partial_long"
+    )
+    assert partial["price"] == aligned_bid
+
+
+def test_sub_tick_ema_anchor_bid_keeps_short_close_at_lowest_positive_tick():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        strategy_kind="ema_anchor",
+        symbols=[
+            make_symbol(
+                0,
+                bid=0.005,
+                ask=0.015,
+                short_pos_size=-1.0,
+                short_pos_price=0.02,
+                short_bp={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+                long_strategy=strategy,
+                short_strategy=strategy,
+                emas=ema_bundle(
+                    m1_close=[
+                        [10.0, 0.005],
+                        [20.0, 0.005],
+                        [math.sqrt(10.0 * 20.0), 0.005],
+                    ],
+                    m1_volume=[[10.0, 1_000.0]],
+                    m1_log_range=[[10.0, 0.01]],
+                ),
+            )
+        ],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    short_close = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_ema_anchor_short"
+    )
+    assert short_close["price"] == 0.01
+
+
+def test_sub_tick_ema_anchor_bid_suppresses_long_entry_above_the_book():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=0.005,
+        ask=0.015,
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 0.005],
+                [20.0, 0.005],
+                [math.sqrt(10.0 * 20.0), 0.005],
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
+        ),
+    )
+    inp = make_input(balance=1_000.0, strategy_kind="ema_anchor", symbols=[symbol])
+    inp["global"]["market_orders_allowed"] = True
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    assert not any(
+        order["order_type"] == "entry_ema_anchor_long" for order in out["orders"]
+    )
+
+
+def test_genuinely_above_tick_ema_anchor_ask_rounds_up():
+    import passivbot_rust as pbr
+
+    strategy = {
+        "base_qty_pct": 0.1,
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=0.09,
+        ask=0.1000000005,
+        long_mode="manual",
+        short_bp={"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+        long_strategy=strategy,
+        short_strategy=strategy,
+        emas=ema_bundle(
+            m1_close=[
+                [10.0, 0.1000000005],
+                [20.0, 0.1000000005],
+                [math.sqrt(10.0 * 20.0), 0.1000000005],
+            ],
+            m1_volume=[[10.0, 1_000.0]],
+            m1_log_range=[[10.0, 0.01]],
+        ),
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        strategy_kind="ema_anchor",
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    short_entry = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "entry_ema_anchor_short"
+    )
+    assert short_entry["price"] == 0.2
+
+
 def test_ema_anchor_entry_double_down_factor_scales_same_side_qty_only():
     import passivbot_rust as pbr
 
@@ -2096,7 +2895,233 @@ def test_panic_mode_emits_close_panic_long():
     assert o["symbol_idx"] == 0
     assert o["pside"] == "long"
     assert o["order_type"] == "close_panic_long"
-    assert o["qty"] < 0.0
+    assert o["qty"] == -1.5
+
+
+def test_off_tick_book_panic_limit_is_quantized_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.003,
+                ask=100.007,
+                long_mode="panic",
+                long_pos_size=1.5,
+                long_pos_price=100.0,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["execution_type"] == "limit"
+    assert out["orders"][0]["price"] == 99.99
+
+
+@pytest.mark.parametrize(
+    ("pside", "expected_price"),
+    [("long", 0.2), ("short", 0.3)],
+)
+def test_tick_aligned_panic_limit_does_not_skip_tick_from_float_noise(
+    pside, expected_price
+):
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=0.2,
+        ask=0.3,
+        long_mode="panic" if pside == "long" else "manual",
+        long_pos_size=1.0 if pside == "long" else 0.0,
+        long_pos_price=0.4 if pside == "long" else 0.0,
+        short_mode="panic" if pside == "short" else "manual",
+        short_pos_size=-1.0 if pside == "short" else 0.0,
+        short_pos_price=0.1 if pside == "short" else 0.0,
+        short_bp={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+            }
+        ),
+        symbols=[symbol],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["order_type"] == f"close_panic_{pside}"
+    assert out["orders"][0]["price"] == expected_price
+
+
+def test_genuinely_above_tick_short_panic_keeps_protective_offset():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=0.1000000005,
+        ask=0.2,
+        long_mode="manual",
+        short_mode="panic",
+        short_pos_size=-1.0,
+        short_pos_price=0.1,
+        short_bp={
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbol["exchange"] = exchange_params(price_step=0.1)
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            short_overrides={"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+        ),
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["order_type"] == "close_panic_short"
+    assert out["orders"][0]["price"] == 0.3
+
+
+def test_low_off_tick_book_panic_limit_stays_positive_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=0.01,
+                ask=0.015,
+                long_mode="panic",
+                long_pos_size=1.5,
+                long_pos_price=0.02,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["execution_type"] == "limit"
+    assert out["orders"][0]["price"] == 0.01
+
+
+def test_off_step_full_panic_close_passes_live_validation():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_mode="panic",
+                long_pos_size=1.005,
+                long_pos_price=100.0,
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    assert len(out["orders"]) == 1
+    assert out["orders"][0]["qty"] == -1.005
+
+
+@pytest.mark.parametrize(
+    ("qty_step", "min_qty", "expected_qty"),
+    [(0.01, 0.015, 0.02), (0.01, 0.07, 0.07), (0.03, 0.33, 0.33)],
+)
+def test_exchange_min_qty_is_quantized_without_overshooting_aligned_values(
+    qty_step, min_qty, expected_qty
+):
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_bp={"entry_initial_qty_pct": 0.0},
+    )
+    symbol["exchange"].update(
+        {"qty_step": qty_step, "min_qty": min_qty, "min_cost": 0.0}
+    )
+    inp = make_input(balance=40.0, symbols=[symbol])
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
+    assert abs(entry["qty"]) == expected_qty
+
+
+def test_positive_sub_step_effective_minimum_emits_one_contract():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=1e9,
+        ask=1e9,
+        long_bp={
+            "wallet_exposure_limit": 2.0,
+            "total_wallet_exposure_limit": 2.0,
+            "entry_initial_qty_pct": 0.1,
+        },
+    )
+    symbol["exchange"].update(
+        {"qty_step": 1.0, "min_qty": 0.0, "min_cost": 1.0}
+    )
+    inp = make_input(
+        balance=1e9,
+        global_bp=bot_params_pair(
+            long_overrides={
+                "wallet_exposure_limit": 2.0,
+                "total_wallet_exposure_limit": 2.0,
+            }
+        ),
+        symbols=[symbol],
+    )
+    out = compute(pbr, inp)
+
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(
+        order for order in out["orders"] if order["order_type"].startswith("entry_")
+    )
+    assert abs(entry["qty"]) == 1.0
 
 
 def test_panic_close_order_type_is_side_local():
@@ -2130,6 +3155,10 @@ def test_panic_close_order_type_is_side_local():
     )
 
     out = compute(pbr, inp)
+    assert inp["global"].get("market_orders_allowed", False) is False
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
     by_pside = {o["pside"]: o for o in out["orders"]}
 
     assert by_pside["long"]["order_type"] == "close_panic_long"
@@ -2259,6 +3288,27 @@ def test_graceful_stop_blocks_initial_entries_only():
     )
     assert any(o["order_type"].startswith("close_") for o in out_gs["orders"])
 
+    # Rust treats every exactly nonzero position as held, including sub-epsilon
+    # exchange dust, so graceful stop still uses effective normal generation.
+    tiny_sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="graceful_stop",
+        long_pos_size=1e-13,
+        long_pos_price=100.0,
+    )
+    tiny_inp = make_input(balance=1_000.0, symbols=[tiny_sym])
+    tiny_out = compute(pbr, tiny_inp)
+    reconciler.validate_rust_orchestrator_output(
+        tiny_out, {0: "BTC/USDT:USDT"}, tiny_inp
+    )
+    assert (
+        tiny_out["diagnostics"]["symbol_states"][0]["long"]["effective_mode"]
+        == "normal"
+    )
+    assert any(order["order_type"].startswith("entry_") for order in tiny_out["orders"])
+
 
 def test_forager_respects_n_positions_selects_one_coin():
     import passivbot_rust as pbr
@@ -2317,6 +3367,11 @@ def test_forager_respects_n_positions_selects_one_coin():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT", 1: "ETH/USDT:USDT"},
+        inp,
+    )
     assert out["orders"], "expected at least one order"
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
     selection = out["diagnostics"]["forager_selections"][0]
@@ -2602,6 +3657,60 @@ def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
     assert unstuck[0]["qty"] == pytest.approx(-1.5)
 
 
+@pytest.mark.parametrize(
+    ("pside", "position_size", "position_price", "bid", "ask", "expected_price"),
+    [
+        ("long", 10.0, 130.0, 120.0, 120.003, 120.01),
+        ("short", -10.0, 110.0, 120.003, 120.01, 120.0),
+    ],
+)
+def test_auto_unstuck_quantizes_off_tick_book_price_before_live_validation(
+    pside,
+    position_size,
+    position_price,
+    bid,
+    ask,
+    expected_price,
+):
+    import passivbot_rust as pbr
+
+    side_bp = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.5,
+        "wallet_exposure_limit": 1.5,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_gating_enabled": False,
+        "unstuck_loss_allowance_pct": 0.005,
+    }
+    symbol_kwargs = {
+        f"{pside}_pos_size": position_size,
+        f"{pside}_pos_price": position_price,
+        f"{pside}_bp": side_bp,
+    }
+    global_kwargs = {f"{pside}_overrides": side_bp}
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(**global_kwargs),
+        symbols=[make_symbol(0, bid=bid, ask=ask, **symbol_kwargs)],
+    )
+    inp["global"][f"unstuck_allowance_{pside}"] = 1e9
+
+    out = compute(pbr, inp)
+    unstuck = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == f"close_unstuck_{pside}"
+    )
+
+    assert unstuck["price"] == pytest.approx(expected_price)
+    reconciler.validate_rust_orchestrator_output(
+        out,
+        {0: "BTC/USDT:USDT"},
+        inp,
+    )
+
+
 def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     import passivbot_rust as pbr
 
@@ -2802,6 +3911,37 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
 
     assert any(o["order_type"].startswith("entry_") for o in out["orders"])
     assert out["diagnostics"]["min_effective_cost_blocks"] == []
+
+
+def test_live_validator_accepts_real_min_effective_cost_diagnostic():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.01,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        effective_min_cost=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
+    inp["global"]["filter_by_min_effective_cost"] = True
+
+    out = compute(pbr, inp)
+
+    assert out["diagnostics"]["min_effective_cost_blocks"]
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
 
 
 def test_manual_positions_consume_twel_entry_gate_budget():
@@ -3087,8 +4227,8 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         long_pos_size=6.0,
         long_pos_price=100.0,
         long_bp=long_bp,
@@ -3098,7 +4238,53 @@ def test_larger_wel_auto_reduce_wins_over_twel_for_same_position():
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_auto_reduce_wel_long" in order_types
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    )
+    assert wel_order["price"] == 100.01
+    assert wel_order["price"] >= sym["order_book"]["ask"]
     assert "close_auto_reduce_twel_long" not in order_types
+
+
+def test_wel_off_tick_limit_meets_minimum_and_passes_live_validation():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 1.0,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=3.0,
+        ask=3.003,
+        long_pos_size=10.001,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym["exchange"].update(
+        {"qty_step": 0.001, "price_step": 0.01, "min_qty": 0.0, "min_cost": 5.0}
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_long"
+    )
+
+    assert wel_order["price"] == 3.01
+    assert wel_order["qty"] == pytest.approx(-1.662)
+    assert abs(wel_order["qty"]) * wel_order["price"] >= 5.0
 
 
 def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
@@ -3118,8 +4304,8 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         long_pos_size=6.0,
         long_pos_price=100.0,
         long_bp=long_bp,
@@ -3157,8 +4343,8 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     global_bp = bot_params_pair(short_overrides=short_bp)
     sym = make_symbol(
         0,
-        bid=100.0,
-        ask=100.0,
+        bid=99.995,
+        ask=100.005,
         short_pos_size=-6.0,
         short_pos_price=100.0,
         short_bp=short_bp,
@@ -3170,6 +4356,13 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_auto_reduce_wel_short" in order_types
+    wel_order = next(
+        order
+        for order in out["orders"]
+        if order["order_type"] == "close_auto_reduce_wel_short"
+    )
+    assert wel_order["price"] == 99.99
+    assert wel_order["price"] <= sym["order_book"]["bid"]
     assert "close_unstuck_short" not in order_types
     assert "close_grid_short" in order_types
     assert sum(
@@ -3207,6 +4400,9 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     inp["global"]["max_realized_loss_pct"] = 0.019
 
     out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
     order_types = [o["order_type"] for o in out["orders"]]
 
     assert "close_unstuck_long" in order_types

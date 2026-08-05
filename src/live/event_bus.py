@@ -646,6 +646,7 @@ _SENSITIVE_KEY_FRAGMENTS = {
     "wallet-address",
     "x-mbx-apikey",
 }
+_NON_SENSITIVE_KEY_EXACT = {"authoritative_epoch"}
 
 
 def utc_ms() -> int:
@@ -692,6 +693,8 @@ def payload_hash_raw(payload: bytes | str) -> str:
 
 def _is_sensitive_key(key: object) -> bool:
     cleaned = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch in "_-")
+    if cleaned in _NON_SENSITIVE_KEY_EXACT:
+        return False
     compact = cleaned.replace("-", "").replace("_", "")
     return any(
         fragment in cleaned or fragment.replace("-", "").replace("_", "") in compact

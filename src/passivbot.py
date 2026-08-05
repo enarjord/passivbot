@@ -684,7 +684,6 @@ _EXECUTION_LOOP_ERROR_ENDPOINTS = frozenset(
     }
 )
 
-
 def compute_live_warmup_windows(
     symbols_by_side: Dict[str, set],
     bp_lookup: Callable[[str, str, str], float],
@@ -2021,76 +2020,6 @@ class Passivbot:
         if cooldown_lookback_minutes <= 0:
             return False, None
         return True, max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
-
-    def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
-        try:
-            base_delay = float(
-                get_optional_live_value(
-                    self.config,
-                    "fills_coverage_retry_delay_seconds",
-                    30.0,
-                )
-            )
-        except Exception:
-            base_delay = 30.0
-        try:
-            max_delay = float(
-                get_optional_live_value(
-                    self.config,
-                    "fills_coverage_retry_max_delay_seconds",
-                    300.0,
-                )
-            )
-        except Exception:
-            max_delay = 300.0
-        base_delay = max(0.0, base_delay)
-        max_delay = max(base_delay, max_delay)
-        retry_count = max(1, int(retry_count or 1))
-        return min(max_delay, base_delay * (2 ** min(retry_count - 1, 6)))
-
-    @staticmethod
-    def _fill_coverage_retry_key(status: dict[str, object]) -> tuple:
-        return (
-            str(status.get("reason", "unknown")),
-            str(status.get("history_scope", "unknown")),
-            int(status.get("covered_start_ms", 0) or 0),
-            int(status.get("oldest_event_ts", 0) or 0),
-            int(status.get("gap_start_ts", 0) or 0),
-            int(status.get("gap_end_ts", 0) or 0),
-            str(status.get("gap_reason", "")),
-        )
-
-    def _fill_coverage_retry_deferred(self, status: dict[str, object], now_ms: int) -> bool:
-        state = getattr(self, "_fill_coverage_retry_state", None)
-        if not isinstance(state, dict):
-            return False
-        if state.get("key") != self._fill_coverage_retry_key(status):
-            return False
-        next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
-        return next_retry_ms > int(now_ms)
-
-    def _record_fill_coverage_retry_defer(
-        self, status: dict[str, object], *, now_ms: Optional[int] = None
-    ) -> None:
-        now = utc_ms() if now_ms is None else int(now_ms)
-        key = self._fill_coverage_retry_key(status)
-        state = getattr(self, "_fill_coverage_retry_state", None)
-        previous_count = (
-            int(state.get("retry_count", 0) or 0)
-            if isinstance(state, dict) and state.get("key") == key
-            else 0
-        )
-        retry_count = previous_count + 1
-        delay_s = self._fill_coverage_retry_delay_seconds(retry_count)
-        self._fill_coverage_retry_state = {
-            "key": key,
-            "retry_count": retry_count,
-            "next_retry_ms": now + int(delay_s * 1000.0),
-        }
-
-    def _clear_fill_coverage_retry_defer(self) -> None:
-        if hasattr(self, "_fill_coverage_retry_state"):
-            self._fill_coverage_retry_state = {}
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -13064,16 +12993,6 @@ class Passivbot:
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 refresh_mode = "full"
-                if not getattr(self, "_fills_full_refresh_logged", False):
-                    if age_limit is None:
-                        logging.debug(
-                            "[fills] Performing full refresh from full available history"
-                        )
-                    else:
-                        logging.debug(
-                            "[fills] Performing full refresh from %s",
-                            ts_to_date(age_limit)[:19],
-                        )
                 await self._pnls_manager.refresh(
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
@@ -16561,13 +16480,14 @@ class Passivbot:
                 }
             )
 
-        out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
-        orders = out.get("orders", [])
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            pbr.compute_ideal_orders_json(json.dumps(input_dict)),
+            idx_to_symbol,
+            input_dict,
+        )
         ideal_orders: dict[str, list] = {}
         for order in orders:
-            symbol = idx_to_symbol.get(int(order["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(order["symbol_idx"])]
             order_type = str(order["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in order:
@@ -17308,8 +17228,10 @@ class Passivbot:
                             idx,
                         )
             raise
-        out = json.loads(out_json)
-        orders = out.get("orders", [])
+        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+            out_json, idx_to_symbol, input_dict
+        )
+        diagnostics = out["diagnostics"]
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -17321,16 +17243,14 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
-            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(o["symbol_idx"])]
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in o:
@@ -19912,6 +19832,15 @@ class Passivbot:
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
+            out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
+                out_json, idx_to_symbol, input_dict
+            )
+            diagnostics = out["diagnostics"]
+            self._order_churn_risk_active_pairs = (
+                reconciler.order_churn_risk_active_pairs_from_rust_output(
+                    out, idx_to_symbol
+                )
+            )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
@@ -19934,16 +19863,8 @@ class Passivbot:
                 error=e,
             )
             raise
-        out = json.loads(out_json)
         elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
         output_hash = payload_hash_raw(out_json)
-        orders = out.get("orders", [])
-        diagnostics = out.get("diagnostics", {})
-        self._order_churn_risk_active_pairs = (
-            reconciler.order_churn_risk_active_pairs_from_rust_output(
-                out, idx_to_symbol
-            )
-        )
         self._emit_rust_orchestrator_returned_event(
             rust_call_id=rust_call_id,
             status="succeeded",
@@ -19973,7 +19894,7 @@ class Passivbot:
             Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
-                out.get("diagnostics", {}),
+                diagnostics,
                 idx_to_symbol,
                 mode_overrides,
             )
@@ -19990,9 +19911,7 @@ class Passivbot:
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
-            symbol = idx_to_symbol.get(int(o["symbol_idx"]))
-            if symbol is None:
-                continue
+            symbol = idx_to_symbol[int(o["symbol_idx"])]
             order_type = str(o["order_type"])
             order_type_id = int(pbr.order_type_snake_to_id(order_type))
             if "execution_type" not in o:
