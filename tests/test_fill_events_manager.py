@@ -58,6 +58,49 @@ class _Clock:
         self._now += delta_ms
 
 
+def test_bot_symbol_resolver_propagates_market_ambiguity():
+    class _Bot:
+        def coin_to_symbol(self, _value, verbose=False):
+            raise fem.AmbiguousMarketIdentifier("ambiguous test market")
+
+    resolver = fem._symbol_resolver(_Bot())
+
+    with pytest.raises(fem.AmbiguousMarketIdentifier, match="ambiguous test market"):
+        resolver("ABCUSDT")
+
+
+@pytest.mark.parametrize("fetcher_cls", [BitgetFetcher, BinanceFetcher])
+@pytest.mark.parametrize(
+    "error_cls", [fem.AmbiguousMarketIdentifier, fem.UnknownMarketIdentifier]
+)
+def test_exchange_fetcher_symbol_resolver_propagates_market_resolution_errors(
+    fetcher_cls, error_cls
+):
+    def ambiguous(_value):
+        raise error_cls("unresolvable test market")
+
+    kwargs = {"symbol_resolver": ambiguous}
+    if fetcher_cls is BinanceFetcher:
+        kwargs.update(positions_provider=lambda: (), open_orders_provider=lambda: ())
+    fetcher = fetcher_cls(object(), **kwargs)
+
+    with pytest.raises(error_cls, match="unresolvable test market"):
+        fetcher._resolve_symbol("ABCUSDT")
+
+
+@pytest.mark.parametrize("fetcher_cls", [BitgetFetcher, BinanceFetcher])
+def test_exchange_fetcher_symbol_resolver_keeps_generic_fallback(fetcher_cls):
+    def unavailable(_value):
+        raise RuntimeError("resolver unavailable")
+
+    kwargs = {"symbol_resolver": unavailable}
+    if fetcher_cls is BinanceFetcher:
+        kwargs.update(positions_provider=lambda: (), open_orders_provider=lambda: ())
+    fetcher = fetcher_cls(object(), **kwargs)
+
+    assert fetcher._resolve_symbol("ABCUSDT") == "ABCUSDT"
+
+
 class _FakeBitgetAPI:
     def __init__(
         self,

@@ -140,6 +140,7 @@ from logging_setup import (
     resolve_log_level,
 )
 from utils import (
+    MarketIdentifierResolutionError,
     load_markets,
     coin_to_symbol,
     symbol_to_coin,
@@ -5914,17 +5915,9 @@ class Passivbot:
         """Map a coin identifier to the exchange-specific trading symbol."""
         if coin == "":
             return ""
-        if not hasattr(self, "coin_to_symbol_map"):
-            self.coin_to_symbol_map = {}
-        if coin in self.coin_to_symbol_map:
-            return self.coin_to_symbol_map[coin]
-        coinf = symbol_to_coin(coin, verbose=verbose)
-        if coinf in self.coin_to_symbol_map:
-            self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
-            return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
-        self.coin_to_symbol_map[coin] = result
-        return result
+        # The shared resolver already caches maps with file-change detection.
+        # A second bot-level result cache would hide newly ambiguous aliases.
+        return coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
 
     def order_to_order_tuple(self, order):
         """Convert an order dictionary into a normalized tuple for comparisons."""
@@ -22064,6 +22057,17 @@ class Passivbot:
             except Exception:
                 pass
             self._log_coin_symbol_fallback_summary()
+        except MarketIdentifierResolutionError as e:
+            psides = set(getattr(self, "approved_coins", {})) | {"long", "short"}
+            self.approved_coins = {pside: set() for pside in psides}
+            self.approved_coins_minus_ignored_coins = {
+                pside: set() for pside in psides
+            }
+            logging.error(
+                "[forager] approved/ignored coin refresh failed closed | "
+                "error_type=%s action=clear_approved_eligibility",
+                bounded_exception_type(e),
+            )
         except Exception as e:
             logging.error(
                 "[forager] approved/ignored coin refresh failed | "

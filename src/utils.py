@@ -37,6 +37,7 @@ _COIN_TO_SYMBOL_CACHE = {}  # {exchange: {"map": dict, "mtime_ns": int, "size": 
 _SYMBOL_TO_COIN_CACHE = {"map": None, "mtime_ns": None, "size": None}
 _SYMBOL_TO_COIN_WARNINGS: set[str] = set()
 _COIN_TO_SYMBOL_FALLBACKS: set[tuple[str, str]] = set()
+_KNOWN_EXCHANGE_QUALIFIERS: Optional[frozenset[str]] = None
 
 # File locking constants for symbol/coin map files
 _SYMBOL_MAP_LOCK_STALE_SECONDS = 180  # Remove locks older than 3 minutes
@@ -47,6 +48,22 @@ LEGACY_COINS_FILE_ALIASES = {
     "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
     "approved_coins_topmcap.txt": Path("configs/approved_coins.json"),
 }
+
+
+class MarketIdentifierResolutionError(ValueError):
+    """Base class for fail-closed exchange market identifier errors."""
+
+
+class AmbiguousMarketIdentifier(MarketIdentifierResolutionError):
+    """Raised when a convenience alias matches multiple exchange markets."""
+
+
+class MarketIdentifierExchangeMismatch(MarketIdentifierResolutionError):
+    """Raised when an exchange-qualified identifier targets another exchange."""
+
+
+class UnknownMarketIdentifier(MarketIdentifierResolutionError):
+    """Raised when an exact market identifier is absent from a loaded exchange map."""
 
 
 def _atomic_write_json(path: str, data: dict, indent=None, sort_keys=False) -> None:
@@ -827,8 +844,10 @@ def _build_coin_symbol_maps(markets, quote):
                 aliases.add(f"{prefix.lower()}:{ticker}")
         return aliases
 
-    coin_to_symbol_map = defaultdict(set)
-    symbol_to_coin_map = {}
+    alias_to_symbols = defaultdict(set)
+    exact_alias_to_symbols = defaultdict(set)
+    alias_to_coins = defaultdict(set)
+    exact_alias_to_coins = defaultdict(set)
     for k, v in markets.items():
         try:
             # Only include swap markets with the right quote.
@@ -839,6 +858,7 @@ def _build_coin_symbol_maps(markets, quote):
                 continue
             if not k.endswith(f":{quote}"):
                 continue
+            active = v.get("active") is not False
             coin = ""
             variants = set()
             for k0 in ["baseName", "base"]:
@@ -851,21 +871,46 @@ def _build_coin_symbol_maps(markets, quote):
                     if not coin:
                         coin = cleaned
                     variants.update(_namespaced_aliases(base, v))
-            symbol_to_coin_map[k] = coin
-            for variant in variants:
-                existing = symbol_to_coin_map.get(variant)
-                if existing and existing != coin:
-                    continue
-                symbol_to_coin_map[variant] = coin
-                coin_to_symbol_map[variant].add(k)
+            # Exact exchange identifiers are lossless routing aliases.  They
+            # must be available before any convenience normalization such as
+            # removing a 1000/k contract multiplier.
+            exact_alias_to_symbols[k].add(k)
+            exact_alias_to_coins[k].add(coin)
+            if active:
+                for variant in variants:
+                    alias_to_coins[variant].add(coin)
+                    alias_to_symbols[variant].add(k)
             if symbol_id := v.get("id"):
-                symbol_to_coin_map[symbol_id] = coin
+                symbol_id = str(symbol_id)
+                exact_alias_to_coins[symbol_id].add(coin)
+                exact_alias_to_symbols[symbol_id].add(k)
         except Exception:
             # Skip malformed market entries but continue processing others
             continue
 
-    # Convert sets to lists for JSON serialisation / on-disk storage
-    coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
+    # Exact aliases outrank convenience aliases even if exchange metadata
+    # happens to make their text collide.  All remaining multi-market aliases
+    # stay visible so the resolver can reject them rather than guess.
+    alias_to_symbols.update(exact_alias_to_symbols)
+    coin_to_symbol_map = {
+        alias: sorted(symbols) for alias, symbols in sorted(alias_to_symbols.items())
+    }
+
+    # The global symbol-to-coin map is used only for canonical labels.  Omit
+    # ambiguous convenience aliases instead of choosing whichever market CCXT
+    # happened to return first, then overlay unique exact identifiers.
+    symbol_to_coin_map = {
+        alias: next(iter(alias_to_coins[alias]))
+        for alias, symbols in sorted(alias_to_symbols.items())
+        if len(symbols) == 1 and len(alias_to_coins[alias]) == 1
+    }
+    symbol_to_coin_map.update(
+        {
+            alias: next(iter(coins))
+            for alias, coins in sorted(exact_alias_to_coins.items())
+            if len(coins) == 1
+        }
+    )
     return coin_to_symbol_map, symbol_to_coin_map
 
 
@@ -945,6 +990,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
         quote = get_quote(exchange, quote)
 
         symbol_to_coin_map_path = make_get_filepath(os.path.join("caches", "symbol_to_coin_map.json"))
+        ambiguity_map_path = make_get_filepath(
+            os.path.join("caches", "symbol_to_coin_ambiguities.json")
+        )
         s2c_lock_path = symbol_to_coin_map_path + ".lock"
 
         # Lock the symbol_to_coin_map for the entire read-modify-write cycle
@@ -962,13 +1010,47 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                 # Build fresh maps from provided markets (pure logic)
                 coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
 
-                # Merge: prefer new discovered mappings while retaining others
-                symbol_to_coin_map.update(new_symbol_to_coin_map)
+                # Persist ambiguity ownership per exchange.  The global label
+                # map cannot represent an alias which is ambiguous on any
+                # loaded exchange, so tombstone the union regardless of cache
+                # refresh order.  Replacing this exchange's entry lets a
+                # delisted collision become usable again after refresh.
+                ambiguity_map = {}
+                try:
+                    if os.path.exists(ambiguity_map_path):
+                        with open(ambiguity_map_path, "r") as f:
+                            loaded_ambiguities = json.load(f)
+                        if isinstance(loaded_ambiguities, dict):
+                            ambiguity_map = loaded_ambiguities
+                except Exception as e:
+                    logging.error("failed to load symbol ambiguity map %s", e)
+                ambiguity_map[exchange] = sorted(
+                    alias
+                    for alias, candidates in coin_to_symbol_map.items()
+                    if len(candidates) > 1
+                )
+                ambiguous_aliases = {
+                    alias
+                    for aliases in ambiguity_map.values()
+                    if isinstance(aliases, list)
+                    for alias in aliases
+                }
+
+                for alias in ambiguous_aliases:
+                    symbol_to_coin_map.pop(alias, None)
+                symbol_to_coin_map.update(
+                    {
+                        alias: coin
+                        for alias, coin in new_symbol_to_coin_map.items()
+                        if alias not in ambiguous_aliases
+                    }
+                )
 
                 # Write symbol_to_coin_map atomically while still holding lock
                 if verbose:
                     logging.debug("dumping symbol_to_coin_map %s", symbol_to_coin_map_path)
                 _atomic_write_json(symbol_to_coin_map_path, symbol_to_coin_map)
+                _atomic_write_json(ambiguity_map_path, ambiguity_map, sort_keys=True)
 
                 # Update in-memory cache
                 try:
@@ -1016,6 +1098,71 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
         return False
 
 
+def split_exchange_qualified_market_identifier(identifier: str):
+    """Return ``(exchange, value)`` for a recognized ``exchange::value`` identifier."""
+    if not isinstance(identifier, str) or "::" not in identifier:
+        return None, identifier
+    prefix, value = identifier.split("::", 1)
+    if not prefix or not value or "/" in prefix:
+        return None, identifier
+    global _KNOWN_EXCHANGE_QUALIFIERS
+    if _KNOWN_EXCHANGE_QUALIFIERS is None:
+        known = set(getattr(ccxt, "exchanges", []))
+        known.update(to_standard_exchange_name(exchange) for exchange in tuple(known))
+        known.update(
+            {
+                "binance",
+                "binanceusdm",
+                "bitget",
+                "bitunix",
+                "bybit",
+                "defx",
+                "fake",
+                "gate",
+                "gateio",
+                "hyperliquid",
+                "kucoin",
+                "kucoinfutures",
+                "okx",
+                "paradex",
+                "weex",
+            }
+        )
+        _KNOWN_EXCHANGE_QUALIFIERS = frozenset(known)
+    if prefix.lower() not in _KNOWN_EXCHANGE_QUALIFIERS:
+        return None, identifier
+    return to_standard_exchange_name(prefix), value
+
+
+def looks_like_exact_market_identifier(identifier: str) -> bool:
+    """Return whether an identifier should reach an exchange map losslessly."""
+    raw = str(identifier).strip()
+    qualified_exchange, _ = split_exchange_qualified_market_identifier(raw)
+    if qualified_exchange is not None or "/" in raw or raw.isdigit():
+        return True
+    if raw != raw.upper():
+        return False
+    if "-" in raw:
+        return True
+    return any(
+        raw.endswith(quote) and len(raw) >= len(quote) + 2
+        for quote in ("USDT", "USDC", "BUSD", "USD")
+    )
+
+
+def _resolve_market_candidates(raw, candidates, exchange):
+    candidates = sorted(set(candidates or []))
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise AmbiguousMarketIdentifier(
+            f"ambiguous market identifier {raw!r} on {exchange}: matches {candidates}; "
+            "use an exact CCXT symbol, native market ID, or "
+            f"{exchange}::<native-id>"
+        )
+    return None
+
+
 def coin_to_symbol(coin, exchange, quote=None, verbose=True):
     # caches coin_to_symbol_map in memory and reloads if file changes
     if coin == "":
@@ -1023,22 +1170,37 @@ def coin_to_symbol(coin, exchange, quote=None, verbose=True):
     # Denormalize to use canonical form for cache paths (e.g., "binance" not "binanceusdm")
     ex = to_standard_exchange_name(exchange or "")
     quote = get_quote(ex, quote)
-    coin_sanitized = symbol_to_coin(coin, verbose=verbose)
-    fallback = f"{coin_sanitized}/{quote}:{quote}"
+    raw = str(coin).strip()
+    qualified_exchange, unqualified = split_exchange_qualified_market_identifier(raw)
+    if qualified_exchange is not None and qualified_exchange != ex:
+        raise MarketIdentifierExchangeMismatch(
+            f"market identifier {raw!r} targets {qualified_exchange}, not {ex}"
+        )
+    lookup_raw = unqualified if qualified_exchange is not None else raw
     try:
         loaded = _load_coin_to_symbol_map(ex)
-        candidates = loaded.get(coin_sanitized, []) if loaded else []
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            if verbose:
-                logging.info(
-                    "Multiple candidates for %s (raw=%s): %s",
-                    coin_sanitized,
-                    coin,
-                    candidates,
-                )
-            return candidates[0]
+        if loaded:
+            # Exact identifiers and base aliases take precedence over lossy
+            # canonicalization.  Ambiguous aliases fail closed.
+            if resolved := _resolve_market_candidates(
+                raw, loaded.get(lookup_raw, []), ex
+            ):
+                return resolved
+
+        coin_sanitized = symbol_to_coin(lookup_raw, verbose=verbose)
+        if looks_like_exact_market_identifier(raw) or (
+            loaded and lookup_raw != coin_sanitized
+        ):
+            raise UnknownMarketIdentifier(
+                f"exact market identifier {raw!r} is unavailable on {ex}; "
+                "refresh exchange market metadata or use a valid exact identifier"
+            )
+        fallback = f"{coin_sanitized}/{quote}:{quote}"
+        if loaded:
+            if resolved := _resolve_market_candidates(
+                raw, loaded.get(coin_sanitized, []), ex
+            ):
+                return resolved
         if loaded:
             # map present but coin missing
             warn_key = (ex, coin_sanitized)
@@ -1064,7 +1226,11 @@ def coin_to_symbol(coin, exchange, quote=None, verbose=True):
                         fallback,
                     )
                 _COIN_TO_SYMBOL_FALLBACKS.add(warn_key)
+    except MarketIdentifierResolutionError:
+        raise
     except Exception as e:
+        coin_sanitized = symbol_to_coin(lookup_raw, verbose=verbose)
+        fallback = f"{coin_sanitized}/{quote}:{quote}"
         if verbose:
             logging.error(
                 "error with coin_to_symbol %s (raw=%s) %s: %s", coin_sanitized, coin, exchange, e
@@ -1076,16 +1242,8 @@ def get_caller_name():
     return inspect.currentframe().f_back.f_back.f_code.co_name
 
 
-def symbol_to_coin(symbol, verbose=True):
-    # caches symbol_to_coin_map in memory and reloads if file changes
-    try:
-        loaded = _load_symbol_to_coin_map()
-        if symbol in loaded:
-            return loaded[symbol]
-        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
-    except Exception:
-        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
-
+def heuristic_symbol_to_coin(symbol):
+    """Return the legacy deterministic coin heuristic without consulting caches."""
     if symbol == "":
         return ""
     if "/" in symbol:
@@ -1107,6 +1265,24 @@ def symbol_to_coin(symbol, verbose=True):
     if coin.startswith("k") and coin[1:].isupper():
         # hyperliquid uses e.g. kSHIB instead of 1000SHIB
         coin = coin[1:]
+    return coin
+
+
+def symbol_to_coin(symbol, verbose=True):
+    # caches symbol_to_coin_map in memory and reloads if file changes
+    raw = str(symbol).strip()
+    qualified_exchange, _ = split_exchange_qualified_market_identifier(raw)
+    if qualified_exchange is not None:
+        return raw
+    try:
+        loaded = _load_symbol_to_coin_map()
+        if raw in loaded:
+            return loaded[raw]
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
+    except Exception:
+        msg = f"failed to convert {symbol} to its coin with symbol_to_coin_map. Caller: {get_caller_name()}"
+
+    coin = heuristic_symbol_to_coin(raw)
     if coin:
         msg += f". Using heuristics to guess coin: {coin}"
     if verbose:
@@ -1175,6 +1351,97 @@ def _load_fake_approved_coins(config, *, quote=None):
     return sorted(set(approved_coins))
 
 
+def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
+    """Return identifiers whose collision scope is safe across all exchanges."""
+    records = []
+    collision_canonicals = set()
+    for exchange, markets, quote in exchange_markets_quotes:
+        coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+        canonical_groups = defaultdict(list)
+        for symbol, market in markets.items():
+            if (market or {}).get("active") is False:
+                continue
+            canonical = symbol_to_coin_map.get(symbol) or heuristic_symbol_to_coin(symbol)
+            if canonical:
+                canonical_groups[canonical].append(symbol)
+
+        exchange_name = to_standard_exchange_name(exchange)
+        for canonical, symbols in canonical_groups.items():
+            candidates = coin_to_symbol_map.get(canonical, [])
+            if len(symbols) > 1 or len(candidates) > 1:
+                collision_canonicals.add(canonical)
+            for symbol in symbols:
+                market = markets.get(symbol) or {}
+                exact_identifier = str(market.get("id") or symbol)
+                records.append((exchange_name, canonical, exact_identifier))
+
+    return {
+        f"{exchange}::{exact_identifier}" if canonical in collision_canonicals else canonical
+        for exchange, canonical, exact_identifier in records
+    }
+
+
+def _preserve_market_identifiers(values) -> list[str]:
+    """Strip configured identifiers without collapsing exchange market identity."""
+    return [raw for value in values if (raw := str(value).strip())]
+
+
+async def _remove_resolved_ignored_markets(
+    config, exchanges, *, quote=None, verbose=True
+) -> None:
+    """Subtract ignored aliases resolving to the same venue market."""
+    approved_by_side = config["live"]["approved_coins"]
+    ignored_by_side = config["live"]["ignored_coins"]
+    potentially_overlapping_sides = [
+        pside
+        for pside in ("long", "short")
+        if any(
+            approved != ignored
+            and (
+                looks_like_exact_market_identifier(approved)
+                or looks_like_exact_market_identifier(ignored)
+                or heuristic_symbol_to_coin(approved) == heuristic_symbol_to_coin(ignored)
+            )
+            for approved in approved_by_side[pside]
+            for ignored in ignored_by_side[pside]
+        )
+    ]
+    if not potentially_overlapping_sides:
+        return
+
+    standard_exchanges = [ex for ex in exchanges if str(ex).lower() != "fake"]
+    if not standard_exchanges:
+        return
+    await asyncio.gather(
+        *[load_markets(ex, verbose=False, quote=quote) for ex in standard_exchanges]
+    )
+
+    def resolve_if_available(identifier, exchange):
+        try:
+            return coin_to_symbol(identifier, exchange, quote=quote, verbose=verbose)
+        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+            return None
+
+    for pside in potentially_overlapping_sides:
+        ignored_symbols_by_exchange = {
+            exchange: {
+                symbol
+                for identifier in ignored_by_side[pside]
+                if (symbol := resolve_if_available(identifier, exchange)) is not None
+            }
+            for exchange in standard_exchanges
+        }
+        approved_by_side[pside] = [
+            identifier
+            for identifier in approved_by_side[pside]
+            if not any(
+                (symbol := resolve_if_available(identifier, exchange)) is not None
+                and symbol in ignored_symbols_by_exchange[exchange]
+                for exchange in standard_exchanges
+            )
+        ]
+
+
 async def format_approved_ignored_coins(config, exchanges: [str], quote=None, verbose=True):
     if isinstance(exchanges, str):
         exchanges = [exchanges]
@@ -1207,9 +1474,14 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
             marketss = [
                 filter_markets(m, ex, quote=quote)[0] for m, ex in zip(marketss, standard_exchanges)
             ]
-            for markets in marketss:
-                for symbol in markets:
-                    approved_coins.add(symbol_to_coin(symbol, verbose=verbose))
+            approved_coins.update(
+                _approved_all_market_identifiers(
+                    [
+                        (exchange, markets, get_quote(exchange, quote))
+                        for exchange, markets in zip(standard_exchanges, marketss)
+                    ]
+                )
+            )
         approved_coins_sorted = sorted([x for x in approved_coins if x])
 
     config["live"]["approved_coins"] = {}
@@ -1217,9 +1489,7 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
         if _coins_source_side_is_all(ac[pside]):
             config["live"]["approved_coins"][pside] = list(approved_coins_sorted or [])
         else:
-            config["live"]["approved_coins"][pside] = [
-                cf for x in ac[pside] if (cf := symbol_to_coin(x))
-            ]
+            config["live"]["approved_coins"][pside] = _preserve_market_identifiers(ac[pside])
 
     ignored_source = coin_sources.get("ignored_coins", config.get("live", {}).get("ignored_coins"))
     if ignored_source is None:
@@ -1227,8 +1497,9 @@ async def format_approved_ignored_coins(config, exchanges: [str], quote=None, ve
     coin_sources["ignored_coins"] = deepcopy(ignored_source)
     ic = normalize_coins_source(ignored_source, allow_all=False)
     config["live"]["ignored_coins"] = {
-        pside: [cf for x in ic[pside] if (cf := symbol_to_coin(x))] for pside in ic
+        pside: _preserve_market_identifiers(ic[pside]) for pside in ic
     }
+    await _remove_resolved_ignored_markets(config, exchanges, quote=quote, verbose=verbose)
 
     approved_diff = _diff_snapshot(before_approved, config["live"]["approved_coins"])
     ignored_diff = _diff_snapshot(before_ignored, config["live"]["ignored_coins"])
@@ -1437,15 +1708,15 @@ def read_external_coins_lists(filepath) -> dict:
 
 
 async def get_first_ohlcv_iteratively(cc, symbol):
-    """Return the earliest OHLCV candle for a Bitget market.
+    """Return the earliest OHLCV candle for a backward-paginated native market.
 
-    Bitget does not accept a conventional ``since`` parameter for swap OHLCV
-    queries. Instead we page backwards using ``params={"until": ms}``, where an
-    empty response indicates that ``until`` predates the instrument listing.  We
-    leverage that behaviour to binary-search over monthly candles and then
-    refine the result with a daily fetch.  The returned value is the first full
-    candle ``[timestamp, open, high, low, close, volume]`` if available, else
-    ``None``."""
+    Native Bitget and Bitunix clients page backwards using
+    ``params={"until": ms}``, where an empty response indicates that ``until``
+    predates the instrument listing. We leverage that behaviour to binary-search
+    over monthly candles and then refine the result with a daily fetch. The
+    returned value is the first full candle
+    ``[timestamp, open, high, low, close, volume]`` if available, else ``None``.
+    """
 
     DAY_MS = 86_400_000
     MONTH_MS = 30 * DAY_MS

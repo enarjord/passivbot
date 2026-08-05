@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Callable
 
 from pure_funcs import sort_dict_keys
-from utils import symbol_to_coin
+from utils import looks_like_exact_market_identifier, symbol_to_coin
 
 from .load import load_prepared_config
 from .log_output import log_config_message
@@ -287,7 +287,9 @@ def parse_overrides(
         result["live"].pop("coin_flags", None)
         result["live"].setdefault("coin_flags", {})
     for coin in sorted(result["coin_overrides"]):
-        formatted_coin = symbol_normalizer(coin)
+        formatted_coin = (
+            coin if looks_like_exact_market_identifier(coin) else symbol_normalizer(coin)
+        )
         if formatted_coin != coin:
             if formatted_coin:
                 result["coin_overrides"][formatted_coin] = deepcopy(result["coin_overrides"][coin])

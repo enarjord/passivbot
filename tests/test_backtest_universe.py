@@ -3,7 +3,7 @@ from copy import deepcopy
 import pytest
 
 from backtest import get_cache_hash
-from backtest_universe import effective_backtest_data_coins
+from backtest_universe import effective_backtest_data_coins, normalize_backtest_coin
 from config import prepare_config
 from config_utils import get_template_config
 
@@ -29,6 +29,38 @@ def test_effective_backtest_data_coins_ignores_disabled_side():
     cfg = _base_config()
 
     assert effective_backtest_data_coins(cfg) == ["A"]
+
+
+def test_backtest_universe_preserves_exchange_qualified_market_identity():
+    assert normalize_backtest_coin("bitget::ABCUSDT") == "bitget::ABCUSDT"
+
+
+def test_backtest_universe_preserves_exact_ccxt_market_identity():
+    assert normalize_backtest_coin("1000ABC/USDT:USDT") == "1000ABC/USDT:USDT"
+
+
+def test_backtest_universe_preserves_native_market_id():
+    assert normalize_backtest_coin("1000ABCUSDT") == "1000ABCUSDT"
+
+
+def test_backtest_universe_preserves_hyphenated_native_market_id():
+    assert normalize_backtest_coin("BTC-USDT-SWAP") == "BTC-USDT-SWAP"
+
+
+@pytest.mark.parametrize("identifier", ["1000ABC"])
+def test_backtest_universe_retains_legacy_unqualified_canonical_keys(identifier):
+    assert normalize_backtest_coin(identifier) == "ABC"
+
+
+def test_backtest_universe_does_not_use_global_symbol_label_cache(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache_dir = tmp_path / "caches"
+    cache_dir.mkdir()
+    (cache_dir / "symbol_to_coin_map.json").write_text(
+        '{"ABC": "venue:ABC"}', encoding="utf-8"
+    )
+
+    assert normalize_backtest_coin("ABC") == "ABC"
 
 
 def test_effective_backtest_data_coins_supports_canonical_grouped_bot_config():

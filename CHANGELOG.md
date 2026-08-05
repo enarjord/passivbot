@@ -12,6 +12,14 @@ All notable user-facing changes will be documented in this file.
   short entry quantities are re-cropped after directional price quantization.
 - Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
   limit reducers cannot become crossing orders merely through price-step rounding.
+- Resolve exchange market identifiers without lossy pre-normalization: exact CCXT symbols,
+  native market IDs, multiplier-prefixed bases, and `exchange::<native-id>` identities now take
+  precedence on every exchange. Convenience aliases that match multiple markets fail closed with
+  their candidates instead of selecting an order-dependent first match, missing exact identifiers
+  fail closed instead of normalizing to another market, `approved_coins="all"`
+  emits exchange-scoped identities for collisions, and generated symbol maps plus durable
+  per-exchange ambiguity tombstones remain deterministic across cache refresh order.
+
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
   the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent
