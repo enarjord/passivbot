@@ -17,7 +17,11 @@ import weakref
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
-from live.diagnostic_safety import bounded_exception_type, sanitize_diagnostic_text
+from live.diagnostic_safety import (
+    bounded_exception_type,
+    is_sensitive_diagnostic_key as _is_sensitive_key,
+    sanitize_diagnostic_text,
+)
 
 
 SCHEMA_VERSION = 1
@@ -622,30 +626,6 @@ VALID_STATUSES = {
 }
 
 
-_SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
-    "accesskey",
-    "accesssign",
-    "accesssignature",
-    "apikey",
-    "apisecret",
-    "apisignature",
-    "authsignature",
-    "authheader",
-    "authenticationheader",
-    "authkey",
-    "authorization",
-    "brokerkey",
-    "exchangesignature",
-    "credential",
-    "hmacsignature",
-    "passphrase",
-    "password",
-    "privatekey",
-    "requestsignature",
-    "secretkey",
-    "xmbxapikey",
-)
-_SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
 _SENSITIVE_HEADER_KEY_COMPACT_EXACT = {
     "key",
     "sign",
@@ -700,39 +680,6 @@ def payload_hash(payload: Any) -> str:
 def payload_hash_raw(payload: bytes | str) -> str:
     raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
     return hashlib.sha256(raw).hexdigest()
-
-
-def _is_sensitive_key(key: object) -> bool:
-    cleaned = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
-    compact = cleaned.replace("_", "")
-    if compact in {"apisign", "authsign"}:
-        return True
-    if any(marker in compact for marker in _SENSITIVE_KEY_STRONG_COMPACT_MARKERS):
-        return True
-    parts = tuple(part for part in cleaned.split("_") if part)
-    if (
-        compact
-        in {
-            "auth",
-            "authentication",
-            "bearer",
-            "cookie",
-            "jwt",
-            "secret",
-            "setcookie",
-            "signature",
-            "token",
-        }
-        or compact.endswith(("cookie", "secret", "token"))
-    ):
-        return True
-    if "cookie" in parts or "secret" in parts or (parts and parts[-1] == "token"):
-        return True
-    return bool(
-        parts
-        and parts[-1] == "signature"
-        and any(part in _SENSITIVE_SIGNATURE_QUALIFIERS for part in parts[:-1])
-    )
 
 
 def _is_sensitive_header_key(key: object) -> bool:

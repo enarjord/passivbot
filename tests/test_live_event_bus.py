@@ -1011,6 +1011,49 @@ def test_live_event_redacts_exact_auth_and_api_sign_aliases():
     assert LiveEvent(EventTypes.REMOTE_CALL_FAILED, data=source).data == expected
 
 
+def test_live_event_redacts_auth_namespace_alias_matrix():
+    sensitive_aliases = (
+        "apiSign",
+        "authSign",
+        "authenticationKey",
+        "authenticationSecret",
+        "authenticationSign",
+        "authenticationSignature",
+        "authenticationToken",
+        "authenticationHeader",
+        "authorization_key",
+        "authorization_secret",
+        "authorization_sign",
+        "authorization_signature",
+        "authorization_token",
+        "authorization_header",
+        "exchangeApiSign",
+        "exchangeAuthSign",
+        "exchangeAuthenticationToken",
+        "exchangeAuthorizationKey",
+    )
+    source = {alias: f"secret-{index}" for index, alias in enumerate(sensitive_aliases)}
+    source.update(
+        {
+            "planningSign": "planning-sign",
+            "planningSignature": "planning-signature",
+            "diagnosticSignature": "diagnostic-signature",
+        }
+    )
+
+    expected = {alias: REDACTED for alias in sensitive_aliases}
+    expected.update(
+        {
+            "planningSign": "planning-sign",
+            "planningSignature": "planning-signature",
+            "diagnosticSignature": "diagnostic-signature",
+        }
+    )
+
+    assert redact_payload(source) == expected
+    assert LiveEvent(EventTypes.REMOTE_CALL_FAILED, data=source).data == expected
+
+
 def test_redact_payload_redacts_exact_authentication_keys_without_matching_authority():
     assert redact_payload(
         {

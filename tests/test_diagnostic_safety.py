@@ -1,3 +1,5 @@
+import live.diagnostic_safety as diagnostic_safety_module
+
 from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
@@ -265,6 +267,39 @@ def test_sanitize_diagnostic_text_redacts_remaining_credential_aliases():
         assert secret not in sanitized
     assert sanitized.count("[redacted]") == 7
     assert "safe=ok" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_auth_namespace_alias_matrix():
+    aliases = (
+        "apiSign",
+        "authSign",
+        "authenticationKey",
+        "authenticationSecret",
+        "authenticationSign",
+        "authenticationSignature",
+        "authenticationToken",
+        "authenticationHeader",
+        "authorization_key",
+        "authorization_secret",
+        "authorization_sign",
+        "authorization_signature",
+        "authorization_token",
+        "authorization_header",
+        "exchangeApiSign",
+        "exchangeAuthSign",
+        "exchangeAuthenticationToken",
+        "exchangeAuthorizationKey",
+    )
+
+    for alias in aliases:
+        sanitized = sanitize_diagnostic_text(f"{alias}=TOPSECRET safe=ok")
+        assert sanitized == f"{alias}=[redacted] safe=ok"
+        multiword = sanitize_diagnostic_text(f"{alias}=TOP SECRET safe=ok")
+        assert multiword == f"{alias}=[redacted] safe=ok"
+
+    assert sanitize_diagnostic_text("planningSign=visible safe=ok") == (
+        "planningSign=visible safe=ok"
+    )
 
 
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
@@ -768,6 +803,20 @@ def test_bounded_exception_type_rejects_forged_trusted_module():
     )
 
     assert bounded_exception_type(forged_error("api_key=hidden")) == "RuntimeError"
+
+
+def test_bounded_exception_type_rejects_exported_credential_bearing_name():
+    class_name = "api_key_TOPSECRET"
+    credential_error = type(
+        class_name,
+        (RuntimeError,),
+        {"__module__": diagnostic_safety_module.__name__},
+    )
+    setattr(diagnostic_safety_module, class_name, credential_error)
+    try:
+        assert bounded_exception_type(credential_error("boom")) == "RuntimeError"
+    finally:
+        delattr(diagnostic_safety_module, class_name)
 
 
 def test_exception_text_contains_catches_hostile_string_conversion():

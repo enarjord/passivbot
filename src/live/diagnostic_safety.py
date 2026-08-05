@@ -8,6 +8,57 @@ EXCEPTION_TYPE_MAX_LEN = 80
 DIAGNOSTIC_MESSAGE_MAX_LEN = 4096
 DIAGNOSTIC_MESSAGE_UNAVAILABLE = "<unavailable>"
 DIAGNOSTIC_REDACTED = "[redacted]"
+_SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
+    r"(?i)(?:api_?key|apikey|authorization|cookie|passphrase|password|private_?key|"
+    r"privatekey|secret|signature|token|wallet_?address|walletaddress)"
+)
+_SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
+    "accesskey",
+    "accesssign",
+    "accesssignature",
+    "apikey",
+    "apisecret",
+    "apisignature",
+    "authsignature",
+    "authheader",
+    "authenticationheader",
+    "authkey",
+    "authorization",
+    "brokerkey",
+    "exchangesignature",
+    "credential",
+    "hmacsignature",
+    "passphrase",
+    "password",
+    "privatekey",
+    "requestsignature",
+    "secretkey",
+    "xmbxapikey",
+)
+_SENSITIVE_KEY_NAMESPACE_SUFFIXES = {
+    "api": (
+        "key",
+        "keyid",
+        "secret",
+        "secretkey",
+        "sign",
+        "signature",
+        "passphrase",
+    ),
+    "access": (
+        "key",
+        "keyid",
+        "secret",
+        "sign",
+        "signature",
+        "token",
+        "passphrase",
+    ),
+    "auth": ("key", "secret", "sign", "signature", "token", "header"),
+    "authentication": ("key", "secret", "sign", "signature", "token", "header"),
+    "authorization": ("key", "secret", "sign", "signature", "token", "header"),
+}
+_SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
 _DIAGNOSTIC_PRIVATE_KEY_BLOCK_RE = re.compile(
     r"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----.*?"
     r"(?:-----END(?: [A-Z0-9]+)* PRIVATE KEY-----|\Z)",
@@ -32,7 +83,8 @@ _DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN = (
     r"(?:[a-z0-9]+[-_])+(?:"
     r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|sign(?:ature)?|passphrase)|"
     r"access[-_]?(?:key(?:[-_]?id)?|secret|token|sign(?:ature)?|passphrase)|"
-    r"auth[-_]?(?:key|secret|token|sign(?:ature)?)|secret[-_]?access[-_]?key|"
+    r"(?:auth|authentication|authorization)[-_]?(?:key|secret|token|sign(?:ature)?|header)|"
+    r"secret[-_]?access[-_]?key|"
     r"secret[-_]?key|session[-_]?token|client[-_]?secret|security[-_]?token|"
     r"private[-_]?key)"
 )
@@ -44,7 +96,8 @@ _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
     r"refreshToken|session[-_]?token|client[-_]?secret|secret[-_]?key|"
     r"secret[-_]?access[-_]?key|security[-_]?token|"
     r"privateKey|requestSignature|request[-_]?signature|"
-    r"broker[-_]?key|auth[-_]?(?:key|secret|sign(?:ature)?|token)|hmac[-_]?signature|"
+    r"broker[-_]?key|(?:auth|authentication|authorization)[-_]?"
+    r"(?:key|secret|sign(?:ature)?|token|header)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|"
     r"bearer|jwt|credentials?|password|passphrase|private[-_]?key)"
 )
@@ -61,6 +114,16 @@ _DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN = (
     r"(?:,|;)\s*[\"']?[A-Za-z_][A-Za-z0-9_.-]*[\"']?\s*[:=]"
     r"|\s+--[A-Za-z0-9_-]+(?=\s|=|\Z)"
     r"|\s+[A-Za-z_][A-Za-z0-9_.-]*\s*[:=]"
+    r"|\}|\Z"
+)
+_DIAGNOSTIC_CLASSIFIED_FIELD_BOUNDARY_PATTERN = (
+    r"(?:,|;)\s*[\"']?[A-Za-z_][A-Za-z0-9_.-]*[\"']?"
+    r"(?:\s*[:=]|\s+)"
+    r"|\s+--[A-Za-z0-9_-]+(?=\s|=|\Z)"
+    r"|\s+[A-Za-z_][A-Za-z0-9_.-]*\s*[:=]"
+    r"|\s+[A-Za-z][A-Za-z0-9]*[_\.-][A-Za-z0-9_.-]*\s+\S"
+    rf"|\s+{_DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN}"
+    r"[\"']?(?:\s*[:=/]\s*|\s+)"
     r"|\}|\Z"
 )
 _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE = re.compile(
@@ -168,6 +231,14 @@ _DIAGNOSTIC_SENSITIVE_CLI_RE = re.compile(
 _DIAGNOSTIC_AUTH_SCHEME_RE = re.compile(
     r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
 )
+_DIAGNOSTIC_CLASSIFIED_NAMED_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])"
+    r"([A-Za-z][A-Za-z0-9_-]*)"
+    r"([\"']?\s*[:=]\s*)"
+    r"(?:(?:bearer|basic|apikey|token)\s+)?"
+    r"(?:([\"'])(?:\\.|(?!\3)[\s\S])*\3|"
+    rf"[\s\S]*?(?={_DIAGNOSTIC_CLASSIFIED_FIELD_BOUNDARY_PATTERN}))"
+)
 _DIAGNOSTIC_STANDALONE_SECRET_RE = re.compile(
     r"(?i)\b(?:sk_(?:live|test)_[A-Za-z0-9]+|sk-[A-Za-z0-9_-]{16,}|"
     r"AKIA[0-9A-Z]{16})\b"
@@ -212,6 +283,58 @@ def _trusted_exception_module(module: str) -> bool:
     )
 
 
+def is_sensitive_diagnostic_key(key: object) -> bool:
+    """Classify credential-bearing structured keys without hiding safe signatures."""
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+    compact = cleaned.replace("_", "")
+    if any(marker in compact for marker in _SENSITIVE_KEY_STRONG_COMPACT_MARKERS):
+        return True
+    if any(
+        compact.endswith(f"{namespace}{suffix}")
+        for namespace, suffixes in _SENSITIVE_KEY_NAMESPACE_SUFFIXES.items()
+        for suffix in suffixes
+    ):
+        return True
+    parts = tuple(part for part in cleaned.split("_") if part)
+    if (
+        compact
+        in {
+            "auth",
+            "authentication",
+            "bearer",
+            "cookie",
+            "jwt",
+            "secret",
+            "setcookie",
+            "signature",
+            "token",
+        }
+        or compact.endswith(("cookie", "secret", "token"))
+    ):
+        return True
+    if "cookie" in parts or "secret" in parts or (parts and parts[-1] == "token"):
+        return True
+    return bool(
+        parts
+        and parts[-1] == "signature"
+        and any(part in _SENSITIVE_SIGNATURE_QUALIFIERS for part in parts[:-1])
+    )
+
+
+def _redact_classified_named_value(match: re.Match[str]) -> str:
+    if not is_sensitive_diagnostic_key(match.group(1)):
+        return match.group(0)
+    value = match.group(0)[len(match.group(1)) + len(match.group(2)) :].strip()
+    if value.strip("\"'") == DIAGNOSTIC_REDACTED:
+        return match.group(0)
+    if match.group(3):
+        return (
+            f"{match.group(1)}{match.group(2)}{match.group(3)}"
+            f"{DIAGNOSTIC_REDACTED}{match.group(3)}"
+        )
+    return f"{match.group(1)}{match.group(2)}{DIAGNOSTIC_REDACTED}"
+
+
 def _module_exports_exception_class(module: str, name: str, cls: type) -> bool:
     try:
         module_obj = sys.modules.get(module)
@@ -238,6 +361,7 @@ def bounded_exception_type(exc: BaseException) -> str:
                 and name
                 and name.isascii()
                 and name.isidentifier()
+                and not _SENSITIVE_EXCEPTION_TYPE_RE.search(name)
                 and _module_exports_exception_class(module, name, cls)
             ):
                 return name[:EXCEPTION_TYPE_MAX_LEN]
@@ -275,6 +399,9 @@ def sanitize_diagnostic_text(
         )
         text = _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE.sub(
             rf"\1\2\3\4{DIAGNOSTIC_REDACTED}\4", text
+        )
+        text = _DIAGNOSTIC_CLASSIFIED_NAMED_VALUE_RE.sub(
+            _redact_classified_named_value, text
         )
         text = _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
