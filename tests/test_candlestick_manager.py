@@ -28,9 +28,161 @@ from candlestick_manager import (
     _GAP_PERSISTENT_RETRY_MS,
     _GATEIO_RECENT_1M_LIMIT_CANDLES,
     _floor_minute,
+    fetch_candles_with_resolution_ladder,
     sanitize_remote_fetch_diagnostic,
+    synthesize_1m_from_higher_tf,
 )
 from logging_setup import DEFAULT_DATEFMT, DEFAULT_FORMAT_WITH_PREFIX
+
+
+def _resolution_candles(*minutes, close_offset=0.0):
+    return np.array(
+        [
+            (
+                minute * ONE_MIN_MS,
+                100.0 + close_offset + minute,
+                101.0 + close_offset + minute,
+                99.0 + close_offset + minute,
+                100.0 + close_offset + minute,
+                1.0,
+            )
+            for minute in minutes
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolution_ladder_stops_when_exact_1m_reaches_start():
+    calls = []
+
+    async def fetch(*, timeframe, start_ts, end_ts):
+        calls.append((timeframe, start_ts, end_ts))
+        assert timeframe == "1m"
+        return _resolution_candles(0, 1, 2)
+
+    result = await fetch_candles_with_resolution_ladder(
+        fetch,
+        start_ts=0,
+        end_ts=2 * ONE_MIN_MS,
+    )
+
+    assert [call[0] for call in calls] == ["1m"]
+    assert result.source_counts == {"1m": 3}
+    assert result.failures == {}
+    assert result.candles["ts"].tolist() == [0, ONE_MIN_MS, 2 * ONE_MIN_MS]
+
+
+@pytest.mark.asyncio
+async def test_resolution_ladder_fills_only_prefix_before_exact_1m():
+    calls = []
+
+    async def fetch(*, timeframe, start_ts, end_ts):
+        calls.append((timeframe, start_ts, end_ts))
+        if timeframe == "1m":
+            return _resolution_candles(10, 11, 13)
+        if timeframe == "5m":
+            return _resolution_candles(0, 5, close_offset=1_000.0)
+        raise AssertionError(f"unexpected timeframe {timeframe}")
+
+    result = await fetch_candles_with_resolution_ladder(
+        fetch,
+        start_ts=0,
+        end_ts=13 * ONE_MIN_MS,
+    )
+
+    assert [call[0] for call in calls] == ["1m", "5m"]
+    assert calls[1][2] == 9 * ONE_MIN_MS
+    assert result.source_counts == {"5m": 10, "1m": 3}
+    assert 12 * ONE_MIN_MS not in set(result.candles["ts"])
+    exact_row = result.candles[result.candles["ts"] == 10 * ONE_MIN_MS][0]
+    assert float(exact_row["c"]) == pytest.approx(110.0)
+
+
+@pytest.mark.asyncio
+async def test_resolution_ladder_rejects_coarse_bucket_crossing_1m_boundary():
+    async def fetch(*, timeframe, start_ts, end_ts):
+        if timeframe == "1m":
+            return _resolution_candles(12, 13)
+        if timeframe == "5m":
+            return _resolution_candles(5, 10, close_offset=500.0)
+        return _resolution_candles()
+
+    result = await fetch_candles_with_resolution_ladder(
+        fetch,
+        start_ts=5 * ONE_MIN_MS,
+        end_ts=13 * ONE_MIN_MS,
+    )
+
+    timestamps = set(result.candles["ts"])
+    expected_timestamps = {minute * ONE_MIN_MS for minute in range(5, 10)} | {
+        12 * ONE_MIN_MS,
+        13 * ONE_MIN_MS,
+    }
+    assert timestamps == expected_timestamps
+    assert result.source_counts == {"5m": 5, "1m": 2}
+
+
+@pytest.mark.asyncio
+async def test_resolution_ladder_uses_finer_sources_before_one_hour():
+    calls = []
+
+    async def fetch(*, timeframe, start_ts, end_ts):
+        calls.append(timeframe)
+        if timeframe == "1m":
+            return _resolution_candles(*range(60, 75))
+        if timeframe == "5m":
+            return _resolution_candles(50, close_offset=500.0)
+        if timeframe == "15m":
+            return _resolution_candles(30, close_offset=1_500.0)
+        if timeframe == "1h":
+            return _resolution_candles(0, close_offset=6_000.0)
+        raise AssertionError(timeframe)
+
+    result = await fetch_candles_with_resolution_ladder(
+        fetch,
+        start_ts=0,
+        end_ts=74 * ONE_MIN_MS,
+    )
+
+    assert calls == ["1m", "5m", "15m", "1h"]
+    assert result.source_counts == {"1h": 40, "15m": 15, "5m": 5, "1m": 15}
+    assert result.candles.size == 75
+
+
+@pytest.mark.asyncio
+async def test_resolution_ladder_skips_unsupported_tier_and_records_failures():
+    calls = []
+
+    async def fetch(*, timeframe, start_ts, end_ts):
+        calls.append(timeframe)
+        if timeframe in {"1m", "15m"}:
+            raise RuntimeError(f"{timeframe} unavailable")
+        if timeframe == "1h":
+            return _resolution_candles(0)
+        raise AssertionError(timeframe)
+
+    result = await fetch_candles_with_resolution_ladder(
+        fetch,
+        start_ts=0,
+        end_ts=59 * ONE_MIN_MS,
+        supported_timeframes={"1m", "15m", "1h"},
+    )
+
+    assert calls == ["1m", "15m", "1h"]
+    assert set(result.failures) == {"1m", "15m"}
+    assert result.source_counts == {"1h": 60}
+    assert result.candles.size == 60
+
+
+def test_synthesize_1m_from_one_hour_candle():
+    result = synthesize_1m_from_higher_tf(_resolution_candles(0), 60)
+
+    assert result.size == 60
+    assert int(result[0]["ts"]) == 0
+    assert int(result[-1]["ts"]) == 59 * ONE_MIN_MS
+    with pytest.raises(ValueError, match="must be > 1"):
+        synthesize_1m_from_higher_tf(_resolution_candles(0), 1)
 
 
 def test_normalize_ccxt_ohlcv_filters_nonfinite_and_nonpositive_rows(tmp_path):

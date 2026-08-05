@@ -151,6 +151,12 @@ required. If the episode saw RED, its cooldown begins at that same flattening fi
 
 This contract applies both to live runtime and to restart-time history replay.
 
+For restart-time price reconstruction, Passivbot uses available 1m candles first. If the exchange
+does not retain the older part of the requested window at that resolution, Passivbot progressively
+uses 5m, 15m, and 1h candles for that older prefix. This deliberately trades old price-path
+precision for robust reconstruction; fill timestamps, realized PnL, fees, and episode boundaries
+remain exact. Coarser sources and their contributed minute counts are included in replay metadata.
+
 In practical terms, restart replay must recognize any historical fill that fully flattened the
 configured scope as an episode boundary even if:
 

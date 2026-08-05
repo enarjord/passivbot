@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Make HSL restart price reconstruction portable across exchanges with limited candle retention.
+  Replay now uses the finest available historical resolution in a fixed 1m, 5m, 15m, then 1h
+  ladder for the older leading prefix, reports approximate source counts, and never uses coarser
+  candles to conceal gaps inside the available 1m era. Fill-based episode boundaries, realized
+  PnL, and fees remain exact.
 - Route Bitget public OHLCV requests through the complete classic futures history endpoint even
   when the authenticated account uses UTA/Elite v3, preventing older available candles from being
   omitted from live EMA windows while retaining UTA routing for private account and order calls.
