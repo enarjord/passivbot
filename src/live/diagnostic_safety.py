@@ -28,13 +28,17 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|(?!\4)[\s\S])*\4"
 )
-_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN = (
+_DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
     r"(?:api[-_]?(?:key|secret|signature)|apikey|access[-_]?(?:key|token)|"
+    r"access[-_]?(?:secret|sign(?:ature)?|passphrase)|"
     r"refreshToken|client[-_]?secret|secret[-_]?key|security[-_]?token|"
     r"privateKey|requestSignature|request[-_]?signature|"
     r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
-    r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|secret|token|"
-    r"bearer|jwt|signature|credentials?|password|passphrase|private[-_]?key)"
+    r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|"
+    r"bearer|jwt|credentials?|password|passphrase|private[-_]?key)"
+)
+_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN = (
+    rf"(?:{_DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN}|secret|token|signature)"
 )
 _DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN = (
     r"(?:,|;)\s*[\"']?[A-Za-z_][A-Za-z0-9_.-]*[\"']?\s*[:=]"
@@ -91,16 +95,38 @@ _DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE = re.compile(
     rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
     r"|[^,\s;}}]+)"
 )
-_DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
+_DIAGNOSTIC_EXPLICIT_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
     rf"({_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN})"
-    r"([\"']?(?:\s*[:=/]\s*|\s+))"
+    r"([\"']?\s*[:=/]\s*)"
     r"(?:"
     r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
     rf"|(['\"])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
     rf"|(?=[^,\s;&}}]*[\"'])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
     rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
     r"|[^,\s;&\"'}]+"
+    r")"
+)
+_DIAGNOSTIC_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    rf"({_DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN})"
+    r"([\"']?\s+)"
+    r"(?:"
+    r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|(['\"])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
+    rf"|(?=[^,\s;&}}]*[\"'])[\s\S]*?(?={_DIAGNOSTIC_SENSITIVE_VALUE_BOUNDARY_PATTERN})"
+    rf"|(?i:bearer|basic|apikey|token)\s+[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r"|[^,\s;&\"'}]+"
+    r")"
+)
+_DIAGNOSTIC_AMBIGUOUS_WHITESPACE_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"(secret|token|signature)"
+    r"([\"']?\s+)"
+    r"(?:"
+    r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    r"|(?=[^,\s;&\"'}]*(?-i:[A-Z0-9])|[^,\s;&\"'}*[^A-Za-z])[^,\s;&\"'}]+"
+    r"|[^,\s;&\"'}]+(?=\s+[A-Za-z][A-Za-z0-9]*[_\.-][A-Za-z0-9_.-]*\s+\S+)"
     r")"
 )
 _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE = re.compile(
@@ -243,7 +269,13 @@ def sanitize_diagnostic_text(
         text = _DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
+        text = _DIAGNOSTIC_EXPLICIT_SENSITIVE_VALUE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
         text = _DIAGNOSTIC_SENSITIVE_VALUE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
+        )
+        text = _DIAGNOSTIC_AMBIGUOUS_WHITESPACE_SENSITIVE_VALUE_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_REMOTE_SENSITIVE_VALUE_RE.sub(

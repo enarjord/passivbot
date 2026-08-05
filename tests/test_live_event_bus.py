@@ -1053,10 +1053,14 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
         "request_headers": [
             ("KC-API-SIGN", "KUCOINPAIR"),
             ("X-Trace", "pair-trace"),
+            {"name": "KC-API-SIGN", "value": "KUCOINDICT"},
+            {"header": "X-Trace", "value": "dict-trace"},
         ],
         "response_headers": {"X-Trace": "response-trace"},
         "accessKey": "STRUCTUREDKEY",
         "access_key": "STRUCTUREDKEY2",
+        "accessSign": "STRUCTUREDSIGN",
+        "access_signature": "STRUCTUREDSIGN2",
     }
 
     assert redact_payload(source) == {
@@ -1075,10 +1079,14 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
         "request_headers": [
             ["KC-API-SIGN", REDACTED],
             ["X-Trace", "pair-trace"],
+            {"name": "KC-API-SIGN", "value": REDACTED},
+            {"header": "X-Trace", "value": "dict-trace"},
         ],
         "response_headers": {"X-Trace": "response-trace"},
         "accessKey": REDACTED,
         "access_key": REDACTED,
+        "accessSign": REDACTED,
+        "access_signature": REDACTED,
     }
     assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
         "headers": {
@@ -1096,10 +1104,14 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
         "request_headers": [
             ["KC-API-SIGN", REDACTED],
             ["X-Trace", "pair-trace"],
+            {"name": "KC-API-SIGN", "value": REDACTED},
+            {"header": "X-Trace", "value": "dict-trace"},
         ],
         "response_headers": {"X-Trace": "response-trace"},
         "accessKey": REDACTED,
         "access_key": REDACTED,
+        "accessSign": REDACTED,
+        "access_signature": REDACTED,
     }
 
 

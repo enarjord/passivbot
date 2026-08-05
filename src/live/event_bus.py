@@ -624,6 +624,8 @@ VALID_STATUSES = {
 
 _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "accesskey",
+    "accesssign",
+    "accesssignature",
     "apikey",
     "apisecret",
     "apisignature",
@@ -753,13 +755,27 @@ def _is_sensitive_header_pair(value: object) -> bool:
     )
 
 
+def _sensitive_header_entry_value_key(value: object) -> str | None:
+    if type(value) is not dict or not dict.__contains__(value, "value"):
+        return None
+    for name_key in ("name", "key", "header"):
+        header_name = dict.get(value, name_key)
+        if type(header_name) is str and _is_sensitive_header_key(header_name):
+            return "value"
+    return None
+
+
 def _redact_payload(value: Any, *, header_context: bool) -> Any:
     if isinstance(value, Mapping):
+        sensitive_header_value_key = (
+            _sensitive_header_entry_value_key(value) if header_context else None
+        )
         return {
             str(key): (
                 REDACTED
                 if _is_sensitive_key(key)
                 or (header_context and _is_sensitive_header_key(key))
+                or key == sensitive_header_value_key
                 else _redact_payload(
                     item,
                     header_context=_is_header_container_key(key),
@@ -1001,6 +1017,9 @@ def _bounded_live_event_value(
             )
         ancestors.add(value_id)
         normalized: dict[str, Any] = {}
+        sensitive_header_value_key = (
+            _sensitive_header_entry_value_key(value) if header_context else None
+        )
         processed_keys = 0
         root_budget_key_present = False
         if is_root:
@@ -1061,6 +1080,7 @@ def _bounded_live_event_value(
                     force_redaction
                     or _is_sensitive_key(normalized_key)
                     or (header_context and _is_sensitive_header_key(normalized_key))
+                    or normalized_key == sensitive_header_value_key
                 ):
                     normalized[normalized_key] = REDACTED
                 else:

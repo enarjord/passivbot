@@ -115,6 +115,37 @@ def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
     assert "planning_signature=plan-hash" in sanitized
 
 
+def test_sanitize_diagnostic_text_preserves_ambiguous_credential_nouns_in_prose():
+    for message in (
+        "Signature for this request is not valid",
+        "signature mismatch",
+        "token expired",
+        "secret unavailable",
+    ):
+        assert sanitize_diagnostic_text(message) == message
+
+    for message in (
+        "signature=TOPSECRET safe=ok",
+        "token: TOPTOKEN safe=ok",
+        "secret/TOPVALUE safe=ok",
+    ):
+        sanitized = sanitize_diagnostic_text(message)
+        assert "TOP" not in sanitized
+        assert "safe=ok" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_access_credential_aliases():
+    sanitized = sanitize_diagnostic_text(
+        "accessSecret=FIRST access_sign=SECOND "
+        "accessSignature=THIRD access_passphrase=FOURTH safe=ok"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD", "FOURTH"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 4
+    assert "safe=ok" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
     sanitized = sanitize_diagnostic_text(
         '{"authKey":"FIRST", "auth_key":"SECOND", "authSecret":"THIRD"}'
