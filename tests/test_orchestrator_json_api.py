@@ -377,6 +377,135 @@ def test_json_rejects_missing_ema():
         compute(pbr, inp)
 
 
+def test_trailing_unavailable_does_not_hide_malformed_bundle():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(0, bid=100.0, ask=100.0)
+    symbol["long"]["trailing_available"] = False
+    del symbol["long"]["trailing"]["max_since_open"]
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+
+    with pytest.raises(ValueError, match="missing field `max_since_open`"):
+        compute(pbr, inp)
+
+
+def test_live_missing_entry_trailing_preserves_close_and_other_side():
+    import passivbot_rust as pbr
+
+    enabled_short = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    strategy = adaptive_strategy_params(
+        entry={"retracement_base_pct": 0.01},
+        close={"retracement_base_pct": 0.0},
+    )
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        short_pos_size=-1.0,
+        short_pos_price=100.0,
+        short_bp=enabled_short,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["long"]["trailing_available"] = False
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=enabled_short),
+        symbols=[symbol],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    assert not any(
+        order["pside"] == "long" and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert any(
+        order["pside"] == "long" and order["order_type"].startswith("close_")
+        for order in out["orders"]
+    )
+    assert any(order["pside"] == "short" for order in out["orders"])
+    assert {
+        "strategy_input_unavailable": {
+            "symbol_idx": 0,
+            "pside": "long",
+            "scope": "strategy_orders",
+        }
+    } in out["diagnostics"]["warnings"]
+
+
+def test_live_missing_close_trailing_still_emits_wel_reducer():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    strategy = adaptive_strategy_params(
+        entry={"retracement_base_pct": 0.0},
+        close={"retracement_base_pct": 0.01},
+    )
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+        long_strategy=strategy,
+    )
+    symbol["long"]["trailing_available"] = False
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[symbol],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    assert any(
+        order["order_type"] == "close_auto_reduce_wel_long"
+        for order in out["orders"]
+    )
+    assert not any(
+        order["pside"] == "long"
+        and order["order_type"] in {"close_grid_long", "close_trailing_long"}
+        for order in out["orders"]
+    )
+
+
+def test_trailing_unavailable_is_inert_when_strategy_does_not_consume_it():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+    )
+    symbol["long"]["trailing_available"] = False
+    inp = make_input(balance=1_000.0, symbols=[symbol])
+    available_inp = copy.deepcopy(inp)
+    available_inp["symbols"][0]["long"]["trailing_available"] = True
+
+    out = compute(pbr, inp)
+    available_out = compute(pbr, available_inp)
+
+    assert out["orders"] == available_out["orders"]
+    assert not any(
+        "strategy_input_unavailable" in warning
+        for warning in out["diagnostics"]["warnings"]
+    )
+
+
 def test_live_authorized_missing_entry_ema_preserves_independent_closes():
     import passivbot_rust as pbr
 
