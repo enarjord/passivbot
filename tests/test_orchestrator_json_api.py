@@ -2120,6 +2120,54 @@ def test_off_tick_strategy_entries_quantize_away_from_the_spread(
 
 
 @pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
+def test_next_only_short_entry_recrops_quantity_after_price_quantization(strategy_kind):
+    import passivbot_rust as pbr
+
+    strategy = (
+        adaptive_strategy_params(entry={"initial_qty_pct": 1.0})
+        if strategy_kind == "trailing_martingale"
+        else trailing_grid_v7_strategy_params(initial_qty_pct=1.0)
+    )
+    disabled = {"n_positions": 0, "total_wallet_exposure_limit": 0.0}
+    enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.01,
+        long_bp=disabled,
+        short_bp=enabled,
+        long_strategy=strategy,
+        short_strategy=strategy,
+    )
+    symbol["exchange"].update(
+        {"qty_step": 0.001, "price_step": 2.0, "min_qty": 0.0, "min_cost": 0.0}
+    )
+    inp = make_input(
+        balance=100.0,
+        global_bp=bot_params_pair(long_overrides=disabled, short_overrides=enabled),
+        strategy_kind=strategy_kind,
+        symbols=[symbol],
+    )
+    inp["peek_hints"] = {
+        "expand_grid_long": [],
+        "expand_grid_short": [],
+        "expand_close_long": [],
+        "expand_close_short": [],
+    }
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(
+        out, {0: "BTC/USDT:USDT"}, inp
+    )
+    entry = next(order for order in out["orders"] if order["pside"] == "short")
+
+    assert entry["price"] == 102.0
+    assert abs(entry["qty"]) == pytest.approx(0.98)
+    assert entry["order_type"] == "entry_initial_normal_short"
+    assert abs(entry["qty"]) * entry["price"] / inp["balance"] <= 1.0
+
+
+@pytest.mark.parametrize("strategy_kind", ["trailing_martingale", "trailing_grid_v7"])
 def test_short_market_entry_uses_executable_bid_minimum(strategy_kind):
     import passivbot_rust as pbr
 

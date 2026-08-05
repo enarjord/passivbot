@@ -235,6 +235,20 @@ def test_sanitize_diagnostic_text_redacts_quoted_prefixed_header_values_as_a_uni
     assert "X-MBX-APIKEY=[redacted]" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_unquoted_multiword_passphrases_to_field_boundary():
+    sanitized = sanitize_diagnostic_text(
+        "passphrase=two words safe=visible, "
+        "KC-API-PASSPHRASE=three words other=visible"
+    )
+
+    for secret in ("two", "words", "three"):
+        assert secret not in sanitized
+    assert "passphrase=[redacted]" in sanitized
+    assert "KC-API-PASSPHRASE=[redacted]" in sanitized
+    assert "safe=visible" in sanitized
+    assert "other=visible" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_exact_headers_without_colons():
     sanitized = sanitize_diagnostic_text(
         "KEY=GATEKEY, SIGN GATESIGN, ACCESS-KEY=OKXKEY"

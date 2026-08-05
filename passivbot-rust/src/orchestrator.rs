@@ -2853,6 +2853,7 @@ mod core {
         pside: PositionSide,
         balance: f64,
         total_wallet_exposure_limit: f64,
+        global: &OrchestratorGlobal,
         positions: &[GateEntriesPosition],
         entries: &mut Vec<IdealOrder>,
         symbols: &[SymbolInput],
@@ -2875,6 +2876,7 @@ mod core {
             symbol_idx: usize,
             qty: f64,
             price: f64,
+            fill_price: f64,
             qty_step: f64,
             c_mult: f64,
             order_type: OrderType,
@@ -2922,7 +2924,12 @@ mod core {
             };
             let ob = &sym.order_book;
             let exch = &sym.exchange;
-            let effective_min_qty = calc_min_entry_qty(o.price, exch);
+            let fill_price = if should_use_market_execution(o, global, ob) {
+                executable_touch_for_order_side(ob, o.qty)
+            } else {
+                o.price
+            };
+            let effective_min_qty = calc_min_entry_qty(fill_price, exch);
             if effective_min_qty.is_finite()
                 && effective_min_qty > QTY_EPS
                 && qty_abs + QTY_EPS < effective_min_qty
@@ -2943,6 +2950,7 @@ mod core {
                 symbol_idx: o.symbol_idx,
                 qty: qty_abs,
                 price: o.price,
+                fill_price,
                 qty_step: exch.qty_step,
                 c_mult: exch.c_mult,
                 order_type: o.order_type,
@@ -2978,12 +2986,17 @@ mod core {
                     let exp = calc_wallet_exposure(c_mult, balance, psize, pprice);
                     (psize, pprice, c_mult, exp)
                 } else {
-                    (0.0, candidate.price, candidate.c_mult, 0.0)
+                    (0.0, candidate.fill_price, candidate.c_mult, 0.0)
                 };
 
                 let old_exp = if exposure.is_finite() { exposure } else { 0.0 };
-                let (new_psize, new_pprice) =
-                    calc_new_psize_pprice(psize, pprice, qty, candidate.price, candidate.qty_step);
+                let (new_psize, new_pprice) = calc_new_psize_pprice(
+                    psize,
+                    pprice,
+                    qty,
+                    candidate.fill_price,
+                    candidate.qty_step,
+                );
                 let new_psize = new_psize.abs();
                 let new_exp =
                     if new_psize <= QTY_EPS || !(new_pprice.is_finite() && new_pprice > 0.0) {
@@ -4173,6 +4186,7 @@ mod core {
                 PositionSide::Long,
                 input.balance,
                 twel_entry_cap,
+                &input.global,
                 &workspace.gate_positions_long,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -4224,6 +4238,7 @@ mod core {
                 PositionSide::Short,
                 input.balance,
                 twel_entry_cap,
+                &input.global,
                 &workspace.gate_positions_short,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -4617,6 +4632,7 @@ mod core {
                 pside,
                 balance,
                 total_wallet_exposure_limit,
+                &make_basic_global(),
                 positions,
                 &mut entries,
                 symbols,
@@ -6562,6 +6578,7 @@ mod core {
                 PositionSide::Long,
                 balance,
                 total_wel,
+                &make_basic_global(),
                 &positions,
                 &mut entries,
                 &symbols,
@@ -6580,6 +6597,61 @@ mod core {
                 "qty {}",
                 entries[0].qty
             );
+        }
+
+        #[test]
+        fn twel_gating_prices_promoted_market_long_entries_at_executable_ask() {
+            let balance = 100.0;
+            let total_wel = 0.995;
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.01,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym];
+            let positions: Vec<GateEntriesPosition> = Vec::new();
+            let mut entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 0.99,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.01;
+            let mut current_positions = Vec::new();
+            let mut scratch = Vec::new();
+            let mut keep = Vec::new();
+            let mut qty_by_order_idx = Vec::new();
+            let mut out = Vec::new();
+
+            gate_entries_by_twel_deterministic(
+                PositionSide::Long,
+                balance,
+                total_wel,
+                &global,
+                &positions,
+                &mut entries,
+                &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+
+            assert_eq!(entries.len(), 1);
+            assert!((entries[0].qty - 0.98).abs() < 1e-9);
+            assert!(entries[0].qty * symbols[0].order_book.ask / balance < total_wel);
         }
 
         #[test]
@@ -6728,6 +6800,7 @@ mod core {
                 PositionSide::Long,
                 balance,
                 total_wel,
+                &make_basic_global(),
                 &positions,
                 &mut entries,
                 &symbols,

@@ -48,6 +48,15 @@ _DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN = (
     r"|\s+[A-Za-z_][A-Za-z0-9_.-]*\s*[:=]"
     r"|\}|\Z"
 )
+_DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])"
+    r"((?:(?:[a-z0-9]+-)*(?:api-?passphrase|access-passphrase)|passphrase))"
+    r"([\"']?(?:\s*[:=/]\s*|\s+))"
+    r"(?:"
+    r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
+    rf"|[\s\S]*?(?={_DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN})"
+    r")"
+)
 _DIAGNOSTIC_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"(\s*:\s*)(?:bearer|basic)?\s*[\s\S]*?"
@@ -211,6 +220,9 @@ def sanitize_diagnostic_text(
         )
         text = _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE.sub(
             rf"\1\2\3\4{DIAGNOSTIC_REDACTED}\4", text
+        )
+        text = _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE.sub(
+            rf"\1\2{DIAGNOSTIC_REDACTED}", text
         )
         text = _DIAGNOSTIC_SENSITIVE_HEADER_RE.sub(
             rf"\1\2{DIAGNOSTIC_REDACTED}", text

@@ -1030,6 +1030,30 @@ def test_redact_payload_redacts_auth_header_containers_before_recursing():
     }
 
 
+def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings():
+    source = {
+        "headers": {
+            "ACCESS-KEY": "OKXKEY",
+            "ACCESS-SIGN": "OKXSIGN",
+            "KEY": "GATEKEY",
+            "SIGN": "GATESIGN",
+            "X-Trace": "trace-123",
+        },
+        "response_headers": {"X-Trace": "response-trace"},
+    }
+
+    assert redact_payload(source) == {
+        "headers": {
+            "ACCESS-KEY": REDACTED,
+            "ACCESS-SIGN": REDACTED,
+            "KEY": REDACTED,
+            "SIGN": REDACTED,
+            "X-Trace": "trace-123",
+        },
+        "response_headers": {"X-Trace": "response-trace"},
+    }
+
+
 def test_redact_payload_redacts_exact_bearer_and_jwt_keys():
     assert redact_payload(
         {

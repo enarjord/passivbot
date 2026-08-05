@@ -99,23 +99,54 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
 pub(crate) fn finalize_next_entry(
     mut entry: Order,
     exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    bot_params: &BotParams,
+    runtime_context: &RuntimeOrderContext,
+    position: &Position,
     price_rounding: RoundingMode,
     context: &str,
 ) -> Order {
     if entry.qty == 0.0 {
         return entry;
     }
+    let original_qty_abs = entry.qty.abs();
     entry.price = quantize_price(
         entry.price,
         exchange_params.price_step,
         price_rounding,
         context,
     );
-    entry.qty = entry.qty.signum()
-        * entry
-            .qty
-            .abs()
-            .max(calc_min_entry_qty(entry.price, exchange_params));
+    let wallet_exposure = calc_wallet_exposure(
+        exchange_params.c_mult,
+        state_params.balance,
+        position.size.abs(),
+        position.price,
+    );
+    let (_, cropped_qty) = calc_cropped_reentry_qty(
+        exchange_params,
+        bot_params,
+        runtime_context,
+        position,
+        wallet_exposure,
+        state_params.balance,
+        entry.qty.abs(),
+        entry.price,
+        wallet_exposure_limit_with_allowance(bot_params, runtime_context),
+    );
+    if cropped_qty < original_qty_abs {
+        entry.order_type = match entry.order_type {
+            OrderType::EntryTrailingNormalLong => OrderType::EntryTrailingCroppedLong,
+            OrderType::EntryTrailingNormalShort => OrderType::EntryTrailingCroppedShort,
+            OrderType::EntryGridNormalLong | OrderType::EntryGridInflatedLong => {
+                OrderType::EntryGridCroppedLong
+            }
+            OrderType::EntryGridNormalShort | OrderType::EntryGridInflatedShort => {
+                OrderType::EntryGridCroppedShort
+            }
+            other => other,
+        };
+    }
+    entry.qty = entry.qty.signum() * cropped_qty;
     entry.qty = quantize_qty(
         entry.qty,
         exchange_params.qty_step,
@@ -550,6 +581,10 @@ pub fn calc_next_entry_long(
     finalize_next_entry(
         entry,
         exchange_params,
+        state_params,
+        bot_params,
+        runtime_context,
+        position,
         RoundingMode::Floor,
         "calc_next_entry_long",
     )
@@ -1049,6 +1084,10 @@ pub fn calc_next_entry_short(
     finalize_next_entry(
         entry,
         exchange_params,
+        state_params,
+        bot_params,
+        runtime_context,
+        position,
         RoundingMode::Ceil,
         "calc_next_entry_short",
     )

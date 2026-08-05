@@ -643,6 +643,14 @@ _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "xmbxapikey",
 )
 _SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
+_SENSITIVE_HEADER_KEY_COMPACT_EXACT = {
+    "key",
+    "sign",
+}
+_SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES = (
+    "accesskey",
+    "accesssign",
+)
 _RUST_ORCHESTRATOR_CONSOLE_MESSAGE_LIMIT = 64
 
 
@@ -718,19 +726,45 @@ def _is_sensitive_key(key: object) -> bool:
     )
 
 
-def redact_payload(value: Any) -> Any:
+def _is_sensitive_header_key(key: object) -> bool:
+    if _is_sensitive_key(key):
+        return True
+    compact = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+    return compact in _SENSITIVE_HEADER_KEY_COMPACT_EXACT or compact.endswith(
+        _SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES
+    )
+
+
+def _is_header_container_key(key: object) -> bool:
+    compact = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+    return compact in {"headers", "requestheaders"}
+
+
+def _redact_payload(value: Any, *, header_context: bool) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): REDACTED if _is_sensitive_key(key) else redact_payload(item)
+            str(key): (
+                REDACTED
+                if _is_sensitive_key(key)
+                or (header_context and _is_sensitive_header_key(key))
+                else _redact_payload(
+                    item,
+                    header_context=_is_header_container_key(key),
+                )
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [redact_payload(item) for item in value]
+        return [_redact_payload(item, header_context=header_context) for item in value]
     if isinstance(value, tuple):
-        return [redact_payload(item) for item in value]
+        return [_redact_payload(item, header_context=header_context) for item in value]
     if isinstance(value, str):
         return sanitize_diagnostic_text(value, max_len=LIVE_EVENT_MAX_STRING_CHARS)
     return value
+
+
+def redact_payload(value: Any) -> Any:
+    return _redact_payload(value, header_context=False)
 
 
 _LIVE_EVENT_TRUNCATION_SUFFIX = "...<truncated>"

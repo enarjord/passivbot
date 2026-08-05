@@ -537,6 +537,10 @@ fn calc_next_entry_long(
     finalize_next_entry(
         calc_next_entry_long_raw(exchange, state, bot, runtime, entry, position, trailing),
         exchange,
+        state,
+        bot,
+        runtime,
+        position,
         RoundingMode::Floor,
         "trailing_grid_v7::next_entry_long",
     )
@@ -908,6 +912,10 @@ fn calc_next_entry_short(
     finalize_next_entry(
         calc_next_entry_short_raw(exchange, state, bot, runtime, entry, position, trailing),
         exchange,
+        state,
+        bot,
+        runtime,
+        position,
         RoundingMode::Ceil,
         "trailing_grid_v7::next_entry_short",
     )
