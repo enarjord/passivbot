@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import utils
 
 from suite_runner import (
     SuiteScenario,
@@ -19,9 +20,11 @@ from suite_runner import (
     prepare_master_datasets,
     resolve_coin_sources,
     _collect_union,
+    _coalesce_master_coins,
     _prepare_dataset_subset,
     _run_combined_dataset,
     summarize_scenario_metrics,
+    validate_suite_side_coin_lists,
 )
 
 
@@ -77,22 +80,30 @@ def test_build_scenarios_handles_exchanges_and_coin_sources():
     assert scenario.coin_sources == {"BTC": "binance"}
 
 
-def test_build_scenarios_normalizes_coins_and_coin_sources():
+def test_build_scenarios_preserves_exact_coins_and_coin_sources():
     suite_cfg = {
         "scenarios": [
             {
                 "label": "X",
-                "coins": ["BTC/USDT:USDT", "ETHUSDT"],
-                "ignored_coins": ["SOL/USDT:USDT"],
-                "coin_sources": {"BTC/USDT:USDT": "binance", "ETHUSDT": "bybit"},
+                "coins": ["BTC/USDT:USDT", "ETHUSDT", "BTC-USDT-SWAP"],
+                "ignored_coins": ["SOL/USDT:USDT", "1000ABCUSDT"],
+                "coin_sources": {
+                    "BTC/USDT:USDT": "binance",
+                    "ETHUSDT": "bybit",
+                    "BTC-USDT-SWAP": "okx",
+                },
             }
         ],
     }
     scenarios, _ = build_scenarios(suite_cfg)
     scenario = scenarios[0]
-    assert scenario.coins == ["BTC", "ETH"]
-    assert scenario.ignored_coins == ["SOL"]
-    assert scenario.coin_sources == {"BTC": "binance", "ETH": "bybit"}
+    assert scenario.coins == ["BTC/USDT:USDT", "ETHUSDT", "BTC-USDT-SWAP"]
+    assert scenario.ignored_coins == ["SOL/USDT:USDT", "1000ABCUSDT"]
+    assert scenario.coin_sources == {
+        "BTC/USDT:USDT": "binance",
+        "ETHUSDT": "bybit",
+        "BTC-USDT-SWAP": "okx",
+    }
 
 
 def test_build_scenarios_inherits_exchanges_from_defaults():
@@ -300,6 +311,227 @@ def test_apply_scenario_rejects_asymmetric_side_coin_lists():
             available_exchanges=["binance"],
             available_coins={"BTC", "ETH"},
         )
+
+
+def test_apply_scenario_rejects_asymmetric_exact_side_coin_lists():
+    base_config = {
+        "backtest": {
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["bitget"],
+        },
+        "live": {
+            "approved_coins": {
+                "long": ["1000ABCUSDT"],
+                "short": ["ABCUSDT"],
+            },
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenario = SuiteScenario(
+        label="scenario_a",
+        start_date=None,
+        end_date=None,
+        coins=["1000ABCUSDT", "ABCUSDT"],
+        ignored_coins=[],
+    )
+
+    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+        apply_scenario(
+            base_config,
+            scenario,
+            master_coins=["1000ABCUSDT", "ABCUSDT"],
+            master_ignored=[],
+            available_exchanges=["bitget"],
+            available_coins={"1000ABCUSDT", "ABCUSDT"},
+        )
+
+
+def test_apply_scenario_reconciles_exact_ignored_id_to_available_alias(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+    base_config = {
+        "backtest": {"coins": {}, "cache_dir": {}, "exchanges": ["bitget"]},
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenario = SuiteScenario(
+        label="scenario_a",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=["BTCUSDT"],
+    )
+
+    cfg, coins = apply_scenario(
+        base_config,
+        scenario,
+        master_coins=["BTC"],
+        master_ignored=["BTCUSDT"],
+        available_exchanges=["bitget"],
+        available_coins={"BTC"},
+    )
+
+    assert coins == ["BTC"]
+    assert cfg["live"]["ignored_coins"] == {
+        "long": ["BTC"],
+        "short": ["BTC"],
+    }
+
+
+def test_suite_side_validation_compares_resolved_market_identity(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+    config = {
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["BTCUSDT"]},
+            "ignored_coins": {"long": [], "short": []},
+        }
+    }
+
+    validate_suite_side_coin_lists(config, ["bitget"])
+
+
+def test_suite_coin_sources_coalesce_master_aliases_to_forced_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    assert _coalesce_master_coins(
+        ["BTC", "BTCUSDT"], {"BTCUSDT": "bitget"}, ["bitget"]
+    ) == ["BTCUSDT"]
+
+
+def test_suite_master_coins_coalesce_resolved_aliases_without_forced_source(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    assert _coalesce_master_coins(
+        ["BTC", "BTCUSDT"], {}, ["bitget"]
+    ) == ["BTC"]
+
+
+def test_suite_master_coins_reject_conflicting_source_aliases(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets_by_exchange = {
+        "bybit": {
+            "EDGE/USDT:USDT": {
+                "id": "EDGEUSDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "EDGE",
+            }
+        },
+        "kucoin": {
+            "EDGE/USDT:USDT": {
+                "id": "EDGEUSDTM",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "EDGE",
+            }
+        },
+    }
+    for exchange, markets in markets_by_exchange.items():
+        assert utils.create_coin_symbol_map_cache(exchange, markets, verbose=False)
+
+    with pytest.raises(ValueError, match="equivalent identifiers.*conflicting exchanges"):
+        _coalesce_master_coins(
+            ["EDGE", "EDGEUSDTM"],
+            {"EDGE": "bybit", "EDGEUSDTM": "kucoin"},
+            ["bybit", "kucoin"],
+        )
+
+
+def test_suite_master_coins_preserve_distinct_qualified_sources(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    for exchange in ("bitget", "bybit"):
+        assert utils.create_coin_symbol_map_cache(exchange, markets, verbose=False)
+
+    identifiers = ["bitget::BTCUSDT", "bybit::BTCUSDT"]
+    assert _coalesce_master_coins(
+        identifiers,
+        {"bitget::BTCUSDT": "bitget", "bybit::BTCUSDT": "bybit"},
+        ["bitget", "bybit"],
+    ) == identifiers
+
+
+def test_suite_side_validation_retains_qualified_venue_scope(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    for exchange in ("bitget", "bybit"):
+        assert utils.create_coin_symbol_map_cache(exchange, markets, verbose=False)
+    config = {
+        "live": {
+            "approved_coins": {
+                "long": ["bitget::BTCUSDT"],
+                "short": ["bybit::BTCUSDT"],
+            },
+            "ignored_coins": {"long": [], "short": []},
+        }
+    }
+
+    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+        validate_suite_side_coin_lists(config, ["bitget", "bybit"])
 
 
 def test_apply_scenario_overrides_update_config():

@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pytest
+import utils
 
 from backtest import build_backtest_payload, ensure_valid_index_metadata
 from config_utils import get_template_config
@@ -117,6 +118,36 @@ def test_hlcvs_dataset_override_intersection_mode_preserves_input_side_membershi
     cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
     _write_dataset(cache_dir)
     config = _base_config(cache_dir, mode="intersection")
+
+    _cache_dir, coins, _hlcvs, _mss, _results_path, _btc, _timestamps = (
+        load_hlcvs_data_override(config, "binance")
+    )
+
+    assert coins == ["BTC"]
+    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+
+
+def test_hlcvs_dataset_override_reconciles_exact_identifier_to_dataset_key(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    _write_dataset(cache_dir)
+    assert utils.create_coin_symbol_map_cache(
+        "binance",
+        {
+            "BTC/USDT:USDT": {
+                "id": "BTCUSDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "BTC",
+            }
+        },
+        verbose=False,
+    )
+    config = _base_config(cache_dir, mode="intersection")
+    config["live"]["approved_coins"] = {"long": ["BTCUSDT"], "short": []}
 
     _cache_dir, coins, _hlcvs, _mss, _results_path, _btc, _timestamps = (
         load_hlcvs_data_override(config, "binance")

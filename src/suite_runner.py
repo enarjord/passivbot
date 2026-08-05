@@ -28,11 +28,17 @@ from config.shared_bot import canonicalize_shared_bot_side
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from materialized_cache import release_materialized_payload
+from backtest_universe import normalize_backtest_coin
 from utils import (
+    MarketIdentifierExchangeMismatch,
+    UnknownMarketIdentifier,
+    coin_to_symbol,
     format_approved_ignored_coins,
     format_end_date,
     load_markets,
-    symbol_to_coin,
+    reject_cross_exchange_market_identifier_collisions,
+    split_exchange_qualified_market_identifier,
+    to_standard_exchange_name,
     ts_to_date,
     utc_ms,
     date_to_ts,
@@ -259,18 +265,144 @@ def _flatten_coin_list(value: Any) -> List[str]:
     return []
 
 
-def _normalized_coin_set(value: Any) -> set[str]:
+def _normalized_coin_set(value: Any, exchanges: Sequence[str] = ()) -> set[str]:
     out: set[str] = set()
     if isinstance(value, str):
         value = [value]
     for entry in value or []:
-        coin = symbol_to_coin(str(entry), verbose=False)
-        if coin:
-            out.add(coin)
+        coin = normalize_backtest_coin(entry)
+        if not coin:
+            continue
+        qualified_exchange, _ = split_exchange_qualified_market_identifier(coin)
+        resolved_symbols = set()
+        for exchange in exchanges:
+            try:
+                symbol = coin_to_symbol(coin, exchange, verbose=False)
+                resolved_symbols.add(
+                    f"{qualified_exchange}::{symbol}"
+                    if qualified_exchange is not None
+                    else symbol
+                )
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+        out.update(resolved_symbols or {coin})
     return out
 
 
-def validate_suite_side_coin_lists(config: Dict[str, Any]) -> None:
+def _reconcile_suite_identifiers_to_available(
+    identifiers: Sequence[str],
+    available_coins: set[str],
+    exchanges: Sequence[str],
+) -> list[str]:
+    """Match exact/alias scenario identifiers to prepared dataset coin keys."""
+    reconciled = []
+    for identifier in identifiers:
+        raw = str(identifier)
+        if raw in available_coins:
+            reconciled.append(raw)
+            continue
+        matches = set()
+        for exchange in exchanges:
+            try:
+                target_symbol = coin_to_symbol(raw, exchange, verbose=False)
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+            for available_coin in available_coins:
+                try:
+                    if (
+                        coin_to_symbol(available_coin, exchange, verbose=False)
+                        == target_symbol
+                    ):
+                        matches.add(available_coin)
+                except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                    continue
+        if len(matches) > 1:
+            raise ValueError(
+                f"suite identifier {raw!r} matches multiple prepared coins: "
+                f"{sorted(matches)}"
+            )
+        reconciled.append(next(iter(matches)) if matches else raw)
+    return list(dict.fromkeys(reconciled))
+
+
+def _reconcile_suite_coin_sources(
+    sources: Dict[str, str], coins: Sequence[str]
+) -> Dict[str, str]:
+    available_coins = set(coins)
+    reconciled = {}
+    for source_coin, exchange in sorted(sources.items()):
+        mapped = _reconcile_suite_identifiers_to_available(
+            [source_coin], available_coins, [exchange]
+        )[0]
+        target_coin = mapped if mapped in available_coins else source_coin
+        existing = reconciled.get(target_coin)
+        if existing is not None and existing != exchange:
+            raise ValueError(
+                f"suite coin_sources maps conflicting exchanges for {target_coin}: "
+                f"{existing} and {exchange}"
+            )
+        reconciled[target_coin] = exchange
+    return reconciled
+
+
+def _coalesce_master_coins(
+    coins: Sequence[str], sources: Dict[str, str], exchanges: Sequence[str]
+) -> list[str]:
+    """Use one dataset identity per resolved market, preferring forced-source keys."""
+    source_assignments = {}
+    for source_coin, exchange in sorted(sources.items()):
+        exchange = to_standard_exchange_name(str(exchange))
+        try:
+            source_symbol = coin_to_symbol(source_coin, exchange, verbose=False)
+        except UnknownMarketIdentifier:
+            continue
+        qualified_exchange, _ = split_exchange_qualified_market_identifier(source_coin)
+        if qualified_exchange is not None:
+            continue
+        existing = source_assignments.get(source_symbol)
+        if existing is not None and existing[1] != exchange:
+            raise ValueError(
+                "suite coin_sources maps equivalent identifiers "
+                f"{existing[0]!r} and {source_coin!r} to conflicting exchanges: "
+                f"{existing[1]} and {exchange}"
+            )
+        source_assignments[source_symbol] = (source_coin, exchange)
+
+    coalesced = set(str(coin) for coin in coins)
+    for source_coin, exchange in sorted(sources.items()):
+        try:
+            source_symbol = coin_to_symbol(source_coin, exchange, verbose=False)
+        except UnknownMarketIdentifier:
+            coalesced.add(source_coin)
+            continue
+        equivalent = set()
+        for coin in coalesced:
+            try:
+                if coin_to_symbol(coin, exchange, verbose=False) == source_symbol:
+                    equivalent.add(coin)
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+        coalesced.difference_update(equivalent)
+        coalesced.add(source_coin)
+
+    representatives = {}
+    for coin in sorted(coalesced):
+        resolved = []
+        for exchange in exchanges:
+            try:
+                resolved.append(
+                    (exchange, coin_to_symbol(coin, exchange, verbose=False))
+                )
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+        identity = ("resolved", tuple(resolved)) if resolved else ("raw", coin)
+        representatives.setdefault(identity, coin)
+    return sorted(representatives.values())
+
+
+def validate_suite_side_coin_lists(
+    config: Dict[str, Any], exchanges: Sequence[str] = ()
+) -> None:
     live = config.get("live", {}) if isinstance(config, dict) else {}
     if not isinstance(live, dict):
         return
@@ -278,8 +410,8 @@ def validate_suite_side_coin_lists(config: Dict[str, Any]) -> None:
         value = live.get(field)
         if not isinstance(value, dict):
             continue
-        long_coins = _normalized_coin_set(value.get("long", []))
-        short_coins = _normalized_coin_set(value.get("short", []))
+        long_coins = _normalized_coin_set(value.get("long", []), exchanges)
+        short_coins = _normalized_coin_set(value.get("short", []), exchanges)
         if long_coins == short_coins:
             continue
         long_only = sorted(long_coins - short_coins)
@@ -311,7 +443,7 @@ def _coerce_coin_source_dict(value: Any) -> Optional[Dict[str, str]]:
     for coin, exchange in value.items():
         if exchange is None:
             continue
-        coin_key = symbol_to_coin(str(coin), verbose=False)
+        coin_key = normalize_backtest_coin(coin)
         if not coin_key:
             continue
         exchange_value = str(exchange)
@@ -333,7 +465,7 @@ def _normalize_coin_list(value: Any) -> Optional[List[str]]:
     normalized: List[str] = []
     seen: set[str] = set()
     for entry in coins_raw:
-        coin = symbol_to_coin(str(entry), verbose=False)
+        coin = normalize_backtest_coin(entry)
         if not coin or coin in seen:
             continue
         seen.add(coin)
@@ -976,7 +1108,7 @@ def apply_scenario(
         )
     backtest_section = cfg.setdefault("backtest", {})
     live_section = cfg.setdefault("live", {})
-    validate_suite_side_coin_lists(cfg)
+    validate_suite_side_coin_lists(cfg, backtest_section.get("exchanges", []))
 
     new_start = scenario.start_date or backtest_section.get("start_date")
     if new_start != backtest_section.get("start_date"):
@@ -993,6 +1125,16 @@ def apply_scenario(
     scenario_coins = list(scenario.coins) if scenario.coins is not None else list(default_coins)
     scenario_ignored = (
         list(scenario.ignored_coins) if scenario.ignored_coins is not None else list(default_ignored)
+    )
+    available_exchange_list = list(available_exchanges)
+    scenario_exchanges = (
+        list(scenario.exchanges) if scenario.exchanges else available_exchange_list
+    )
+    scenario_coins = _reconcile_suite_identifiers_to_available(
+        scenario_coins, available_coins, scenario_exchanges
+    )
+    scenario_ignored = _reconcile_suite_identifiers_to_available(
+        scenario_ignored, available_coins, scenario_exchanges
     )
 
     filtered_coins = [coin for coin in scenario_coins if coin in available_coins]
@@ -1011,7 +1153,6 @@ def apply_scenario(
     filtered_ignored = [coin for coin in scenario_ignored if coin in available_coins]
     filtered_ignored = sorted(dict.fromkeys(filtered_ignored))
 
-    scenario_exchanges = list(scenario.exchanges) if scenario.exchanges else list(available_exchanges)
     if scenario_exchanges != backtest_section.get("exchanges"):
         tracker.update(
             ["backtest", "exchanges"], backtest_section.get("exchanges"), scenario_exchanges
@@ -1068,6 +1209,7 @@ def apply_scenario(
         base_coin_sources or {},
         scenario.coin_sources,
     )
+    resolved_sources = _reconcile_suite_coin_sources(resolved_sources, filtered_coins)
     if resolved_sources != backtest_section.get("coin_sources"):
         tracker.update(
             ["backtest", "coin_sources"],
@@ -1760,7 +1902,6 @@ async def run_backtest_suite_async(
     suite_output_root: Optional[Path] = None,
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
-    validate_suite_side_coin_lists(config)
 
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
@@ -1781,16 +1922,30 @@ async def run_backtest_suite_async(
             sorted(added_exchanges),
         )
 
-    for exchange in exchanges_list:
-        await load_markets(exchange, verbose=False)
-    await format_approved_ignored_coins(config, exchanges_list, verbose=False)
-
     suite_coin_sources = collect_suite_coin_sources(config, scenarios)
+    identity_exchanges = sorted(
+        set(exchanges_list) | set(suite_coin_sources.values())
+    )
+    for exchange in identity_exchanges:
+        await load_markets(exchange, verbose=False)
+    await format_approved_ignored_coins(
+        config,
+        exchanges_list,
+        verbose=False,
+        prefer_backtest_coin_source_keys=True,
+    )
+    validate_suite_side_coin_lists(config, exchanges_list)
 
     master_coins = _collect_union((s.coins for s in scenarios), base_coins)
-    if suite_coin_sources:
-        master_coins = sorted(dict.fromkeys([*master_coins, *suite_coin_sources.keys()]))
+    master_coins = _coalesce_master_coins(
+        master_coins, suite_coin_sources, identity_exchanges
+    )
     master_ignored = _collect_union((s.ignored_coins for s in scenarios), base_ignored)
+    await reject_cross_exchange_market_identifier_collisions(
+        [*master_coins, *master_ignored, *suite_coin_sources.keys()],
+        identity_exchanges,
+        verbose=False,
+    )
 
     base_config = deepcopy(config)
     base_config.setdefault("backtest", {})

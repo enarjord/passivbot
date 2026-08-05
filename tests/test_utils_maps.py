@@ -57,6 +57,20 @@ def test_load_ccxt_instance_defaults_okx_to_swap_only_markets(monkeypatch):
     assert cc.options["fetchMarkets"] == {"types": ["swap"]}
 
 
+def test_defx_exchange_qualified_identifier_is_recognized():
+    assert utils.split_exchange_qualified_market_identifier("defx::ABCUSDC") == (
+        "defx",
+        "ABCUSDC",
+    )
+
+
+@pytest.mark.parametrize(
+    "identifier", ["BTC-USDT-SWAP", "HOTUSDTM", "EDGEUSDTM", "XUSDT", "XUSDTM"]
+)
+def test_native_market_id_is_exact(identifier):
+    assert utils.looks_like_exact_market_identifier(identifier)
+
+
 @pytest.mark.asyncio
 async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
     # Work inside an isolated temp directory
@@ -96,6 +110,9 @@ async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
     assert set(c2s["BTC"]) == {"BTC/USDT:USDT"}
     # SHIB should be derived from "1000SHIB"
     assert set(c2s["SHIB"]) == {"1000SHIB/USDT:USDT"}
+    # Exact bases and CCXT symbols remain lossless aliases.
+    assert c2s["1000SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert c2s["1000SHIB/USDT:USDT"] == ["1000SHIB/USDT:USDT"]
     # FOO comes from base without baseName
     assert set(c2s["FOO"]) == {"FOO/USDT:USDT"}
 
@@ -224,22 +241,326 @@ def test_coin_to_symbol_fallback_and_logging(tmp_path, monkeypatch, caplog):
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump({}, open(path, "w"))
-    # sanitize a noisy input
     caplog.set_level(logging.INFO)
-    sym = utils.coin_to_symbol("BTCUSDC", ex)
+    sym = utils.coin_to_symbol("BTC", ex)
     assert sym == "BTC/USDC:USDC"
-    assert any("BTCUSDC" in rec.message for rec in caplog.records)
+    assert any("BTC" in rec.message for rec in caplog.records)
 
 
-def test_coin_to_symbol_multiple_candidates(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("identifier", ["bitget::1000ABCUSDT", "1000ABCUSDT"])
+def test_exact_identifier_without_market_map_fails_closed(identifier, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(utils.UnknownMarketIdentifier, match="is unavailable on bitget"):
+        utils.coin_to_symbol(identifier, "bitget")
+
+
+def test_unknown_namespaced_hip3_identifier_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    assert utils.looks_like_exact_market_identifier("xyz:UNKNOWN")
+    with pytest.raises(utils.UnknownMarketIdentifier, match="is unavailable on hyperliquid"):
+        utils.coin_to_symbol("xyz:UNKNOWN", "hyperliquid")
+
+
+def test_coin_to_symbol_rejects_multiple_candidates(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ex = "binance"
     path = os.path.join("caches", ex, "coin_to_symbol_map.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump({"BTC": ["A", "B"]}, open(path, "w"))
-    caplog.set_level(logging.INFO)
-    assert utils.coin_to_symbol("BTC", ex) == "A"
-    assert any("Multiple candidates" in rec.message for rec in caplog.records)
+    with pytest.raises(utils.AmbiguousMarketIdentifier, match="matches \['A', 'B'\]"):
+        utils.coin_to_symbol("BTC", ex)
+
+
+def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ex = "testexchange"
+    markets = {
+        "ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "baseName": "ABC",
+            "id": "ABCUSDT",
+        },
+        "1000ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "1000ABC",
+            "baseName": "1000ABC",
+            "id": "1000ABCUSDT",
+        },
+    }
+
+    c2s, s2c = utils._build_coin_symbol_maps(markets, "USDT")
+    reverse_c2s, reverse_s2c = utils._build_coin_symbol_maps(
+        dict(reversed(list(markets.items()))), "USDT"
+    )
+    assert c2s == reverse_c2s
+    assert s2c == reverse_s2c
+    assert c2s["ABC"] == ["1000ABC/USDT:USDT", "ABC/USDT:USDT"]
+    assert c2s["1000ABC"] == ["1000ABC/USDT:USDT"]
+    assert c2s["ABCUSDT"] == ["ABC/USDT:USDT"]
+    assert c2s["1000ABCUSDT"] == ["1000ABC/USDT:USDT"]
+    assert c2s["ABC/USDT:USDT"] == ["ABC/USDT:USDT"]
+    assert c2s["1000ABC/USDT:USDT"] == ["1000ABC/USDT:USDT"]
+
+    path = os.path.join("caches", ex, "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(c2s, open(path, "w"))
+
+    assert utils.coin_to_symbol("1000ABC", ex) == "1000ABC/USDT:USDT"
+    assert utils.coin_to_symbol("ABCUSDT", ex) == "ABC/USDT:USDT"
+    assert utils.coin_to_symbol("1000ABCUSDT", ex) == "1000ABC/USDT:USDT"
+    assert utils.coin_to_symbol("ABC/USDT:USDT", ex) == "ABC/USDT:USDT"
+    assert utils.coin_to_symbol("1000ABC/USDT:USDT", ex) == "1000ABC/USDT:USDT"
+    with pytest.raises(utils.AmbiguousMarketIdentifier, match="ambiguous market identifier 'ABC'"):
+        utils.coin_to_symbol("ABC", ex)
+
+
+def test_single_multiplier_market_keeps_legacy_convenience_alias():
+    markets = {
+        "1000SHIB/USDT:USDT": {
+            "id": "1000SHIBUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "1000SHIB",
+            "baseName": "SHIB",
+        }
+    }
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(markets, "USDT")
+
+    assert coin_to_symbol_map["SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert coin_to_symbol_map["1000SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert symbol_to_coin_map["1000SHIBUSDT"] == "SHIB"
+
+
+def test_inactive_multiplier_market_does_not_pollute_convenience_alias():
+    markets = {
+        "ABC/USDT:USDT": {
+            "id": "ABCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "ABC",
+        },
+        "1000ABC/USDT:USDT": {
+            "id": "1000ABCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": False,
+            "base": "1000ABC",
+        },
+    }
+
+    coin_to_symbol_map, _ = utils._build_coin_symbol_maps(markets, "USDT")
+
+    assert coin_to_symbol_map["ABC"] == ["ABC/USDT:USDT"]
+    assert coin_to_symbol_map["1000ABCUSDT"] == ["1000ABC/USDT:USDT"]
+    assert coin_to_symbol_map["1000ABC/USDT:USDT"] == ["1000ABC/USDT:USDT"]
+
+
+def test_map_builder_omits_ambiguous_canonical_label_deterministically():
+    markets = {
+        "ABC/USDC:USDC": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "ABC-USDC",
+        },
+        "VENUE-ABC/USDC:USDC": {
+            "swap": True,
+            "linear": True,
+            "baseName": "venue:ABC",
+            "id": "12345",
+            "info": {"hip3": True},
+        },
+    }
+
+    c2s, s2c = utils._build_coin_symbol_maps(markets, "USDC")
+    reverse_c2s, reverse_s2c = utils._build_coin_symbol_maps(
+        dict(reversed(list(markets.items()))), "USDC"
+    )
+
+    assert c2s == reverse_c2s
+    assert s2c == reverse_s2c
+    assert c2s["ABC"] == ["ABC/USDC:USDC", "VENUE-ABC/USDC:USDC"]
+    assert "ABC" not in s2c
+    assert s2c["ABC-USDC"] == "ABC"
+    assert s2c["12345"] == "venue:ABC"
+
+
+def test_ambiguity_tombstones_survive_other_exchange_refreshes(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    colliding_markets = {
+        "ABC/USDC:USDC": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "ABC-USDC",
+        },
+        "VENUE-ABC/USDC:USDC": {
+            "swap": True,
+            "linear": True,
+            "baseName": "venue:ABC",
+            "id": "12345",
+            "info": {"hip3": True},
+        },
+    }
+    unambiguous_markets = {
+        "ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "ABCUSDT",
+        }
+    }
+
+    assert utils.create_coin_symbol_map_cache(
+        "hyperliquid", colliding_markets, quote="USDC", verbose=False
+    )
+    assert utils.create_coin_symbol_map_cache("bybit", unambiguous_markets, verbose=False)
+
+    symbol_map = json.loads((tmp_path / "caches" / "symbol_to_coin_map.json").read_text())
+    ambiguities = json.loads(
+        (tmp_path / "caches" / "symbol_to_coin_ambiguities.json").read_text()
+    )
+    assert "ABC" not in symbol_map
+    assert ambiguities["hyperliquid"] == ["ABC"]
+    assert utils.coin_to_symbol("ABC", "bybit") == "ABC/USDT:USDT"
+    with pytest.raises(utils.AmbiguousMarketIdentifier):
+        utils.coin_to_symbol("ABC", "hyperliquid")
+
+
+def test_ambiguity_tombstone_is_released_after_collision_disappears(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    colliding_markets = {
+        "ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "ABCUSDT",
+        },
+        "1000ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "1000ABC",
+            "id": "1000ABCUSDT",
+        },
+    }
+    remaining_market = {"ABC/USDT:USDT": colliding_markets["ABC/USDT:USDT"]}
+
+    assert utils.create_coin_symbol_map_cache("bitget", colliding_markets, verbose=False)
+    assert "ABC" not in utils._load_symbol_to_coin_map()
+
+    assert utils.create_coin_symbol_map_cache("bitget", remaining_market, verbose=False)
+    assert utils.symbol_to_coin("ABC", verbose=False) == "ABC"
+    assert json.loads(
+        (tmp_path / "caches" / "symbol_to_coin_ambiguities.json").read_text()
+    )["bitget"] == []
+
+
+def test_exact_native_id_resolution_is_exchange_local(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    bitget_markets = {
+        "ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "12345",
+        }
+    }
+    bybit_markets = {
+        "OTHER/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "OTHER",
+            "id": "12345",
+        }
+    }
+
+    assert utils.create_coin_symbol_map_cache("bitget", bitget_markets, verbose=False)
+    assert utils.create_coin_symbol_map_cache("bybit", bybit_markets, verbose=False)
+
+    assert utils.coin_to_symbol("12345", "bitget") == "ABC/USDT:USDT"
+    assert utils.coin_to_symbol("12345", "bybit") == "OTHER/USDT:USDT"
+
+
+def test_exchange_qualified_native_id_is_scoped(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = os.path.join("caches", "bitget", "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"ABCUSDT": ["ABC/USDT:USDT"]}, open(path, "w"))
+
+    assert utils.coin_to_symbol("bitget::ABCUSDT", "bitget") == "ABC/USDT:USDT"
+    with pytest.raises(utils.MarketIdentifierExchangeMismatch, match="targets bitget, not bybit"):
+        utils.coin_to_symbol("bitget::ABCUSDT", "bybit")
+
+
+@pytest.mark.parametrize("identifier", ["bitget::1000ABCUSDT", "1000ABCUSDT"])
+def test_exact_identifier_miss_does_not_fall_back_to_normalized_market(
+    identifier, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    path = os.path.join("caches", "bitget", "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"ABC": ["ABC/USDT:USDT"]}, open(path, "w"))
+
+    with pytest.raises(utils.UnknownMarketIdentifier, match="is unavailable on bitget"):
+        utils.coin_to_symbol(identifier, "bitget")
+
+
+def test_symbol_to_coin_preserves_exchange_qualified_identifier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert utils.symbol_to_coin("bitget::ABCUSDT", verbose=False) == "bitget::ABCUSDT"
+
+
+def test_namespaced_non_exchange_alias_is_not_treated_as_qualification(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    path = os.path.join("caches", "hyperliquid", "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"xyz:TSLA": ["XYZ-TSLA/USDC:USDC"]}, open(path, "w"))
+
+    assert utils.coin_to_symbol("xyz:TSLA", "hyperliquid") == "XYZ-TSLA/USDC:USDC"
+
+
+def test_namespaced_full_symbol_alias_resolves_losslessly(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "XYZ-TSLA/USDC:USDC": {
+            "id": "12345",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "XYZ-TSLA",
+            "baseName": "xyz:TSLA",
+            "info": {"hip3": True},
+        }
+    }
+    assert utils.create_coin_symbol_map_cache(
+        "hyperliquid", markets, quote="USDC", verbose=False
+    )
+
+    assert (
+        utils.coin_to_symbol("xyz:TSLA/USDC:USDC", "hyperliquid")
+        == "XYZ-TSLA/USDC:USDC"
+    )
+
+
+def test_hip3_namespace_matching_exchange_name_is_not_qualification(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = os.path.join("caches", "hyperliquid", "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump({"bitget:FOO": ["BITGET-FOO/USDC:USDC"]}, open(path, "w"))
+
+    assert (
+        utils.coin_to_symbol("bitget:FOO", "hyperliquid")
+        == "BITGET-FOO/USDC:USDC"
+    )
 
 
 def test_symbol_to_coin_in_memory_reload_and_heuristics(tmp_path, monkeypatch):

@@ -2,7 +2,12 @@ import logging
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
 
-from utils import format_end_date, normalize_coins_source, symbol_to_coin
+from utils import (
+    format_end_date,
+    looks_like_exact_market_identifier,
+    normalize_coins_source,
+    symbol_to_coin,
+)
 from optimization.random_seed import normalize_optional_seed
 
 from .limits import _resolve_optimize_limits_for_load
@@ -152,7 +157,12 @@ def _normalize_coin_sources(raw: Any) -> Dict[str, str]:
     for coin, exchange in raw.items():
         if exchange is None:
             continue
-        coin_key = symbol_to_coin(str(coin), verbose=False)
+        raw_coin = str(coin).strip()
+        coin_key = (
+            raw_coin
+            if looks_like_exact_market_identifier(raw_coin)
+            else symbol_to_coin(raw_coin, verbose=False)
+        )
         if not coin_key:
             continue
         exchange_value = str(exchange)

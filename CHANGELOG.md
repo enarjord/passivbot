@@ -35,6 +35,33 @@ All notable user-facing changes will be documented in this file.
   short entry quantities are re-cropped after directional price quantization.
 - Directionally quantize passive WEL auto-reducer prices away from off-tick executable touches so
   limit reducers cannot become crossing orders merely through price-step rounding.
+- Resolve exchange market identifiers without lossy pre-normalization: exact CCXT symbols,
+  native market IDs, multiplier-prefixed bases, and `exchange::<native-id>` identities now take
+  precedence on every exchange. Convenience aliases that match multiple markets fail closed with
+  their candidates instead of selecting an order-dependent first match, missing exact identifiers
+  and namespaced HIP-3 aliases fail closed instead of normalizing to another market,
+  suffix-bearing native IDs remain lossless,
+  contradictory qualified source mappings are rejected, unqualified native IDs that identify
+  different contracts across configured exchanges require venue scope, and the same scaled-contract
+  identity check applies to ordinary convenience aliases; suite scenario identifiers
+  are validated and reconciled after union, inception discovery is limited to requested/live
+  venues and uses the offline fake timeline locally,
+  source and approved-market aliases are coalesced before dataset preparation, conflicting
+  duplicate coin and market-settings overrides are rejected consistently, unresolved delisted
+  fill IDs preserve their raw historical symbol, resolver changes invalidate old HLCV and
+  first-timestamp/inception caches now retain and revalidate resolved-symbol provenance, prepared
+  HLCV cache keys track current resolved venue symbols
+  after refreshing configured and source-only venue metadata,
+  unknown combined-market inception cannot satisfy positive minimum-age rules,
+  backtest-only coin sources cannot rewrite live approvals,
+  invalid live identifiers disable only their own eligibility while unresolved ignored IDs retain
+  only their own prior restrictions, `approved_coins="all"`
+  unifies quote variants and equivalent `k`/`1000` scaled contracts while keeping scaled and
+  unscaled markets distinct, rejects unavailable exact source overrides for active coins,
+  emits exchange-scoped identities for remaining collisions, and generated symbol maps plus durable
+  per-exchange ambiguity tombstones remain deterministic across cache refresh order. Live coin
+  overrides are rebuilt atomically so a failed metadata refresh cannot expose a partial override map.
+
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
   the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent

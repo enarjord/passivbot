@@ -112,7 +112,7 @@ async def test_combined_candidate_frames_are_released_after_normalization(monkey
     monkeypatch.setattr(
         hp,
         "get_first_timestamps_unified",
-        lambda _coins: asyncio.sleep(0, result={}),
+        lambda _coins, **_kwargs: asyncio.sleep(0, result={}),
     )
     monkeypatch.setattr(hp, "_normalize_combined_coins", lambda values, *_args: list(values))
     monkeypatch.setattr(hp, "_resolve_combined_coin", fake_resolve_combined_coin)

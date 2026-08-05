@@ -138,6 +138,37 @@ def test_coins_by_exchange_grouping():
     assert "hyperliquid" not in coins_by_exchange
 
 
+def test_scoped_market_settings_miss_falls_back_to_ohlcv_source():
+    import hlcv_preparation as hp
+
+    class StubOM:
+        def __init__(self, exchange, available):
+            self.exchange = exchange
+            self.available = available
+
+        def has_coin(self, _coin):
+            return self.available
+
+        def get_market_specific_settings(self, _coin):
+            if not self.available:
+                raise AssertionError("unavailable settings source must not be used")
+            return {"exchange": self.exchange, "min_cost": 1.0}
+
+    result = hp._resolve_combined_market_settings(
+        coin="bitget::ABCUSDT",
+        best_exchange="bitget",
+        market_settings_sources={"bitget::ABCUSDT": "bybit"},
+        om_dict={
+            "bitget": StubOM("bitget", True),
+            "bybit": StubOM("bybit", False),
+        },
+        per_coin_warmups={},
+        default_warm=0,
+    )
+
+    assert result["exchange"] == "bitget"
+
+
 @pytest.mark.asyncio
 async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_provenance(
     monkeypatch, tmp_path
@@ -167,16 +198,22 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         def get_symbol(self, coin):
             return coin
 
+        def has_coin(self, _coin):
+            return True
+
         def get_market_specific_settings(self, _coin):
             return {"exchange": self.exchange_id, "min_cost": 1.0}
 
     om_dict = {"binanceusdm": DummyOM("binanceusdm"), "bybit": DummyOM("bybit")}
 
-    async def fake_get_first_timestamps_unified(_coins):
-        return {"BTC": start_ts}
+    exact_coin = "BTC/USDT:USDT"
+
+    async def fake_get_first_timestamps_unified(_coins, **_kwargs):
+        assert _kwargs == {"exchanges": ["binanceusdm", "bybit"]}
+        return {exact_coin: start_ts}
 
     async def fake_fetch_data_for_coin_and_exchange(coin, ex, *_args, **_kwargs):
-        if coin != "BTC":
+        if coin != exact_coin:
             return None
         if ex == "binanceusdm":
             return ex, candle_df.copy(), 3, 0, 1_000.0
@@ -219,19 +256,21 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_normalization_p
         _requested_start_ts=start_ts,
         end_ts=start_ts + 180_000,
         forced_sources={},
-        market_settings_sources={"BTC": "bybit"},
+        market_settings_sources={exact_coin: "bybit"},
         force_refetch_gaps=False,
         catalog=catalog,
         store=store,
         legacy_root=None,
     )
 
-    assert mss["BTC"]["exchange"] == "bybit"
-    assert mss["BTC"]["ohlcv_source"] == "binance"
+    assert mss[exact_coin]["exchange"] == "bybit"
+    assert mss[exact_coin]["ohlcv_source"] == "binance"
     normalization = mss["__preparation_meta__"]["volume_normalization"]
     assert normalization["exchange_counts"] == {"binance": 1}
     assert normalization["reference_exchange"] == "binance"
-    assert aligned_values_by_coin["BTC"][:, 3].sum() == pytest.approx(candle_df["volume"].sum())
+    assert aligned_values_by_coin[exact_coin][:, 3].sum() == pytest.approx(
+        candle_df["volume"].sum()
+    )
 
 
 @pytest.mark.asyncio
@@ -253,7 +292,7 @@ async def test_prepare_hlcvs_combined_impl_honors_disabled_volume_normalization(
         def get_market_specific_settings(self, _coin):
             return {"exchange": "unused", "min_cost": 1.0}
 
-    async def fake_get_first_timestamps_unified(_coins):
+    async def fake_get_first_timestamps_unified(_coins, **_kwargs):
         return {"BTC": start_ts, "ETH": start_ts}
 
     async def fake_fetch(coin, exchange, *_args, **_kwargs):
@@ -354,7 +393,7 @@ async def test_prepare_hlcvs_combined_impl_normalizes_forced_override_only_excha
         def get_market_specific_settings(self, _coin):
             return {"exchange": self.exchange, "min_cost": 1.0}
 
-    async def fake_get_first_timestamps_unified(_coins):
+    async def fake_get_first_timestamps_unified(_coins, **_kwargs):
         return {coin: start_ts for coin in coins}
 
     async def fake_fetch(coin, exchange, *_args, **_kwargs):
