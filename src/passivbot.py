@@ -350,6 +350,25 @@ def _trailing_bundle_default_dict() -> dict:
     return _trailing_bundle_tuple_to_dict(pbr.trailing_bundle_default_py())
 
 
+def _orchestrator_trailing_input(bot, symbol: str, pside: str) -> tuple[dict, bool]:
+    unavailable_psides = getattr(
+        bot, "_orchestrator_trailing_unavailable_psides", {}
+    ) or {}
+    available = pside not in set(unavailable_psides.get(symbol, []))
+    trailing = getattr(bot, "trailing_prices", {}).get(symbol, {}).get(pside)
+    if not trailing:
+        trailing = _trailing_bundle_default_dict()
+    return (
+        {
+            "min_since_open": float(trailing.get("min_since_open", 0.0)),
+            "max_since_min": float(trailing.get("max_since_min", 0.0)),
+            "max_since_open": float(trailing.get("max_since_open", 0.0)),
+            "min_since_max": float(trailing.get("min_since_max", 0.0)),
+        },
+        available,
+    )
+
+
 def _trailing_bundle_from_arrays(
     highs: np.ndarray, lows: np.ndarray, closes: np.ndarray
 ) -> dict:
@@ -9748,7 +9767,7 @@ class Passivbot:
                         )
                 logging.warning(
                     "[trailing] trailing state unavailable reason=%s symbols=%s "
-                    "action=mark_nontradable_until_fresh%s",
+                    "action=mark_trailing_branches_unavailable_until_fresh%s",
                     reason,
                     Passivbot._log_symbols(sorted(reason_symbols), limit=12),
                     confirmation_detail,
@@ -17103,10 +17122,6 @@ class Passivbot:
             "forager_m1_log_range_emas", m1_log_range_emas
         )
         h1_log_range_emas = snapshot["h1_log_range_emas"]
-        trailing_unavailable_symbols = set(
-            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
-        )
-
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         auto_unstuck_allowed = bool(
             snapshot.get(
@@ -17209,23 +17224,17 @@ class Passivbot:
                 pos = self.positions.get(symbol, {}).get(
                     pside, {"size": 0.0, "price": 0.0}
                 )
-                trailing = self.trailing_prices.get(symbol, {}).get(pside)
-                if not trailing:
-                    trailing = _trailing_bundle_default_dict()
-                else:
-                    trailing = dict(trailing)
+                trailing, trailing_available = _orchestrator_trailing_input(
+                    self, symbol, pside
+                )
                 return {
                     "mode": mode,
                     "position": {
                         "size": float(pos["size"]),
                         "price": float(pos["price"]),
                     },
-                    "trailing": {
-                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
-                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
-                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
-                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
-                    },
+                    "trailing": trailing,
+                    "trailing_available": trailing_available,
                     "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
                     "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
@@ -17257,11 +17266,7 @@ class Passivbot:
                     "symbol_idx": int(idx),
                     "order_book": {"bid": mprice, "ask": mprice},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
-                    "tradable": bool(
-                        active
-                        and symbol not in trailing_unavailable_symbols
-                        and not exchange_cooldown_blocks_symbol
-                    ),
+                    "tradable": bool(active and not exchange_cooldown_blocks_symbol),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -19699,7 +19704,6 @@ class Passivbot:
         trailing_unavailable_symbols = set(
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
-
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True,
@@ -19798,7 +19802,6 @@ class Passivbot:
             tradable = bool(
                 active
                 and symbol not in ema_unavailable_symbols
-                and symbol not in trailing_unavailable_symbols
                 and not exchange_cooldown_blocks_symbol
             )
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
@@ -19814,23 +19817,17 @@ class Passivbot:
                 pos = self.positions.get(symbol, {}).get(
                     pside, {"size": 0.0, "price": 0.0}
                 )
-                trailing = self.trailing_prices.get(symbol, {}).get(pside)
-                if not trailing:
-                    trailing = _trailing_bundle_default_dict()
-                else:
-                    trailing = dict(trailing)
+                trailing, trailing_available = _orchestrator_trailing_input(
+                    self, symbol, pside
+                )
                 return {
                     "mode": mode,
                     "position": {
                         "size": float(pos["size"]),
                         "price": float(pos["price"]),
                     },
-                    "trailing": {
-                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
-                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
-                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
-                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
-                    },
+                    "trailing": trailing,
+                    "trailing_available": trailing_available,
                     "last_increase_fill_timestamp_ms": last_increase_fill_timestamps.get(symbol, {}).get(pside),
                     "bot_params": self._bot_params_to_rust_dict(pside, symbol),
                     "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),

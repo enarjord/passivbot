@@ -76,8 +76,8 @@ Live health distinguishes three stages:
 1. The candidate universe contains approved, age-eligible, cost-eligible symbols.
 2. A rankable candidate has the required real-candle quote-volume and log-range
    features.
-3. A Rust-tradable symbol also has every strategy, trailing, and risk input
-   needed for its current mode.
+3. Each Rust-plannable action has the strategy, trailing, and risk inputs it
+   consumes; availability may differ by position side and entry/close branch.
 
 A flat candidate with unavailable ranking features remains visible as a forager
 candidate but is marked `forager.rankable=false`; this is distinct from an
@@ -104,6 +104,14 @@ Entries and closes use threshold/retracement fields.
 - `retracement_base_pct > 0.0`: threshold is the required excursion, retracement is the confirmation move.
 - Trailing extrema reset after any fill for the same coin+pside.
 - Passivbot tracks trailing state itself from candle inputs; exchange-native trailing order types are not part of the core contract.
+
+Live trailing availability is a Rust planning input, not a Python reconciliation policy. Python
+sets `trailing_available=false` only for the affected coin+position-side while retaining a
+structurally valid but inert bundle. Rust omits only an entry or close branch whose active strategy
+configuration actually consumes trailing extrema. The other branch, the other position side,
+panic, and independent risk reducers continue when their own inputs are complete. The resulting
+Rust ideal set remains authoritative: reconciliation cancels resting orders absent from that set
+and never preserves them merely because trailing reconstruction is pending.
 
 Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
 exposure weights widen them.

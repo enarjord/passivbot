@@ -3065,9 +3065,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     malformed_actual_symbols = set(
         getattr(bot, "_malformed_actual_order_symbols", set()) or set()
     )
-    trailing_unavailable_symbols = set(
-        getattr(bot, "_orchestrator_trailing_unavailable_symbols", set()) or set()
-    )
     malformed_actual_counts = dict(
         getattr(bot, "_malformed_actual_order_counts", {}) or {}
     )
@@ -3144,33 +3141,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             )
         pre_cancel = len(cancel_)
         pre_create = len(create_)
-        trailing_skipped = 0
-        if symbol in trailing_unavailable_symbols:
-            before_trailing_create = list(create_)
-            cancel_, create_, trailing_skipped, fully_blocked = (
-                filter_trailing_unavailable_reconciliation(
-                    bot, symbol, cancel_, create_, ideal_list
-                )
-            )
-            trace = _trace_record(
-                trace,
-                "record_blocked_orders",
-                _orders_removed_by_identity(before_trailing_create, create_),
-                "trailing_unavailable",
-            )
-            if fully_blocked:
-                blocked_total = len(symbol_orders) + len(ideal_list)
-                plan_summaries.append(
-                    (
-                        symbol,
-                        len(symbol_orders),
-                        0,
-                        len(ideal_list),
-                        0,
-                        blocked_total,
-                    )
-                )
-                continue
         cancel_, create_ = bot._annotate_order_deltas(cancel_, create_)
         before_tolerance_create = list(create_)
         cancel_, create_, skipped = bot._apply_order_match_tolerance(cancel_, create_)
@@ -3180,7 +3150,6 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             _orders_removed_by_identity(before_tolerance_create, create_),
             "order_match_tolerance",
         )
-        skipped += trailing_skipped
         plan_summaries.append(
             (symbol, pre_cancel, len(cancel_), pre_create, len(create_), skipped)
         )
@@ -3605,124 +3574,6 @@ def _reduce_only_order_family(order: dict) -> tuple[str, str] | None:
 def _order_is_protective_reducer(order: dict) -> bool:
     family = _reduce_only_order_family(order)
     return family is not None and family[1] in _PROTECTIVE_REDUCE_ONLY_FAMILIES
-
-
-def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
-    by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_reasons", {}) or {}
-    reasons = by_symbol.get(symbol, []) if isinstance(by_symbol, dict) else []
-    if isinstance(reasons, str):
-        return {reasons}
-    return {str(reason) for reason in reasons if reason}
-
-
-def _trailing_unavailable_psides(bot, symbol: str) -> set[str]:
-    by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_psides", {}) or {}
-    if isinstance(by_symbol, dict) and symbol in by_symbol:
-        psides = by_symbol.get(symbol, [])
-        if isinstance(psides, str):
-            return {psides}
-        return {str(pside).lower() for pside in psides if pside}
-    # Compatibility for callers/tests that only expose the older symbol-level state.
-    return {"long", "short"}
-
-
-def _order_is_unavailable_trailing_close(order: dict, unavailable_psides: set[str]) -> bool:
-    family = _reduce_only_order_family(order)
-    if family is None:
-        return False
-    pside, order_family = family
-    return order_family == "close_trailing" and (
-        not pside or pside in unavailable_psides
-    )
-
-
-def _order_position_side(order: dict) -> str:
-    pside = str(
-        order.get("position_side") or order.get("positionSide") or ""
-    ).lower()
-    if not pside:
-        family = _reduce_only_order_family(order)
-        pside = "" if family is None else family[0]
-    return pside
-
-
-def _order_targets_unavailable_pside(
-    order: dict, unavailable_psides: set[str]
-) -> bool:
-    pside = _order_position_side(order)
-    return not pside or pside in unavailable_psides
-
-
-def filter_trailing_unavailable_reconciliation(
-    bot,
-    symbol: str,
-    to_cancel: list[dict],
-    to_create: list[dict],
-    ideal_orders: list[dict],
-) -> tuple[list[dict], list[dict], int, bool]:
-    """Constrain reconciliation when trailing data is unavailable.
-
-    Ordinary trailing closes require post-fill extrema. Suppress their creation and
-    retire existing trailing orders while preserving independent reduce-only and panic
-    exits. Missing anchors/fetch failures otherwise preserve the symbol.
-    """
-    reasons = _trailing_unavailable_reasons(bot, symbol)
-    unavailable_psides = _trailing_unavailable_psides(bot, symbol)
-    panic_psides = {
-        pside
-        for order in [*ideal_orders, *to_create]
-        if _order_is_panic(order) and (pside := _order_position_side(order))
-    }
-    soft_missing_candles_only = reasons == {"missing_trailing_candles"}
-    if not soft_missing_candles_only:
-        filtered_cancel = [
-            order
-            for order in to_cancel
-            if _order_position_side(order) in panic_psides
-            or not _order_targets_unavailable_pside(order, unavailable_psides)
-            or _order_is_unavailable_trailing_close(order, unavailable_psides)
-        ]
-        filtered_create = [
-            order
-            for order in to_create
-            if _order_is_panic(order)
-            or not _order_targets_unavailable_pside(order, unavailable_psides)
-        ]
-        dropped = (len(to_cancel) - len(filtered_cancel)) + (
-            len(to_create) - len(filtered_create)
-        )
-        fully_blocked = not filtered_cancel and not filtered_create
-        return filtered_cancel, filtered_create, dropped, fully_blocked
-
-    filtered_create = [
-        order
-        for order in to_create
-        if (_order_is_reduce_only(order) or _order_is_panic(order))
-        and not _order_is_unavailable_trailing_close(order, unavailable_psides)
-    ]
-    dropped_create = len(to_create) - len(filtered_create)
-
-    ideal_reduce_only_families = {
-        family
-        for order in ideal_orders
-        if (family := _reduce_only_order_family(order)) is not None
-    }
-    filtered_cancel = []
-    dropped_cancel = 0
-    for order in to_cancel:
-        if _order_position_side(order) in panic_psides:
-            filtered_cancel.append(order)
-            continue
-        if _order_is_reduce_only(order):
-            if _order_is_unavailable_trailing_close(order, unavailable_psides):
-                filtered_cancel.append(order)
-                continue
-            family = _reduce_only_order_family(order)
-            if family is None or family not in ideal_reduce_only_families:
-                dropped_cancel += 1
-                continue
-        filtered_cancel.append(order)
-    return filtered_cancel, filtered_create, dropped_cancel + dropped_create, False
 
 
 def annotate_order_deltas(
