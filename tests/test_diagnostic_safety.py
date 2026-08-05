@@ -146,6 +146,27 @@ def test_sanitize_diagnostic_text_redacts_access_credential_aliases():
     assert "safe=ok" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_access_passphrase_through_field_boundary():
+    for label in ("access_passphrase", "accessPassphrase"):
+        sanitized = sanitize_diagnostic_text(f"{label}=two words safe=ok")
+        assert "two" not in sanitized
+        assert "words" not in sanitized
+        assert f"{label}=[redacted]" in sanitized
+        assert "safe=ok" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_api_key_id_and_secret_key_aliases():
+    sanitized = sanitize_diagnostic_text(
+        "apiSecretKey=FIRST api_secret_key=SECOND "
+        "apiKeyId=THIRD api_key_id=FOURTH safe=ok"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD", "FOURTH"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 4
+    assert "safe=ok" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
     sanitized = sanitize_diagnostic_text(
         '{"authKey":"FIRST", "auth_key":"SECOND", "authSecret":"THIRD"}'

@@ -649,6 +649,7 @@ _SENSITIVE_SIGNATURE_QUALIFIERS = {"api", "auth", "exchange", "hmac", "request"}
 _SENSITIVE_HEADER_KEY_COMPACT_EXACT = {
     "key",
     "sign",
+    "xamzsignature",
 }
 _SENSITIVE_HEADER_KEY_COMPACT_SUFFIXES = (
     "accesskey",

@@ -29,7 +29,8 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|(?!\4)[\s\S])*\4"
 )
 _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
-    r"(?:api[-_]?(?:key|secret|signature)|apikey|access[-_]?(?:key|token)|"
+    r"(?:api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
+    r"apikey|access[-_]?(?:key|token)|"
     r"access[-_]?(?:secret|sign(?:ature)?|passphrase)|"
     r"refreshToken|client[-_]?secret|secret[-_]?key|security[-_]?token|"
     r"privateKey|requestSignature|request[-_]?signature|"
@@ -54,7 +55,7 @@ _DIAGNOSTIC_UNQUOTED_FIELD_BOUNDARY_PATTERN = (
 )
 _DIAGNOSTIC_UNQUOTED_PASSPHRASE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
-    r"((?:(?:[a-z0-9]+-)*(?:api-?passphrase|access-passphrase)|passphrase))"
+    r"((?:(?:[a-z0-9]+-)*api-?passphrase|access[-_]?passphrase|passphrase))"
     r"([\"']?(?:\s*[:=/]\s*|\s+))"
     r"(?:"
     r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
