@@ -9598,7 +9598,7 @@ class Passivbot:
                 continue
             # Determine earliest start among sides to avoid duplicate fetches
             starts = [
-                pside_changes[pside]
+                (int(pside_changes[pside]) // ONE_MIN_MS + 1) * ONE_MIN_MS
                 for pside in pside_changes
                 if pside in required_trailing[symbol]
             ]
@@ -9609,7 +9609,9 @@ class Passivbot:
 
         tasks = {
             sym: asyncio.create_task(
-                self.cm.get_candles(sym, start_ts=st, end_ts=None, strict=False)
+                self.cm.get_candles_with_resolution_ladder(
+                    sym, start_ts=st, end_ts=None, strict=False
+                )
             )
             for sym, st in fetch_plan.items()
         }
@@ -9617,7 +9619,22 @@ class Passivbot:
         results = {}
         for sym, task in tasks.items():
             try:
-                results[sym] = await task
+                result = await task
+                if int(result.source_counts.get("1m", 0)) <= 0:
+                    if "1m" in result.failures:
+                        unavailable_reasons["candle_fetch_failed"].add(sym)
+                        logging.debug(
+                            "[trailing] exact candle fetch failed | symbol=%s "
+                            "reason=candle_fetch_failed action=mark_unavailable error_type=%s",
+                            Passivbot._log_symbol(sym),
+                            bounded_exception_type(result.failures["1m"]),
+                        )
+                    else:
+                        unavailable_reasons["missing_exact_trailing_candles"].add(sym)
+                    unavailable_psides[sym].update(required_trailing.get(sym, set()))
+                    results[sym] = None
+                    continue
+                results[sym] = result
             except Exception as e:
                 unavailable_reasons["candle_fetch_failed"].add(sym)
                 unavailable_psides[sym].update(required_trailing.get(sym, set()))
@@ -9629,13 +9646,40 @@ class Passivbot:
                 results[sym] = None
 
         # Compute trailing metrics per symbol/side
-        for symbol, arr in results.items():
-            if arr is None:
+        previous_resolution_contexts = dict(
+            getattr(self, "_trailing_historical_resolution_contexts", {}) or {}
+        )
+        current_resolution_contexts = {}
+        for symbol, result in results.items():
+            if result is None:
                 continue
+            arr = result.candles
             if arr.size == 0:
                 unavailable_reasons["missing_trailing_candles"].add(symbol)
                 unavailable_psides[symbol].update(required_trailing.get(symbol, set()))
                 continue
+            approximate_sources = {
+                timeframe: int(count)
+                for timeframe, count in result.source_counts.items()
+                if timeframe != "1m" and int(count) > 0
+            }
+            if approximate_sources:
+                approximate_count = sum(approximate_sources.values())
+                context = {
+                    "source_counts": approximate_sources,
+                    "approximate_until_ts": int(arr[approximate_count - 1]["ts"]),
+                    "exact_from_ts": int(arr[approximate_count]["ts"]),
+                }
+                current_resolution_contexts[symbol] = context
+                if previous_resolution_contexts.get(symbol) != context:
+                    logging.info(
+                        "[trailing] using approximate old candle prefix | symbol=%s "
+                        "sources=%s approximate_until_ts=%d exact_from_ts=%d",
+                        Passivbot._log_symbol(symbol),
+                        approximate_sources,
+                        context["approximate_until_ts"],
+                        context["exact_from_ts"],
+                    )
             if symbol not in last_position_changes:
                 continue
             arr = np.sort(arr, order="ts")
@@ -9696,6 +9740,7 @@ class Passivbot:
                         e,
                     )
 
+        self._trailing_historical_resolution_contexts = current_resolution_contexts
         unavailable_symbols = set()
         unavailable_by_symbol: dict[str, list[str]] = defaultdict(list)
         warning_signature_parts = [

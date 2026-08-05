@@ -5,6 +5,11 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Redact complete quoted generic and unquoted authentication-header credential values in retained diagnostics, and keep terminal startup and outer process failure console records within the normal bounded projection budget.
+- Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
+  the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
+  the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent
+  1m suffix remains mandatory; missing or internally sparse recent data still makes only the
+  affected trailing input unavailable.
 - Move live trailing-input availability into Rust's side-scoped planning contract. Missing
   trailing extrema now suppress only entry or close branches that actually consume them while the
   other branch, other position side, panic, and independent reducers remain available. Remove the
