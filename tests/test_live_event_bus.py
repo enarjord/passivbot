@@ -320,12 +320,16 @@ def test_live_event_data_budget_preserves_under_limit_json_and_redaction_without
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": "secret",
+        "diagnostic": "failed  api_key=TOPSECRET\nsafe=visible",
+        "reason": "price  step\nmismatch",
     }
     expected_source = {
         "planning": {"ready": True, "candidate_count": 3},
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": "secret",
+        "diagnostic": "failed  api_key=TOPSECRET\nsafe=visible",
+        "reason": "price  step\nmismatch",
     }
 
     event = LiveEvent(EventTypes.CYCLE_COMPLETED, data=source)
@@ -337,6 +341,8 @@ def test_live_event_data_budget_preserves_under_limit_json_and_redaction_without
         "order_wave": {"created": 2, "cancelled": 1},
         "health": {"queue_depth": 4, "healthy": True},
         "apiKey": REDACTED,
+        "diagnostic": "failed  api_key=[redacted]\nsafe=visible",
+        "reason": "price  step\nmismatch",
     }
     assert LIVE_EVENT_BUDGET_METADATA_KEY not in event.data
     assert event.to_dict()["data"] == event.data
@@ -1044,7 +1050,13 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
             "X-Trace-Sign": "trace-sign",
             "X-Trace": "trace-123",
         },
+        "request_headers": [
+            ("KC-API-SIGN", "KUCOINPAIR"),
+            ("X-Trace", "pair-trace"),
+        ],
         "response_headers": {"X-Trace": "response-trace"},
+        "accessKey": "STRUCTUREDKEY",
+        "access_key": "STRUCTUREDKEY2",
     }
 
     assert redact_payload(source) == {
@@ -1060,7 +1072,13 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
             "X-Trace-Sign": "trace-sign",
             "X-Trace": "trace-123",
         },
+        "request_headers": [
+            ["KC-API-SIGN", REDACTED],
+            ["X-Trace", "pair-trace"],
+        ],
         "response_headers": {"X-Trace": "response-trace"},
+        "accessKey": REDACTED,
+        "access_key": REDACTED,
     }
     assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
         "headers": {
@@ -1075,7 +1093,13 @@ def test_redact_payload_redacts_exact_auth_keys_inside_generic_header_mappings()
             "X-Trace-Sign": "trace-sign",
             "X-Trace": "trace-123",
         },
+        "request_headers": [
+            ["KC-API-SIGN", REDACTED],
+            ["X-Trace", "pair-trace"],
+        ],
         "response_headers": {"X-Trace": "response-trace"},
+        "accessKey": REDACTED,
+        "access_key": REDACTED,
     }
 
 

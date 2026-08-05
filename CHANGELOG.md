@@ -5,9 +5,11 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Hardened credential sanitization for multi-word passphrases, exact exchange auth keys, and
-  prefixed signature headers inside generic header mappings, including canonical structured and
-  monitor events, priced TWEL-gated market entries at executable touch, and re-cropped next-only
-  short entry quantities after directional price quantization.
+  prefixed signature headers inside generic header mappings and header-pair sequences, including
+  canonical structured and monitor events. Canonical event strings preserve under-limit
+  whitespace while still redacting embedded credentials. TWEL-gated market entries are priced at
+  executable touch, and next-only short entry quantities are re-cropped after directional price
+  quantization.
 
 - Redact complete quoted generic credentials, quote-containing unquoted credentials,
   unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,

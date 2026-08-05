@@ -623,6 +623,7 @@ VALID_STATUSES = {
 
 
 _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
+    "accesskey",
     "apikey",
     "apisecret",
     "apisignature",
@@ -743,6 +744,15 @@ def _is_header_container_key(key: object) -> bool:
     return compact in {"headers", "requestheaders"}
 
 
+def _is_sensitive_header_pair(value: object) -> bool:
+    return (
+        type(value) in {list, tuple}
+        and len(value) == 2
+        and type(value[0]) is str
+        and _is_sensitive_header_key(value[0])
+    )
+
+
 def _redact_payload(value: Any, *, header_context: bool) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -758,11 +768,19 @@ def _redact_payload(value: Any, *, header_context: bool) -> Any:
             for key, item in value.items()
         }
     if isinstance(value, list):
+        if header_context and _is_sensitive_header_pair(value):
+            return [_redact_payload(value[0], header_context=False), REDACTED]
         return [_redact_payload(item, header_context=header_context) for item in value]
     if isinstance(value, tuple):
+        if header_context and _is_sensitive_header_pair(value):
+            return [_redact_payload(value[0], header_context=False), REDACTED]
         return [_redact_payload(item, header_context=header_context) for item in value]
     if isinstance(value, str):
-        return sanitize_diagnostic_text(value, max_len=LIVE_EVENT_MAX_STRING_CHARS)
+        return sanitize_diagnostic_text(
+            value,
+            max_len=LIVE_EVENT_MAX_STRING_CHARS,
+            one_line=False,
+        )
     return value
 
 
@@ -957,6 +975,7 @@ def _bounded_live_event_value(
         sanitized = sanitize_diagnostic_text(
             value,
             max_len=LIVE_EVENT_MAX_STRING_CHARS,
+            one_line=False,
         )
         if len(value) > LIVE_EVENT_MAX_STRING_CHARS:
             state.add("truncated_strings")
@@ -1078,6 +1097,17 @@ def _bounded_live_event_value(
         ancestors.add(value_id)
         normalized_items: list[Any] = []
         try:
+            if header_context and _is_sensitive_header_pair(value):
+                normalized_items.append(
+                    _bounded_live_event_value(
+                        value[0],
+                        depth=depth + 1,
+                        ancestors=ancestors,
+                        state=state,
+                    )
+                )
+                normalized_items.append(REDACTED)
+                return normalized_items
             for index, child in enumerate(value):
                 if index >= LIVE_EVENT_MAX_LIST_ITEMS:
                     state.add(

@@ -202,14 +202,21 @@ def sanitize_diagnostic_text(
     value: str,
     *,
     max_len: int = DIAGNOSTIC_MESSAGE_MAX_LEN,
+    one_line: bool = True,
 ) -> str:
-    """Return bounded one-line diagnostics with authentication secrets redacted.
+    """Return bounded diagnostics with authentication secrets redacted.
 
     Operational values such as symbols, prices, quantities, order identifiers,
     exchange messages, URLs, and account state are intentionally retained.  The
     sanitizer removes only credential-bearing values and private-key material.
+    Structured callers may disable one-line whitespace normalization.
     """
-    if type(value) is not str or type(max_len) is not int or max_len <= 0:
+    if (
+        type(value) is not str
+        or type(max_len) is not int
+        or max_len <= 0
+        or type(one_line) is not bool
+    ):
         return DIAGNOSTIC_MESSAGE_UNAVAILABLE
     try:
         scan_len = max(16_384, max_len * 4)
@@ -254,8 +261,9 @@ def sanitize_diagnostic_text(
         text = _DIAGNOSTIC_URL_USERINFO_RE.sub(
             rf"\1{DIAGNOSTIC_REDACTED}@", text
         )
-        text = " ".join(text.split())
-        if not text:
+        if one_line:
+            text = " ".join(text.split())
+        if not text and one_line:
             return "<empty>"
         suffix = "...<truncated>"
         if truncated or len(text) > max_len:
