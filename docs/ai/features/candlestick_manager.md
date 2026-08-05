@@ -210,13 +210,21 @@
    bulk backtest-data download.
 10. Native higher-timeframe EMA windows require full requested coverage on every exchange. WEEX
     additionally requires exact aligned coverage for 1m EMA windows because its recent endpoint
-    silently tail-anchors responses. Exchange-independent trailing-extrema and HSL replay-cache
-    extension consumers also require exact aligned coverage; incomplete windows become unavailable
-    or fall back to authoritative replay. HSL restart reconstruction is the narrow exception: it
-    fetches 1m candles first, then may cover only the older leading prefix with 5m, 15m, and 1h
-    candles. The finest available source wins, source counts remain visible, and only coarse
-    buckets ending at or before the first available 1m candle are eligible, so later price action
-    cannot leak backward across the precision boundary.
+    silently tail-anchors responses. Exchange-independent HSL replay-cache extension consumers
+    require exact aligned coverage or authoritative replay. HSL restart and live trailing restart
+    reconstruction may instead fetch 1m candles first, then cover only the older leading prefix
+    with 5m, 15m, and 1h candles. The finest available source wins, source counts remain visible,
+    and only coarse buckets ending at or before the first available 1m candle are eligible, so
+    later price action cannot leak backward across the precision boundary.
+
+    Trailing still requires a nonempty exact 1m suffix and its existing dense post-fill coverage
+    and bounded open-tail checks. The first post-fill minute remains the exact reset boundary;
+    deterministic expansion may clip the beginning of a coarse bucket there but never emits an
+    earlier timestamp. Coarse OHLC preserves the old prefix's highs and lows, while the dependent
+    `min_since_max` and `max_since_min` values are explicitly approximate because a higher-timeframe
+    candle cannot prove whether its high or low occurred first. Failure to obtain the exact suffix
+    keeps the affected position side unavailable rather than treating an entirely coarse window as
+    current trailing state.
 11. Quote-volume EMA is derived from normalized CCXT base volume and typical price
     (`base_volume * (high + low + close) / 3`). It is an approximation when an exchange, including
     WEEX, does not expose raw quote turnover through unified OHLCV.
