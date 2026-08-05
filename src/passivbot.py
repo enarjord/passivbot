@@ -2021,76 +2021,6 @@ class Passivbot:
             return False, None
         return True, max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
 
-    def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
-        try:
-            base_delay = float(
-                get_optional_live_value(
-                    self.config,
-                    "fills_coverage_retry_delay_seconds",
-                    30.0,
-                )
-            )
-        except Exception:
-            base_delay = 30.0
-        try:
-            max_delay = float(
-                get_optional_live_value(
-                    self.config,
-                    "fills_coverage_retry_max_delay_seconds",
-                    300.0,
-                )
-            )
-        except Exception:
-            max_delay = 300.0
-        base_delay = max(0.0, base_delay)
-        max_delay = max(base_delay, max_delay)
-        retry_count = max(1, int(retry_count or 1))
-        return min(max_delay, base_delay * (2 ** min(retry_count - 1, 6)))
-
-    @staticmethod
-    def _fill_coverage_retry_key(status: dict[str, object]) -> tuple:
-        return (
-            str(status.get("reason", "unknown")),
-            str(status.get("history_scope", "unknown")),
-            int(status.get("covered_start_ms", 0) or 0),
-            int(status.get("oldest_event_ts", 0) or 0),
-            int(status.get("gap_start_ts", 0) or 0),
-            int(status.get("gap_end_ts", 0) or 0),
-            str(status.get("gap_reason", "")),
-        )
-
-    def _fill_coverage_retry_deferred(self, status: dict[str, object], now_ms: int) -> bool:
-        state = getattr(self, "_fill_coverage_retry_state", None)
-        if not isinstance(state, dict):
-            return False
-        if state.get("key") != self._fill_coverage_retry_key(status):
-            return False
-        next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
-        return next_retry_ms > int(now_ms)
-
-    def _record_fill_coverage_retry_defer(
-        self, status: dict[str, object], *, now_ms: Optional[int] = None
-    ) -> None:
-        now = utc_ms() if now_ms is None else int(now_ms)
-        key = self._fill_coverage_retry_key(status)
-        state = getattr(self, "_fill_coverage_retry_state", None)
-        previous_count = (
-            int(state.get("retry_count", 0) or 0)
-            if isinstance(state, dict) and state.get("key") == key
-            else 0
-        )
-        retry_count = previous_count + 1
-        delay_s = self._fill_coverage_retry_delay_seconds(retry_count)
-        self._fill_coverage_retry_state = {
-            "key": key,
-            "retry_count": retry_count,
-            "next_retry_ms": now + int(delay_s * 1000.0),
-        }
-
-    def _clear_fill_coverage_retry_defer(self) -> None:
-        if hasattr(self, "_fill_coverage_retry_state"):
-            self._fill_coverage_retry_state = {}
-
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
             return []
@@ -13063,16 +12993,6 @@ class Passivbot:
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 refresh_mode = "full"
-                if not getattr(self, "_fills_full_refresh_logged", False):
-                    if age_limit is None:
-                        logging.debug(
-                            "[fills] Performing full refresh from full available history"
-                        )
-                    else:
-                        logging.debug(
-                            "[fills] Performing full refresh from %s",
-                            ts_to_date(age_limit)[:19],
-                        )
                 await self._pnls_manager.refresh(
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
