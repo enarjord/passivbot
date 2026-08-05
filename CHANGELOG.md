@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Stop inferring missing fill history from long periods without executions. Fill lookback
+  coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
+  fetches create unproven ranges, which remain retryable under the live execution loop's backoff
+  until a successful response (including an empty response) clears them.
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
   the old leading prefix, their source counts and exact-1m boundary are logged, and a real recent

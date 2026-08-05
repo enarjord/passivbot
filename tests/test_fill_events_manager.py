@@ -5921,7 +5921,7 @@ async def test_manager_refresh_for_lookback_retries_known_gap_before_latest(tmp_
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_for_lookback_refreshes_latest_when_gap_retries_exhausted(
+async def test_manager_refresh_for_lookback_retries_failed_range_regardless_of_attempt_count(
     tmp_path: Path,
 ):
     cache_dir = tmp_path / "fills_lookback_exhausted_gap"
@@ -5986,8 +5986,8 @@ async def test_manager_refresh_for_lookback_refreshes_latest_when_gap_retries_ex
     completed = await manager.refresh_for_lookback(start_ms=start_ms)
 
     assert completed is True
-    assert fetcher.calls == [(event_ts, None)]
-    assert manager.cache.get_known_gaps()[0]["retry_count"] == 3
+    assert fetcher.calls == [(gap_start, gap_end), (event_ts, None)]
+    assert manager.cache.get_known_gaps() == []
 
 
 def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
@@ -6043,7 +6043,7 @@ def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
+async def test_manager_refresh_range_does_not_infer_gaps_from_fill_spacing(tmp_path: Path):
     cache_dir = tmp_path / "fills_range"
     cache = FillEventCache(cache_dir)
     base = int((datetime.now(timezone.utc) - timedelta(hours=48)).timestamp() * 1000)
@@ -6119,12 +6119,10 @@ async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
     start_ms = base - int(6 * 60 * 60 * 1000)
     end_ms = base + int(24 * 60 * 60 * 1000)
 
-    await manager.refresh_range(start_ms=start_ms, end_ms=end_ms, gap_hours=12, overlap=1)
+    await manager.refresh_range(start_ms=start_ms, end_ms=end_ms)
 
-    assert len(fetcher.calls) == 3
-    assert fetcher.calls[0] == (start_ms, events[0].timestamp)
-    assert fetcher.calls[1] == (events[1].timestamp, end_ms)
-    assert fetcher.calls[2] == (events[2].timestamp, None)
+    assert fetcher.calls == [(start_ms, end_ms)]
+    assert manager.cache.get_known_gaps() == []
 
 
 @pytest.mark.asyncio

@@ -1891,20 +1891,11 @@ def _is_close_payload(payload: Dict[str, object]) -> bool:
 # Cache
 # ---------------------------------------------------------------------------
 
-# Maximum retry attempts before marking gap as persistent
-_GAP_MAX_RETRIES = 3
-
-# Gap confidence levels
-GAP_CONFIDENCE_UNKNOWN = 0.0
-GAP_CONFIDENCE_SUSPICIOUS = 0.3
-GAP_CONFIDENCE_LIKELY_LEGITIMATE = 0.7
+# Legacy cache metadata may explicitly mark a range as proven legitimate.
 GAP_CONFIDENCE_CONFIRMED = 1.0
 
-# Gap reasons
-GAP_REASON_AUTO = "auto_detected"
 GAP_REASON_FETCH_FAILED = "fetch_failed"
 GAP_REASON_CONFIRMED = "confirmed_legitimate"
-GAP_REASON_MANUAL = "manual"
 PENDING_PNL_REFRESH_MARGIN_MS = 5 * 60 * 1000
 KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS = 10 * 60 * 1000
 DEGRADED_PNL_REPAIR_MAX_INTERVALS_PER_CYCLE = 4
@@ -1912,14 +1903,14 @@ DEGRADED_PNL_REPAIR_MAX_INTERVAL_SPAN_MS = 24 * 60 * 60 * 1000
 
 
 class KnownGap(TypedDict, total=False):
-    """Gap metadata stored in metadata.json known_gaps."""
+    """Unproven bounded fetch range stored in metadata.json."""
 
     start_ts: int  # Gap start timestamp (ms)
     end_ts: int  # Gap end timestamp (ms)
-    retry_count: int  # Number of fetch attempts (max 3)
-    reason: str  # auto_detected, fetch_failed, confirmed_legitimate, manual
+    retry_count: int  # Diagnostic count; orchestration owns retry timing
+    reason: str  # fetch_failed or legacy confirmed_legitimate
     added_at: int  # Timestamp when gap was first detected
-    confidence: float  # 0.0=unknown, 0.3=suspicious, 0.7=likely_ok, 1.0=confirmed
+    confidence: float  # Legacy compatibility; 1.0 means confirmed legitimate
 
 
 class CacheMetadata(TypedDict, total=False):
@@ -2298,10 +2289,9 @@ class FillEventCache:
         start_ts: int,
         end_ts: int,
         *,
-        reason: str = GAP_REASON_AUTO,
-        confidence: float = GAP_CONFIDENCE_UNKNOWN,
+        reason: str = GAP_REASON_FETCH_FAILED,
     ) -> None:
-        """Add or update a known gap."""
+        """Record a bounded range whose exchange fetch failed."""
         metadata = self.load_metadata()
         gaps = metadata.get("known_gaps", [])
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -2313,10 +2303,6 @@ class FillEventCache:
                 gap["start_ts"] = min(gap["start_ts"], start_ts)
                 gap["end_ts"] = max(gap["end_ts"], end_ts)
                 gap["retry_count"] = gap.get("retry_count", 0) + 1
-                if gap["retry_count"] >= _GAP_MAX_RETRIES:
-                    gap["confidence"] = max(
-                        gap.get("confidence", 0), GAP_CONFIDENCE_LIKELY_LEGITIMATE
-                    )
                 logger.info(
                     "FillEventCache.add_known_gap: updated gap %s → %s (retry_count=%d)",
                     _format_ms(gap["start_ts"]),
@@ -2333,7 +2319,6 @@ class FillEventCache:
             "retry_count": 0,
             "reason": reason,
             "added_at": now_ms,
-            "confidence": confidence,
         }
         gaps.append(new_gap)
         metadata["known_gaps"] = gaps
@@ -2391,17 +2376,26 @@ class FillEventCache:
             return True
         return False
 
-    def should_retry_gap(self, gap: KnownGap) -> bool:
-        """Check if a gap should be retried (retry_count < max)."""
-        return gap.get("retry_count", 0) < _GAP_MAX_RETRIES
-
     def get_coverage_summary(self) -> Dict[str, object]:
         """Return a summary of cache coverage for debugging."""
         metadata = self.load_metadata()
         gaps = metadata.get("known_gaps", [])
 
-        persistent_gaps = [g for g in gaps if not self.should_retry_gap(g)]
-        retryable_gaps = [g for g in gaps if self.should_retry_gap(g)]
+        def is_confirmed_legacy_gap(gap: object) -> bool:
+            if not isinstance(gap, dict):
+                return False
+            try:
+                confidence = float(gap.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            return (
+                str(gap.get("reason", "") or "").lower() == GAP_REASON_CONFIRMED
+                or confidence >= GAP_CONFIDENCE_CONFIRMED
+            )
+
+        retryable_gaps = [
+            gap for gap in gaps if not is_confirmed_legacy_gap(gap)
+        ]
 
         total_gap_ms = sum(g["end_ts"] - g["start_ts"] for g in gaps)
 
@@ -2412,7 +2406,10 @@ class FillEventCache:
             "last_refresh_ms": metadata.get("last_refresh_ms", 0),
             "history_scope": self.get_history_scope(),
             "total_gaps": len(gaps),
-            "persistent_gaps": len(persistent_gaps),
+            # Compatibility fields retained for the fill dashboard. Unproven
+            # ranges no longer become terminal merely because a retry count is
+            # exhausted; orchestration owns indefinitely backed-off retries.
+            "persistent_gaps": 0,
             "retryable_gaps": len(retryable_gaps),
             "total_gap_hours": total_gap_ms / (1000 * 60 * 60) if total_gap_ms > 0 else 0,
             "gaps": [
@@ -5098,7 +5095,6 @@ class FillEventsManager:
                     start_ms,
                     end_ms,
                     reason=GAP_REASON_FETCH_FAILED,
-                    confidence=GAP_CONFIDENCE_UNKNOWN,
                 )
             raise
         finally:
@@ -5448,30 +5444,25 @@ class FillEventsManager:
         *,
         end_ms: Optional[int] = None,
         overlap: int = 20,
-        gap_hours: float = 12.0,
-        force_refetch_gaps: bool = False,
     ) -> bool:
-        """Refresh fills for a requested lookback window using cache-derived coverage.
+        """Prove a requested fill lookback through exchange traversal.
 
         Open-ended lookbacks are tracked in cache metadata so bots can avoid
         re-running the same expensive history bootstrap after restart when the
-        early portion of the lookback legitimately contains no fills.
+        early portion of the lookback legitimately contains no fills. Fill
+        density is not coverage evidence: only a completed exchange fetch may
+        prove an interval, and only a failed bounded fetch creates a known gap.
 
         Returns True only after at least one exchange fill fetch completes.
         """
         await self.ensure_loaded()
         start_ms = int(start_ms)
         if end_ms is not None:
-            await self.refresh_range(
-                start_ms=start_ms,
-                end_ms=end_ms,
-                gap_hours=gap_hours,
-                overlap=overlap,
-                force_refetch_gaps=force_refetch_gaps,
-            )
+            await self.refresh(start_ms=start_ms, end_ms=int(end_ms))
             return True
 
         coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        latest_refreshed = False
 
         blocking_gaps = self._blocking_known_gaps(
             start_ms=start_ms,
@@ -5482,8 +5473,6 @@ class FillEventsManager:
             for gap in blocking_gaps:
                 bounds = self._known_gap_bounds(gap)
                 if bounds is None:
-                    continue
-                if not force_refetch_gaps and not self.cache.should_retry_gap(gap):
                     continue
                 gap_start, gap_end = bounds
                 retry_start = max(start_ms, gap_start)
@@ -5499,17 +5488,18 @@ class FillEventsManager:
                 await self.refresh(start_ms=retry_start, end_ms=retry_end)
             if retried_ranges:
                 await self.refresh_latest(overlap=overlap)
+                latest_refreshed = True
                 blocking_gaps = self._blocking_known_gaps(
                     start_ms=start_ms,
                     end_ms=coverage_end_ms,
                 )
             if blocking_gaps:
                 if not retried_ranges:
-                    # Historical coverage may remain blocked after its bounded
-                    # retry budget is exhausted. A recent refresh is still
-                    # required so trailing confirmation can prove its fill
-                    # cache current without weakening the PnL coverage gate.
+                    # Malformed legacy evidence cannot identify a bounded retry
+                    # range. Keep recent structural confirmation current while
+                    # the coverage verdict remains fail-closed.
                     await self.refresh_latest(overlap=overlap)
+                    latest_refreshed = True
                 gap = blocking_gaps[0]
                 bounds = self._known_gap_bounds(gap)
                 range_label = (
@@ -5519,12 +5509,11 @@ class FillEventsManager:
                 )
                 gap_info = gap if isinstance(gap, dict) else {}
                 logger.warning(
-                    "[fills] lookback coverage remains unproven because known gap overlaps requested window | start=%s gap=%s reason=%s retry_count=%s confidence=%s",
+                    "[fills] lookback coverage remains unproven because failed fetch range overlaps requested window | start=%s gap=%s reason=%s retry_count=%s",
                     _format_ms(start_ms),
                     range_label,
                     str(gap_info.get("reason", "malformed")),
                     str(gap_info.get("retry_count", "unknown")),
-                    str(gap_info.get("confidence", "unknown")),
                 )
                 return True
 
@@ -5541,7 +5530,8 @@ class FillEventsManager:
                 _format_ms(covered_start_ms) if covered_start_ms else "None",
                 _format_ms(oldest_event_ts) if oldest_event_ts else "None",
             )
-            await self.refresh_latest(overlap=overlap)
+            if not latest_refreshed:
+                await self.refresh_latest(overlap=overlap)
             return True
 
         if coverage_status.get("reason") == "cache_metadata_event_mismatch":
@@ -5550,30 +5540,11 @@ class FillEventsManager:
                 _format_ms(covered_start_ms),
             )
 
-        if self._events:
-            if oldest_event_ts > 0 and oldest_event_ts <= start_ms:
-                logger.info(
-                    "[fills] lookback coverage unproven from %s despite older cached fill at %s; refreshing full lookback",
-                    _format_ms(start_ms),
-                    _format_ms(oldest_event_ts),
-                )
-                await self.refresh(start_ms=start_ms, end_ms=None)
-                await self.refresh_latest(overlap=overlap)
-            else:
-                logger.info(
-                    "[fills] lookback uncovered from %s; refreshing missing range before latest",
-                    _format_ms(start_ms),
-                )
-                await self.refresh_range(
-                    start_ms=start_ms,
-                    end_ms=None,
-                    gap_hours=gap_hours,
-                    overlap=overlap,
-                    force_refetch_gaps=force_refetch_gaps,
-                )
-        else:
-            logger.info("[fills] cache empty; refreshing full lookback from %s", _format_ms(start_ms))
-            await self.refresh(start_ms=start_ms, end_ms=None)
+        logger.info(
+            "[fills] lookback coverage unproven from %s; traversing the full requested window",
+            _format_ms(start_ms),
+        )
+        await self.refresh(start_ms=start_ms, end_ms=None)
 
         self.cache.mark_covered_start(start_ms)
         return True
@@ -5700,101 +5671,18 @@ class FillEventsManager:
         self,
         start_ms: int,
         end_ms: Optional[int],
-        *,
-        gap_hours: float = 12.0,
-        overlap: int = 20,
-        force_refetch_gaps: bool = False,
     ) -> None:
-        """Fill missing data between `start_ms` and `end_ms` using gap heuristics.
+        """Refresh the exact requested interval.
 
-        Args:
-            start_ms: Start timestamp in milliseconds
-            end_ms: End timestamp in milliseconds (or None for now)
-            gap_hours: Threshold for detecting gaps (default 12 hours)
-            overlap: Number of events to overlap when fetching latest
-            force_refetch_gaps: If True, retry even persistent gaps
+        Fill timestamps are irregular, so spacing between cached events is not
+        evidence of missing history. The exchange fetcher owns complete
+        traversal of this interval.
         """
         await self.ensure_loaded()
-        intervals: List[Tuple[int, int]] = []
-
-        # Get known gaps from cache metadata
-        known_gaps = self.cache.get_known_gaps()
-
-        def is_in_persistent_gap(ts_start: int, ts_end: int) -> bool:
-            """Check if interval is fully within a persistent (max retries) gap."""
-            if force_refetch_gaps:
-                return False
-            for gap in known_gaps:
-                if ts_start >= gap["start_ts"] and ts_end <= gap["end_ts"]:
-                    if not self.cache.should_retry_gap(gap):
-                        return True
-            return False
-
-        if not self._events:
-            logger.debug("[fills] refresh_range: cache empty, refreshing entire interval")
-            await self.refresh(start_ms=start_ms, end_ms=end_ms)
-            if self._events:
-                await self.refresh_latest(overlap=overlap)
-            return
-
-        events_sorted = self._events
-        earliest = events_sorted[0].timestamp
-        latest = events_sorted[-1].timestamp
-        gap_ms = max(1, int(gap_hours * 60.0 * 60.0 * 1000.0))
-
-        # Fetch older data before earliest cached if requested
-        if start_ms < earliest:
-            upper = earliest if end_ms is None else min(earliest, end_ms)
-            if start_ms < upper and not is_in_persistent_gap(start_ms, upper):
-                intervals.append((start_ms, upper))
-
-        # Detect large gaps in cached data
-        prev_ts = earliest
-        for ev in events_sorted[1:]:
-            cur_ts = ev.timestamp
-            if end_ms is not None and cur_ts > end_ms:
-                break
-            if cur_ts - prev_ts >= gap_ms:
-                gap_start = max(prev_ts, start_ms)
-                gap_end = cur_ts
-                if gap_start < gap_end:
-                    if is_in_persistent_gap(gap_start, gap_end):
-                        logger.debug(
-                            "FillEventsManager.refresh_range: skipping persistent gap %s → %s",
-                            _format_ms(gap_start),
-                            _format_ms(gap_end),
-                        )
-                    else:
-                        intervals.append((gap_start, gap_end))
-                        # Record as potential gap for tracking
-                        self.cache.add_known_gap(
-                            gap_start,
-                            gap_end,
-                            reason=GAP_REASON_AUTO,
-                            confidence=GAP_CONFIDENCE_SUSPICIOUS,
-                        )
-            prev_ts = cur_ts
-
-        # Fetch newer data after latest cached if requested (if not already covered)
-        if end_ms is not None and end_ms > latest and (not intervals or intervals[-1][1] != end_ms):
-            lower = max(latest, start_ms)
-            if lower < end_ms and not is_in_persistent_gap(lower, end_ms):
-                intervals.append((lower, end_ms))
-
-        merged = self._merge_intervals(intervals)
-        if merged:
-            logger.debug(
-                "[fills] refresh_range: refreshing %d intervals: %s",
-                len(merged),
-                ", ".join(f"{_format_ms(start)} → {_format_ms(end)}" for start, end in merged),
-            )
-        else:
-            logger.debug("[fills] refresh_range: no gaps detected in requested interval")
-
-        for start, end in merged:
-            await self.refresh(start_ms=start, end_ms=end)
-
-        await self.refresh_latest(overlap=overlap)
+        await self.refresh(
+            start_ms=int(start_ms),
+            end_ms=None if end_ms is None else int(end_ms),
+        )
 
     def get_events(
         self,
