@@ -96,6 +96,35 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
     }
 }
 
+pub(crate) fn finalize_next_entry(
+    mut entry: Order,
+    exchange_params: &ExchangeParams,
+    price_rounding: RoundingMode,
+    context: &str,
+) -> Order {
+    if entry.qty == 0.0 {
+        return entry;
+    }
+    entry.price = quantize_price(
+        entry.price,
+        exchange_params.price_step,
+        price_rounding,
+        context,
+    );
+    entry.qty = entry.qty.signum()
+        * entry
+            .qty
+            .abs()
+            .max(calc_min_entry_qty(entry.price, exchange_params));
+    entry.qty = quantize_qty(
+        entry.qty,
+        exchange_params.qty_step,
+        RoundingMode::Nearest,
+        context,
+    );
+    entry
+}
+
 fn calc_entry_distance_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit: f64,
@@ -496,7 +525,7 @@ pub fn calc_next_entry_long(
     }
     let allowed_wallet_exposure_limit =
         wallet_exposure_limit_with_allowance(bot_params, runtime_context);
-    if entry_params.retracement_base_pct > 0.0 {
+    let entry = if entry_params.retracement_base_pct > 0.0 {
         calc_trailing_entry_long(
             exchange_params,
             state_params,
@@ -517,7 +546,13 @@ pub fn calc_next_entry_long(
             position,
             allowed_wallet_exposure_limit,
         )
-    }
+    };
+    finalize_next_entry(
+        entry,
+        exchange_params,
+        RoundingMode::Floor,
+        "calc_next_entry_long",
+    )
 }
 
 pub fn calc_trailing_entry_long(
@@ -989,7 +1024,7 @@ pub fn calc_next_entry_short(
     }
     let allowed_wallet_exposure_limit =
         wallet_exposure_limit_with_allowance(bot_params, runtime_context);
-    if entry_params.retracement_base_pct > 0.0 {
+    let entry = if entry_params.retracement_base_pct > 0.0 {
         calc_trailing_entry_short(
             exchange_params,
             state_params,
@@ -1010,7 +1045,13 @@ pub fn calc_next_entry_short(
             position,
             allowed_wallet_exposure_limit,
         )
-    }
+    };
+    finalize_next_entry(
+        entry,
+        exchange_params,
+        RoundingMode::Ceil,
+        "calc_next_entry_short",
+    )
 }
 
 pub fn calc_entries_long(
@@ -1233,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn final_entry_price_quantization_recomputes_minimum_cost_quantity() {
+    fn next_entry_price_quantization_recomputes_minimum_cost_quantity() {
         let exchange = ExchangeParams {
             qty_step: 0.001,
             price_step: 0.01,
@@ -1261,7 +1302,7 @@ mod tests {
             ..Default::default()
         };
 
-        let orders = calc_entries_long(
+        let order = calc_next_entry_long(
             &exchange,
             &state,
             &bot,
@@ -1271,13 +1312,13 @@ mod tests {
             &TrailingPriceBundle::default(),
         );
 
-        assert_eq!(orders[0].price, 3.0);
-        assert!((orders[0].qty - 1.667).abs() < 1e-12);
-        assert!(orders[0].qty * orders[0].price >= exchange.min_cost);
+        assert_eq!(order.price, 3.0);
+        assert!((order.qty - 1.667).abs() < 1e-12);
+        assert!(order.qty * order.price >= exchange.min_cost);
     }
 
     #[test]
-    fn final_entry_price_quantization_remains_passive_for_both_sides() {
+    fn next_entry_price_quantization_remains_passive_for_both_sides() {
         let exchange = ExchangeParams {
             qty_step: 0.001,
             price_step: 0.01,
@@ -1305,7 +1346,7 @@ mod tests {
             ..Default::default()
         };
 
-        let long_orders = calc_entries_long(
+        let long_order = calc_next_entry_long(
             &exchange,
             &state,
             &bot,
@@ -1314,7 +1355,7 @@ mod tests {
             &Position::default(),
             &TrailingPriceBundle::default(),
         );
-        let short_orders = calc_entries_short(
+        let short_order = calc_next_entry_short(
             &exchange,
             &state,
             &bot,
@@ -1324,10 +1365,10 @@ mod tests {
             &TrailingPriceBundle::default(),
         );
 
-        assert_eq!(long_orders[0].price, 100.0);
-        assert!(long_orders[0].price <= state.order_book.bid);
-        assert_eq!(short_orders[0].price, 100.02);
-        assert!(short_orders[0].price >= state.order_book.ask);
+        assert_eq!(long_order.price, 100.0);
+        assert!(long_order.price <= state.order_book.bid);
+        assert_eq!(short_order.price, 100.02);
+        assert!(short_order.price >= state.order_book.ask);
     }
 
     #[test]

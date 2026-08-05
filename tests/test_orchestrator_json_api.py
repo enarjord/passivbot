@@ -2064,8 +2064,9 @@ def test_off_tick_strategy_entry_recomputes_minimum_after_price_quantization(
         ("trailing_grid_v7", "short", 100.006, 100.014, 100.02),
     ],
 )
+@pytest.mark.parametrize("next_only", [False, True])
 def test_off_tick_strategy_entries_quantize_away_from_the_spread(
-    strategy_kind, pside, bid, ask, expected_price
+    strategy_kind, pside, bid, ask, expected_price, next_only
 ):
     import passivbot_rust as pbr
 
@@ -2096,6 +2097,13 @@ def test_off_tick_strategy_entries_quantize_away_from_the_spread(
         strategy_kind=strategy_kind,
         symbols=[symbol],
     )
+    if next_only:
+        inp["peek_hints"] = {
+            "expand_grid_long": [],
+            "expand_grid_short": [],
+            "expand_close_long": [],
+            "expand_close_short": [],
+        }
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(

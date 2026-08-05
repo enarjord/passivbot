@@ -628,6 +628,7 @@ _SENSITIVE_KEY_STRONG_COMPACT_MARKERS = (
     "apisignature",
     "authsignature",
     "authheader",
+    "authenticationheader",
     "authkey",
     "authorization",
     "brokerkey",

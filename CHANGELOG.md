@@ -7,7 +7,7 @@ All notable user-facing changes will be documented in this file.
 - Redact complete quoted generic credentials, quote-containing unquoted credentials,
   unterminated quoted credentials, bearer/JWT and auth-key/secret fields and structured keys,
   exact credential and remote auth/cookie labels, quoted and unquoted authentication-header values,
-  auth-header containers, key/secret aliases, equals-style credential flags, scheme-prefixed
+  auth/authentication-header containers, key/secret aliases, equals-style credential flags, scheme-prefixed
   unquoted credential values, and URL userinfo across supported schemes with or without a password
   delimiter in retained diagnostics. Keep terminal startup and outer process failure console
   records within the normal bounded projection budget.
@@ -63,8 +63,8 @@ All notable user-facing changes will be documented in this file.
   the only executable full close, and clamp short close prices to the minimum positive tick. Live
   execution-policy validation also canonicalizes only representation-noisy, tick-aligned
   submitted books to the same float Rust decodes from JSON.
-  Off-tick trailing-strategy entry prices now quantize away from the spread so a passive bid is
-  never rounded up and a passive ask is never rounded down.
+  Off-tick trailing-strategy entry prices now quantize away from the spread in both next-only and
+  expanded-grid paths so a passive bid is never rounded up and a passive ask is never rounded down.
 - WEEX now recognizes exact structured error code `-1058` as a temporary per-symbol API-trading
   suspension. The affected symbol enters a configurable RAM-only cooldown (six hours by default):
   flat symbols use graceful stop, held symbols use TP-only while retaining close and panic

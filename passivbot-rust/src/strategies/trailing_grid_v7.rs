@@ -6,7 +6,8 @@ use crate::closes::{
     calc_close_qty, calc_wel_auto_reduce_long, calc_wel_auto_reduce_short, sort_closes_by_price,
 };
 use crate::entries::{
-    calc_cropped_reentry_qty, calc_min_entry_qty, wallet_exposure_limit_with_allowance,
+    calc_cropped_reentry_qty, calc_min_entry_qty, finalize_next_entry,
+    wallet_exposure_limit_with_allowance,
 };
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
@@ -437,7 +438,7 @@ fn calc_trailing_entry_long(
     }
 }
 
-fn calc_next_entry_long(
+fn calc_next_entry_long_raw(
     exchange: &ExchangeParams,
     state: &StateParams,
     bot: &BotParams,
@@ -522,6 +523,23 @@ fn calc_next_entry_long(
             allowed_wallet_exposure_limit,
         )
     }
+}
+
+fn calc_next_entry_long(
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    entry: &TrailingGridV7EntryParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> Order {
+    finalize_next_entry(
+        calc_next_entry_long_raw(exchange, state, bot, runtime, entry, position, trailing),
+        exchange,
+        RoundingMode::Floor,
+        "trailing_grid_v7::next_entry_long",
+    )
 }
 
 fn calc_grid_entry_short(
@@ -791,7 +809,7 @@ fn calc_trailing_entry_short(
     }
 }
 
-fn calc_next_entry_short(
+fn calc_next_entry_short_raw(
     exchange: &ExchangeParams,
     state: &StateParams,
     bot: &BotParams,
@@ -876,6 +894,23 @@ fn calc_next_entry_short(
             allowed_wallet_exposure_limit,
         )
     }
+}
+
+fn calc_next_entry_short(
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    entry: &TrailingGridV7EntryParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> Order {
+    finalize_next_entry(
+        calc_next_entry_short_raw(exchange, state, bot, runtime, entry, position, trailing),
+        exchange,
+        RoundingMode::Ceil,
+        "trailing_grid_v7::next_entry_short",
+    )
 }
 
 fn calc_grid_close_long(

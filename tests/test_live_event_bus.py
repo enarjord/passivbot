@@ -1009,17 +1009,23 @@ def test_redact_payload_redacts_auth_header_containers_before_recursing():
     source = {
         "authHeaders": {"KEY": "GATEKEY", "SIGN": "GATESIGN"},
         "auth_headers": {"ACCESS-KEY": "OKXKEY"},
+        "authenticationHeaders": {"KEY": "GATEKEY"},
+        "authentication_headers": {"ACCESS-KEY": "OKXKEY"},
         "response_headers": {"X-Trace": "trace-123"},
     }
 
     assert redact_payload(source) == {
         "authHeaders": REDACTED,
         "auth_headers": REDACTED,
+        "authenticationHeaders": REDACTED,
+        "authentication_headers": REDACTED,
         "response_headers": {"X-Trace": "trace-123"},
     }
     assert LiveEvent(EventTypes.CYCLE_COMPLETED, data=source).data == {
         "authHeaders": REDACTED,
         "auth_headers": REDACTED,
+        "authenticationHeaders": REDACTED,
+        "authentication_headers": REDACTED,
         "response_headers": {"X-Trace": "trace-123"},
     }
 
