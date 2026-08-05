@@ -193,6 +193,30 @@ async def test_gateio_fetch_ohlcv_omits_until_param(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timeframe", ["1m", "1h"])
+async def test_bitget_public_ohlcv_bypasses_account_uta_routing(tmp_path, timeframe):
+    ex = CapturingExchange(exid="bitget")
+    ex.options = {"uta": True}
+    cm = CandlestickManager(
+        exchange=ex,
+        exchange_name="bitget",
+        cache_dir=str(tmp_path / "caches"),
+    )
+
+    rows = await cm._ccxt_fetch_ohlcv_once(
+        "XMR/USDT:USDT",
+        since_ms=1779332400000,
+        limit=200,
+        end_exclusive_ms=1780052400000,
+        timeframe=timeframe,
+    )
+
+    assert rows and len(rows) == 1
+    assert ex.options["uta"] is True
+    assert ex.params_seen == {"uta": False}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("timeframe", "row_count"), [("1m", 1400), ("1h", 1100)])
 async def test_weex_pagination_uses_bounded_history_then_recent_tail(
     tmp_path, timeframe, row_count

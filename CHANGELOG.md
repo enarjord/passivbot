@@ -5,7 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Redact complete quoted generic and unquoted authentication-header credential values in retained diagnostics, and keep terminal startup and outer process failure console records within the normal bounded projection budget.
-
+- Route Bitget public OHLCV requests through the complete classic futures history endpoint even
+  when the authenticated account uses UTA/Elite v3, preventing older available candles from being
+  omitted from live EMA windows while retaining UTA routing for private account and order calls.
 - Recognize repeated exclusive switching between complete order cohorts as live
   order-churn evidence. Alternating long/short or order-type intent can now use
   the existing account-wide far-order allowance without merging position-side
@@ -60,8 +62,9 @@ All notable user-facing changes will be documented in this file.
   strategy orders are cancelled through normal Rust-authoritative reconciliation, entry and close
   strategy branches remain independent when their input needs differ, and independent panic,
   WEL, and TWEL reducers may continue when their own inputs are complete. The live producer-boundary
-  validator accepts and strictly validates Rust's corresponding scoped-unavailability warning.
-
+  validator accepts and strictly validates Rust's corresponding scoped-unavailability warning. A
+  `NaN` returned by the completed-candle EMA API now follows that unavailable-input path instead of
+  restarting the whole execution cycle; positive or negative infinity remains fatal.
 - Harden combined-exchange HLCV preparation across independently downloaded datasets: equivalent
   full-range sources now follow configured exchange priority instead of total volume, robust
   complete-day median-log estimates replace arithmetic volume averaging, and underdetermined
