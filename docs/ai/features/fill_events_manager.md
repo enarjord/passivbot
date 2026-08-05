@@ -21,9 +21,10 @@
    or caused the exchange fill. Refresh and deduplication preserve an existing
    provenance record, including the absence of provenance on legacy cache rows.
    Historical rows are never retroactively attributed.
-8. `last_refresh_ms` records a completed exchange fetch, not local cache loading,
-   normalization, or doctor repair. Preserving that distinction ensures the first
-   incremental refresh after restart covers fills which occurred while the bot was
+8. `last_refresh_ms` records a completed tail-capable exchange fetch, not local cache
+   loading, normalization, doctor repair, or a bounded historical range repair.
+   Preserving that distinction ensures the next incremental refresh covers fills
+   after a repaired historical range and fills which occurred while the bot was
    offline.
 9. A position whose latest fill identity or reconstructed after-state does not
    match the authoritative exchange position remains nontradable. Live orchestration

@@ -1658,6 +1658,7 @@ async def test_refresh_rejects_malformed_fetcher_rows_without_partial_persist(tm
 
     assert FillEventCache(tmp_path).load() == []
     assert FillEventCache(tmp_path).load_metadata()["last_refresh_ms"] == 0
+    assert FillEventCache(tmp_path).get_known_gaps() == []
 
 
 @pytest.mark.asyncio
@@ -1693,6 +1694,43 @@ async def test_refresh_range_empty_bounded_window_does_not_fetch_unbounded_lates
 
     assert fetcher.calls == [(1_000, 2_000)]
     assert FillEventCache(tmp_path).load() == []
+    assert FillEventCache(tmp_path).load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_range_bounded_history_preserves_refresh_checkpoint_with_fills(
+    tmp_path: Path,
+):
+    checkpoint_ms = 777
+    event = {
+        "id": "historical",
+        "timestamp": 1_500,
+        "datetime": "",
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 0.0,
+        "fees": {"currency": "USDC", "cost": 0.01},
+        "pb_order_type": "entry_grid_normal_long",
+        "position_side": "long",
+        "client_order_id": "cid-historical",
+    }
+    cache = FillEventCache(tmp_path)
+    cache.save_metadata({"last_refresh_ms": checkpoint_ms})
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([event]),
+        cache_path=tmp_path,
+    )
+
+    await manager.refresh_range(start_ms=1_000, end_ms=2_000)
+
+    assert [item.id for item in cache.load()] == ["historical"]
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == checkpoint_ms
+    assert metadata["newest_event_ts"] == 1_500
 
 
 # ---------------------------------------------------------------------------
@@ -6186,23 +6224,31 @@ async def test_hyperliquid_fetcher_raises_after_max_rate_limit_retries(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_registers_gap_and_reraises_rate_limit(tmp_path: Path):
-    cache_dir = tmp_path / "fills_rate_limit_gap"
+@pytest.mark.parametrize(
+    "fetch_error",
+    [RateLimitExceeded("rate limited"), RuntimeError("exchange unavailable")],
+    ids=["rate_limit", "exchange_error"],
+)
+async def test_manager_refresh_registers_gap_and_reraises_fetch_failure(
+    tmp_path: Path,
+    fetch_error: Exception,
+):
+    cache_dir = tmp_path / "fills_fetch_failure_gap"
 
-    class _RateLimitedFetcher(BaseFetcher):
+    class _FailingFetcher(BaseFetcher):
         async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
-            raise RateLimitExceeded("rate limited")
+            raise fetch_error
 
     manager = FillEventsManager(
         exchange="hyperliquid",
         user="default",
-        fetcher=_RateLimitedFetcher(),
+        fetcher=_FailingFetcher(),
         cache_path=cache_dir,
     )
 
     start_ms = 1_700_000_000_000
     end_ms = start_ms + 60_000
-    with pytest.raises(RateLimitExceeded):
+    with pytest.raises(type(fetch_error), match=str(fetch_error)):
         await manager.refresh(start_ms=start_ms, end_ms=end_ms)
 
     gaps = manager.cache.get_known_gaps()
@@ -6210,6 +6256,43 @@ async def test_manager_refresh_registers_gap_and_reraises_rate_limit(tmp_path: P
     assert gaps[0]["start_ts"] == start_ms
     assert gaps[0]["end_ts"] == end_ms
     assert gaps[0]["reason"] == GAP_REASON_FETCH_FAILED
+
+
+@pytest.mark.asyncio
+async def test_manager_pnl_repair_failure_does_not_invalidate_fill_coverage(
+    tmp_path: Path,
+):
+    class _FailingPnlRepairFetcher(BaseFetcher):
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            return []
+
+        async def fetch_degraded_pnl_repair(
+            self,
+            since_ms,
+            until_ms,
+            aux_start_ms,
+            aux_end_ms,
+            detail_cache,
+            on_batch=None,
+        ):
+            raise RuntimeError("PnL endpoint unavailable")
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_FailingPnlRepairFetcher(),
+        cache_path=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="PnL endpoint unavailable"):
+        await manager.refresh(
+            start_ms=1_000,
+            end_ms=2_000,
+            mark_refreshed=False,
+            degraded_pnl_aux_range=(3_000, 4_000),
+        )
+
+    assert manager.cache.get_known_gaps() == []
 
 
 # ---------------------------------------------------------------------------

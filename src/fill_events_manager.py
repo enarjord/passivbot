@@ -5087,10 +5087,16 @@ class FillEventsManager:
                 fetched_events = await self.fetcher.fetch(
                     start_ms, end_ms, detail_cache, on_batch=collect_batch
                 )
-        except RateLimitExceeded:
-            # Preserve bounded-range failures as known gaps so retry logic can
-            # revisit them.  We still re-raise to fail loudly on critical input.
-            if start_ms is not None and end_ms is not None:
+        except Exception:
+            # Preserve failed bounded fill traversals as unproven ranges so
+            # coverage retry can revisit them. PnL-only enrichment does not
+            # invalidate already-proven structural fill coverage. Re-raise so
+            # the caller still owns failure policy.
+            if (
+                degraded_pnl_aux_range is None
+                and start_ms is not None
+                and end_ms is not None
+            ):
                 self.cache.add_known_gap(
                     start_ms,
                     end_ms,
@@ -5682,6 +5688,9 @@ class FillEventsManager:
         await self.refresh(
             start_ms=int(start_ms),
             end_ms=None if end_ms is None else int(end_ms),
+            # A bounded historical repair does not prove the recent tail and
+            # must not advance the incremental refresh checkpoint.
+            mark_refreshed=end_ms is None,
         )
 
     def get_events(
