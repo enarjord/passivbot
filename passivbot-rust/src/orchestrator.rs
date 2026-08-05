@@ -3123,11 +3123,16 @@ mod core {
                 };
             }
             // Final dust guard (e.g. binary-search partial could still end up below effective min qty).
-            let exch = match symbols.get(o.symbol_idx).map(|s| &s.exchange) {
+            let sym = match symbols.get(o.symbol_idx) {
                 Some(v) => v,
                 None => continue,
             };
-            let min_qty = calc_min_entry_qty(o.price, exch);
+            let minimum_price = if should_use_market_execution(&o, global, &sym.order_book) {
+                executable_touch_for_order_side(&sym.order_book, o.qty)
+            } else {
+                o.price
+            };
+            let min_qty = calc_min_entry_qty(minimum_price, &sym.exchange);
             if min_qty.is_finite() && min_qty > QTY_EPS && o.qty.abs() + QTY_EPS < min_qty {
                 continue;
             }
@@ -6651,6 +6656,61 @@ mod core {
 
             assert_eq!(entries.len(), 1);
             assert!((entries[0].qty - 0.98).abs() < 1e-9);
+            assert!(entries[0].qty * symbols[0].order_book.ask / balance < total_wel);
+        }
+
+        #[test]
+        fn twel_gating_final_dust_guard_uses_promoted_market_long_ask() {
+            let balance = 100.0;
+            let total_wel = 1.001;
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 99.95,
+                ask: 100.05,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.001,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 100.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym];
+            let positions: Vec<GateEntriesPosition> = Vec::new();
+            let mut entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 2.0,
+                price: 99.95,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            let mut global = make_basic_global();
+            global.market_orders_allowed = true;
+            global.market_order_near_touch_threshold = 0.001;
+            let mut current_positions = Vec::new();
+            let mut scratch = Vec::new();
+            let mut keep = Vec::new();
+            let mut qty_by_order_idx = Vec::new();
+            let mut out = Vec::new();
+
+            gate_entries_by_twel_deterministic(
+                PositionSide::Long,
+                balance,
+                total_wel,
+                &global,
+                &positions,
+                &mut entries,
+                &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+
+            assert_eq!(entries.len(), 1);
+            assert!((entries[0].qty - 1.0).abs() < 1e-12);
             assert!(entries[0].qty * symbols[0].order_book.ask / balance < total_wel);
         }
 

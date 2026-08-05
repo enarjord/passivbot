@@ -127,7 +127,7 @@ def test_sanitize_diagnostic_text_preserves_ambiguous_credential_nouns_in_prose(
     for message in (
         "signature=TOPSECRET safe=ok",
         "token: TOPTOKEN safe=ok",
-        "secret/TOPVALUE safe=ok",
+        "secret=TOPVALUE safe=ok",
     ):
         sanitized = sanitize_diagnostic_text(message)
         assert "TOP" not in sanitized
@@ -187,6 +187,23 @@ def test_sanitize_diagnostic_text_redacts_credential_alias_cli_flags():
         assert secret not in sanitized
     assert sanitized.count("[redacted]") == 3
     assert "--safe-option=ok" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_prefixed_environment_credentials():
+    sanitized = sanitize_diagnostic_text(
+        "AWS_SECRET_ACCESS_KEY=FIRST AWS_SESSION_TOKEN=SECOND "
+        "EXCHANGE_API_KEY=THIRD planning_signature=visible"
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 3
+    assert "planning_signature=visible" in sanitized
+
+
+def test_sanitize_diagnostic_text_preserves_slash_delimited_symbols():
+    for symbol in ("TOKEN/USDT:USDT", "SECRET/USDC:USDC", "SIGNATURE/BTC:BTC"):
+        assert sanitize_diagnostic_text(symbol) == symbol
 
 
 def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():

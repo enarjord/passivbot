@@ -28,8 +28,16 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
     rf"(?i)(?<![A-Za-z0-9_-])({_DIAGNOSTIC_SENSITIVE_HEADER_NAME_PATTERN})"
     r"([\"'])(\s*[:=]\s*)([\"'])(?:\\.|(?!\4)[\s\S])*\4"
 )
+_DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN = (
+    r"(?:[a-z0-9]+[-_])+(?:"
+    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
+    r"access[-_]?(?:key(?:[-_]?id)?|secret|token|sign(?:ature)?|passphrase)|"
+    r"secret[-_]?access[-_]?key|session[-_]?token|client[-_]?secret|"
+    r"security[-_]?token|private[-_]?key)"
+)
 _DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN = (
-    r"(?:api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
+    rf"(?:{_DIAGNOSTIC_PREFIXED_SENSITIVE_VALUE_NAME_PATTERN}|"
+    r"api[-_]?(?:key(?:[-_]?id)?|secret(?:[-_]?key)?|signature)|"
     r"apikey|access[-_]?(?:key|token)|"
     r"access[-_]?(?:secret|sign(?:ature)?|passphrase)|"
     r"refreshToken|client[-_]?secret|secret[-_]?key|security[-_]?token|"
@@ -99,7 +107,8 @@ _DIAGNOSTIC_UPPERCASE_SENSITIVE_HEADER_RE = re.compile(
 )
 _DIAGNOSTIC_EXPLICIT_SENSITIVE_VALUE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_-])"
-    rf"({_DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN})"
+    rf"((?:{_DIAGNOSTIC_COMPOUND_SENSITIVE_VALUE_NAME_PATTERN})|"
+    r"(?:secret|token|signature)(?=[\"']?\s*[:=]))"
     r"([\"']?\s*[:=/]\s*)"
     r"(?:"
     r"(['\"])(?:\\.|(?!\3)[\s\S])*\3"
