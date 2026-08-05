@@ -2012,14 +2012,37 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return whether planning needs historical coverage and its earliest timestamp."""
-        if self._live_risk_uses_authoritative_pnl():
+        hsl_enabled = self._equity_hard_stop_enabled()
+        pnl_required = (
+            self._orchestrator_uses_realized_pnl()
+            if hsl_enabled
+            else self._live_risk_uses_authoritative_pnl()
+        )
+        if pnl_required:
             return True, pnl_start_ms
+        required_starts: list[Optional[int]] = []
+        hsl_required, hsl_start_ms = (
+            self._equity_hard_stop_required_fill_history_start_ms(
+                int(now_ms),
+                pnl_start_ms=pnl_start_ms,
+            )
+            if hsl_enabled
+            else (False, None)
+        )
+        if hsl_required:
+            required_starts.append(hsl_start_ms)
         cooldown_lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
             self._max_configured_entry_cooldown_minutes()
         )
-        if cooldown_lookback_minutes <= 0:
+        if cooldown_lookback_minutes > 0:
+            required_starts.append(
+                max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
+            )
+        if not required_starts:
             return False, None
-        return True, max(0, int(now_ms) - cooldown_lookback_minutes * 60_000)
+        if any(start is None for start in required_starts):
+            return True, None
+        return True, min(int(start) for start in required_starts if start is not None)
 
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
@@ -2222,8 +2245,8 @@ class Passivbot:
     _equity_hard_stop_coverage_allow_incomplete = (
         pb_hsl._equity_hard_stop_coverage_allow_incomplete
     )
-    _equity_hard_stop_coin_episode_start_covered = (
-        pb_hsl._equity_hard_stop_coin_episode_start_covered
+    _equity_hard_stop_required_fill_history_start_ms = (
+        pb_hsl._equity_hard_stop_required_fill_history_start_ms
     )
     _equity_hard_stop_coin_realized_pnl_peak_last = (
         pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
@@ -13160,9 +13183,15 @@ class Passivbot:
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             self._last_fill_refresh_degraded_pnl_count = len(degraded_pnl_events)
             pnls_safe = not pending_pnl_events and not degraded_pnl_events
-            if coverage_required:
+            post_coverage_required, post_age_limit = (
+                self._required_fill_history_start_ms(
+                    self.get_exchange_time(),
+                    pnl_start_ms=pnl_age_limit,
+                )
+            )
+            if post_coverage_required:
                 post_refresh_coverage_status = self._fill_history_coverage_status(
-                    start_ms=age_limit,
+                    start_ms=post_age_limit,
                     end_ms=self.get_exchange_time(),
                 )
                 coverage_ready_after = bool(
