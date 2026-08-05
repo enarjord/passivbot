@@ -31,7 +31,7 @@ _DIAGNOSTIC_SERIALIZED_SENSITIVE_HEADER_RE = re.compile(
 _DIAGNOSTIC_SENSITIVE_VALUE_NAME_PATTERN = (
     r"(?:api[-_]?(?:key|secret|signature)|apikey|accessToken|refreshToken|"
     r"clientSecret|privateKey|requestSignature|request[-_]?signature|"
-    r"broker[-_]?key|auth[-_]?(?:signature|token)|hmac[-_]?signature|"
+    r"broker[-_]?key|auth[-_]?(?:key|secret|signature|token)|hmac[-_]?signature|"
     r"exchange[-_]?signature|access[-_]?token|refresh[-_]?token|secret|token|"
     r"bearer|jwt|signature|password|passphrase|private[-_]?key)"
 )
@@ -85,7 +85,7 @@ _DIAGNOSTIC_STANDALONE_SECRET_RE = re.compile(
     r"AKIA[0-9A-Z]{16})\b"
 )
 _DIAGNOSTIC_URL_USERINFO_RE = re.compile(
-    r"(?i)\b(https?://)[^\s/?#]*:[^\s/?#]*@"
+    r"(?i)\b(https?://)[^\s/?#]*@"
 )
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")

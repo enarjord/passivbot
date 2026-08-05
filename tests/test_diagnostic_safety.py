@@ -69,6 +69,15 @@ def test_sanitize_diagnostic_text_redacts_userinfo_through_final_authority_separ
     assert "https://[redacted]@example.invalid/db" in sanitized
 
 
+def test_sanitize_diagnostic_text_redacts_colonless_userinfo():
+    sanitized = sanitize_diagnostic_text(
+        "connect https://TOPSECRET@example.invalid/db failed"
+    )
+
+    assert "TOPSECRET" not in sanitized
+    assert "https://[redacted]@example.invalid/db" in sanitized
+
+
 def test_sanitize_diagnostic_text_redacts_unterminated_private_key_block():
     sanitized = sanitize_diagnostic_text(
         "parser failed exchange_reason=invalid key material "
@@ -92,6 +101,16 @@ def test_sanitize_diagnostic_text_redacts_camel_case_credentials():
     assert "client-value" not in sanitized
     assert "request-value" not in sanitized
     assert "planning_signature=plan-hash" in sanitized
+
+
+def test_sanitize_diagnostic_text_redacts_auth_key_and_secret_variants():
+    sanitized = sanitize_diagnostic_text(
+        '{"authKey":"FIRST", "auth_key":"SECOND", "authSecret":"THIRD"}'
+    )
+
+    for secret in ("FIRST", "SECOND", "THIRD"):
+        assert secret not in sanitized
+    assert sanitized.count("[redacted]") == 3
 
 
 def test_sanitize_diagnostic_text_redacts_whitespace_separated_credentials():
