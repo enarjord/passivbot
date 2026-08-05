@@ -5501,7 +5501,14 @@ class FillEventsManager:
                     _format_ms(retry_start),
                     _format_ms(retry_end),
                 )
-                await self.refresh(start_ms=retry_start, end_ms=retry_end)
+                await self.refresh(
+                    start_ms=retry_start,
+                    end_ms=retry_end,
+                    # A bounded historical retry does not prove the recent
+                    # tail. Let the subsequent tail refresh advance the
+                    # incremental checkpoint only after it succeeds.
+                    mark_refreshed=False,
+                )
             if retried_ranges:
                 await self.refresh_latest(overlap=overlap)
                 latest_refreshed = True
