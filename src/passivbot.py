@@ -39,7 +39,7 @@ from candlestick_manager import (
     CANDLE_DTYPE,
     DEFAULT_NATIVE_SPARSE_GAP_TOLERANCE_MINUTES,
     OhlcvTerminalEmptyPage,
-    synthesize_1m_from_higher_tf,
+    fetch_candles_with_resolution_ladder,
 )
 from fill_events_manager import (
     FillEventCacheContractError,
@@ -14856,7 +14856,13 @@ class Passivbot:
                 reason_code=ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
             )
 
-            async def fetch_replay_candles(sym: str, *, timeframe: str = "1m"):
+            async def fetch_replay_candles(
+                sym: str,
+                *,
+                timeframe: str,
+                start_ts: int,
+                end_ts: int,
+            ):
                 async with replay_sem:
                     symbol_fetch_started_s = time.monotonic()
                     symbol_payload = {
@@ -14865,8 +14871,8 @@ class Passivbot:
                         "price_replay_symbols": len(price_replay_symbols),
                         "history_minutes": history_minutes,
                         "timeframe": str(timeframe),
-                        "start_ts": int(start_minute),
-                        "end_ts": int(end_minute),
+                        "start_ts": int(start_ts),
+                        "end_ts": int(end_ts),
                     }
                     _emit_hsl_history_progress(
                         "price_history_symbol_fetch_started",
@@ -14877,8 +14883,8 @@ class Passivbot:
                     try:
                         arr = await self.cm.get_candles(
                             sym,
-                            start_ts=start_minute,
-                            end_ts=end_minute,
+                            start_ts=start_ts,
+                            end_ts=end_ts,
                             strict=False,
                             timeframe=timeframe,
                         )
@@ -14900,7 +14906,7 @@ class Passivbot:
                             status="succeeded",
                             reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
                         )
-                        return sym, arr, None
+                        return arr
                     except Exception as exc:
                         _emit_hsl_history_progress(
                             "price_history_symbol_fetch_completed",
@@ -14920,76 +14926,64 @@ class Passivbot:
                             status="failed",
                             reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
                         )
-                        return sym, None, exc
+                        raise
                     finally:
                         if replay_fetch_delay_s > 0.0:
                             await self._sleep_unless_shutdown(
                                 replay_fetch_delay_s, stage="history_replay_candles"
                             )
 
-            for sym, arr, exc in await asyncio.gather(
-                *(fetch_replay_candles(sym) for sym in sorted(price_replay_symbols))
+            exchange_timeframes = getattr(
+                getattr(self, "cca", None), "timeframes", None
+            )
+            supported_timeframes = (
+                set(exchange_timeframes)
+                if isinstance(exchange_timeframes, dict) and exchange_timeframes
+                else None
+            )
+
+            async def fetch_replay_history(sym: str):
+                async def fetch_timeframe(
+                    *, timeframe: str, start_ts: int, end_ts: int
+                ):
+                    return await fetch_replay_candles(
+                        sym,
+                        timeframe=timeframe,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                    )
+
+                result = await fetch_candles_with_resolution_ladder(
+                    fetch_timeframe,
+                    start_ts=start_minute,
+                    end_ts=end_minute,
+                    supported_timeframes=supported_timeframes,
+                )
+                return sym, result
+
+            for sym, result in await asyncio.gather(
+                *(fetch_replay_history(sym) for sym in sorted(price_replay_symbols))
             ):
-                if exc is not None:
+                for timeframe, exc in result.failures.items():
                     logging.error(
-                        "error fetching candles for %s | error_type=%s",
+                        "error fetching %s candles for %s during equity history replay "
+                        "| error_type=%s",
+                        timeframe,
                         Passivbot._log_symbol(sym),
                         bounded_exception_type(exc),
                     )
-                    arr = np.empty((0,), dtype=CANDLE_DTYPE)
-                if arr is None:
-                    arr = np.empty((0,), dtype=CANDLE_DTYPE)
                 price_lookup[sym] = {
                     int(row["ts"]): float(row["c"])
-                    for row in arr
+                    for row in result.candles
                     if float(row["c"]) > 0.0
                 }
-            is_hyperliquid = str(getattr(self, "exchange", "")).lower() == "hyperliquid"
-            if is_hyperliquid:
-                lookback_minutes = (
-                    int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
-                )
-                tf_plan: list[tuple[str, int]] = []
-                if lookback_minutes > 5000:
-                    tf_plan.append(("5m", 5))
-                if lookback_minutes > 5000 * 5:
-                    tf_plan.append(("15m", 15))
-                for timeframe, tf_minutes in tf_plan:
-                    for sym, arr, exc in await asyncio.gather(
-                        *(
-                            fetch_replay_candles(sym, timeframe=timeframe)
-                            for sym in sorted(price_replay_symbols)
-                        )
-                    ):
-                        if exc is not None:
-                            logging.error(
-                                "error fetching %s candles for %s during equity history replay "
-                                "| error_type=%s",
-                                timeframe,
-                                Passivbot._log_symbol(sym),
-                                bounded_exception_type(exc),
-                            )
-                            continue
-                        if arr is None or arr.size == 0:
-                            continue
-                        synth = synthesize_1m_from_higher_tf(arr, tf_minutes)
-                        if synth.size == 0:
-                            continue
-                        added = 0
-                        lookup = price_lookup.setdefault(sym, {})
-                        for row in synth:
-                            ts = int(row["ts"])
-                            close = float(row["c"])
-                            if ts < start_minute or ts > end_minute:
-                                continue
-                            if ts in lookup:
-                                continue
-                            lookup[ts] = float(close)
-                            added += 1
-                        if added > 0:
-                            approximate_price_sources.setdefault(sym, {})[
-                                timeframe
-                            ] = added
+                approximate_counts = {
+                    timeframe: count
+                    for timeframe, count in result.source_counts.items()
+                    if timeframe != "1m" and count > 0
+                }
+                if approximate_counts:
+                    approximate_price_sources[sym] = approximate_counts
             candle_fetch_elapsed_s = max(0.0, time.monotonic() - candle_fetch_started_s)
             _emit_hsl_history_progress(
                 "price_history_fetch_completed",

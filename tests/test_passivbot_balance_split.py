@@ -2152,6 +2152,7 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     }
     bot._pnls_manager = None
     bot.inverse = False
+    bot.cca = SimpleNamespace(timeframes={"1m": "1m"})
     bot._candle_fetch_concurrency = lambda *, context="runtime": 2
     bot._get_fetch_delay_seconds = lambda: 0.0
     sink = ListEventSink()
@@ -2341,7 +2342,12 @@ async def test_balance_equity_history_redacts_failed_candle_fetch_diagnostics(mo
         if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED
         and event.status == "failed"
     ]
-    assert {event.data["timeframe"] for event in failed_events} == {"1m", "5m"}
+    assert {event.data["timeframe"] for event in failed_events} == {
+        "1m",
+        "5m",
+        "15m",
+        "1h",
+    }
     assert {event.data["error_type"] for event in failed_events} == {"RuntimeError"}
     assert all(
         event.data["stage"] == "price_history_symbol_fetch_completed"
@@ -3167,6 +3173,7 @@ async def test_balance_equity_history_skips_unsupported_closed_historical_symbol
     bot.positions = {}
     bot._pnls_manager = None
     bot.inverse = False
+    bot.cca = SimpleNamespace(timeframes={"1m": "1m"})
     bot._candle_fetch_concurrency = lambda *, context="runtime": 2
     bot._get_fetch_delay_seconds = lambda: 0.0
     bot.c_mults = {"BTC/USDT:USDT": 1.0}

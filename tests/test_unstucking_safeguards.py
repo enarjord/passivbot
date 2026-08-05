@@ -6514,11 +6514,11 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
 
 
 @pytest.mark.asyncio
-async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypatch):
+async def test_get_balance_equity_history_backfills_from_5m_on_any_exchange(monkeypatch):
     cfg = _dummy_config()
     cfg["live"]["pnls_max_lookback_days"] = 4.0
     bot = _make_dummy_bot(cfg)
-    bot.exchange = "hyperliquid"
+    bot.exchange = "gateio"
     bot._live_values["pnls_max_lookback_days"] = 4.0
     symbol = "BTC/USDT:USDT"
     bot.c_mults = {symbol: 1.0}
@@ -6551,7 +6551,7 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
                         ),
                     ]
                 )
-            if timeframe == "15m":
+            if timeframe in {"15m", "1h"}:
                 return _make_candles([])
             raise AssertionError(f"unexpected timeframe {timeframe}")
 
