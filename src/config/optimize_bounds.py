@@ -74,7 +74,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         },
         "risk": {
             "entry_cooldown_minutes": [0, 60, 0.1],
-            "n_positions": [7, 7],
+            "n_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
@@ -103,7 +103,7 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         },
         "risk": {
             "entry_cooldown_minutes": [0, 60, 0.1],
-            "n_positions": [5, 5],
+            "n_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_wallet_exposure_limit": [0, 0],
