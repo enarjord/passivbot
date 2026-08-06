@@ -1689,6 +1689,38 @@ def test_prepare_config_rejects_negative_coin_override_entry_cooldown_minutes():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_prepare_config_rejects_non_finite_entry_cooldown_minutes(bad_value):
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = bad_value
+
+    with pytest.raises(
+        ValueError,
+        match="bot.long.risk.entry_cooldown_minutes must be a finite number",
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_prepare_config_rejects_non_finite_coin_override_entry_cooldown_minutes(bad_value):
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": bad_value},
+                }
+            }
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="coin_overrides.HYPE.bot.long.risk.entry_cooldown_minutes must be a finite number",
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_rejects_positive_twel_with_zero_positions():
     source = get_template_config()
     risk = source["bot"]["long"]["risk"]
