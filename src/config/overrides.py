@@ -9,6 +9,8 @@ from utils import symbol_to_coin
 
 from .load import load_prepared_config
 from .log_output import log_config_message
+from .migrations.detect import detect_flavor
+from .schema import get_template_config
 from .shared_bot import (
     BOT_GROUP_FIELD_MAP,
     BOT_POSITION_SIDES,
@@ -275,6 +277,32 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
     return True
 
 
+def normalize_override_raw_snapshot(raw: dict | None) -> dict | None:
+    """Normalize a loaded override file's ``_raw`` to the prepared bot/live root.
+
+    Supported ``nested_current`` files are shaped as ``{\"config\": {...}}``. Preparation
+    unwraps that envelope, but ``_raw`` retains it. Pruning must use the same root as the
+    prepared allowed-diff paths or every file-loaded field is dropped.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    try:
+        flavor = detect_flavor(raw, get_template_config())
+    except Exception:
+        flavor = "unknown"
+    if flavor == "nested_current" and isinstance(raw.get("config"), dict):
+        return raw["config"]
+    # Heuristic fallback for partial nested wrappers that omit full current sections.
+    nested = raw.get("config")
+    if (
+        isinstance(nested, dict)
+        and "bot" not in raw
+        and ("bot" in nested or "live" in nested)
+    ):
+        return nested
+    return raw
+
+
 def prune_override_diff_to_explicit_raw(diff: dict, raw: dict | None) -> dict:
     """Keep only allowed override leaves that were explicitly present in raw config.
 
@@ -286,6 +314,7 @@ def prune_override_diff_to_explicit_raw(diff: dict, raw: dict | None) -> dict:
     """
     if not isinstance(diff, dict):
         return {}
+    raw = normalize_override_raw_snapshot(raw)
     if not isinstance(raw, dict):
         return deepcopy(diff)
 
@@ -306,11 +335,11 @@ def prune_override_diff_to_explicit_raw(diff: dict, raw: dict | None) -> dict:
 
 
 def inject_flat_shared_keys_into_coin_overrides(config: dict) -> None:
-    """Ensure coin override bot sides expose flat shared keys for live ``bp()`` lookup.
+    """Mirror grouped shared fields into flat keys on coin override bot sides.
 
-    Live calls ``parse_overrides`` after ``compile_runtime_config``, so file-loaded
-    grouped fields must be flattened here or ``bp(pside, risk_entry_cooldown_minutes)``
-    falls back to the global value.
+    Prefer not to call this on durable config that may receive later grouped-only
+    transforms; live ``bp()`` resolves grouped coin-override fields directly. Kept for
+    explicit runtime boundaries that need flat aliases without a full recompile.
     """
     coin_overrides = config.get("coin_overrides")
     if not isinstance(coin_overrides, dict):
@@ -460,7 +489,10 @@ def parse_overrides(
             coin,
             sort_dict_keys(parsed_overrides),
         )
-    inject_flat_shared_keys_into_coin_overrides(result)
+    # Do not inject flat shared aliases here. Live ``bp()`` resolves grouped
+    # coin-override fields, and early flat mirrors can stale-overwrite later
+    # group-only transforms on the next compile. Flat aliases are added by
+    # ``compile_runtime_config`` / ``apply_forager_internal_aliases`` when needed.
     record_transform(
         result,
         "parse_overrides",
