@@ -4,6 +4,7 @@ import pytest
 
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 from passivbot import Passivbot
+from utils import AmbiguousMarketIdentifier, UnknownMarketIdentifier
 
 
 def _make_mode_override_bot(auto_gs=True):
@@ -479,6 +480,37 @@ def test_refresh_approved_ignored_coin_lists_supports_migrated_global_all():
 
     assert bot.approved_coins["long"] == {"AAA/USDT:USDT", "BBB/USDT:USDT"}
     assert bot.approved_coins["short"] == {"AAA/USDT:USDT", "BBB/USDT:USDT"}
+
+
+@pytest.mark.parametrize(
+    "error_cls", [AmbiguousMarketIdentifier, UnknownMarketIdentifier]
+)
+def test_refresh_market_resolution_error_clears_stale_entry_eligibility(
+    error_cls, caplog
+):
+    bot = _make_eligibility_event_bot()
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"STALE/USDT:USDT"},
+        "short": {"STALE/USDT:USDT"},
+    }
+
+    def fail_closed(_coin, verbose=True):
+        raise error_cls("unresolvable test market")
+
+    bot.coin_to_symbol = fail_closed
+
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot.approved_coins == {"long": set(), "short": set()}
+    assert bot.approved_coins_minus_ignored_coins == {
+        "long": set(),
+        "short": set(),
+    }
+    assert any(
+        "action=clear_approved_eligibility" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def _make_eligibility_event_bot():

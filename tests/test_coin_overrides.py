@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+import passivbot
 from config_utils import parse_overrides
 from passivbot import Passivbot
 
@@ -22,7 +23,7 @@ def test_coin_override_forced_mode_manual(monkeypatch):
     }
 
     config = parse_overrides(deepcopy(base_config), verbose=False)
-    assert "DOGE" in config["coin_overrides"]
+    assert "DOGEUSDT" in config["coin_overrides"]
 
     bot = Passivbot.__new__(Passivbot)
     bot.config = config
@@ -65,3 +66,36 @@ def test_forced_mode_shorthand_expansion(monkeypatch):
     assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
     # Shorthand "gs" should expand to "graceful_stop"
     assert bot.get_forced_PB_mode("short", "ETH/USDT:USDT") == "graceful_stop"
+
+
+def test_bot_symbol_cache_does_not_reuse_lossy_canonical_alias(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "testexchange"
+    bot.quote = "USDT"
+    bot.coin_to_symbol_map = {"ABC": "ABC/USDT:USDT"}
+    calls = []
+
+    def exact_resolver(identifier, exchange, quote=None, verbose=True):
+        calls.append((identifier, exchange, quote))
+        return "1000ABC/USDT:USDT"
+
+    monkeypatch.setattr(passivbot, "coin_to_symbol", exact_resolver)
+    monkeypatch.setattr(passivbot, "symbol_to_coin", lambda *_args, **_kwargs: "ABC")
+
+    assert bot.coin_to_symbol("1000ABC/USDT:USDT") == "1000ABC/USDT:USDT"
+    assert calls == [("1000ABC/USDT:USDT", "testexchange", "USDT")]
+
+
+def test_bot_symbol_cache_revalidates_previously_cached_alias(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "testexchange"
+    bot.quote = "USDT"
+    bot.coin_to_symbol_map = {"ABC": "STALE/USDT:USDT"}
+
+    monkeypatch.setattr(
+        passivbot,
+        "coin_to_symbol",
+        lambda identifier, exchange, quote=None, verbose=True: "CURRENT/USDT:USDT",
+    )
+
+    assert bot.coin_to_symbol("ABC") == "CURRENT/USDT:USDT"

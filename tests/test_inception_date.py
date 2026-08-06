@@ -316,3 +316,76 @@ class TestInceptionDateTracking:
             g["start_ts"] == day1 and g["end_ts"] == day2 - ONE_MIN_MS and g["reason"] == "pre_inception"
             for g in gaps
         )
+
+    def test_exact_symbol_key_in_exchange_specific_cache_is_authoritative(self, tmp_cache_dir):
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "ETH/USDT:USDT"
+        authoritative_ts = 1672617600000
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({symbol: {"binanceusdm": authoritative_ts}}, f)
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
+
+    def test_native_market_id_key_in_exchange_specific_cache_is_authoritative(
+        self, tmp_cache_dir
+    ):
+        symbol = "1000ABC/USDT:USDT"
+        native_id = "1000ABCUSDT"
+        authoritative_ts = 1672617600000
+        exchange = type(
+            "FakeExchange",
+            (),
+            {
+                "id": "bitget",
+                "markets": {
+                    symbol: {
+                        "symbol": symbol,
+                        "id": native_id,
+                    }
+                },
+            },
+        )()
+        cm = CandlestickManager(
+            exchange=exchange, exchange_name="bitget", cache_dir=tmp_cache_dir
+        )
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({native_id: {"bitget": authoritative_ts}}, f)
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
+
+    def test_qualified_native_market_id_cache_key_is_authoritative(self, tmp_cache_dir):
+        symbol = "ABC/USDT:USDT"
+        native_id = "ABCUSDT"
+        authoritative_ts = 1672617600000
+        exchange = type(
+            "FakeExchange",
+            (),
+            {
+                "id": "bitget",
+                "markets": {
+                    symbol: {
+                        "symbol": symbol,
+                        "id": native_id,
+                    }
+                },
+            },
+        )()
+        cm = CandlestickManager(
+            exchange=exchange, exchange_name="bitget", cache_dir=tmp_cache_dir
+        )
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {f"bitget::{native_id}": {"bitget": authoritative_ts}},
+                f,
+            )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts

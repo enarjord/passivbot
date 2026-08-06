@@ -14,8 +14,13 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from backtest import _validate_hlcvs_valid_windows, build_backtest_payload
+from backtest import (
+    _apply_market_settings_override,
+    _validate_hlcvs_valid_windows,
+    build_backtest_payload,
+)
 from config_utils import get_template_config
+import utils
 
 
 def _base_config(candle_interval_minutes: int = 1) -> dict:
@@ -114,6 +119,57 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
 
     assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit"] == 0.0
     assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
+
+
+def test_market_settings_overrides_match_exact_and_alias_keys(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+    overrides = {
+        "global": {"BTCUSDT": {"c_mult": 2.0}},
+        "by_exchange": {"bitget": {"BTCUSDT": {"maker": 0.001}}},
+    }
+
+    result = _apply_market_settings_override(
+        "BTC",
+        "bitget",
+        {"exchange": "bitget", "c_mult": 1.0, "maker": 0.0002},
+        overrides,
+    )
+
+    assert result["c_mult"] == 2.0
+    assert result["maker"] == 0.001
+
+
+def test_market_settings_override_alias_matches_active_exact_key(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    result = _apply_market_settings_override(
+        "BTCUSDT",
+        "bitget",
+        {"exchange": "bitget", "c_mult": 1.0},
+        {"global": {"BTC": {"c_mult": 3.0}}, "by_exchange": {}},
+    )
+
+    assert result["c_mult"] == 3.0
 
 
 def test_build_backtest_payload_marks_normal_forced_coin_active():

@@ -2858,7 +2858,8 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
     )
     monkeypatch.setattr(hp, "_has_tradfi_provider_config", lambda: True)
 
-    async def fake_first_timestamps(_coins):
+    async def fake_first_timestamps(_coins, exchange=None):
+        assert exchange == "hyperliquid"
         return {}
 
     monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)
@@ -2951,7 +2952,8 @@ async def test_prepare_hlcvs_internal_masks_invalid_direct_fetch_rows(monkeypatc
     start_ts = month_start_ts(2026, 4)
     end_ts = start_ts + 2 * 60_000
 
-    async def fake_first_timestamps(coins):
+    async def fake_first_timestamps(coins, exchange=None):
+        assert exchange == "binance"
         return {"ETH": start_ts}
 
     monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)

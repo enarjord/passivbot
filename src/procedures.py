@@ -13,14 +13,18 @@ import re
 from collections import defaultdict
 from collections.abc import Sized
 from utils import (
+    UnknownMarketIdentifier,
     coin_to_symbol,
     symbol_to_coin,
     make_get_filepath,
     load_markets,
     get_file_mod_ms,
+    get_quote,
     date_to_ts,
     get_first_ohlcv_iteratively,
     load_ccxt_instance,
+    split_exchange_qualified_market_identifier,
+    to_ccxt_exchange_id,
     to_standard_exchange_name,
 )
 import sys
@@ -343,16 +347,22 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             # Monthly timeframe; data since 2018
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2018-01-01")), timeframe="1M")
 
-        elif exchange_name == "bitget":
+        elif exchange_name in {"bitget", "bitunix"}:
             first_candle = await get_first_ohlcv_iteratively(cc, symbol)
             return [first_candle] if first_candle else []
 
-        else:  # e.g., 'hyperliquid'
+        elif exchange_name == "hyperliquid":
             # Weekly timeframe; data since 2021
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2021-01-01")), timeframe="1w")
 
-    # Remove duplicates and sort the input coins for consistency
-    coins = sorted(set(symbol_to_coin(coin) for coin in coins))
+        else:
+            # Dynamic CCXT venues must not inherit another exchange's listing
+            # horizon. Ask for the first daily candle from the epoch instead.
+            return await cc.fetch_ohlcv(symbol, since=1, timeframe="1d", limit=1)
+
+    # Preserve exact market identifiers until each exchange-specific resolver
+    # sees them.  Eager canonicalization can collapse unrelated contracts.
+    coins = sorted({str(coin).strip() for coin in coins if str(coin).strip()})
 
     # Paths to the cache files
     cache_fpath = make_get_filepath("caches/first_ohlcv_timestamps_unified.json")
@@ -384,9 +394,12 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         except Exception as e:
             logging.warning("error reading %s: %s", cache_fpath_exchange_specific, e)
 
-    # If an exchange is specified, handle "binance" alias
-    if exchange == "binance":
-        exchange = "binanceusdm"
+    # Exchange-specific cache keys use canonical names, except for the legacy
+    # Binance key retained for compatibility with existing caches/readers.
+    if exchange is not None:
+        exchange = to_standard_exchange_name(exchange)
+        if exchange == "binance":
+            exchange = "binanceusdm"
 
     def _valid_first_timestamp(value: Any) -> bool:
         try:
@@ -397,7 +410,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
     # 1) If no exchange is specified and all coins have valid cached timestamps, just return ftss
     if exchange is None:
         if all(_valid_first_timestamp(ftss.get(coin)) for coin in coins):
-            return ftss
+            return {coin: ftss[coin] for coin in coins}
 
     # 2) If a specific exchange is requested:
     else:
@@ -428,12 +441,35 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         "bitget": "USDT",
         "hyperliquid": "USDC",
     }
+    if exchange is not None:
+        target_exchange = to_standard_exchange_name(exchange)
+        exchange_map = {
+            ex_name: quote
+            for ex_name, quote in exchange_map.items()
+            if to_standard_exchange_name(ex_name) == target_exchange
+        }
+        if not exchange_map:
+            exchange_map = {exchange: get_quote(exchange)}
 
     # Initialize ccxt clients for each exchange
     ccxt_clients = {}
     for ex_name in sorted(exchange_map):
         try:
-            ccxt_clients[ex_name] = load_ccxt_instance(ex_name)
+            if ex_name == "bitunix":
+                from exchanges.bitunix import BitunixClient, apply_bitunix_endpoint_override
+                from custom_endpoint_overrides import resolve_custom_endpoint_override
+
+                client_config = apply_bitunix_endpoint_override(
+                    {
+                        "enableRateLimit": True,
+                        "timeout": 60_000,
+                        "wsEnabled": False,
+                    },
+                    resolve_custom_endpoint_override(ex_name),
+                )
+                ccxt_clients[ex_name] = BitunixClient(client_config)
+            else:
+                ccxt_clients[ex_name] = load_ccxt_instance(to_ccxt_exchange_id(ex_name))
         except Exception as e:
             print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
             del exchange_map[ex_name]
@@ -473,9 +509,18 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             bitget_symbols = {}
             for coin in batch:
                 tasks[coin] = {}
+                qualified_exchange, _ = split_exchange_qualified_market_identifier(coin)
                 for ex_name, quote in exchange_map.items():
+                    if (
+                        qualified_exchange is not None
+                        and qualified_exchange != to_standard_exchange_name(ex_name)
+                    ):
+                        continue
                     # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
-                    symbol = coin_to_symbol(coin, ex_name)
+                    try:
+                        symbol = coin_to_symbol(coin, ex_name)
+                    except UnknownMarketIdentifier:
+                        continue
                     if not symbol:
                         continue
                     if ex_name == "bitget":
@@ -529,8 +574,23 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             # Process results for each coin in this batch
             for coin in batch:
                 exchange_data = batch_results.get(coin, {})
-                fts_for_this_coin = {ex: 0.0 for ex in exchange_map}  # default 0.0 for all
-                earliest_candidates = []
+                cached_exchange_data = ftss_exchange_specific.get(coin, {})
+                fts_for_this_coin = (
+                    dict(cached_exchange_data) if isinstance(cached_exchange_data, dict) else {}
+                )
+                for ex_name in exchange_map:
+                    fts_for_this_coin[ex_name] = 0.0
+                earliest_candidates = [
+                    value
+                    for value in fts_for_this_coin.values()
+                    if _valid_first_timestamp(value) and float(value) > 1262304000000.0
+                ]
+                if (
+                    exchange is not None
+                    and _valid_first_timestamp(ftss.get(coin))
+                    and float(ftss[coin]) > 1262304000000.0
+                ):
+                    earliest_candidates.append(ftss[coin])
 
                 for ex_name, arr in exchange_data.items():
                     if arr and len(arr) > 0:
@@ -566,7 +626,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             return {coin: ftss_exchange_specific.get(coin, {}).get(exchange, 0.0) for coin in coins}
 
         # Otherwise, return earliest cross-exchange timestamps
-        return ftss
+        return {coin: ftss.get(coin, 0.0) for coin in coins}
     finally:
         await asyncio.gather(
             *(ccxt_clients[e].close() for e in ccxt_clients if hasattr(ccxt_clients[e], "close"))

@@ -5,7 +5,8 @@ from typing import Any
 
 from config.access import require_config_value, require_live_value
 from config.shared_bot import require_grouped_bot_value
-from utils import symbol_to_coin
+from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
+
 
 POSITION_SIDES = ("long", "short")
 
@@ -30,7 +31,11 @@ def backtest_side_enabled(config: dict, pside: str) -> bool:
 
 
 def normalize_backtest_coin(coin: Any) -> str:
-    return symbol_to_coin(str(coin), verbose=False)
+    raw = str(coin).strip()
+    # Keep explicitly exchange-scoped identities and exact CCXT symbols
+    # lossless.  Other unqualified inputs retain the established canonical
+    # coin keys used by datasets, overrides, and Rust payloads.
+    return raw if looks_like_exact_market_identifier(raw) else heuristic_symbol_to_coin(raw)
 
 
 def _normalize_coin_list(coins: Any) -> list[str]:
