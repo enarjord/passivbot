@@ -1,5 +1,8 @@
 from copy import deepcopy
 
+import pytest
+
+from config import compile_runtime_config, prepare_config
 from config_utils import parse_overrides
 from passivbot import Passivbot
 
@@ -65,3 +68,46 @@ def test_forced_mode_shorthand_expansion(monkeypatch):
     assert bot.get_forced_PB_mode("long", "ETH/USDT:USDT") == "panic"
     # Shorthand "gs" should expand to "graceful_stop"
     assert bot.get_forced_PB_mode("short", "ETH/USDT:USDT") == "graceful_stop"
+
+
+def test_live_bp_uses_per_coin_entry_cooldown_override():
+    from config import get_template_config
+
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    source["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 50.0},
+                }
+            }
+        }
+    }
+
+    prepared = prepare_config(source, verbose=False, target="live", runtime="live")
+    compiled = compile_runtime_config(prepared, runtime="live", record_step=False)
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = compiled
+    bot.exchange = "binance"
+    bot.markets_dict = {"HYPE/USDT:USDT": {"active": True}}
+
+    def fake_coin_to_symbol(self, coin, verbose=True):
+        if coin in {"HYPE", "HYPEUSDT"}:
+            return "HYPE/USDT:USDT"
+        return ""
+
+    bot.coin_to_symbol = fake_coin_to_symbol.__get__(bot, Passivbot)
+    bot.init_coin_overrides()
+
+    symbol = "HYPE/USDT:USDT"
+    assert symbol in bot.coin_overrides
+    assert compiled["coin_overrides"]["HYPE"]["bot"]["long"][
+        "risk_entry_cooldown_minutes"
+    ] == pytest.approx(50.0)
+    assert bot.bp("long", "risk_entry_cooldown_minutes", symbol) == pytest.approx(50.0)
+    assert bot.bp("long", "risk_entry_cooldown_minutes") == pytest.approx(7.0)
+    assert bot.bp("short", "risk_entry_cooldown_minutes", symbol) == pytest.approx(
+        float(compiled["bot"]["short"]["risk_entry_cooldown_minutes"])
+    )

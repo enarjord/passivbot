@@ -125,7 +125,7 @@ from config.strategy import (
     get_active_strategy_side,
     normalize_strategy_kind,
 )
-from config.shared_bot import get_grouped_bot_value
+from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH, get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
@@ -4470,6 +4470,33 @@ class Passivbot:
                     logging.debug("Using override for %s: %s", symbol, ".".join(path))
                     self._override_hits_logged.add(log_key)
                 return d
+            # Shared bot fields may exist only under grouped paths on coin
+            # overrides (e.g. risk.entry_cooldown_minutes). Resolve those when
+            # callers look up the flat runtime key after parse_overrides.
+            if (
+                len(path) == 3
+                and path[0] == "bot"
+                and path[2] in FLAT_BOT_KEY_TO_GROUP_PATH
+            ):
+                override_bot = self.coin_overrides[symbol].get("bot")
+                side = (
+                    override_bot.get(path[1])
+                    if isinstance(override_bot, dict)
+                    else None
+                )
+                if isinstance(side, dict):
+                    sentinel = object()
+                    grouped = get_grouped_bot_value(side, path[2], default=sentinel)
+                    if grouped is not sentinel:
+                        log_key = (symbol, ".".join(path))
+                        if not hasattr(self, "_override_hits_logged"):
+                            self._override_hits_logged = set()
+                        if log_key not in self._override_hits_logged:
+                            logging.debug(
+                                "Using override for %s: %s", symbol, ".".join(path)
+                            )
+                            self._override_hits_logged.add(log_key)
+                        return grouped
 
         # fallback to global config
         d = self.config
@@ -4477,6 +4504,20 @@ class Passivbot:
             if isinstance(d, dict) and p in d:
                 d = d[p]
             else:
+                # Global shared fields may also be grouped-only before compile inject.
+                if (
+                    len(path) == 3
+                    and path[0] == "bot"
+                    and path[2] in FLAT_BOT_KEY_TO_GROUP_PATH
+                ):
+                    bot_side = self.config.get("bot", {}).get(path[1], {})
+                    if isinstance(bot_side, dict):
+                        sentinel = object()
+                        grouped = get_grouped_bot_value(
+                            bot_side, path[2], default=sentinel
+                        )
+                        if grouped is not sentinel:
+                            return grouped
                 raise KeyError(
                     f"Key path {'.'.join(path)} not found in config or coin overrides."
                 )

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Allow per-coin `bot.<side>.risk.entry_cooldown_minutes` overrides via `coin_overrides`, so
+  single-coin optimized cooldowns can be preserved when running a multi-coin global config.
+  File-based overrides keep only fields present in the override file (no template-hydrated
+  fabrications), support nested `{"config": ...}` override files, resolve grouped coin-override
+  fields in live lookup without early flat aliases, and reject non-finite cooldown values.
 - Stop inferring missing fill history from long periods without executions. Fill lookback
   coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
   fetches create unproven ranges, which remain retryable under the live execution loop's backoff

@@ -128,6 +128,24 @@ def inject_flattened_shared_bot_side(bot_side: dict | None) -> None:
         bot_side.setdefault(flat_key, deepcopy(value))
 
 
+def discard_shared_flat_aliases_when_grouped_present(bot_side: dict | None) -> None:
+    """Drop shared flat aliases when the canonical grouped field is already set.
+
+    ``inject_flattened_shared_bot_side`` mirrors groups into flat keys for runtime
+    consumers. Later transforms often update only the grouped form. The next
+    ``canonicalize_shared_bot_side`` otherwise prefers the stale flat alias and
+    overwrites the newer grouped value. When both are present, keep the group.
+    """
+    if not isinstance(bot_side, dict):
+        return
+    for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
+        if flat_key not in bot_side:
+            continue
+        group = bot_side.get(group_name)
+        if isinstance(group, dict) and local_key in group:
+            bot_side.pop(flat_key, None)
+
+
 def canonical_shared_bot_path_for_flat_key(pside: str, flat_key: str) -> tuple[str, ...] | None:
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is None:

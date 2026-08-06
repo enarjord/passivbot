@@ -9,7 +9,15 @@ from utils import symbol_to_coin
 
 from .load import load_prepared_config
 from .log_output import log_config_message
-from .shared_bot import BOT_GROUP_FIELD_MAP
+from .migrations.detect import detect_flavor
+from .schema import get_template_config
+from .shared_bot import (
+    BOT_GROUP_FIELD_MAP,
+    BOT_POSITION_SIDES,
+    BOT_SHARED_GROUPS,
+    FLAT_BOT_KEY_TO_GROUP_PATH,
+    inject_flattened_shared_bot_side,
+)
 from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
 from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
@@ -71,6 +79,7 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "unstuck_loss_allowance_pct": True,
     "unstuck_threshold": True,
     "wallet_exposure_limit": True,
+    "risk_entry_cooldown_minutes": True,
     "risk_twel_entry_gate_enabled": False,
     "risk_wel_enforcer_enabled": True,
     "risk_wel_enforcer_threshold": True,
@@ -205,6 +214,159 @@ def nested_update(base_dict, update_dict):
     return base_dict
 
 
+def _raw_bot_side_has_shared_field(raw_side: dict | None, flat_key: str) -> bool:
+    """True when raw bot side explicitly set a shared field (flat or grouped)."""
+    if not isinstance(raw_side, dict):
+        return False
+    if flat_key in raw_side:
+        return True
+    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if group_path is None:
+        return False
+    group_name, local_key = group_path
+    group = raw_side.get(group_name)
+    return isinstance(group, dict) and local_key in group
+
+
+def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
+    """Return True when an allowed override path was explicitly present in raw config.
+
+    Shared bot fields may appear as either flat keys (``risk_entry_cooldown_minutes``)
+    or grouped keys (``risk.entry_cooldown_minutes``); both count as explicit.
+    """
+    if not path:
+        return isinstance(raw, dict)
+    if not isinstance(raw, dict):
+        return False
+
+    # bot.<pside>.<flat_shared_key>
+    if (
+        len(path) == 3
+        and path[0] == "bot"
+        and path[1] in BOT_POSITION_SIDES
+        and path[2] in FLAT_BOT_KEY_TO_GROUP_PATH
+    ):
+        bot = raw.get("bot")
+        side = bot.get(path[1]) if isinstance(bot, dict) else None
+        return _raw_bot_side_has_shared_field(side, path[2])
+
+    # bot.<pside>.<group>.<local_key>
+    if (
+        len(path) == 4
+        and path[0] == "bot"
+        and path[1] in BOT_POSITION_SIDES
+        and path[2] in BOT_SHARED_GROUPS
+    ):
+        bot = raw.get("bot")
+        side = bot.get(path[1]) if isinstance(bot, dict) else None
+        if not isinstance(side, dict):
+            return False
+        group_name, local_key = path[2], path[3]
+        field_map = BOT_GROUP_FIELD_MAP.get(group_name, {})
+        flat_key = field_map.get(local_key)
+        if flat_key is not None:
+            return _raw_bot_side_has_shared_field(side, flat_key)
+        group = side.get(group_name)
+        return isinstance(group, dict) and local_key in group
+
+    current: object = raw
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def normalize_override_raw_snapshot(raw: dict | None) -> dict | None:
+    """Normalize a loaded override file's ``_raw`` to the prepared bot/live root.
+
+    Supported ``nested_current`` files are shaped as ``{\"config\": {...}}``. Preparation
+    unwraps that envelope, but ``_raw`` retains it. Pruning must use the same root as the
+    prepared allowed-diff paths or every file-loaded field is dropped.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    try:
+        flavor = detect_flavor(raw, get_template_config())
+    except Exception:
+        flavor = "unknown"
+    if flavor == "nested_current" and isinstance(raw.get("config"), dict):
+        return raw["config"]
+    # Heuristic fallback for partial nested wrappers that omit full current sections.
+    nested = raw.get("config")
+    if (
+        isinstance(nested, dict)
+        and "bot" not in raw
+        and ("bot" in nested or "live" in nested)
+    ):
+        return nested
+    return raw
+
+
+def prune_override_diff_to_explicit_raw(diff: dict, raw: dict | None) -> dict:
+    """Keep only allowed override leaves that were explicitly present in raw config.
+
+    File-based overrides are loaded via ``load_prepared_config`` / ``load_config``, which
+    hydrate missing fields from the repository template. Diffing the hydrated result against
+    the live base would otherwise fabricate per-coin overrides for every allowlisted field
+    whose template default differs from the global config. Restricting to ``_raw`` keeps only
+    fields the operator actually set in the override file.
+    """
+    if not isinstance(diff, dict):
+        return {}
+    raw = normalize_override_raw_snapshot(raw)
+    if not isinstance(raw, dict):
+        return deepcopy(diff)
+
+    def _prune(node: dict, node_path: tuple[str, ...]) -> dict:
+        out: dict = {}
+        for key, value in node.items():
+            child_path = node_path + (key,)
+            if isinstance(value, dict):
+                nested = _prune(value, child_path)
+                if nested:
+                    out[key] = nested
+                continue
+            if _raw_has_allowed_path(raw, child_path):
+                out[key] = deepcopy(value)
+        return out
+
+    return _prune(diff, ())
+
+
+def inject_flat_shared_keys_into_coin_overrides(config: dict) -> None:
+    """Mirror grouped shared fields into flat keys on coin override bot sides.
+
+    Prefer not to call this on durable config that may receive later grouped-only
+    transforms; live ``bp()`` resolves grouped coin-override fields directly. Kept for
+    explicit runtime boundaries that need flat aliases without a full recompile.
+    """
+    coin_overrides = config.get("coin_overrides")
+    if not isinstance(coin_overrides, dict):
+        return
+    for override in coin_overrides.values():
+        if not isinstance(override, dict):
+            continue
+        override_bot = override.get("bot")
+        if not isinstance(override_bot, dict):
+            continue
+        for pside in BOT_POSITION_SIDES:
+            side = override_bot.get(pside)
+            if isinstance(side, dict):
+                inject_flattened_shared_bot_side(side)
+
+
+def _allowed_diff_from_loaded(base_config: dict, loaded: dict) -> dict:
+    """Compute allowed override diffs, excluding hydrated template defaults for file loads."""
+    diff = apply_allowed_modifications(
+        base_config, loaded, get_allowed_modifications(), return_full=False
+    )
+    raw = loaded.get("_raw")
+    if isinstance(raw, dict):
+        diff = prune_override_diff_to_explicit_raw(diff, raw)
+    return diff
+
+
 def load_override_config(
     config,
     coin,
@@ -311,9 +473,7 @@ def parse_overrides(
         loaded = override_loader(result, coin)
         if loaded:
             _reject_flat_strategy_coin_overrides(loaded, coin=coin)
-            parsed_overrides = apply_allowed_modifications(
-                result, loaded, get_allowed_modifications(), return_full=False
-            )
+            parsed_overrides = _allowed_diff_from_loaded(result, loaded)
         _reject_flat_strategy_coin_overrides(overrides, coin=coin)
         nested_update(
             parsed_overrides,
@@ -329,6 +489,10 @@ def parse_overrides(
             coin,
             sort_dict_keys(parsed_overrides),
         )
+    # Do not inject flat shared aliases here. Live ``bp()`` resolves grouped
+    # coin-override fields, and early flat mirrors can stale-overwrite later
+    # group-only transforms on the next compile. Flat aliases are added by
+    # ``compile_runtime_config`` / ``apply_forager_internal_aliases`` when needed.
     record_transform(
         result,
         "parse_overrides",

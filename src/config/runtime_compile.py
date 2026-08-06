@@ -2,7 +2,11 @@ from copy import deepcopy
 
 from .bot import apply_forager_internal_aliases
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
-from .shared_bot import BOT_POSITION_SIDES, canonicalize_shared_bot_side
+from .shared_bot import (
+    BOT_POSITION_SIDES,
+    canonicalize_shared_bot_side,
+    discard_shared_flat_aliases_when_grouped_present,
+)
 from .strategy import prune_inactive_strategy_subtrees, sync_canonical_strategy_config
 from .transform_log import record_transform
 
@@ -23,8 +27,12 @@ def compile_runtime_config(config: dict, runtime: str = "generic", *, record_ste
         if not isinstance(override_bot, dict):
             continue
         for pside in BOT_POSITION_SIDES:
+            side = override_bot.get(pside)
+            # Prefer grouped values over inject-created flat mirrors so later
+            # group-only updates (suite/CLI) are not overwritten by stale aliases.
+            discard_shared_flat_aliases_when_grouped_present(side)
             canonicalize_shared_bot_side(
-                override_bot.get(pside),
+                side,
                 path_prefix=("coin_overrides", pside),
                 seed_missing_groups=False,
             )

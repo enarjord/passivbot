@@ -8,12 +8,15 @@ resolved, and shows examples for both inline and file-based overrides.
 
 Allowed fields are intentionally limited:
 
-- **Bot params** (per side): wallet exposure limits, unstuck settings, selected risk knobs, and
-  nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
-  allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
+- **Bot params** (per side): wallet exposure limits, unstuck settings, selected risk knobs
+  (including `risk.entry_cooldown_minutes` / `risk_entry_cooldown_minutes`, WEL enforcer and
+  WE excess allowance), and nested active strategy parameters under
+  `bot.<side>.strategy.<strategy_kind>.*` (see the allowlist in
+  `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
 
-Not overrideable: approved/ignored coins, exchange settings, arbitrary new keys—anything outside the
+Not overrideable: approved/ignored coins, exchange settings, portfolio-global risk knobs such as
+`n_positions` and TWEL enforcer/entry-gate fields, and arbitrary new keys—anything outside the
 allowlist is ignored. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected;
 use the nested v8 strategy path instead.
 
@@ -52,6 +55,9 @@ base values are used.
           },
           "unstuck": {
             "loss_allowance_pct": 0.005
+          },
+          "risk": {
+            "entry_cooldown_minutes": 50.0
           },
           "wallet_exposure_limit": 0.18
         },
@@ -136,6 +142,9 @@ Main config:
 - A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
   percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
   it does not create a separate per-coin realized-PnL tracker.
+- A per-coin `risk.entry_cooldown_minutes` overrides only that coin+side's entry ladder cooldown
+  (minutes after the last position-increasing fill). Use this when a single-coin optimized config
+  is merged into a multi-coin global config so live/backtest match the optimized cooldown.
 
 ## Common pitfalls
 
