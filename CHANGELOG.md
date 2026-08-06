@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Refresh hardcoded schema defaults and the mirrored example config from the latest
+  long-only trailing-martingale canon candidate: update `bot.long` parameters,
+  `optimize.bounds`, and `live.approved_coins` (replace CRO with TON; reorder coin
+  list). Backtest suite scenarios and unrelated defaults are unchanged.
+
 - Stop inferring missing fill history from long periods without executions. Fill lookback
   coverage is now proven by successful exchange-endpoint traversal; only actual failed bounded
   fetches create unproven ranges, which remain retryable under the live execution loop's backoff

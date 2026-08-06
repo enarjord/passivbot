@@ -46,7 +46,7 @@ passivbot live configs/live/my_config.json
 The default profile mirrored by `configs/examples/default_trailing_martingale_long.json` is:
 
 - trailing martingale style configuration
-- long enabled with `bot.long.risk.n_positions = 5`
+- long enabled with `bot.long.risk.n_positions = 7`
 - short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
 - `bot.long.risk.total_wallet_exposure_limit = 1.5`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`
