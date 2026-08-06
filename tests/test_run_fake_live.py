@@ -997,7 +997,9 @@ async def test_hsl_replay_scenarios_run_end_to_end(
         )
     if scenario_rel.endswith("hsl_long_terminal_no_restart.hjson"):
         cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 0.02
+        cfg["bot"]["long"]["hsl_restart_after_red_policy"] = "threshold"
         cfg["bot"]["long"].setdefault("hsl", {})["no_restart_drawdown_threshold"] = 0.02
+        cfg["bot"]["long"].setdefault("hsl", {})["restart_after_red_policy"] = "threshold"
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0
         cfg["bot"]["long"]["total_wallet_exposure_limit"] = 2.5
         cfg["bot"]["long"].setdefault("risk", {})["total_wallet_exposure_limit"] = 2.5
