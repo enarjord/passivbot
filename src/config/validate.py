@@ -96,6 +96,21 @@ def validate_config(
                 override_side = override_bot.get(pside)
                 if not isinstance(override_side, dict):
                     continue
+                if "risk_entry_cooldown_minutes" in override_side or (
+                    isinstance(override_side.get("risk"), dict)
+                    and "entry_cooldown_minutes" in override_side["risk"]
+                ):
+                    entry_cooldown_minutes = float(
+                        get_grouped_bot_value(
+                            override_side, "risk_entry_cooldown_minutes", 0.0
+                        )
+                        or 0.0
+                    )
+                    if entry_cooldown_minutes < 0.0:
+                        raise ValueError(
+                            f"coin_overrides.{coin}.bot.{pside}.risk."
+                            "entry_cooldown_minutes must be >= 0.0"
+                        )
                 if "risk_we_excess_allowance_mode" in override_side:
                     normalize_we_excess_allowance_mode(
                         override_side.get("risk_we_excess_allowance_mode"),

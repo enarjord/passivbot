@@ -22,6 +22,11 @@ from config_utils import format_config, get_template_config
                 "bot": {"long": {"unstuck": {"loss_allowance_pct": 0.005}}},
             },
         },
+        {
+            "HYPEUSDT": {
+                "bot": {"long": {"risk": {"entry_cooldown_minutes": 50.0}}},
+            },
+        },
     ],
 )
 def test_coin_overrides_not_pruned(overrides):

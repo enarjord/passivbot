@@ -71,6 +71,7 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "unstuck_loss_allowance_pct": True,
     "unstuck_threshold": True,
     "wallet_exposure_limit": True,
+    "risk_entry_cooldown_minutes": True,
     "risk_twel_entry_gate_enabled": False,
     "risk_wel_enforcer_enabled": True,
     "risk_wel_enforcer_threshold": True,

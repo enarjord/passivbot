@@ -1644,6 +1644,51 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_keeps_coin_override_entry_cooldown_minutes():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    source["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 50.0},
+                }
+            }
+        }
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(7.0)
+    assert prepared["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
+        "entry_cooldown_minutes"
+    ] == pytest.approx(50.0)
+
+    compiled = compile_runtime_config(prepared, runtime="live", record_step=False)
+    assert compiled["coin_overrides"]["HYPE"]["bot"]["long"][
+        "risk_entry_cooldown_minutes"
+    ] == pytest.approx(50.0)
+
+
+def test_prepare_config_rejects_negative_coin_override_entry_cooldown_minutes():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": -1.0},
+                }
+            }
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="coin_overrides.HYPE.bot.long.risk.entry_cooldown_minutes",
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_rejects_positive_twel_with_zero_positions():
     source = get_template_config()
     risk = source["bot"]["long"]["risk"]

@@ -216,6 +216,28 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
 
 
+def test_prep_backtest_args_applies_per_coin_entry_cooldown_override():
+    config = _multi_coin_config()
+    config["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    config["bot"]["short"]["risk"]["entry_cooldown_minutes"] = 7.0
+    config["coin_overrides"] = {
+        "ETH/USDT:USDT": {
+            "bot": {
+                "long": {"risk": {"entry_cooldown_minutes": 50.0}},
+            }
+        }
+    }
+    mss = _multi_coin_mss()
+
+    bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
+
+    assert len(bot_params_list) == 2
+    btc_params, eth_params = bot_params_list
+    assert btc_params["long"]["risk_entry_cooldown_minutes"] == pytest.approx(7.0)
+    assert eth_params["long"]["risk_entry_cooldown_minutes"] == pytest.approx(50.0)
+    assert eth_params["short"]["risk_entry_cooldown_minutes"] == pytest.approx(7.0)
+
+
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
     config = _base_config()
     config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0
