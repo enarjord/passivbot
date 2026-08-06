@@ -800,57 +800,85 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-def _build_coin_symbol_maps(markets, quote):
-    """
-    Build coin_to_symbol_map (as dict of lists) and symbol_to_coin_map from markets data.
-    This function is pure and performs no disk I/O.
-    """
+def _is_symbol_map_market(symbol: str, market: dict, quote: str) -> bool:
+    return (
+        bool(market.get("swap"))
+        and market.get("linear") is not False
+        and symbol.endswith(f":{quote}")
+    )
 
-    def _namespaced_aliases(base: str, market: dict) -> set[str]:
-        aliases = set()
-        if not isinstance(base, str) or not base:
-            return aliases
-        is_namespaced_hip3 = bool((market.get("info") or {}).get("hip3")) or base.startswith(
-            ("XYZ-", "xyz:")
-        )
-        if not is_namespaced_hip3:
-            return aliases
-        if ":" in base:
-            prefix, ticker = base.split(":", 1)
-            if prefix and ticker:
-                aliases.add(ticker)
-                aliases.add(f"{prefix.upper()}-{ticker}")
-        elif "-" in base:
-            prefix, ticker = base.split("-", 1)
-            if prefix and ticker:
-                aliases.add(ticker)
-                aliases.add(f"{prefix.lower()}:{ticker}")
+
+def _symbol_map_bases(market: dict) -> list[str]:
+    return [base for key in ("baseName", "base") if (base := market.get(key))]
+
+
+def _symbol_map_namespaced_aliases(base: str, market: dict) -> set[str]:
+    aliases = set()
+    if not isinstance(base, str) or not base:
         return aliases
+    is_namespaced_hip3 = bool((market.get("info") or {}).get("hip3")) or base.startswith(
+        ("XYZ-", "xyz:")
+    )
+    if not is_namespaced_hip3:
+        return aliases
+    if ":" in base:
+        prefix, ticker = base.split(":", 1)
+        if prefix and ticker:
+            aliases.add(ticker)
+            aliases.add(f"{prefix.upper()}-{ticker}")
+    elif "-" in base:
+        prefix, ticker = base.split("-", 1)
+        if prefix and ticker:
+            aliases.add(ticker)
+            aliases.add(f"{prefix.lower()}:{ticker}")
+    return aliases
 
+
+def _collect_symbol_map_markets(markets: dict, quote: str) -> tuple[dict, dict]:
+    eligible_markets = {}
+    available_bases = defaultdict(set)
+    for symbol, market in markets.items():
+        try:
+            if not _is_symbol_map_market(symbol, market, quote):
+                continue
+            eligible_markets[symbol] = market
+            for base in _symbol_map_bases(market):
+                available_bases[base.replace("k", "")].add(symbol)
+        except Exception:
+            continue
+    return eligible_markets, available_bases
+
+
+def _symbol_map_coin_and_variants(
+    symbol: str, market: dict, available_bases: dict
+) -> tuple[str, set[str]]:
+    coin = ""
+    variants = set()
+    for base in _symbol_map_bases(market):
+        variants.add(base)
+        raw_cleaned = base.replace("k", "")
+        variants.add(raw_cleaned)
+        cleaned = remove_powers_of_ten(raw_cleaned)
+        preserve_multiplier = cleaned != raw_cleaned and any(
+            other_symbol != symbol for other_symbol in available_bases.get(cleaned, set())
+        )
+        if not preserve_multiplier:
+            variants.add(remove_powers_of_ten(base))
+            variants.add(cleaned)
+        if not coin:
+            coin = raw_cleaned if preserve_multiplier else cleaned
+        variants.update(_symbol_map_namespaced_aliases(base, market))
+    return coin, variants
+
+
+def _build_coin_symbol_maps(markets, quote):
+    """Build coin-to-symbol and symbol-to-coin maps without disk I/O."""
+    eligible_markets, available_bases = _collect_symbol_map_markets(markets, quote)
     coin_to_symbol_map = defaultdict(set)
     symbol_to_coin_map = {}
-    for k, v in markets.items():
+    for k, v in eligible_markets.items():
         try:
-            # Only include swap markets with the right quote.
-            if not v.get("swap"):
-                continue
-            # If "linear" is explicitly False, skip; otherwise treat missing as acceptable.
-            if v.get("linear") is False:
-                continue
-            if not k.endswith(f":{quote}"):
-                continue
-            coin = ""
-            variants = set()
-            for k0 in ["baseName", "base"]:
-                if base := v.get(k0):
-                    variants.add(base)
-                    variants.add(base.replace("k", ""))
-                    variants.add(remove_powers_of_ten(base))
-                    cleaned = remove_powers_of_ten(base.replace("k", ""))
-                    variants.add(cleaned)
-                    if not coin:
-                        coin = cleaned
-                    variants.update(_namespaced_aliases(base, v))
+            coin, variants = _symbol_map_coin_and_variants(k, v, available_bases)
             symbol_to_coin_map[k] = coin
             for variant in variants:
                 existing = symbol_to_coin_map.get(variant)
@@ -865,8 +893,19 @@ def _build_coin_symbol_maps(markets, quote):
             continue
 
     # Convert sets to lists for JSON serialisation / on-disk storage
-    coin_to_symbol_map = {k: list(v) for k, v in coin_to_symbol_map.items()}
+    coin_to_symbol_map = {k: sorted(v) for k, v in coin_to_symbol_map.items()}
     return coin_to_symbol_map, symbol_to_coin_map
+
+
+def _merge_symbol_to_coin_maps(existing: dict, discovered: dict) -> dict:
+    """Merge symbol maps without downgrading a multiplier-specific canonical name."""
+    merged = dict(existing)
+    for symbol, coin in discovered.items():
+        previous = merged.get(symbol)
+        if previous and previous != coin and remove_powers_of_ten(previous) == coin:
+            continue
+        merged[symbol] = coin
+    return merged
 
 
 def _write_coin_symbol_maps(
@@ -962,8 +1001,11 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                 # Build fresh maps from provided markets (pure logic)
                 coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
 
-                # Merge: prefer new discovered mappings while retaining others
-                symbol_to_coin_map.update(new_symbol_to_coin_map)
+                # Preserve a more specific multiplier-prefixed name discovered on
+                # another exchange, regardless of market-cache refresh order.
+                symbol_to_coin_map = _merge_symbol_to_coin_maps(
+                    symbol_to_coin_map, new_symbol_to_coin_map
+                )
 
                 # Write symbol_to_coin_map atomically while still holding lock
                 if verbose:

@@ -242,6 +242,152 @@ def test_coin_to_symbol_multiple_candidates(tmp_path, monkeypatch, caplog):
     assert any("Multiple candidates" in rec.message for rec in caplog.records)
 
 
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_coin_symbol_maps_preserve_multiplier_when_unprefixed_market_exists(reverse_order):
+    market_rows = [
+        (
+            "1000CAT/USDT:USDT",
+            {
+                "id": "1000CATUSDT",
+                "swap": True,
+                "linear": True,
+                "base": "1000CAT",
+            },
+        ),
+        (
+            "CAT/USDT:USDT",
+            {
+                "id": "CATUSDT",
+                "swap": True,
+                "linear": True,
+                "base": "CAT",
+            },
+        ),
+    ]
+    if reverse_order:
+        market_rows.reverse()
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(
+        dict(market_rows), "USDT"
+    )
+
+    assert coin_to_symbol_map["1000CAT"] == ["1000CAT/USDT:USDT"]
+    assert coin_to_symbol_map["CAT"] == ["CAT/USDT:USDT"]
+    assert symbol_to_coin_map["1000CATUSDT"] == "1000CAT"
+    assert symbol_to_coin_map["CATUSDT"] == "CAT"
+
+
+def test_coin_symbol_maps_still_shorten_single_multiplier_market():
+    markets = {
+        "1000SHIB/USDT:USDT": {
+            "id": "1000SHIBUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "1000SHIB",
+        }
+    }
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(markets, "USDT")
+
+    assert coin_to_symbol_map["SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert coin_to_symbol_map["1000SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert symbol_to_coin_map["1000SHIBUSDT"] == "SHIB"
+
+
+def test_coin_symbol_maps_do_not_treat_same_market_base_name_as_collision():
+    markets = {
+        "1000SHIB/USDT:USDT": {
+            "id": "1000SHIBUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "1000SHIB",
+            "baseName": "SHIB",
+        }
+    }
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(markets, "USDT")
+
+    assert coin_to_symbol_map["SHIB"] == ["1000SHIB/USDT:USDT"]
+    assert symbol_to_coin_map["1000SHIBUSDT"] == "SHIB"
+
+
+def test_coin_to_symbol_resolves_exact_market_symbols_after_normalization(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    os.makedirs(os.path.join("caches", "binance"), exist_ok=True)
+    json.dump(
+        {
+            "CAT": ["CAT/USDT:USDT"],
+            "1000CAT": ["1000CAT/USDT:USDT"],
+        },
+        open(os.path.join("caches", "binance", "coin_to_symbol_map.json"), "w"),
+    )
+    json.dump(
+        {
+            "CAT": "CAT",
+            "1000CAT": "1000CAT",
+            "CATUSDT": "CAT",
+            "1000CATUSDT": "1000CAT",
+            "CAT/USDT:USDT": "CAT",
+            "1000CAT/USDT:USDT": "1000CAT",
+        },
+        open(os.path.join("caches", "symbol_to_coin_map.json"), "w"),
+    )
+
+    assert utils.coin_to_symbol("CAT", "binance") == "CAT/USDT:USDT"
+    assert utils.coin_to_symbol("1000CAT", "binance") == "1000CAT/USDT:USDT"
+    assert utils.coin_to_symbol("CATUSDT", "binance") == "CAT/USDT:USDT"
+    assert utils.coin_to_symbol("1000CATUSDT", "binance") == "1000CAT/USDT:USDT"
+    assert utils.coin_to_symbol("CAT/USDT:USDT", "binance") == "CAT/USDT:USDT"
+    assert (
+        utils.coin_to_symbol("1000CAT/USDT:USDT", "binance")
+        == "1000CAT/USDT:USDT"
+    )
+
+
+@pytest.mark.parametrize(
+    "existing,discovered",
+    [
+        ({"1000CAT": "CAT"}, {"1000CAT": "1000CAT"}),
+        ({"1000CAT": "1000CAT"}, {"1000CAT": "CAT"}),
+    ],
+)
+def test_symbol_map_merge_keeps_multiplier_specific_canonical_name(existing, discovered):
+    assert utils._merge_symbol_to_coin_maps(existing, discovered)["1000CAT"] == "1000CAT"
+
+
+def test_cache_refresh_order_does_not_downgrade_multiplier_specific_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    multiplier_only = {
+        "1000CAT/USDT:USDT": {
+            "id": "1000CATUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "1000CAT",
+        }
+    }
+    colliding_markets = {
+        **multiplier_only,
+        "CAT/USDT:USDT": {
+            "id": "CATUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "CAT",
+        },
+    }
+
+    assert utils.create_coin_symbol_map_cache("bybit", multiplier_only, verbose=False)
+    assert utils.symbol_to_coin("1000CATUSDT") == "CAT"
+
+    assert utils.create_coin_symbol_map_cache("binance", colliding_markets, verbose=False)
+    assert utils.symbol_to_coin("1000CATUSDT") == "1000CAT"
+    assert utils.coin_to_symbol("CAT", "binance") == "CAT/USDT:USDT"
+    assert utils.coin_to_symbol("1000CAT", "binance") == "1000CAT/USDT:USDT"
+
+    assert utils.create_coin_symbol_map_cache("bybit", multiplier_only, verbose=False)
+    assert utils.symbol_to_coin("1000CATUSDT") == "1000CAT"
+    assert utils.coin_to_symbol("1000CAT", "bybit") == "1000CAT/USDT:USDT"
+
+
 def test_symbol_to_coin_in_memory_reload_and_heuristics(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     s2c_path = os.path.join("caches", "symbol_to_coin_map.json")
