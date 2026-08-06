@@ -173,7 +173,7 @@
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
                 "red_threshold": 0.15,
-                "restart_after_red_policy": "always",
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {"orange": 0.75, "yellow": 0.5}
             },
             "risk": {
