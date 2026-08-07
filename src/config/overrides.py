@@ -16,6 +16,7 @@ from .shared_bot import (
     BOT_POSITION_SIDES,
     BOT_SHARED_GROUPS,
     FLAT_BOT_KEY_TO_GROUP_PATH,
+    canonicalize_shared_bot_side,
     inject_flattened_shared_bot_side,
 )
 from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
@@ -533,6 +534,19 @@ def parse_overrides(
                 result, overrides, get_allowed_modifications(), return_full=False
             ),
         )
+        # Fold dual-form shared fields into durable grouped form after merge.
+        # Inline flat values win over file-loaded grouped values (same rule as
+        # canonicalize_shared_bot_side), so live and backtest stay aligned.
+        override_bot = parsed_overrides.get("bot")
+        if isinstance(override_bot, dict):
+            for pside in BOT_POSITION_SIDES:
+                side = override_bot.get(pside)
+                if isinstance(side, dict):
+                    canonicalize_shared_bot_side(
+                        side,
+                        path_prefix=("coin_overrides", coin, "bot", pside),
+                        seed_missing_groups=False,
+                    )
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         log_config_message(
             verbose,

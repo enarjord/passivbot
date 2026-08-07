@@ -241,6 +241,78 @@ def test_suite_flat_coin_override_cooldown_path_updates_grouped_form():
     assert side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
 
 
+def test_inline_flat_cooldown_wins_over_file_loaded_grouped_value():
+    """Inline flat cooldown must win after merge and survive compile (live/backtest parity)."""
+    from config import compile_runtime_config, get_template_config
+    from config.overrides import parse_overrides
+    from passivbot import Passivbot
+
+    base = get_template_config()
+    base["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    # Inline flat 12 + simulated file-loaded grouped 50 after allowed-diff merge shape.
+    base["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 50.0},
+                    "risk_entry_cooldown_minutes": 12.0,
+                }
+            }
+        }
+    }
+    # parse_overrides re-applies allowed mods (diff vs base keeps both when both differ).
+    parsed = parse_overrides(deepcopy(base), verbose=False)
+    side = parsed["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+    assert "risk_entry_cooldown_minutes" not in side
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = parsed
+    bot.coin_overrides = {"HYPE/USDT:USDT": parsed["coin_overrides"]["HYPE"]}
+    assert bot.bp("long", "risk_entry_cooldown_minutes", "HYPE/USDT:USDT") == pytest.approx(
+        12.0
+    )
+
+    compiled = compile_runtime_config(parsed, runtime="backtest", record_step=False)
+    compiled_side = compiled["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert compiled_side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+    assert compiled_side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
+
+
+def test_suite_flat_selector_works_when_only_flat_coin_override_exists():
+    """Flat-only coin overrides must remain addressable before group materialization."""
+    from config import get_template_config
+    from config.param_paths import require_existing_config_path, resolve_dotted_config_path
+
+    cfg = get_template_config()
+    cfg["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk_entry_cooldown_minutes": 50.0,
+                }
+            }
+        }
+    }
+    dotted = "coin_overrides.HYPE.bot.long.risk_entry_cooldown_minutes"
+    assert resolve_dotted_config_path(cfg, dotted) == (
+        "coin_overrides",
+        "HYPE",
+        "bot",
+        "long",
+        "risk_entry_cooldown_minutes",
+    )
+    resolved = require_existing_config_path(cfg, dotted)
+    assert resolved[-1] == "risk_entry_cooldown_minutes"
+    target = cfg
+    for part in resolved[:-1]:
+        target = target[part]
+    target[resolved[-1]] = 12.0
+    assert cfg["coin_overrides"]["HYPE"]["bot"]["long"][
+        "risk_entry_cooldown_minutes"
+    ] == pytest.approx(12.0)
+
+
 def test_cli_flat_coin_override_cooldown_survives_compile_discard():
     """Iterative/CLI flat selectors must remap before compile discards flat aliases."""
     from config import compile_runtime_config, get_template_config

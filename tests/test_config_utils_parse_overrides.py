@@ -119,6 +119,8 @@ def test_parse_overrides_keeps_flat_entry_cooldown_minutes(monkeypatch):
 
     res = config_utils.parse_overrides(deepcopy(cfg), verbose=False)
 
-    assert res["coin_overrides"]["HYPE"]["bot"]["long"][
-        "risk_entry_cooldown_minutes"
+    # Flat input is folded into durable grouped form during parse_overrides.
+    assert res["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
+        "entry_cooldown_minutes"
     ] == pytest.approx(42.5)
+    assert "risk_entry_cooldown_minutes" not in res["coin_overrides"]["HYPE"]["bot"]["long"]

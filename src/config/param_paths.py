@@ -116,6 +116,15 @@ def canonical_path_for_bot_side_flat_key(
     return None
 
 
+def _config_has_path(config: dict, path: tuple[str, ...]) -> bool:
+    current: object = config
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
 def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str, ...] | None:
     raw_parts = tuple(part.strip() for part in selector_or_path.split(".") if part.strip())
     if not raw_parts:
@@ -133,8 +142,10 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
         if canonical_path is not None:
             return canonical_path
     # coin_overrides.<coin>.bot.<pside>.<flat_shared_or_strategy_key>
-    # Map to the same canonical grouped/strategy path used for top-level bot writes so
-    # suite/CLI flat selectors update the durable form instead of a stale dual-form alias.
+    # Prefer the canonical grouped/strategy path when that leaf already exists so
+    # suite/CLI flat selectors update durable form. If only the flat leaf exists
+    # (common before runtime compile), keep the flat path so require_existing
+    # still works; writers with create_missing can still use the grouped path.
     if (
         len(parts) == 5
         and parts[0] == "coin_overrides"
@@ -144,13 +155,24 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
         coin = parts[1]
         pside = parts[3]
         flat_key = parts[4]
+        flat_path = parts
         shared_path = canonical_shared_bot_path_for_flat_key(pside, flat_key)
         if shared_path is not None:
             # shared_path is ("bot", pside, group, local)
-            return ("coin_overrides", coin, *shared_path)
+            grouped_path = ("coin_overrides", coin, *shared_path)
+            if _config_has_path(config, grouped_path):
+                return grouped_path
+            if _config_has_path(config, flat_path):
+                return flat_path
+            return grouped_path
         strategy_path = canonical_path_for_bot_side_flat_key(config, pside, flat_key)
         if strategy_path is not None and strategy_path[:2] == ("bot", pside):
-            return ("coin_overrides", coin, *strategy_path)
+            nested_path = ("coin_overrides", coin, *strategy_path)
+            if _config_has_path(config, nested_path):
+                return nested_path
+            if _config_has_path(config, flat_path):
+                return flat_path
+            return nested_path
     if (
         len(parts) >= 4
         and parts[0] == "bot"
