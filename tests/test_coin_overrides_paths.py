@@ -198,6 +198,133 @@ def test_compile_prefers_grouped_cooldown_over_stale_flat_alias():
     assert side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
 
 
+def test_suite_flat_coin_override_cooldown_path_updates_grouped_form():
+    """Flat coin_overrides dotted selectors must remap to the grouped durable path."""
+    from config import compile_runtime_config, get_template_config
+    from config.param_paths import require_existing_config_path
+    from config.shared_bot import inject_flattened_shared_bot_side
+
+    cfg = get_template_config()
+    cfg["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 50.0},
+                }
+            }
+        }
+    }
+    # Prior compile inject leaves a flat mirror alongside the group.
+    inject_flattened_shared_bot_side(cfg["coin_overrides"]["HYPE"]["bot"]["long"])
+    cfg["coin_overrides"]["HYPE"]["bot"]["long"]["risk_entry_cooldown_minutes"] = 50.0
+
+    resolved = require_existing_config_path(
+        cfg, "coin_overrides.HYPE.bot.long.risk_entry_cooldown_minutes"
+    )
+    assert resolved == (
+        "coin_overrides",
+        "HYPE",
+        "bot",
+        "long",
+        "risk",
+        "entry_cooldown_minutes",
+    )
+    # Suite-style write through the resolved path.
+    target = cfg
+    for part in resolved[:-1]:
+        target = target[part]
+    target[resolved[-1]] = 12.0
+
+    compiled = compile_runtime_config(cfg, runtime="backtest", record_step=False)
+    side = compiled["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+    assert side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
+
+
+def test_file_override_non_finite_entry_cooldown_fails_closed(tmp_path):
+    """Invalid cooldown in override_config_path must not fall back to global."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "bad.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    # 1e309 becomes +inf when coerced to float; JSON cannot encode NaN portably.
+    override_cfg = {
+        "bot": {
+            "long": {
+                "risk": {"entry_cooldown_minutes": 1e309},
+            }
+        },
+        "live": {"user": "tester"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    with pytest.raises((ValueError, KeyError), match="entry_cooldown_minutes"):
+        config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+
+def test_load_override_config_propagates_value_errors(tmp_path):
+    """Loader validation failures must not be swallowed into an empty override."""
+    from config.overrides import load_override_config
+
+    override_path = tmp_path / "missing_but_declared.json"
+    # Path is checked for existence before loader call; create a placeholder file.
+    override_path.write_text("{}", encoding="utf-8")
+    config = {
+        "live": {},
+        "coin_overrides": {
+            "HYPE": {"override_config_path": str(override_path)},
+        },
+    }
+
+    def boom(_path):
+        raise ValueError(
+            "bot.long.risk.entry_cooldown_minutes must be a finite number >= 0.0"
+        )
+
+    with pytest.raises(ValueError, match="entry_cooldown_minutes must be a finite number"):
+        load_override_config(config, "HYPE", config_loader=boom)
+
+
+def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_path):
+    """Raw flat strategy keys must survive prune after preparation nests them."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 100.0
+    base_cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "flat_strategy.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    # Supported load path: flat side strategy field + grouped cooldown.
+    override_cfg = {
+        "bot": {
+            "long": {
+                "ema_span_0": 321.0,
+                "risk": {"entry_cooldown_minutes": 50.0},
+            }
+        },
+        "live": {"user": "tester"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+    hype = parsed["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert hype["risk"]["entry_cooldown_minutes"] == pytest.approx(50.0)
+    assert hype["strategy"]["trailing_martingale"]["ema_span_0"] == pytest.approx(321.0)
+
+
 def test_partial_file_override_does_not_synthesize_template_entry_cooldown(tmp_path):
     """Hydrated template defaults must not become per-coin cooldown overrides."""
     base_cfg = config_utils.get_template_config()

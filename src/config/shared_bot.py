@@ -131,10 +131,11 @@ def inject_flattened_shared_bot_side(bot_side: dict | None) -> None:
 def discard_shared_flat_aliases_when_grouped_present(bot_side: dict | None) -> None:
     """Drop shared flat aliases when the canonical grouped field is already set.
 
-    ``inject_flattened_shared_bot_side`` mirrors groups into flat keys for runtime
-    consumers. Later transforms often update only the grouped form. The next
-    ``canonicalize_shared_bot_side`` otherwise prefers the stale flat alias and
-    overwrites the newer grouped value. When both are present, keep the group.
+    Durable coin-override / bot sides should keep grouped form as source of truth.
+    ``inject_flattened_shared_bot_side`` may re-add flat mirrors for runtime consumers;
+    those mirrors must not survive into the next canonicalize (which prefers flat on
+    conflict). Explicit later writers should update the grouped path (see
+    ``resolve_dotted_config_path`` coin_overrides flat remapping) rather than the alias.
     """
     if not isinstance(bot_side, dict):
         return

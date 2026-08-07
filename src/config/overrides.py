@@ -228,11 +228,23 @@ def _raw_bot_side_has_shared_field(raw_side: dict | None, flat_key: str) -> bool
     return isinstance(group, dict) and local_key in group
 
 
+def _raw_walk_has_path(raw: dict | None, path: tuple[str, ...]) -> bool:
+    current: object = raw
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
 def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
     """Return True when an allowed override path was explicitly present in raw config.
 
     Shared bot fields may appear as either flat keys (``risk_entry_cooldown_minutes``)
     or grouped keys (``risk.entry_cooldown_minutes``); both count as explicit.
+
+    Strategy params may appear flat on the side in the raw file (``bot.long.ema_span_0``)
+    and be moved into ``bot.long.strategy.<kind>.*`` during preparation; both count.
     """
     if not path:
         return isinstance(raw, dict)
@@ -269,12 +281,40 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
         group = side.get(group_name)
         return isinstance(group, dict) and local_key in group
 
-    current: object = raw
-    for part in path:
-        if not isinstance(current, dict) or part not in current:
+    # bot.<pside>.strategy.<kind>.<param...> — also accept raw flat side keys moved
+    # into the active strategy subtree during preparation (e.g. ema_span_0).
+    if (
+        len(path) >= 5
+        and path[0] == "bot"
+        and path[1] in BOT_POSITION_SIDES
+        and path[2] == "strategy"
+    ):
+        if _raw_walk_has_path(raw, path):
+            return True
+        bot = raw.get("bot")
+        side = bot.get(path[1]) if isinstance(bot, dict) else None
+        if not isinstance(side, dict):
             return False
-        current = current[part]
-    return True
+        param_parts = path[4:]
+        if not param_parts:
+            return False
+        # Single-segment strategy params are commonly written flat on the side.
+        if len(param_parts) == 1 and param_parts[0] in side:
+            return True
+        # Nested param may exist under a raw strategy tree without kind, or as
+        # dotted flat key — walk param_parts from the side when present.
+        if _raw_walk_has_path(side, param_parts):
+            return True
+        # Raw may already nest under strategy.<kind> even when the prepared kind
+        # differs only by alias; also accept strategy.<any_kind>.param_parts.
+        raw_strategy = side.get("strategy")
+        if isinstance(raw_strategy, dict):
+            for kind_cfg in raw_strategy.values():
+                if isinstance(kind_cfg, dict) and _raw_walk_has_path(kind_cfg, param_parts):
+                    return True
+        return False
+
+    return _raw_walk_has_path(raw, path)
 
 
 def normalize_override_raw_snapshot(raw: dict | None) -> dict | None:
@@ -385,6 +425,10 @@ def load_override_config(
             npath = os.path.join(os.path.dirname(base_config_path), path)
             if os.path.exists(npath):
                 return config_loader(npath)
+    except (ValueError, TypeError, KeyError):
+        # Invalid trading config inputs (including non-finite cooldowns) must fail
+        # closed rather than silently falling back to the global config.
+        raise
     except Exception as exc:
         logging.exception("error loading config %s: %s", path, exc)
     return {}

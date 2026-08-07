@@ -132,6 +132,25 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
         canonical_path = canonical_path_for_bot_side_flat_key(config, parts[1], parts[2])
         if canonical_path is not None:
             return canonical_path
+    # coin_overrides.<coin>.bot.<pside>.<flat_shared_or_strategy_key>
+    # Map to the same canonical grouped/strategy path used for top-level bot writes so
+    # suite/CLI flat selectors update the durable form instead of a stale dual-form alias.
+    if (
+        len(parts) == 5
+        and parts[0] == "coin_overrides"
+        and parts[2] == "bot"
+        and parts[3] in BOT_POSITION_SIDES
+    ):
+        coin = parts[1]
+        pside = parts[3]
+        flat_key = parts[4]
+        shared_path = canonical_shared_bot_path_for_flat_key(pside, flat_key)
+        if shared_path is not None:
+            # shared_path is ("bot", pside, group, local)
+            return ("coin_overrides", coin, *shared_path)
+        strategy_path = canonical_path_for_bot_side_flat_key(config, pside, flat_key)
+        if strategy_path is not None and strategy_path[:2] == ("bot", pside):
+            return ("coin_overrides", coin, *strategy_path)
     if (
         len(parts) >= 4
         and parts[0] == "bot"
