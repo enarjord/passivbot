@@ -283,6 +283,8 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
 
     # bot.<pside>.strategy.<kind>.<param...> — also accept raw flat side keys moved
     # into the active strategy subtree during preparation (e.g. ema_span_0).
+    # Do not treat a different strategy kind's raw subtree as provenance for the
+    # prepared active kind (that would re-admit hydrated template defaults).
     if (
         len(path) >= 5
         and path[0] == "bot"
@@ -295,23 +297,24 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
         side = bot.get(path[1]) if isinstance(bot, dict) else None
         if not isinstance(side, dict):
             return False
+        kind = path[3]
         param_parts = path[4:]
         if not param_parts:
             return False
-        # Single-segment strategy params are commonly written flat on the side.
-        if len(param_parts) == 1 and param_parts[0] in side:
-            return True
-        # Nested param may exist under a raw strategy tree without kind, or as
-        # dotted flat key — walk param_parts from the side when present.
-        if _raw_walk_has_path(side, param_parts):
-            return True
-        # Raw may already nest under strategy.<kind> even when the prepared kind
-        # differs only by alias; also accept strategy.<any_kind>.param_parts.
+        # Exact kind only (already covered by full-path walk above, but also
+        # allow strategy.<kind> when the prepared path uses the same kind).
         raw_strategy = side.get("strategy")
         if isinstance(raw_strategy, dict):
-            for kind_cfg in raw_strategy.values():
-                if isinstance(kind_cfg, dict) and _raw_walk_has_path(kind_cfg, param_parts):
-                    return True
+            kind_cfg = raw_strategy.get(kind)
+            if isinstance(kind_cfg, dict) and _raw_walk_has_path(kind_cfg, param_parts):
+                return True
+        # Single-segment strategy params are commonly written flat on the side
+        # and migrated into the active kind during preparation.
+        if len(param_parts) == 1 and param_parts[0] in side:
+            return True
+        # Nested param may exist under the side without a strategy wrapper.
+        if _raw_walk_has_path(side, param_parts):
+            return True
         return False
 
     return _raw_walk_has_path(raw, path)

@@ -362,6 +362,49 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
     assert hype["strategy"]["trailing_martingale"]["ema_span_0"] == pytest.approx(321.0)
 
 
+def test_file_override_does_not_treat_other_strategy_kind_as_active_provenance(tmp_path):
+    """Raw strategy params for a non-active kind must not authorize active-kind diffs."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["strategy_kind"] = "trailing_martingale"
+    base_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 100.0
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "other_kind.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    # Explicit inactive-kind subtree only; prepared active kind is trailing_martingale.
+    override_cfg = {
+        "bot": {
+            "long": {
+                "strategy": {
+                    "ema_anchor": {
+                        "ema_span_0": 321.0,
+                    }
+                }
+            }
+        },
+        "live": {"user": "tester"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+    hype = parsed["coin_overrides"].get("HYPE", {})
+    long_ov = hype.get("bot", {}).get("long", {})
+    strategy = long_ov.get("strategy") or {}
+    # Must not fabricate trailing_martingale.ema_span_0 from template via ema_anchor raw.
+    tm = strategy.get("trailing_martingale") or {}
+    assert "ema_span_0" not in tm
+    # Inactive-kind values are not keepable as coin overrides for the active kind path.
+    assert "ema_anchor" not in strategy or "ema_span_0" not in (
+        strategy.get("ema_anchor") or {}
+    )
+
+
 def test_partial_file_override_does_not_synthesize_template_entry_cooldown(tmp_path):
     """Hydrated template defaults must not become per-coin cooldown overrides."""
     base_cfg = config_utils.get_template_config()
