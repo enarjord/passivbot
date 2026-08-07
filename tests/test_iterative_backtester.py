@@ -43,6 +43,42 @@ def test_apply_cli_overrides_updates_nested_config_paths():
     assert config["backtest"]["start_date"] == "2023-01-01"
 
 
+def test_apply_cli_overrides_remaps_flat_coin_override_entry_cooldown():
+    """Flat coin-override CLI selectors must update the durable grouped path."""
+    from config import compile_runtime_config
+    from config.shared_bot import inject_flattened_shared_bot_side
+
+    config = {
+        "bot": {
+            "long": {"risk": {"entry_cooldown_minutes": 7.0}},
+            "short": {"risk": {"entry_cooldown_minutes": 0.0}},
+        },
+        "live": {"strategy_kind": "trailing_martingale"},
+        "coin_overrides": {
+            "HYPE": {
+                "bot": {
+                    "long": {
+                        "risk": {"entry_cooldown_minutes": 50.0},
+                    }
+                }
+            }
+        },
+    }
+    inject_flattened_shared_bot_side(config["coin_overrides"]["HYPE"]["bot"]["long"])
+
+    overridden = ib.apply_cli_overrides(
+        config,
+        ["coin_overrides.HYPE.bot.long.risk_entry_cooldown_minutes=12"],
+    )
+    side = overridden["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+
+    compiled = compile_runtime_config(overridden, runtime="backtest", record_step=False)
+    compiled_side = compiled["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert compiled_side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+    assert compiled_side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
+
+
 def test_apply_cli_overrides_uses_backtest_cli_type_parsing_for_known_fields():
     config = {
         "backtest": {"exchanges": ["binance"], "combine_ohlcvs": True},

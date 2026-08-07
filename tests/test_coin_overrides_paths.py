@@ -241,6 +241,43 @@ def test_suite_flat_coin_override_cooldown_path_updates_grouped_form():
     assert side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
 
 
+def test_cli_flat_coin_override_cooldown_survives_compile_discard():
+    """Iterative/CLI flat selectors must remap before compile discards flat aliases."""
+    from config import compile_runtime_config, get_template_config
+    from config.param_paths import resolve_dotted_config_path
+    from config.shared_bot import inject_flattened_shared_bot_side
+    from config_utils import set_nested_value_safe
+
+    cfg = get_template_config()
+    cfg["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 50.0},
+                }
+            }
+        }
+    }
+    inject_flattened_shared_bot_side(cfg["coin_overrides"]["HYPE"]["bot"]["long"])
+
+    dotted = "coin_overrides.HYPE.bot.long.risk_entry_cooldown_minutes"
+    resolved = resolve_dotted_config_path(cfg, dotted)
+    assert resolved == (
+        "coin_overrides",
+        "HYPE",
+        "bot",
+        "long",
+        "risk",
+        "entry_cooldown_minutes",
+    )
+    assert set_nested_value_safe(cfg, list(resolved), 12.0, create_missing=True)
+
+    compiled = compile_runtime_config(cfg, runtime="backtest", record_step=False)
+    side = compiled["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert side["risk"]["entry_cooldown_minutes"] == pytest.approx(12.0)
+    assert side["risk_entry_cooldown_minutes"] == pytest.approx(12.0)
+
+
 def test_file_override_non_finite_entry_cooldown_fails_closed(tmp_path):
     """Invalid cooldown in override_config_path must not fall back to global."""
     base_cfg = config_utils.get_template_config()

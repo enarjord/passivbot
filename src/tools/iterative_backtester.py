@@ -44,6 +44,7 @@ from config.access import get_optional_config_value, require_config_value  # noq
 from config.limits import normalize_limit_entries  # noqa: E402
 from config.metrics import resolve_metric_value as resolve_stored_metric_value  # noqa: E402
 from config.overrides import parse_overrides  # noqa: E402
+from config.param_paths import resolve_dotted_config_path  # noqa: E402
 from config.schema import get_template_config  # noqa: E402
 from config_utils import (  # noqa: E402
     add_config_arguments,
@@ -494,8 +495,14 @@ def apply_cli_overrides(config: Dict[str, Any], overrides: Iterable[str]) -> Dic
     result = deepcopy(config)
     for entry in overrides:
         path_parts, value = parse_cli_override(entry)
-        if not set_nested_value_safe(result, path_parts, value, create_missing=True):
-            dotted = ".".join(path_parts)
+        dotted = ".".join(path_parts)
+        # Remap flat shared/strategy selectors (including under coin_overrides) to
+        # the same canonical grouped paths used by suite overrides, so later
+        # compile_runtime_config does not discard explicit flat CLI writes.
+        resolved = resolve_dotted_config_path(result, dotted)
+        if resolved is None or not resolved or any(part == "" for part in resolved):
+            raise ValueError(f"failed to apply override {dotted}={value!r}")
+        if not set_nested_value_safe(result, list(resolved), value, create_missing=True):
             raise ValueError(f"failed to apply override {dotted}={value!r}")
     return result
 

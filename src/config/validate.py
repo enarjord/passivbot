@@ -21,6 +21,25 @@ from .strategy import (
 _STARTUP_BUDGET_KEYS = frozenset({"elapsed_ms", "since_previous_ms"})
 
 
+def _require_finite_nonneg_entry_cooldown(raw_value, *, path: str) -> float:
+    """Validate entry_cooldown_minutes without falsey coercion to 0.0.
+
+    Explicit null/empty/bool values must fail closed rather than silently
+    disabling cooldown via ``float(x or 0.0)``.
+    """
+    if raw_value is None or isinstance(raw_value, bool):
+        raise ValueError(f"{path} must be a finite number >= 0.0")
+    if isinstance(raw_value, str) and not raw_value.strip():
+        raise ValueError(f"{path} must be a finite number >= 0.0")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{path} must be a finite number >= 0.0") from exc
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{path} must be a finite number >= 0.0")
+    return value
+
+
 def _validate_startup_phase_budgets(live_config: dict) -> None:
     budgets = live_config.get("startup_phase_budgets")
     if not isinstance(budgets, dict):
@@ -66,13 +85,10 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
-        entry_cooldown_minutes = float(
-            get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
+        _require_finite_nonneg_entry_cooldown(
+            get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0),
+            path=f"bot.{pside}.risk.entry_cooldown_minutes",
         )
-        if not math.isfinite(entry_cooldown_minutes) or entry_cooldown_minutes < 0.0:
-            raise ValueError(
-                f"bot.{pside}.risk.entry_cooldown_minutes must be a finite number >= 0.0"
-            )
         normalize_we_excess_allowance_mode(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
             path=f"bot.{pside}.risk.we_excess_allowance_mode",
@@ -102,20 +118,15 @@ def validate_config(
                     isinstance(override_side.get("risk"), dict)
                     and "entry_cooldown_minutes" in override_side["risk"]
                 ):
-                    entry_cooldown_minutes = float(
+                    _require_finite_nonneg_entry_cooldown(
                         get_grouped_bot_value(
-                            override_side, "risk_entry_cooldown_minutes", 0.0
-                        )
-                        or 0.0
-                    )
-                    if (
-                        not math.isfinite(entry_cooldown_minutes)
-                        or entry_cooldown_minutes < 0.0
-                    ):
-                        raise ValueError(
+                            override_side, "risk_entry_cooldown_minutes", default=None
+                        ),
+                        path=(
                             f"coin_overrides.{coin}.bot.{pside}.risk."
-                            "entry_cooldown_minutes must be a finite number >= 0.0"
-                        )
+                            "entry_cooldown_minutes"
+                        ),
+                    )
                 if "risk_we_excess_allowance_mode" in override_side:
                     normalize_we_excess_allowance_mode(
                         override_side.get("risk_we_excess_allowance_mode"),
