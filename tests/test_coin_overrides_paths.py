@@ -362,6 +362,39 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
     assert hype["strategy"]["trailing_martingale"]["ema_span_0"] == pytest.approx(321.0)
 
 
+def test_file_override_preserves_literal_dotted_flat_strategy_param(tmp_path):
+    """Raw side keys like 'entry.threshold_base_pct' must survive prune after nesting."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = 0.01
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "dotted_flat.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    override_cfg = {
+        "bot": {
+            "long": {
+                "entry.threshold_base_pct": 0.05,
+            }
+        },
+        "live": {"user": "tester"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+    hype = parsed["coin_overrides"]["HYPE"]["bot"]["long"]
+    assert hype["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] == pytest.approx(0.05)
+
+
 def test_file_override_does_not_treat_other_strategy_kind_as_active_provenance(tmp_path):
     """Raw strategy params for a non-active kind must not authorize active-kind diffs."""
     base_cfg = config_utils.get_template_config()

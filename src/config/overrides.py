@@ -312,6 +312,11 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
         # and migrated into the active kind during preparation.
         if len(param_parts) == 1 and param_parts[0] in side:
             return True
+        # Multi-segment params may appear as a literal dotted key on the side
+        # (e.g. "entry.threshold_base_pct") before strategy normalization nests them.
+        dotted_flat_key = ".".join(param_parts)
+        if dotted_flat_key in side:
+            return True
         # Nested param may exist under the side without a strategy wrapper.
         if _raw_walk_has_path(side, param_parts):
             return True

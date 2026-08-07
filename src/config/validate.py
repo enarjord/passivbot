@@ -25,7 +25,8 @@ def _require_finite_nonneg_entry_cooldown(raw_value, *, path: str) -> float:
     """Validate entry_cooldown_minutes without falsey coercion to 0.0.
 
     Explicit null/empty/bool values must fail closed rather than silently
-    disabling cooldown via ``float(x or 0.0)``.
+    disabling cooldown via ``float(x or 0.0)``. Returns the normalized float so
+    callers can store it (string inputs like ``\"5\"`` must not remain strings).
     """
     if raw_value is None or isinstance(raw_value, bool):
         raise ValueError(f"{path} must be a finite number >= 0.0")
@@ -38,6 +39,17 @@ def _require_finite_nonneg_entry_cooldown(raw_value, *, path: str) -> float:
     if not math.isfinite(value) or value < 0.0:
         raise ValueError(f"{path} must be a finite number >= 0.0")
     return value
+
+
+def _store_entry_cooldown_minutes(side: dict, value: float) -> None:
+    """Write normalized cooldown back to flat and/or grouped locations present on side."""
+    if "risk_entry_cooldown_minutes" in side:
+        side["risk_entry_cooldown_minutes"] = value
+    risk = side.get("risk")
+    if isinstance(risk, dict) and "entry_cooldown_minutes" in risk:
+        risk["entry_cooldown_minutes"] = value
+    elif "risk_entry_cooldown_minutes" not in side:
+        side.setdefault("risk", {})["entry_cooldown_minutes"] = value
 
 
 def _validate_startup_phase_budgets(live_config: dict) -> None:
@@ -74,34 +86,17 @@ def validate_config(
 
     require_config_dict(config, "monitor")
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
-    optimize_bounds = (
-        raw_optimize.get("bounds")
-        if isinstance(raw_optimize, dict)
-        and isinstance(raw_optimize.get("bounds"), dict)
-        else config.get("optimize", {}).get("bounds", {})
-    )
-    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
-    validate_bot_config(config)
+    # Normalize cooldowns before optimize-bounds checks so accepted numeric strings
+    # (e.g. "5") become floats and remain valid at the Rust runtime boundary.
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
-        require_config_dict(bot_side, "strategy")
-        _require_finite_nonneg_entry_cooldown(
-            get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0),
-            path=f"bot.{pside}.risk.entry_cooldown_minutes",
+        _store_entry_cooldown_minutes(
+            bot_side,
+            _require_finite_nonneg_entry_cooldown(
+                get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0),
+                path=f"bot.{pside}.risk.entry_cooldown_minutes",
+            ),
         )
-        normalize_we_excess_allowance_mode(
-            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
-            path=f"bot.{pside}.risk.we_excess_allowance_mode",
-        )
-        normalize_twel_enforcer_policy(
-            get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
-            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
-        )
-        active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
-        if not isinstance(active_strategy, dict) or not active_strategy:
-            raise ValueError(
-                f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
-            )
     coin_overrides = config.get("coin_overrides")
     if isinstance(coin_overrides, dict):
         for coin, override in coin_overrides.items():
@@ -118,15 +113,55 @@ def validate_config(
                     isinstance(override_side.get("risk"), dict)
                     and "entry_cooldown_minutes" in override_side["risk"]
                 ):
-                    _require_finite_nonneg_entry_cooldown(
-                        get_grouped_bot_value(
-                            override_side, "risk_entry_cooldown_minutes", default=None
-                        ),
-                        path=(
-                            f"coin_overrides.{coin}.bot.{pside}.risk."
-                            "entry_cooldown_minutes"
+                    _store_entry_cooldown_minutes(
+                        override_side,
+                        _require_finite_nonneg_entry_cooldown(
+                            get_grouped_bot_value(
+                                override_side,
+                                "risk_entry_cooldown_minutes",
+                                default=None,
+                            ),
+                            path=(
+                                f"coin_overrides.{coin}.bot.{pside}.risk."
+                                "entry_cooldown_minutes"
+                            ),
                         ),
                     )
+    optimize_bounds = (
+        raw_optimize.get("bounds")
+        if isinstance(raw_optimize, dict)
+        and isinstance(raw_optimize.get("bounds"), dict)
+        else config.get("optimize", {}).get("bounds", {})
+    )
+    validate_optimize_bounds_against_bot_config(config, optimize_bounds)
+    validate_bot_config(config)
+    for pside in BOT_POSITION_SIDES:
+        bot_side = require_config_dict(config, f"bot.{pside}")
+        require_config_dict(bot_side, "strategy")
+        normalize_we_excess_allowance_mode(
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
+            path=f"bot.{pside}.risk.we_excess_allowance_mode",
+        )
+        normalize_twel_enforcer_policy(
+            get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
+            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+        )
+        active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
+        if not isinstance(active_strategy, dict) or not active_strategy:
+            raise ValueError(
+                f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
+            )
+    if isinstance(coin_overrides, dict):
+        for coin, override in coin_overrides.items():
+            if not isinstance(override, dict):
+                continue
+            override_bot = override.get("bot")
+            if not isinstance(override_bot, dict):
+                continue
+            for pside in BOT_POSITION_SIDES:
+                override_side = override_bot.get(pside)
+                if not isinstance(override_side, dict):
+                    continue
                 if "risk_we_excess_allowance_mode" in override_side:
                     normalize_we_excess_allowance_mode(
                         override_side.get("risk_we_excess_allowance_mode"),

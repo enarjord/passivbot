@@ -1741,6 +1741,32 @@ def test_prepare_config_rejects_null_or_empty_coin_override_entry_cooldown_minut
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_normalizes_string_entry_cooldown_minutes_to_float():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = "5"
+    source["coin_overrides"] = {
+        "HYPE": {
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": "12.5"},
+                }
+            }
+        }
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(5.0)
+    assert isinstance(prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"], float)
+    assert prepared["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
+        "entry_cooldown_minutes"
+    ] == pytest.approx(12.5)
+    assert isinstance(
+        prepared["coin_overrides"]["HYPE"]["bot"]["long"]["risk"]["entry_cooldown_minutes"],
+        float,
+    )
+
+
 def test_prepare_config_rejects_positive_twel_with_zero_positions():
     source = get_template_config()
     risk = source["bot"]["long"]["risk"]
