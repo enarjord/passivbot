@@ -467,6 +467,44 @@ def test_file_override_preserves_literal_dotted_flat_strategy_param(tmp_path):
     ] == pytest.approx(0.05)
 
 
+def test_file_override_does_not_treat_unconsumed_side_nested_strategy_as_provenance(
+    tmp_path,
+):
+    """Nested side maps (entry.threshold_base_pct tree) are not strategy migrations."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "threshold_base_pct"
+    ] = 0.01
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "nested_entry.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    # Nested form is NOT consumed by sync_canonical_strategy_config (only dotted key is).
+    override_cfg = {
+        "bot": {
+            "long": {
+                "entry": {"threshold_base_pct": 0.05},
+            }
+        },
+        "live": {"user": "tester"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+    hype = parsed["coin_overrides"].get("HYPE", {})
+    long_ov = hype.get("bot", {}).get("long", {})
+    tm = (long_ov.get("strategy") or {}).get("trailing_martingale") or {}
+    entry = tm.get("entry") or {}
+    # Must not fabricate template default as a per-coin override via nested raw.
+    assert "threshold_base_pct" not in entry
+
+
 def test_file_override_does_not_treat_other_strategy_kind_as_active_provenance(tmp_path):
     """Raw strategy params for a non-active kind must not authorize active-kind diffs."""
     base_cfg = config_utils.get_template_config()

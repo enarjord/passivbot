@@ -315,11 +315,10 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
             return True
         # Multi-segment params may appear as a literal dotted key on the side
         # (e.g. "entry.threshold_base_pct") before strategy normalization nests them.
+        # Nested side maps like side["entry"]["threshold_base_pct"] are NOT migrated
+        # by sync_canonical_strategy_config and must not authorize active-kind diffs.
         dotted_flat_key = ".".join(param_parts)
         if dotted_flat_key in side:
-            return True
-        # Nested param may exist under the side without a strategy wrapper.
-        if _raw_walk_has_path(side, param_parts):
             return True
         return False
 
