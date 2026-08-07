@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Gate.io multi-currency futures balance events now publish bounded settle-currency
+  composition diagnostics (wallet amount, available margin, reserved IM/order
+  margin, unrealized PnL) and select the quote-matched futures-account row instead
+  of blindly using `info[0]`. Trading wallet balance continues to reconstruct from
+  available + position IM + order margin − unrealized PnL so resting-order
+  reservations do not resize risk inputs.
 - Refresh hardcoded schema defaults and the mirrored example config from the latest
   long-only trailing-martingale canon candidate: update `bot.long` parameters,
   `optimize.bounds`, and `live.approved_coins` (replace CRO with TON; reorder coin
