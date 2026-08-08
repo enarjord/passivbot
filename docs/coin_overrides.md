@@ -8,7 +8,10 @@ resolved, and shows examples for both inline and file-based overrides.
 
 Allowed fields are intentionally limited:
 
-- **Bot params** (per side): wallet exposure limits, unstuck settings, selected risk knobs, and
+- **Bot params** (per side): per-coin wallet exposure limits; selected risk fields
+  (`entry_cooldown_minutes`, position-exposure enforcer settings, and
+  `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
+  `ema_gating_enabled`, `enabled`, `loss_allowance_pct`, and `threshold`); and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
@@ -18,6 +21,11 @@ unknown inline override is rejected with its full path. A full override config f
 ordinary non-override config fields; those fields are validated as part of that config and then
 filtered out. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected; use the
 nested v8 strategy path instead.
+
+`bot.<side>.risk.we_excess_allowance_mode` is global policy, not a per-coin knob. Inline coin
+patches that contain it fail with a migration message. A complete file used through
+`override_config_path` may contain the global field, but it is warned about and ignored for the
+coin patch; set the value in the main config instead.
 
 ## How overrides are loaded
 
@@ -59,7 +67,11 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             }
           },
           "unstuck": {
+            "ema_gating_enabled": false,
             "loss_allowance_pct": 0.005
+          },
+          "risk": {
+            "entry_cooldown_minutes": 0.05
           },
           "wallet_exposure_limit": 0.18
         },
@@ -144,6 +156,9 @@ Main config:
 - A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
   percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
   it does not create a separate per-coin realized-PnL tracker.
+- A per-coin `risk.entry_cooldown_minutes` gates only position-increasing entries for the selected
+  coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
+  EMA trigger/readiness gate; the other unstuck eligibility checks still apply.
 
 ## Common pitfalls
 

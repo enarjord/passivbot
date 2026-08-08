@@ -12,7 +12,7 @@ instead of extending the current feature branch indefinitely.
 - [x] Keep `bot.<pside>.unstuck.loss_allowance_pct` overridable.
 - [x] Remove `bot.<pside>.risk.we_excess_allowance_mode` from the override surface.
 - [x] Add `bot.<pside>.unstuck.ema_gating_enabled` to the override surface.
-- [x] Add `bot.<pside>.entry_cooldown_minutes` to the override surface.
+- [x] Add `bot.<pside>.risk.entry_cooldown_minutes` to the override surface.
 - [x] Make the complete `bot.<pside>.hsl.*` group overridable when that side's
   `hsl_signal_mode` is `"coin"`.
 - [x] Do not add any new `live.*` overrides in this series.
@@ -85,33 +85,33 @@ instead of extending the current feature branch indefinitely.
 - [x] Inspect the exact diff and staged paths for public-repository safety.
 - [x] Open a regular ready-for-review PR.
 - [x] Request Codex review; first pass reviewed `abb40a4840e64a834a50077540d0a2d5c2894313`.
-- [ ] Address actionable findings, add regressions, rerun proportional validation, and
+- [x] Address actionable findings, add regressions, rerun proportional validation, and
   request re-review until no unresolved actionable findings remain.
-- [ ] Require all CI checks green on the current head.
-- [ ] Merge the reviewed current head and mark this section complete.
+- [x] Require all CI checks green on the current head.
+- [x] Merge the reviewed current head and mark this section complete.
 
 ## PR 2: override policy and entry cooldown
 
 ### Implementation
 
-- [ ] Branch from the merged PR 1 result.
-- [ ] Express the allowlist as a maintainable parameter policy rather than scattered
+- [x] Branch from the merged PR 1 result.
+- [x] Express the allowlist as a maintainable parameter policy rather than scattered
   conditionals.
-- [ ] Remove `bot.<pside>.risk.we_excess_allowance_mode` from allowed overrides with an
+- [x] Remove `bot.<pside>.risk.we_excess_allowance_mode` from allowed overrides with an
   actionable migration error.
-- [ ] Keep `bot.<pside>.unstuck.loss_allowance_pct` allowed.
-- [ ] Add `bot.<pside>.unstuck.ema_gating_enabled`.
-- [ ] Add `bot.<pside>.entry_cooldown_minutes`.
-- [ ] Update reference documentation and the changelog.
+- [x] Keep `bot.<pside>.unstuck.loss_allowance_pct` allowed.
+- [x] Add `bot.<pside>.unstuck.ema_gating_enabled`.
+- [x] Add `bot.<pside>.risk.entry_cooldown_minutes`.
+- [x] Update reference documentation and the changelog.
 
 ### Validation and release gate
 
-- [ ] Add table-driven policy tests for every added, retained, and removed parameter.
-- [ ] Prove independent long/short behavior and file/inline precedence.
-- [ ] Run focused and broader Python tests.
-- [ ] Rebuild and verify the Rust extension.
-- [ ] Run real backtest comparisons that exercise entry cooldown and unstuck EMA gating.
-- [ ] Run deterministic offline fake-live scenarios that exercise the new parameters.
+- [x] Add table-driven policy tests for every added, retained, and removed parameter.
+- [x] Prove independent long/short behavior and file/inline precedence.
+- [x] Run focused and broader Python tests.
+- [x] Rebuild and verify the Rust extension.
+- [x] Run real backtest comparisons that exercise entry cooldown and unstuck EMA gating.
+- [x] Run deterministic offline fake-live scenarios that exercise the new parameters.
 - [ ] Open a regular ready-for-review PR and request Codex review.
 - [ ] Address findings and repeat review plus validation until the current head is green.
 - [ ] Merge the reviewed current head and mark this section complete.
@@ -160,6 +160,6 @@ instead of extending the current feature branch indefinitely.
 - [x] Execution checklist persisted.
 - [x] PR 1 implementation and author validation complete.
 - [x] PR 1 under review.
-- [ ] PR 1 merged.
+- [x] PR 1 merged as `75116d1954c19e2bf54ef8313c18d332815a00e1`.
 - [ ] PR 2 merged.
 - [ ] PR 3 merged.

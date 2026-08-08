@@ -1093,7 +1093,11 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             {
                 "bot": {
                     "long": {
-                        "unstuck": {"loss_allowance_pct": 0.1},
+                        "risk": {"entry_cooldown_minutes": 3.0},
+                        "unstuck": {
+                            "ema_gating_enabled": False,
+                            "loss_allowance_pct": 0.1,
+                        },
                     }
                 }
             }
@@ -1105,6 +1109,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
             "override_config_path": override_path.name,
             "bot": {
                 "long": {
+                    "risk": {"entry_cooldown_minutes": 0.05},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_pct": global_threshold}
@@ -1142,6 +1147,10 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
 
         bot = captured["bot"]
         override = bot.coin_overrides["BTC/USDT:USDT"]
+        assert override["bot"]["long"]["risk"]["entry_cooldown_minutes"] == 0.05
+        assert override["bot"]["long"]["risk_entry_cooldown_minutes"] == 0.05
+        assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
+        assert override["bot"]["long"]["unstuck_ema_gating_enabled"] is False
         assert override["bot"]["long"]["unstuck"]["loss_allowance_pct"] == 0.1
         assert override["bot"]["long"]["strategy"]["trailing_martingale"][
             "entry"

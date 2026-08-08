@@ -19,7 +19,6 @@ from .strategy import (
 )
 from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
-from risk_limits import normalize_we_excess_allowance_mode
 
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
@@ -56,8 +55,6 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
                 if not return_full and not target_dict[key]:
                     target_dict.pop(key, None)
             elif allowed_value is True:
-                if key in {"risk_we_excess_allowance_mode", "we_excess_allowance_mode"}:
-                    mod_value = normalize_we_excess_allowance_mode(mod_value)
                 if return_full:
                     target_dict[key] = deepcopy(mod_value)
                 else:
@@ -67,27 +64,39 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
     return result
 
 
-_ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
-    "unstuck_close_pct": True,
-    "unstuck_ema_dist": True,
-    "unstuck_enabled": True,
-    "unstuck_loss_allowance_pct": True,
-    "unstuck_threshold": True,
-    "wallet_exposure_limit": True,
-    "risk_twel_entry_gate_enabled": False,
-    "risk_wel_enforcer_enabled": True,
-    "risk_wel_enforcer_threshold": True,
-    "risk_we_excess_allowance_pct": True,
-    "risk_we_excess_allowance_mode": True,
-    "risk_twel_enforcer_enabled": False,
-    "risk_twel_enforcer_policy": False,
-    "risk_twel_enforcer_threshold": False,
-}
+OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
+    {
+        "risk.entry_cooldown_minutes",
+        "risk.position_exposure_enforcer_enabled",
+        "risk.position_exposure_enforcer_threshold",
+        "risk.we_excess_allowance_pct",
+        "unstuck.close_pct",
+        "unstuck.ema_dist",
+        "unstuck.ema_gating_enabled",
+        "unstuck.enabled",
+        "unstuck.loss_allowance_pct",
+        "unstuck.threshold",
+    }
+)
+OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
+REMOVED_COIN_OVERRIDE_PATHS = frozenset({"risk.we_excess_allowance_mode"})
+
+
+def _flat_bot_side_modification_policy() -> dict[str, bool]:
+    policy = {
+        flat_key: f"{group_name}.{local_key}" in OVERRIDABLE_SHARED_BOT_PATHS
+        for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
+        for local_key, flat_key in field_map.items()
+    }
+    policy.update({key: True for key in OVERRIDABLE_STANDALONE_BOT_KEYS})
+    return policy
 
 
 def allowed_flat_bot_side_modification_keys() -> frozenset[str]:
     return frozenset(
-        key for key, allowed in _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.items() if allowed is True
+        key
+        for key, allowed in _flat_bot_side_modification_policy().items()
+        if allowed is True
     )
 
 
@@ -142,7 +151,7 @@ def _allowed_bot_side_modifications() -> dict:
             current[parts[-1]] = True
         return result
 
-    side = deepcopy(_ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS)
+    side = _flat_bot_side_modification_policy()
     side["strategy"] = {
         strategy_kind: _allow_dotted_paths(keys)
         for strategy_kind in get_supported_strategy_kinds()
@@ -150,8 +159,8 @@ def _allowed_bot_side_modifications() -> dict:
     }
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items():
         grouped_allowed = {
-            local_key: _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.get(flat_key, False)
-            for local_key, flat_key in field_map.items()
+            local_key: f"{group_name}.{local_key}" in OVERRIDABLE_SHARED_BOT_PATHS
+            for local_key in field_map
         }
         if any(grouped_allowed.values()):
             side[group_name] = grouped_allowed
@@ -250,6 +259,23 @@ def _extract_allowed_patch(
                 continue
             if not isinstance(side, dict):
                 raise TypeError(f"{source}.bot.{pside} must be a dict")
+            for removed_path in REMOVED_COIN_OVERRIDE_PATHS:
+                group_name, local_key = removed_path.split(".", 1)
+                flat_key = BOT_GROUP_FIELD_MAP[group_name][local_key]
+                group = side.get(group_name)
+                if flat_key in side or (
+                    isinstance(group, dict) and local_key in group
+                ):
+                    path = _format_override_path(
+                        coin, ("bot", pside, group_name, local_key)
+                    )
+                    message = (
+                        f"{path} is no longer overridable; configure "
+                        f"bot.{pside}.{removed_path} globally and remove it from {source}"
+                    )
+                    if strict:
+                        raise ValueError(message)
+                    logging.warning("%s; the file value is ignored", message)
             canonicalize_shared_bot_side(
                 side,
                 path_prefix=(source, "bot", pside),
@@ -393,19 +419,6 @@ def _validate_patch_leaf_types(
         raise ValueError(
             f"coin_overrides.{coin}.live.leverage ({origin}) must be > 0.0"
         )
-
-
-def _normalize_patch_values(patch: dict, *, coin: str) -> None:
-    for pside in ("long", "short"):
-        risk = patch.get("bot", {}).get(pside, {}).get("risk", {})
-        if isinstance(risk, dict) and "we_excess_allowance_mode" in risk:
-            risk["we_excess_allowance_mode"] = normalize_we_excess_allowance_mode(
-                risk["we_excess_allowance_mode"],
-                path=(
-                    f"coin_overrides.{coin}.bot.{pside}.risk."
-                    "we_excess_allowance_mode"
-                ),
-            )
 
 
 def _validate_effective_coin_config(
@@ -633,7 +646,6 @@ def parse_overrides(
                 strict=False,
                 strategy_kind=strategy_kind,
             )
-            _normalize_patch_values(parsed_overrides, coin=coin)
             _validate_patch_leaf_types(
                 result,
                 parsed_overrides,
@@ -653,7 +665,6 @@ def parse_overrides(
             strict=True,
             strategy_kind=strategy_kind,
         )
-        _normalize_patch_values(inline_patch, coin=coin)
         _validate_patch_leaf_types(
             result,
             inline_patch,
@@ -664,7 +675,6 @@ def parse_overrides(
             parsed_overrides,
             inline_patch,
         )
-        _normalize_patch_values(parsed_overrides, coin=coin)
         parsed_overrides = _validate_effective_coin_config(
             result,
             parsed_overrides,

@@ -375,6 +375,9 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                             )
                         },
                         "risk": {
+                            "entry_cooldown_minutes": side["risk"][
+                                "entry_cooldown_minutes"
+                            ],
                             "position_exposure_enforcer_enabled": side["risk"][
                                 "position_exposure_enforcer_enabled"
                             ],
@@ -384,13 +387,11 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                             "we_excess_allowance_pct": side["risk"][
                                 "we_excess_allowance_pct"
                             ],
-                            "we_excess_allowance_mode": side["risk"][
-                                "we_excess_allowance_mode"
-                            ],
                         },
                         "unstuck": {
                             "close_pct": side["unstuck"]["close_pct"],
                             "ema_dist": side["unstuck"]["ema_dist"],
+                            "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
                             "enabled": side["unstuck"]["enabled"],
                             "loss_allowance_pct": side["unstuck"]["loss_allowance_pct"],
                             "threshold": side["unstuck"]["threshold"],
