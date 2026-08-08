@@ -6,6 +6,7 @@ import os
 import pytest
 
 import config_utils
+from config.overrides import load_override_config
 
 
 def _write_config(path, cfg):
@@ -66,17 +67,70 @@ def test_override_path_resolves_relative_to_base_config(tmp_path):
     assert "disallowed_root" not in xrp_ov
 
 
-def test_override_file_not_found_yields_empty_override(tmp_path, monkeypatch):
+def test_override_file_not_found_fails_closed(tmp_path):
     base_cfg = config_utils.get_template_config()
     base_cfg["live"]["user"] = "tester"
     base_cfg["live"]["base_config_path"] = str(tmp_path / "base.json")
-    base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": "overrides/missing.json"}}
+    base_cfg["coin_overrides"] = {
+        "DOGE": {"override_config_path": "overrides/missing.json"}
+    }
     base_path = tmp_path / "base.json"
     _write_config(base_path, base_cfg)
 
     loaded = config_utils.load_config(str(base_path), verbose=False)
-    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+    with pytest.raises(
+        FileNotFoundError,
+        match=r"coin_overrides\.DOGE\.override_config_path not found",
+    ):
+        config_utils.parse_overrides(deepcopy(loaded), verbose=False)
 
-    # override exists but has no allowed diff because the file was missing
-    assert "DOGE" in parsed["coin_overrides"]
-    assert parsed["coin_overrides"]["DOGE"] == {}
+
+def test_malformed_override_file_fails_closed(tmp_path):
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_path = tmp_path / "base.json"
+    override_path = tmp_path / "broken.json"
+    override_path.write_text('{"bot": ', encoding="utf-8")
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": override_path.name}}
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    with pytest.raises(
+        ValueError,
+        match=r"coin_overrides\.DOGE\.override_config_path .* is invalid",
+    ):
+        config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+
+def test_structurally_invalid_override_file_fails_closed(tmp_path):
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_path = tmp_path / "base.json"
+    override_path = tmp_path / "invalid.json"
+    override_path.write_text("[]", encoding="utf-8")
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    base_cfg["coin_overrides"] = {"DOGE": {"override_config_path": override_path.name}}
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    with pytest.raises(
+        ValueError,
+        match=r"coin_overrides\.DOGE\.override_config_path .* is invalid",
+    ):
+        config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+
+def test_unreadable_override_file_error_propagates(tmp_path):
+    override_path = tmp_path / "override.json"
+    override_path.write_text("{}", encoding="utf-8")
+    config = {
+        "live": {"base_config_path": str(tmp_path / "base.json")},
+        "coin_overrides": {"DOGE": {"override_config_path": override_path.name}},
+    }
+
+    def raise_permission_error(path):
+        raise PermissionError(f"cannot read {path}")
+
+    with pytest.raises(PermissionError, match="cannot read"):
+        load_override_config(config, "DOGE", config_loader=raise_permission_error)

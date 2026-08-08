@@ -4456,6 +4456,12 @@ class Passivbot:
         log_key = None
         if symbol and symbol in self.coin_overrides:
             d = self.coin_overrides[symbol]
+            if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
+                side = d.get("bot", {}).get(path[1], {})
+                sentinel = object()
+                grouped_value = get_grouped_bot_value(side, path[2], default=sentinel)
+                if grouped_value is not sentinel:
+                    return grouped_value
             for p in path:
                 if isinstance(d, dict) and p in d:
                     d = d[p]

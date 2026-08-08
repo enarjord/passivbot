@@ -395,10 +395,19 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
       ]
       ```
-    - `config.bot.long/short` shared groups:
+    - `config.bot.long/short` shared fields:
       ```
       [
-        risk.*, forager.*, hsl.*, unstuck.*, wallet_exposure_limit
+        risk.position_exposure_enforcer_enabled,
+        risk.position_exposure_enforcer_threshold,
+        risk.we_excess_allowance_pct,
+        risk.we_excess_allowance_mode,
+        unstuck.close_pct,
+        unstuck.ema_dist,
+        unstuck.enabled,
+        unstuck.loss_allowance_pct,
+        unstuck.threshold,
+        wallet_exposure_limit
       ]
       ```
     - `config.live`:
@@ -406,7 +415,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     [forced_mode_long, forced_mode_short, leverage]
     ```
   - Examples:
-    - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Will attempt to load "path/to/override_config.json" and apply all eligible parameters from there for COIN1
+    - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Loads the required file and applies all explicitly present eligible parameters from it for COIN1
     - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", "bot": {"long": {"strategy": {"trailing_martingale": {"close": {"threshold_base_pct": 0.005}}}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply the given close threshold override after.
     - `{"COIN3": {"bot": {"short": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": 0.01}}}}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
 - **forced_modes**:
