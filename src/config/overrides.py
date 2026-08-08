@@ -103,14 +103,6 @@ _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
     "entry_we_weight",
 } | TRAILING_GRID_V7_FLAT_ONLY_KEYS
 
-_RUNTIME_GENERATED_OVERRIDE_KEYS = {
-    "filter_volatility_drop_pct",
-    "filter_volatility_ema_span_1m",
-    "filter_volume_drop_pct",
-    "filter_volume_ema_span_1m",
-}
-
-
 def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
     if not isinstance(overrides, dict):
         return
@@ -235,7 +227,6 @@ def _extract_allowed_patch(
     source: str,
     strict: bool,
     strategy_kind: str,
-    strip_runtime_aliases: bool = False,
 ) -> dict:
     """Extract explicitly supplied allowed leaves without hydrating defaults."""
 
@@ -259,9 +250,6 @@ def _extract_allowed_patch(
                 continue
             if not isinstance(side, dict):
                 raise TypeError(f"{source}.bot.{pside} must be a dict")
-            if strip_runtime_aliases:
-                for generated_key in _RUNTIME_GENERATED_OVERRIDE_KEYS:
-                    side.pop(generated_key, None)
             canonicalize_shared_bot_side(
                 side,
                 path_prefix=(source, "bot", pside),
@@ -422,7 +410,7 @@ def _normalize_patch_values(patch: dict, *, coin: str) -> None:
 
 def _validate_effective_coin_config(
     config: dict, patch: dict, *, coin: str, origin: str
-) -> None:
+) -> dict:
     effective = deepcopy(config)
     for metadata_key in (
         "_coins_sources",
@@ -432,6 +420,12 @@ def _validate_effective_coin_config(
     ):
         effective.pop(metadata_key, None)
     effective["coin_overrides"] = {}
+    for pside in ("long", "short"):
+        canonicalize_shared_bot_side(
+            effective.get("bot", {}).get(pside),
+            path_prefix=("bot", pside),
+            seed_missing_groups=False,
+        )
     validation_input = get_template_config()
     nested_update(validation_input, effective)
     effective = validation_input
@@ -439,7 +433,7 @@ def _validate_effective_coin_config(
         if root in patch:
             nested_update(effective[root], deepcopy(patch[root]))
     try:
-        prepare_config(
+        prepared = prepare_config(
             effective,
             base_config_path=str(effective.get("live", {}).get("base_config_path") or ""),
             live_only=False,
@@ -450,6 +444,25 @@ def _validate_effective_coin_config(
         raise type(exc)(
             f"coin_overrides.{coin} produces an invalid config after {origin}: {exc}"
         ) from exc
+    normalized_patch = {}
+    for path, original_value in _iter_patch_leaves(patch):
+        normalized_value = _get_nested_value(prepared, path)
+        if normalized_value is None:
+            # wallet_exposure_limit is a per-coin runtime value calculated after
+            # canonical config preparation, so it has no canonical global leaf.
+            if len(path) == 3 and path[0] == "bot" and path[2] == "wallet_exposure_limit":
+                normalized_value = original_value
+            else:
+                raise ValueError(
+                    f"coin_overrides.{coin} normalization lost {'.'.join(path)} after {origin}"
+                )
+        set_nested_value_safe(
+            normalized_patch,
+            list(path),
+            deepcopy(normalized_value),
+            create_missing=True,
+        )
+    return normalized_patch
 
 
 def load_override_config(
@@ -559,6 +572,15 @@ def parse_overrides(
     if symbol_normalizer is None:
         symbol_normalizer = symbol_to_coin
     result = deepcopy(config)
+    runtime_compiled = any(
+        isinstance(item, dict) and item.get("step") == "compile_runtime_config"
+        for item in result.get("_transform_log", [])
+    )
+    if runtime_compiled:
+        raise ValueError(
+            "parse_overrides must run before compile_runtime_config so explicit coin "
+            "override keys remain distinguishable from generated runtime aliases"
+        )
     if "coin_overrides" in result and not isinstance(result["coin_overrides"], dict):
         raise TypeError("coin_overrides must be a dict")
     if not result.get("coin_overrides", {}):
@@ -600,10 +622,6 @@ def parse_overrides(
             )
     result["coin_overrides"] = normalized_overrides
     strategy_kind = normalize_strategy_kind(result.get("live", {}).get("strategy_kind"))
-    runtime_compiled = any(
-        isinstance(item, dict) and item.get("step") == "compile_runtime_config"
-        for item in result.get("_transform_log", [])
-    )
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
         loaded = override_loader(result, coin)
@@ -622,7 +640,7 @@ def parse_overrides(
                 coin=coin,
                 origin="override_config_path",
             )
-            _validate_effective_coin_config(
+            parsed_overrides = _validate_effective_coin_config(
                 result,
                 parsed_overrides,
                 coin=coin,
@@ -634,7 +652,6 @@ def parse_overrides(
             source=f"coin_overrides.{coin}",
             strict=True,
             strategy_kind=strategy_kind,
-            strip_runtime_aliases=runtime_compiled,
         )
         _normalize_patch_values(inline_patch, coin=coin)
         _validate_patch_leaf_types(
@@ -648,7 +665,7 @@ def parse_overrides(
             inline_patch,
         )
         _normalize_patch_values(parsed_overrides, coin=coin)
-        _validate_effective_coin_config(
+        parsed_overrides = _validate_effective_coin_config(
             result,
             parsed_overrides,
             coin=coin,

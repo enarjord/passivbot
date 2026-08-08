@@ -84,7 +84,7 @@ instead of extending the current feature branch indefinitely.
   including a restart scenario.
 - [x] Inspect the exact diff and staged paths for public-repository safety.
 - [x] Open a regular ready-for-review PR.
-- [ ] Request Codex review and record the reviewed head SHA.
+- [x] Request Codex review; first pass reviewed `abb40a4840e64a834a50077540d0a2d5c2894313`.
 - [ ] Address actionable findings, add regressions, rerun proportional validation, and
   request re-review until no unresolved actionable findings remain.
 - [ ] Require all CI checks green on the current head.

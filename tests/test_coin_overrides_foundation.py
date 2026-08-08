@@ -4,6 +4,7 @@ import pytest
 
 from config.load import prepare_config
 from config.overrides import parse_overrides
+from config.runtime_compile import compile_runtime_config
 from config.schema import get_template_config
 from config.strategy import merge_runtime_bot_side
 from passivbot import Passivbot
@@ -149,6 +150,52 @@ def test_unstuck_ema_distance_validation_applies_to_effective_config():
         match=r"coin_overrides\.BTC produces an invalid config after file and inline precedence resolution",
     ):
         _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_dist": -1.0}}}}})
+
+
+def test_effective_validation_normalization_is_retained_in_patch():
+    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"threshold": 1e-12}}}}})
+
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["threshold"] == 0.0
+
+
+def test_runtime_compilation_must_follow_override_parsing():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"filter_volume_drop_pct": 0.25}}}
+    }
+    runtime_config = prepare_config(
+        source,
+        verbose=False,
+        log_config_transforms=False,
+        target="live",
+        runtime="live",
+    )
+
+    with pytest.raises(ValueError, match=r"must run before compile_runtime_config"):
+        parse_overrides(runtime_config, verbose=False)
+
+    canonical_config = prepare_config(
+        source,
+        verbose=False,
+        log_config_transforms=False,
+        target="live",
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"coin_overrides\.BTC\.bot\.long\.filter_volume_drop_pct is not overridable",
+    ):
+        parse_overrides(canonical_config, verbose=False)
+
+
+def test_runtime_compilation_after_parsing_preserves_normalized_patch():
+    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"threshold": 1e-12}}}}})
+
+    runtime_config = compile_runtime_config(parsed, runtime="live")
+
+    assert (
+        runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["threshold"]
+        == 0.0
+    )
 
 
 def test_unknown_and_disallowed_inline_paths_fail():

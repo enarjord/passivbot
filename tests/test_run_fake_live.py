@@ -1146,6 +1146,10 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
         assert override["bot"]["long"]["strategy"]["trailing_martingale"][
             "entry"
         ]["threshold_base_pct"] == global_threshold
+        transform_steps = [item["step"] for item in bot.config["_transform_log"]]
+        assert transform_steps.index("parse_overrides") < transform_steps.index(
+            "compile_runtime_config"
+        )
     finally:
         _cleanup_fake_user_state(user)
 
