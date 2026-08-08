@@ -405,6 +405,7 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
     """Raw flat strategy keys must survive prune after preparation nests them."""
     base_cfg = config_utils.get_template_config()
     base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["strategy_kind"] = "trailing_martingale"
     base_cfg["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 100.0
     base_cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 7.0
     base_path = tmp_path / "base.json"
@@ -414,6 +415,7 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
         "HYPE": {"override_config_path": str(override_path)},
     }
     # Supported load path: flat side strategy field + grouped cooldown.
+    # Declare strategy_kind so flat migration lands on the active kind.
     override_cfg = {
         "bot": {
             "long": {
@@ -421,7 +423,7 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
                 "risk": {"entry_cooldown_minutes": 50.0},
             }
         },
-        "live": {"user": "tester"},
+        "live": {"user": "tester", "strategy_kind": "trailing_martingale"},
     }
     _write_config(override_path, override_cfg)
     _write_config(base_path, base_cfg)
@@ -432,6 +434,54 @@ def test_file_override_preserves_flat_strategy_param_moved_during_prepare(tmp_pa
     hype = parsed["coin_overrides"]["HYPE"]["bot"]["long"]
     assert hype["risk"]["entry_cooldown_minutes"] == pytest.approx(50.0)
     assert hype["strategy"]["trailing_martingale"]["ema_span_0"] == pytest.approx(321.0)
+
+
+def test_file_override_flat_strategy_param_does_not_authorize_other_kind_defaults(
+    tmp_path,
+):
+    """Flat ema_span_0 must not authorize hydrated defaults on a different kind."""
+    base_cfg = config_utils.get_template_config()
+    base_cfg["live"]["user"] = "tester"
+    base_cfg["live"]["strategy_kind"] = "ema_anchor"
+    base_cfg["bot"]["long"]["strategy"]["ema_anchor"] = {
+        **(base_cfg["bot"]["long"]["strategy"].get("ema_anchor") or {}),
+        "ema_span_0": 55.0,
+        "offset": 0.001,
+    }
+    base_path = tmp_path / "base.json"
+    base_cfg["live"]["base_config_path"] = str(base_path)
+    override_path = tmp_path / "flat_wrong_kind.json"
+    base_cfg["coin_overrides"] = {
+        "HYPE": {"override_config_path": str(override_path)},
+    }
+    # Flat key + ema_anchor active; if migration steals flat into another kind,
+    # hydrated ema_anchor.ema_span_0 must not be kept as a per-coin override.
+    override_cfg = {
+        "bot": {
+            "long": {
+                "ema_span_0": 321.0,
+                "strategy": {
+                    "ema_anchor": {
+                        "offset": 0.003,
+                    }
+                },
+            }
+        },
+        "live": {"user": "tester", "strategy_kind": "ema_anchor"},
+    }
+    _write_config(override_path, override_cfg)
+    _write_config(base_path, base_cfg)
+
+    loaded = config_utils.load_config(str(base_path), verbose=False)
+    parsed = config_utils.parse_overrides(deepcopy(loaded), verbose=False)
+
+    hype = parsed["coin_overrides"]["HYPE"]["bot"]["long"]
+    ea = hype["strategy"]["ema_anchor"]
+    assert ea["offset"] == pytest.approx(0.003)
+    # Keep only when prepared leaf equals raw flat (true migration). Drop hydrated
+    # defaults that merely share the flat key name.
+    if "ema_span_0" in ea:
+        assert ea["ema_span_0"] == pytest.approx(321.0)
 
 
 def test_file_override_preserves_literal_dotted_flat_strategy_param(tmp_path):

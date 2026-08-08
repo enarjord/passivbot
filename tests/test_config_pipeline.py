@@ -1741,6 +1741,16 @@ def test_prepare_config_rejects_null_or_empty_coin_override_entry_cooldown_minut
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_require_finite_entry_cooldown_rejects_overflowing_integer():
+    from config.validate import _require_finite_nonneg_entry_cooldown
+
+    huge = int("9" * 400)
+    with pytest.raises(ValueError, match="must be a finite number"):
+        _require_finite_nonneg_entry_cooldown(
+            huge, path="bot.long.risk.entry_cooldown_minutes"
+        )
+
+
 def test_prepare_config_normalizes_string_entry_cooldown_minutes_to_float():
     source = get_template_config()
     source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = "5"

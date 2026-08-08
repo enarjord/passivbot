@@ -34,7 +34,7 @@ def _require_finite_nonneg_entry_cooldown(raw_value, *, path: str) -> float:
         raise ValueError(f"{path} must be a finite number >= 0.0")
     try:
         value = float(raw_value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{path} must be a finite number >= 0.0") from exc
     if not math.isfinite(value) or value < 0.0:
         raise ValueError(f"{path} must be a finite number >= 0.0")

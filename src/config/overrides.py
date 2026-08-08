@@ -238,14 +238,34 @@ def _raw_walk_has_path(raw: dict | None, path: tuple[str, ...]) -> bool:
     return True
 
 
-def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
+def _raw_prepared_values_match(raw_value, prepared_value) -> bool:
+    """True when a prepared leaf is the same explicit value present in raw."""
+    if raw_value == prepared_value:
+        return True
+    # Numeric strings / ints / floats that normalize equivalently.
+    if isinstance(raw_value, bool) or isinstance(prepared_value, bool):
+        return False
+    try:
+        return float(raw_value) == float(prepared_value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _raw_has_allowed_path(
+    raw: dict | None,
+    path: tuple[str, ...],
+    *,
+    prepared_value=None,
+) -> bool:
     """Return True when an allowed override path was explicitly present in raw config.
 
     Shared bot fields may appear as either flat keys (``risk_entry_cooldown_minutes``)
     or grouped keys (``risk.entry_cooldown_minutes``); both count as explicit.
 
     Strategy params may appear flat on the side in the raw file (``bot.long.ema_span_0``)
-    and be moved into ``bot.long.strategy.<kind>.*`` during preparation; both count.
+    and be moved into ``bot.long.strategy.<kind>.*`` during preparation. Flat provenance
+    only counts when the prepared leaf still equals that raw flat value, so a flat key
+    migrated into a different kind cannot authorize a hydrated template default.
     """
     if not path:
         return isinstance(raw, dict)
@@ -309,17 +329,18 @@ def _raw_has_allowed_path(raw: dict | None, path: tuple[str, ...]) -> bool:
             kind_cfg = raw_strategy.get(kind)
             if isinstance(kind_cfg, dict) and _raw_walk_has_path(kind_cfg, param_parts):
                 return True
-        # Single-segment strategy params are commonly written flat on the side
-        # and migrated into the active kind during preparation.
-        if len(param_parts) == 1 and param_parts[0] in side:
-            return True
-        # Multi-segment params may appear as a literal dotted key on the side
-        # (e.g. "entry.threshold_base_pct") before strategy normalization nests them.
-        # Nested side maps like side["entry"]["threshold_base_pct"] are NOT migrated
-        # by sync_canonical_strategy_config and must not authorize active-kind diffs.
-        dotted_flat_key = ".".join(param_parts)
-        if dotted_flat_key in side:
-            return True
+        # Flat side keys only authorize a prepared leaf that still equals the raw
+        # flat value (proves migration landed this value on this kind).
+        if prepared_value is not None:
+            if len(param_parts) == 1 and param_parts[0] in side:
+                if _raw_prepared_values_match(side[param_parts[0]], prepared_value):
+                    return True
+            # Literal dotted flat keys (e.g. "entry.threshold_base_pct").
+            dotted_flat_key = ".".join(param_parts)
+            if dotted_flat_key in side and _raw_prepared_values_match(
+                side[dotted_flat_key], prepared_value
+            ):
+                return True
         return False
 
     return _raw_walk_has_path(raw, path)
@@ -375,7 +396,7 @@ def prune_override_diff_to_explicit_raw(diff: dict, raw: dict | None) -> dict:
                 if nested:
                     out[key] = nested
                 continue
-            if _raw_has_allowed_path(raw, child_path):
+            if _raw_has_allowed_path(raw, child_path, prepared_value=value):
                 out[key] = deepcopy(value)
         return out
 
