@@ -271,7 +271,11 @@ def normalize_hyperliquid_unified_balance_composition(fetched: Any) -> dict[str,
 
 
 def _select_gateio_account_row(fetched: Mapping[str, Any], quote: str) -> Mapping[str, Any] | None:
-    """Pick the unique Gate futures-account row for the settle currency when possible."""
+    """Pick the unique Gate futures-account row for the settle currency when possible.
+
+    Prefer an exact currency match to ``quote``. A singleton is accepted only when
+    ``currency`` is omitted; an explicit mismatched currency is rejected.
+    """
     info = fetched.get("info")
     if not isinstance(info, list) or not info:
         return None
@@ -289,7 +293,7 @@ def _select_gateio_account_row(fetched: Mapping[str, Any], quote: str) -> Mappin
         return currency_matches[0]
     if len(currency_matches) > 1:
         return None
-    if len(dict_rows) == 1:
+    if len(dict_rows) == 1 and dict_rows[0].get("currency") is None:
         return dict_rows[0]
     return None
 

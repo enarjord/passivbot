@@ -327,7 +327,9 @@ orders move value between `cross_available` and `cross_order_margin`, while open
 positions use `cross_initial_margin`. For multi-currency margin accounts, select
 the unique futures-account row whose settle `currency` matches the bot quote
 (CCXT wraps Gate's single-account response as `info=[account]`; never prefer an
-unrelated first row when currency-matched candidates exist). Derive the strategy
+unrelated first row when currency-matched candidates exist). A singleton row is
+accepted only when `currency` is omitted; an explicit mismatched currency fails
+closed. Derive the strategy
 wallet balance from that same authoritative row as
 `cross_available + cross_order_margin + cross_initial_margin -
 cross_unrealised_pnl`. Require all four finite fields. Removing unrealized PnL

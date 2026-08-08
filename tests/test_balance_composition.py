@@ -281,6 +281,28 @@ def test_gateio_balance_composition_marks_malformed_multi_currency_fields():
     )
 
 
+def test_gateio_balance_composition_rejects_singleton_mismatched_currency():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "info": [
+                {
+                    "currency": "BTC",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "1.0",
+                    "cross_initial_margin": "0.0",
+                    "cross_order_margin": "0.0",
+                    "cross_unrealised_pnl": "0.0",
+                }
+            ]
+        },
+        quote="USDT",
+    )
+
+    assert snapshot == malformed_balance_composition(
+        source="gateio.info.futures_account", reason="missing_account"
+    )
+
+
 def test_ccxt_balance_composition_public_contract_keeps_bounded_provenance():
     public = public_balance_composition(
         normalize_ccxt_balance_composition(

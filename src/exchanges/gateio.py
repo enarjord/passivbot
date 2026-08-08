@@ -144,7 +144,9 @@ class GateIOBot(CCXTBot):
                 f"{self.exchange}: fetch_balance response has multiple info rows "
                 f"for settle currency {quote}"
             )
-        if len(dict_rows) == 1:
+        # No currency match: accept a singleton only when currency is omitted.
+        # An explicit mismatched currency must fail closed (wrong denomination).
+        if len(dict_rows) == 1 and dict_rows[0].get("currency") is None:
             return dict_rows[0]
         raise KeyError(
             f"{self.exchange}: fetch_balance response missing unique info row "

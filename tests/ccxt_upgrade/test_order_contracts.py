@@ -1321,6 +1321,62 @@ def test_gateio_selects_quote_matched_account_row_not_first_info_entry():
     assert balance == pytest.approx(693.0)
 
 
+def test_gateio_rejects_singleton_account_row_with_mismatched_currency():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+
+    with pytest.raises(KeyError, match="settle currency USDT"):
+        bot._get_balance(
+            {
+                "USDT": {"total": 0.0},
+                "info": [
+                    {
+                        "user": 1,
+                        "currency": "BTC",
+                        "margin_mode_name": "multi_currency",
+                        "cross_available": "1.0",
+                        "cross_initial_margin": "0.0",
+                        "cross_order_margin": "0.0",
+                        "cross_unrealised_pnl": "0.0",
+                    }
+                ],
+            }
+        )
+
+
+def test_gateio_accepts_singleton_account_row_when_currency_omitted():
+    bot = GateIOBot.__new__(GateIOBot)
+    bot.exchange = "gateio"
+    bot.quote = "USDT"
+    bot.uid = "existing"
+    bot.cca = SimpleNamespace(uid="existing")
+    bot.ccp = None
+    bot.log_once = lambda msg: None
+
+    balance = bot._get_balance(
+        {
+            "USDT": {"total": 0.0},
+            "info": [
+                {
+                    "user": 1,
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "680.0",
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": "5.0",
+                    "cross_unrealised_pnl": "2.0",
+                }
+            ],
+        }
+    )
+
+    assert balance == pytest.approx(693.0)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
