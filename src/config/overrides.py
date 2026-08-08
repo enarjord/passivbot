@@ -239,12 +239,20 @@ def _raw_walk_has_path(raw: dict | None, path: tuple[str, ...]) -> bool:
 
 
 def _raw_prepared_values_match(raw_value, prepared_value) -> bool:
-    """True when a prepared leaf is the same explicit value present in raw."""
+    """True when a prepared leaf is the same explicit value present in raw.
+
+    Accepts numeric coercions and strategy string normalizations such as
+    case-folding (``\"ALL\"`` -> ``\"all\"`` for ema_gate_mode).
+    """
     if raw_value == prepared_value:
         return True
     # Numeric strings / ints / floats that normalize equivalently.
     if isinstance(raw_value, bool) or isinstance(prepared_value, bool):
         return False
+    # Strategy enums and similar strip+lower normalizations.
+    if isinstance(raw_value, str) and isinstance(prepared_value, str):
+        if raw_value.strip().lower() == prepared_value.strip().lower():
+            return True
     try:
         return float(raw_value) == float(prepared_value)
     except (TypeError, ValueError, OverflowError):
