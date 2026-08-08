@@ -83,7 +83,7 @@ instead of extending the current feature branch indefinitely.
 - [x] Run the deterministic offline fake-live harness with file and inline overrides,
   including a restart scenario.
 - [x] Inspect the exact diff and staged paths for public-repository safety.
-- [ ] Open a regular ready-for-review PR.
+- [x] Open a regular ready-for-review PR.
 - [ ] Request Codex review and record the reviewed head SHA.
 - [ ] Address actionable findings, add regressions, rerun proportional validation, and
   request re-review until no unresolved actionable findings remain.
@@ -159,7 +159,7 @@ instead of extending the current feature branch indefinitely.
 - [x] Foundation branch created from current `origin/master`.
 - [x] Execution checklist persisted.
 - [x] PR 1 implementation and author validation complete.
-- [ ] PR 1 under review.
+- [x] PR 1 under review.
 - [ ] PR 1 merged.
 - [ ] PR 2 merged.
 - [ ] PR 3 merged.
