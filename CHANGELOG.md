@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Make coin overrides explicit, typed patches instead of hydrated config diffs. File values now
+  precede inline values without losing intentional resets to defaults, false, or zero; each resolved
+  per-coin config is validated before use; normalized symbol collisions and strategy-kind mismatches
+  are rejected; and configured override files fail closed when missing, unreadable, malformed, or
+  invalid. Live and backtest consumers now resolve canonical grouped bot fields consistently.
+
 - Refresh hardcoded schema defaults and the mirrored example config from the latest
   long-only trailing-martingale canon candidate: update `bot.long` parameters,
   `optimize.bounds`, and `live.approved_coins` (replace CRO with TON; reorder coin

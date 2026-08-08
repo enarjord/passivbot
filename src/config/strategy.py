@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import Optional
 
-from .shared_bot import BOT_SHARED_GROUPS
+from .shared_bot import BOT_SHARED_GROUPS, flatten_shared_bot_side
 from .strategy_spec import (
     BOT_POSITION_SIDES,
     DEFAULT_STRATEGY_KIND,
@@ -354,7 +354,7 @@ def merge_runtime_bot_side(
         if key in strategy_keys:
             merged.pop(key)
     if isinstance(override_side, dict):
-        for key, value in override_side.items():
+        for key, value in flatten_shared_bot_side(override_side).items():
             if key == "strategy":
                 continue
             if key in strategy_keys:

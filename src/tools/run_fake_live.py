@@ -17,7 +17,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from candlestick_manager import CANDLE_DTYPE, sanitize_remote_fetch_diagnostic
 from config import load_prepared_config
+from config.overrides import parse_overrides
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.runtime_compile import compile_runtime_config
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
 from live.event_bus import LiveEvent, LiveEventContext, LiveEventPipeline
@@ -879,8 +881,9 @@ async def _run_fake_case(
         config_path,
         verbose=False,
         target="live",
-        runtime="live",
     )
+    config = parse_overrides(config, verbose=False)
+    config = compile_runtime_config(config, runtime="live")
     config.setdefault("live", {})
     config["live"]["fake_scenario_path"] = scenario_path
 

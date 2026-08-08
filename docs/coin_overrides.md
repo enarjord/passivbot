@@ -13,23 +13,31 @@ Allowed fields are intentionally limited:
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
 
-Not overrideable: approved/ignored coins, exchange settings, arbitrary new keys—anything outside the
-allowlist is ignored. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected;
-use the nested v8 strategy path instead.
+Not overrideable: approved/ignored coins, exchange settings, and arbitrary new keys. A disallowed or
+unknown inline override is rejected with its full path. A full override config file may contain
+ordinary non-override config fields; those fields are validated as part of that config and then
+filtered out. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected; use the
+nested v8 strategy path instead.
 
 ## How overrides are loaded
 
 1) `coin_overrides` is read from your main config. Keys should be coin tickers (e.g., `"XRP"`).
 2) If `override_config_path` is provided, the file is loaded. Relative paths are resolved against
    `live.base_config_path` (if set) or the current working directory.
-3) The override content is filtered to the allowed fields and diffed against the base config; only
-   differing allowed fields are kept.
-4) During live startup, override keys are remapped to exchange symbols via `coin_to_symbol`; config
+3) Explicit allowed values are extracted without hydrating omitted fields or diffing against the
+   base config. This preserves intentional resets to a global/default value, `false`, or zero.
+4) File values are applied first and inline values are applied second. Inline values therefore win
+   at the individual leaf they specify.
+5) The patch is type-checked, merged with the global config, and the resulting complete per-coin
+   config is validated before startup continues.
+6) During live startup, override keys are remapped to exchange symbols via `coin_to_symbol`; config
    lookups prefer these per-symbol values. In backtests, `prep_backtest_args` merges the override
-   bot diffs directly per coin.
+   bot patch directly per coin.
 
-If the file cannot be found or yields no allowed diffs, the override is effectively empty and the
-base values are used.
+Configured override files are required inputs. A missing, unreadable, malformed, or invalid file
+stops configuration loading with the coin and path identified. The file's `live.strategy_kind`, if
+present, must match the global strategy kind; per-coin strategy-kind changes are not supported.
+Coin keys that normalize to the same ticker are also rejected instead of overwriting each other.
 
 ## Inline override example
 
@@ -129,8 +137,8 @@ Main config:
 - Run with `--log-level debug` to see which overrides were initialized and when a per-symbol override
   value is used.
 - Ensure `live.base_config_path` is set so relative `override_config_path` values resolve.
-- Verify the override file changes *allowed* fields versus the base config; disallowed keys are
-  dropped unless they are rejected flat strategy keys.
+- Verify that inline patches contain only allowed fields. Non-override fields in a complete file are
+  filtered after the file is validated.
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
   main config.
 - A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
@@ -139,8 +147,11 @@ Main config:
 
 ## Common pitfalls
 
-- Bad paths: `override_config_path` not found → override silently empty.
-- Disallowed keys: fields outside the allowlist are ignored; flat strategy keys are rejected with an
-  error so stale v7-style overrides cannot disappear silently.
-- No diff: if the override matches the base on allowed fields, nothing is applied.
-- Mis-keyed coins: if a coin name cannot be mapped to an exchange symbol, the override is discarded.
+- Bad paths: a missing or unreadable `override_config_path` is fatal.
+- Disallowed inline keys: fields outside the allowlist are rejected; flat strategy keys are also
+  rejected so stale v7-style overrides cannot disappear silently.
+- Explicit reset: an allowed value equal to the global/default value is still retained and may
+  override a different value from `override_config_path`.
+- Mis-keyed coins: invalid coin names and normalized-name collisions are rejected.
+- Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
+  coerced into trading parameters.

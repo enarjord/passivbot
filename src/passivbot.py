@@ -129,6 +129,7 @@ from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
+from config.runtime_compile import compile_runtime_config
 from risk_limits import (
     effective_we_excess_allowance_pct,
     normalize_we_excess_allowance_mode,
@@ -4456,6 +4457,12 @@ class Passivbot:
         log_key = None
         if symbol and symbol in self.coin_overrides:
             d = self.coin_overrides[symbol]
+            if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
+                side = d.get("bot", {}).get(path[1], {})
+                sentinel = object()
+                grouped_value = get_grouped_bot_value(side, path[2], default=sentinel)
+                if grouped_value is not sentinel:
+                    return grouped_value
             for p in path:
                 if isinstance(d, dict) and p in d:
                     d = d[p]
@@ -22323,7 +22330,6 @@ async def main():
         live_only=True,
         verbose=True,
         target="live",
-        runtime="live",
         raw_snapshot=raw_snapshot,
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
@@ -22414,6 +22420,7 @@ async def main():
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)
+    config = compile_runtime_config(config, runtime="live")
     cooldown_secs = 60
     restarts = []
     while True:
