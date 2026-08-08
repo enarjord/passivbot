@@ -112,7 +112,8 @@ instead of extending the current feature branch indefinitely.
 - [x] Rebuild and verify the Rust extension.
 - [x] Run real backtest comparisons that exercise entry cooldown and unstuck EMA gating.
 - [x] Run deterministic offline fake-live scenarios that exercise the new parameters.
-- [ ] Open a regular ready-for-review PR and request Codex review.
+- [x] Open a regular ready-for-review PR.
+- [ ] Request Codex review and record the reviewed head SHA.
 - [ ] Address findings and repeat review plus validation until the current head is green.
 - [ ] Merge the reviewed current head and mark this section complete.
 
@@ -161,5 +162,6 @@ instead of extending the current feature branch indefinitely.
 - [x] PR 1 implementation and author validation complete.
 - [x] PR 1 under review.
 - [x] PR 1 merged as `75116d1954c19e2bf54ef8313c18d332815a00e1`.
+- [x] PR 2 under review.
 - [ ] PR 2 merged.
 - [ ] PR 3 merged.
