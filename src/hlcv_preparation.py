@@ -100,6 +100,7 @@ from utils import (
     load_ccxt_instance,
     load_markets,
     make_get_filepath,
+    market_denomination_identity,
     split_exchange_qualified_market_identifier,
     to_ccxt_exchange_id,
     symbol_to_coin,
@@ -111,7 +112,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 6
+HLCV_PREPARATION_ALGORITHM_VERSION = 7
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -5217,11 +5218,23 @@ def _resolve_combined_market_settings(
             try:
                 if not settings_om.has_coin(coin):
                     raise LookupError("market identifier unavailable on settings source")
-            except (
-                LookupError,
-                MarketIdentifierExchangeMismatch,
-                UnknownMarketIdentifier,
-            ):
+                best_symbol = om_dict[best_exchange].get_symbol(coin)
+                settings_symbol = settings_om.get_symbol(coin)
+                if market_denomination_identity(
+                    settings_symbol
+                ) != market_denomination_identity(best_symbol):
+                    raise LookupError(
+                        "market denomination differs from OHLCV source "
+                        f"({settings_symbol} vs {best_symbol})"
+                    )
+            except LookupError as exc:
+                logging.warning(
+                    f"{coin}: cannot use market_settings_sources exchange "
+                    f"'{settings_exchange}' ({exc}); falling back to OHLCV source "
+                    f"'{best_exchange}'"
+                )
+                settings_exchange = best_exchange
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 logging.warning(
                     f"{coin}: not listed on market_settings_sources exchange '{settings_exchange}', "
                     f"falling back to OHLCV source '{best_exchange}'"

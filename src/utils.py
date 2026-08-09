@@ -1180,11 +1180,59 @@ def looks_like_exact_market_identifier(identifier: str) -> bool:
     return False
 
 
+def market_denomination_identity(symbol: str) -> tuple[str, int]:
+    """Return canonical underlying and power-of-ten denomination for a market symbol."""
+    base = str(symbol).split("/", 1)[0].strip()
+    if base.startswith("k") and base[1:].isupper():
+        return base[1:].upper(), 1000
+
+    prefix_match = re.fullmatch(r"(1(?:0+))(.+)", base)
+    suffix_match = re.fullmatch(r"(.+?)(1(?:0+))", base)
+    if bool(prefix_match) != bool(suffix_match):
+        match = prefix_match or suffix_match
+        if prefix_match:
+            multiplier, underlying = match.groups()
+        else:
+            underlying, multiplier = match.groups()
+        if underlying:
+            return underlying.upper(), int(multiplier)
+    return base.upper(), 1
+
+
+def _preferred_convenience_market_candidate(raw, candidates):
+    """Choose one denomination variant for a plain underlying, if selection is safe."""
+    if looks_like_exact_market_identifier(raw):
+        return None
+    requested_underlying, requested_denomination = market_denomination_identity(raw)
+    if requested_denomination != 1:
+        return None
+
+    identities = {
+        candidate: market_denomination_identity(candidate) for candidate in candidates
+    }
+    if (
+        {underlying for underlying, _denomination in identities.values()}
+        != {requested_underlying}
+        or len(set(identities.values())) != len(identities)
+    ):
+        return None
+    return min(
+        candidates,
+        key=lambda candidate: (
+            identities[candidate][1] != 1,
+            identities[candidate][1],
+            candidate,
+        ),
+    )
+
+
 def _resolve_market_candidates(raw, candidates, exchange):
     candidates = sorted(set(candidates or []))
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
+        if preferred := _preferred_convenience_market_candidate(raw, candidates):
+            return preferred
         raise AmbiguousMarketIdentifier(
             f"ambiguous market identifier {raw!r} on {exchange}: matches {candidates}; "
             "use an exact CCXT symbol, native market ID, or "
@@ -1385,7 +1433,7 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
     """Return identifiers whose collision scope is safe across all exchanges."""
     records = []
     collision_canonicals = set()
-    canonical_symbols = defaultdict(set)
+    canonical_underlyings = defaultdict(set)
     for exchange, markets, quote in exchange_markets_quotes:
         coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
         canonical_groups = defaultdict(list)
@@ -1398,11 +1446,20 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
 
         exchange_name = to_standard_exchange_name(exchange)
         for canonical, symbols in canonical_groups.items():
-            canonical_symbols[canonical].update(
-                _quote_agnostic_market_identity(symbol) for symbol in symbols
+            identities = {
+                symbol: market_denomination_identity(symbol) for symbol in symbols
+            }
+            canonical_underlyings[canonical].update(
+                underlying for underlying, _denomination in identities.values()
             )
             candidates = coin_to_symbol_map.get(canonical, [])
-            if len(symbols) > 1 or len(candidates) > 1:
+            preferred_candidate = _preferred_convenience_market_candidate(
+                canonical, candidates
+            )
+            if (
+                len(set(identities.values())) != len(identities)
+                or (len(candidates) > 1 and preferred_candidate is None)
+            ):
                 collision_canonicals.add(canonical)
             for symbol in symbols:
                 market = markets.get(symbol) or {}
@@ -1411,8 +1468,8 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
 
     collision_canonicals.update(
         canonical
-        for canonical, symbols in canonical_symbols.items()
-        if len(symbols) > 1
+        for canonical, underlyings in canonical_underlyings.items()
+        if len(underlyings) > 1
     )
 
     return {
@@ -1422,11 +1479,9 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
 
 
 def _quote_agnostic_market_identity(symbol: str) -> str:
-    """Identify an underlying contract without collapsing scaled base tokens."""
-    base = str(symbol).split("/", 1)[0].strip()
-    if base.startswith("k") and base[1:].isupper():
-        base = f"1000{base[1:]}"
-    return base.upper()
+    """Identify an underlying and denomination across venue naming conventions."""
+    underlying, denomination = market_denomination_identity(symbol)
+    return f"{underlying}@{denomination}"
 
 
 def _preserve_market_identifiers(values) -> list[str]:
@@ -1473,12 +1528,29 @@ async def reject_cross_exchange_market_identifier_collisions(
                 )
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
+            underlying, denomination = market_denomination_identity(symbol)
             resolved[exchange] = {
                 "coin": heuristic_symbol_to_coin(symbol),
                 "symbol": symbol,
+                "underlying": underlying,
+                "denomination": denomination,
                 "identity": _quote_agnostic_market_identity(symbol),
             }
-        if len({item["identity"] for item in resolved.values()}) > 1:
+        _requested_underlying, requested_denomination = market_denomination_identity(
+            identifier
+        )
+        compare_denomination = (
+            looks_like_exact_market_identifier(identifier)
+            or requested_denomination != 1
+        )
+        comparison_identities = {
+            (
+                item["underlying"],
+                item["denomination"] if compare_denomination else None,
+            )
+            for item in resolved.values()
+        }
+        if len(comparison_identities) > 1:
             raise AmbiguousMarketIdentifier(
                 f"market identifier {identifier!r} resolves to different contracts across "
                 f"configured exchanges: {resolved}; use exchange::<native-id>"

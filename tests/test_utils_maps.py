@@ -273,6 +273,22 @@ def test_coin_to_symbol_rejects_multiple_candidates(tmp_path, monkeypatch):
         utils.coin_to_symbol("BTC", ex)
 
 
+@pytest.mark.parametrize(
+    ("symbol", "expected"),
+    [
+        ("SHIB/USDT:USDT", ("SHIB", 1)),
+        ("1000SHIB/USDT:USDT", ("SHIB", 1000)),
+        ("SHIB1000/USDT:USDT", ("SHIB", 1000)),
+        ("SHIB100000/USDT:USDT", ("SHIB", 100000)),
+        ("kSHIB/USDC:USDC", ("SHIB", 1000)),
+        ("LUNA2/USDT:USDT", ("LUNA2", 1)),
+        ("1INCH/USDT:USDT", ("1INCH", 1)),
+    ],
+)
+def test_market_denomination_identity(symbol, expected):
+    assert utils.market_denomination_identity(symbol) == expected
+
+
 def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ex = "testexchange"
@@ -315,8 +331,44 @@ def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkey
     assert utils.coin_to_symbol("1000ABCUSDT", ex) == "1000ABC/USDT:USDT"
     assert utils.coin_to_symbol("ABC/USDT:USDT", ex) == "ABC/USDT:USDT"
     assert utils.coin_to_symbol("1000ABC/USDT:USDT", ex) == "1000ABC/USDT:USDT"
-    with pytest.raises(utils.AmbiguousMarketIdentifier, match="ambiguous market identifier 'ABC'"):
-        utils.coin_to_symbol("ABC", ex)
+    assert utils.coin_to_symbol("ABC", ex) == "ABC/USDT:USDT"
+
+
+def test_plain_coin_prefers_smallest_available_denomination(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ex = "testexchange"
+    path = os.path.join("caches", ex, "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(
+        {
+            "SHIB": [
+                "SHIB100000/USDT:USDT",
+                "SHIB1000/USDT:USDT",
+            ]
+        },
+        open(path, "w"),
+    )
+
+    assert utils.coin_to_symbol("SHIB", ex) == "SHIB1000/USDT:USDT"
+
+
+def test_plain_coin_rejects_duplicate_markets_at_same_denomination(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ex = "testexchange"
+    path = os.path.join("caches", ex, "coin_to_symbol_map.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(
+        {
+            "SHIB": [
+                "1000SHIB/USDT:USDT",
+                "SHIB1000/USDT:USDT",
+            ]
+        },
+        open(path, "w"),
+    )
+
+    with pytest.raises(utils.AmbiguousMarketIdentifier, match="ambiguous market identifier"):
+        utils.coin_to_symbol("SHIB", ex)
 
 
 def test_single_multiplier_market_keeps_legacy_convenience_alias():
