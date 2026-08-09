@@ -53,6 +53,20 @@ def test_format_config_normalizes_coin_sources():
     assert out["backtest"]["coin_sources"] == {"BTC": "binance"}
 
 
+def test_format_config_preserves_exact_coin_source_identifiers():
+    cfg = _base_config()
+    cfg["backtest"]["coin_sources"] = {
+        "1000ABCUSDT": "bitget",
+        "ABC/USDT:USDT": "bybit",
+        "bitget::ABCUSDT": "bitget",
+        "BTC-USDT-SWAP": "okx",
+    }
+
+    out = format_config(copy.deepcopy(cfg), verbose=False)
+
+    assert out["backtest"]["coin_sources"] == cfg["backtest"]["coin_sources"]
+
+
 def test_cache_hash_includes_coin_sources():
     cfg = _base_config()
     cfg["live"]["approved_coins"]["long"] = ["BTC/USDT:USDT"]

@@ -2,6 +2,7 @@ import logging
 
 import numpy as np
 import pytest
+import utils
 
 import backtest as backtest_module
 from config_utils import get_template_config
@@ -196,6 +197,37 @@ def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coi
     assert bot_params_list[0]["short"]["wallet_exposure_limit"] == -1.0
 
 
+def test_prep_backtest_args_does_not_alias_exact_native_ids_across_sides():
+    config = _base_config()
+    config["backtest"]["coins"] = {"binance": ["1000ABCUSDT", "ABCUSDT"]}
+    config["live"]["approved_coins"] = {
+        "long": ["1000ABCUSDT"],
+        "short": ["ABCUSDT"],
+    }
+    config["bot"]["short"]["n_positions"] = 1
+    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+    market_settings = {
+        coin: {
+            "maker": 0.0001,
+            "taker": 0.0005,
+            "qty_step": 1.0,
+            "price_step": 0.0001,
+            "min_qty": 1.0,
+            "min_cost": 1.0,
+            "c_mult": 1.0,
+        }
+        for coin in config["backtest"]["coins"]["binance"]
+    }
+
+    bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
+
+    params_by_coin = dict(zip(sorted(market_settings), bot_params_list))
+    assert params_by_coin["1000ABCUSDT"]["long"]["wallet_exposure_limit"] == -1.0
+    assert params_by_coin["1000ABCUSDT"]["short"]["wallet_exposure_limit"] == 0.0
+    assert params_by_coin["ABCUSDT"]["long"]["wallet_exposure_limit"] == 0.0
+    assert params_by_coin["ABCUSDT"]["short"]["wallet_exposure_limit"] == -1.0
+
+
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     config = _base_config()
     config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
@@ -253,6 +285,37 @@ def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
         "yellow": pytest.approx(0.5),
         "orange": pytest.approx(0.75),
     }
+
+
+def test_prep_backtest_args_matches_exact_override_to_active_alias(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    utils.create_coin_symbol_map_cache("binance", markets, verbose=False)
+    config = _base_config()
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    config["coin_overrides"] = {
+        "BTCUSDT": {"bot": {"long": {"wallet_exposure_limit": 0.25}}}
+    }
+    market_settings = {
+        "BTC": {
+            **_base_mss()["BTC/USDT:USDT"],
+            "exchange": "binance",
+            "symbol": "BTC/USDT:USDT",
+        }
+    }
+
+    bot_params_list, _, _, _ = prep_backtest_args(config, market_settings, "binance")
+
+    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.25
 
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():

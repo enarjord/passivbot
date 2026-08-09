@@ -89,13 +89,18 @@ from config.access import require_config_value, require_live_value
 from ohlcv_utils import get_days_in_between, load_ohlcv_data
 from procedures import get_first_timestamps_unified
 from utils import (
+    MarketIdentifierExchangeMismatch,
+    UnknownMarketIdentifier,
     coin_to_symbol,
+    heuristic_symbol_to_coin,
+    looks_like_exact_market_identifier,
     to_standard_exchange_name,
     format_end_date,
     get_quote,
     load_ccxt_instance,
     load_markets,
     make_get_filepath,
+    split_exchange_qualified_market_identifier,
     to_ccxt_exchange_id,
     symbol_to_coin,
     ts_to_date,
@@ -106,16 +111,36 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 5
+HLCV_PREPARATION_ALGORITHM_VERSION = 6
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
 VOLUME_NORMALIZATION_MIN_CONTRIBUTORS = 3
 
 
-def _filter_forced_sources_for_coins(
-    forced_sources: Dict[str, str], coins: Sequence[str]
+def _reconcile_exchange_sources_for_coins(
+    sources: Dict[str, str],
+    coins: Sequence[str],
+    *,
+    field_name: str,
+    defer_unavailable: bool = False,
 ) -> Dict[str, str]:
+    def canonical_alias(identifier: str) -> str:
+        _qualified_exchange, unqualified = split_exchange_qualified_market_identifier(
+            str(identifier)
+        )
+        return heuristic_symbol_to_coin(unqualified)
+
+    for source_coin, exchange in sources.items():
+        qualified_exchange, _ = split_exchange_qualified_market_identifier(source_coin)
+        if (
+            qualified_exchange is not None
+            and qualified_exchange != to_standard_exchange_name(exchange)
+        ):
+            raise MarketIdentifierExchangeMismatch(
+                f"market identifier {source_coin!r} targets {qualified_exchange}, "
+                f"not {to_standard_exchange_name(exchange)}"
+            )
     active_aliases: set[str] = set()
     for raw_coin in coins:
         coin = str(raw_coin)
@@ -124,11 +149,105 @@ def _filter_forced_sources_for_coins(
             active_aliases.add(coin[4:])
         else:
             active_aliases.add(f"xyz:{coin}")
-    return {
-        coin: forced_sources[coin]
-        for coin in sorted(forced_sources)
+    filtered = {
+        coin: sources[coin]
+        for coin in sorted(sources)
         if coin in active_aliases
     }
+    active_coins = [str(coin) for coin in coins]
+    for source_coin in sorted(sources):
+        if source_coin in active_aliases:
+            continue
+        exchange = sources[source_coin]
+        if not (
+            looks_like_exact_market_identifier(source_coin)
+            or any(looks_like_exact_market_identifier(coin) for coin in active_coins)
+        ):
+            continue
+        try:
+            source_symbol = coin_to_symbol(source_coin, exchange, verbose=False)
+        except UnknownMarketIdentifier as exc:
+            if defer_unavailable:
+                filtered[source_coin] = exchange
+            elif canonical_alias(source_coin) in {
+                canonical_alias(active_coin) for active_coin in active_coins
+            }:
+                raise UnknownMarketIdentifier(
+                    f"{field_name} key {source_coin!r} is unavailable on {exchange} "
+                    "but corresponds to an active backtest coin"
+                ) from exc
+            continue
+        matches = []
+        for active_coin in active_coins:
+            try:
+                if coin_to_symbol(active_coin, exchange, verbose=False) == source_symbol:
+                    matches.append(active_coin)
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+        if len(matches) > 1:
+            raise ValueError(
+                f"{field_name} key {source_coin!r} matches multiple active coins "
+                f"on {exchange}: {sorted(matches)}"
+            )
+        if not matches:
+            continue
+        active_coin = matches[0]
+        existing = filtered.get(active_coin)
+        if existing is not None and existing != exchange:
+            raise ValueError(
+                f"{field_name} maps conflicting exchanges for {active_coin}: "
+                f"{existing} and {exchange}"
+            )
+        filtered[active_coin] = exchange
+    return {coin: filtered[coin] for coin in sorted(filtered)}
+
+
+def _filter_forced_sources_for_coins(
+    forced_sources: Dict[str, str],
+    coins: Sequence[str],
+    *,
+    defer_unavailable: bool = False,
+) -> Dict[str, str]:
+    return _reconcile_exchange_sources_for_coins(
+        forced_sources,
+        coins,
+        field_name="backtest.coin_sources",
+        defer_unavailable=defer_unavailable,
+    )
+
+
+def _filter_market_settings_sources_for_coins(
+    market_settings_sources: Dict[str, str],
+    coins: Sequence[str],
+    *,
+    defer_unavailable: bool = False,
+) -> Dict[str, str]:
+    return _reconcile_exchange_sources_for_coins(
+        market_settings_sources,
+        coins,
+        field_name="backtest.market_settings_sources",
+        defer_unavailable=defer_unavailable,
+    )
+
+
+async def _load_and_reconcile_combined_sources(
+    forced_sources: Dict[str, str],
+    market_settings_sources: Dict[str, str],
+    coins: Sequence[str],
+    configured_exchanges: Sequence[str] = (),
+) -> tuple[Dict[str, str], Dict[str, str]]:
+    """Load override venues before deciding which ones participate in preparation."""
+    source_exchanges = sorted(
+        (set(forced_sources.values()) | set(market_settings_sources.values()))
+        - set(configured_exchanges)
+    )
+    await asyncio.gather(
+        *[load_markets(exchange, verbose=False) for exchange in source_exchanges]
+    )
+    return (
+        _filter_forced_sources_for_coins(forced_sources, coins),
+        _filter_market_settings_sources_for_coins(market_settings_sources, coins),
+    )
 
 
 def _partition_combined_exchange_roles(
@@ -573,7 +692,16 @@ class HLCVManager:
 
     def get_symbol(self, coin: str) -> str:
         assert self.markets, "needs to call load_markets() first"
-        symbol = coin_to_symbol(coin, self.exchange)
+        try:
+            symbol = coin_to_symbol(coin, self.exchange)
+        except MarketIdentifierExchangeMismatch:
+            # Exchange-qualified identities are intentionally unavailable on
+            # every other source in combined-exchange preparation.
+            return ""
+        except UnknownMarketIdentifier:
+            # The manager's in-memory market metadata is authoritative even
+            # when a disk-backed symbol map has not yet been generated.
+            symbol = ""
         if symbol in self.markets:
             return symbol
 
@@ -1255,7 +1383,9 @@ async def try_prepare_hlcvs_v2_local(
 
     try:
         await om.load_markets()
-        first_timestamps_unified = await get_first_timestamps_unified(coins)
+        first_timestamps_unified = await get_first_timestamps_unified(
+            coins, exchange=exchange
+        )
         catalog = OhlcvCatalog(Path("caches") / "ohlcvs" / "catalog.sqlite")
         store = OhlcvStore(Path("caches") / "ohlcvs", catalog)
         mss = {}
@@ -1269,6 +1399,11 @@ async def try_prepare_hlcvs_v2_local(
                 continue
             if coin not in first_timestamps_unified:
                 logging.info("[%s] v2 local skip missing unified inception %s", exchange, coin)
+                continue
+            if minimum_coin_age_days > 0.0 and not _coerce_positive_ts(
+                first_timestamps_unified.get(coin)
+            ):
+                logging.info("[%s] v2 local skip unknown inception %s", exchange, coin)
                 continue
 
             first_ts_guess = om.load_first_timestamp(coin)
@@ -4043,7 +4178,9 @@ async def prepare_hlcvs_internal(
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60_000
 
-    first_timestamps_unified = await get_first_timestamps_unified(coins)
+    first_timestamps_unified = await get_first_timestamps_unified(
+        coins, exchange=exchange
+    )
     per_coin_warmups = compute_per_coin_warmup_minutes(config)
     default_warm = int(per_coin_warmups.get("__default__", 0))
 
@@ -4087,6 +4224,16 @@ async def prepare_hlcvs_internal(
                 if minimum_coin_age_days > 0.0 and not (
                     is_stock_perp_coin and tradfi_for_stock_perps
                 ):
+                    unified_first_ts = _coerce_positive_ts(
+                        first_timestamps_unified.get(coin)
+                    )
+                    if unified_first_ts is None:
+                        _pct_log(
+                            "info",
+                            progress.pct(),
+                            f"{exchange} coin {coin} has no authoritative inception; skipping",
+                        )
+                        return None
                     fetch_stage = "get_first_timestamp"
                     first_ts = await om.get_first_timestamp(coin)
 
@@ -4099,7 +4246,7 @@ async def prepare_hlcvs_internal(
                         return None
 
                     coin_age_days = int(
-                        round(utc_ms() - first_timestamps_unified[coin]) / (1000 * 60 * 60 * 24)
+                        round(utc_ms() - unified_first_ts) / (1000 * 60 * 60 * 24)
                     )
                     if coin_age_days < minimum_coin_age_days:
                         _pct_log(
@@ -4111,7 +4258,7 @@ async def prepare_hlcvs_internal(
                         return None
 
                     new_adjusted_start_ts = max(
-                        first_timestamps_unified[coin] + min_coin_age_ms, first_ts
+                        unified_first_ts + min_coin_age_ms, first_ts
                     )
                     if new_adjusted_start_ts > adjusted_start_ts:
                         _pct_log(
@@ -4267,16 +4414,20 @@ async def prepare_hlcvs_combined(
         for coin, exchange in forced_sources.items()
         if exchange
     }
-    normalized_forced_sources = _filter_forced_sources_for_coins(
-        normalized_forced_sources,
-        effective_backtest_data_coins(config),
-    )
     market_settings_sources = market_settings_sources or {}
     normalized_mss_sources = {
         str(coin): to_ccxt_exchange_id(exchange)
         for coin, exchange in market_settings_sources.items()
         if exchange
     }
+    normalized_forced_sources, normalized_mss_sources = (
+        await _load_and_reconcile_combined_sources(
+            normalized_forced_sources,
+            normalized_mss_sources,
+            effective_backtest_data_coins(config),
+            exchanges_to_consider,
+        )
+    )
     # Only configured exchanges may be selected for unforced coins. Exchanges used
     # solely by a per-coin override still need managers and normalization overlap
     # candidates, but must not enter unrelated source selection. Sort those extras
@@ -4487,7 +4638,12 @@ async def _prepare_hlcvs_combined_impl(
     tradfi_for_stock_perps = _has_stock_perp_calendar_context(
         config.get("backtest", {}).get("ohlcv_source_dir")
     )
-    first_timestamps_unified = await get_first_timestamps_unified(coins)
+    timestamp_exchanges = list(
+        dict.fromkeys([*exchanges_to_consider, *forced_sources.values()])
+    )
+    first_timestamps_unified = await get_first_timestamps_unified(
+        coins, exchanges=timestamp_exchanges
+    )
 
     per_coin_warmups = compute_per_coin_warmup_minutes(config)
     default_warm = int(per_coin_warmups.get("__default__", 0))
@@ -4500,6 +4656,10 @@ async def _prepare_hlcvs_combined_impl(
 
     # Preload markets
     await asyncio.gather(*[om.load_markets() for om in om_dict.values()])
+    forced_sources = _filter_forced_sources_for_coins(forced_sources, coins)
+    market_settings_sources = _filter_market_settings_sources_for_coins(
+        market_settings_sources, coins
+    )
     coins = _normalize_combined_coins(coins, forced_sources, om_dict, first_timestamps_unified)
 
     progress = ProgressTracker(len(coins), "combined fetching candles")
@@ -4833,7 +4993,15 @@ def _plan_combined_coin(
         effective_start_ts = int(base_start_ts)
         coin_fts = None
     else:
-        coin_fts = int(first_timestamps_unified[coin])
+        coin_fts = _coerce_positive_ts(first_timestamps_unified[coin])
+        if minimum_coin_age_days > 0.0 and coin_fts is None:
+            logging.info(
+                "%s: skipping - no authoritative inception for min_age=%d days",
+                coin,
+                int(minimum_coin_age_days),
+            )
+            return None
+        coin_fts = int(coin_fts or 0)
         effective_start_ts = max(int(base_start_ts), coin_fts + int(min_coin_age_ms))
     if effective_start_ts > end_ts:
         logging.info(
@@ -5047,8 +5215,13 @@ def _resolve_combined_market_settings(
             settings_exchange = best_exchange
         else:
             try:
-                settings_om.get_symbol(coin)
-            except Exception:
+                if not settings_om.has_coin(coin):
+                    raise LookupError("market identifier unavailable on settings source")
+            except (
+                LookupError,
+                MarketIdentifierExchangeMismatch,
+                UnknownMarketIdentifier,
+            ):
                 logging.warning(
                     f"{coin}: not listed on market_settings_sources exchange '{settings_exchange}', "
                     f"falling back to OHLCV source '{best_exchange}'"

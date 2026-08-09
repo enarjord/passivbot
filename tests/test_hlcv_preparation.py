@@ -32,6 +32,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import hlcv_preparation as hp
+import utils
 from hlcv_preparation import HLCVManager, prepare_hlcvs, prepare_hlcvs_combined
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE
 from ohlcv_catalog import OhlcvCatalog
@@ -47,6 +48,29 @@ LEGACY_DTYPE = np.dtype(
         ("bv", "float32"),
     ]
 )
+
+
+def test_combined_market_settings_propagates_ambiguous_source_identifier():
+    class AmbiguousSettingsManager:
+        def has_coin(self, _coin):
+            raise utils.AmbiguousMarketIdentifier("ambiguous market identifier")
+
+    class BestSourceManager:
+        def get_market_specific_settings(self, _coin):
+            return {}
+
+    with pytest.raises(utils.AmbiguousMarketIdentifier):
+        hp._resolve_combined_market_settings(
+            coin="ABC",
+            best_exchange="bybit",
+            market_settings_sources={"ABC": "bitget"},
+            om_dict={
+                "bybit": BestSourceManager(),
+                "bitget": AmbiguousSettingsManager(),
+            },
+            per_coin_warmups={},
+            default_warm=0,
+        )
 
 # ============================================================================
 # Fixtures
@@ -719,11 +743,8 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
         def get_market_specific_settings(self, coin):
             return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
 
-    monkeypatch.setattr(
-        hp,
-        "get_first_timestamps_unified",
-        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
-    )
+    first_timestamps_mock = AsyncMock(return_value={"BAD": 0, "GOOD": 0})
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", first_timestamps_mock)
 
     with pytest.raises(RuntimeError, match="get_ohlcvs failed for BAD"):
         await hp.prepare_hlcvs_internal(
@@ -735,6 +756,9 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
             60_000,
             FakeManager(),
         )
+    first_timestamps_mock.assert_awaited_once_with(
+        ["BAD", "GOOD"], exchange="binance"
+    )
 
 
 @pytest.mark.asyncio
@@ -765,7 +789,7 @@ async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
     monkeypatch.setattr(
         hp,
         "get_first_timestamps_unified",
-        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
+        AsyncMock(return_value={"BAD": 1, "GOOD": 1}),
     )
 
     with pytest.raises(RuntimeError, match="get_first_timestamp failed for BAD"):
@@ -773,6 +797,41 @@ async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
             sample_config,
             ["BAD", "GOOD"],
             "binance",
+            0,
+            0,
+            60_000,
+            FakeManager(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_rejects_zero_inception_when_age_filter_enabled(
+    sample_config, monkeypatch
+):
+    sample_config["live"]["minimum_coin_age_days"] = 30.0
+
+    class FakeManager:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, _coin):
+            return True
+
+        async def get_first_timestamp(self, _coin):
+            pytest.fail("zero unified inception must fail before exchange age lookup")
+
+        async def get_ohlcvs(self, _coin):
+            pytest.fail("coin with unknown inception must not fetch tradable candles")
+
+    monkeypatch.setattr(
+        hp, "get_first_timestamps_unified", AsyncMock(return_value={"NEW": 0.0})
+    )
+
+    with pytest.raises(ValueError, match="No valid coins found with data"):
+        await hp.prepare_hlcvs_internal(
+            sample_config,
+            ["NEW"],
+            "kucoinfutures",
             0,
             0,
             60_000,
@@ -2167,10 +2226,19 @@ def test_pick_best_combined_candidate_uses_config_order_not_volume_for_full_rang
 
 def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
     filtered_forced_sources = hp._filter_forced_sources_for_coins(
-        {"BTC": "okx", "STALE": "hyperliquid", "xyz:TSLA": "hyperliquid"},
-        ["BTC", "xyz:TSLA"],
+        {
+            "BTC": "okx",
+            "1000ABCUSDT": "bitget",
+            "STALE": "hyperliquid",
+            "xyz:TSLA": "hyperliquid",
+        },
+        ["BTC", "1000ABCUSDT", "xyz:TSLA"],
     )
-    assert filtered_forced_sources == {"BTC": "okx", "xyz:TSLA": "hyperliquid"}
+    assert filtered_forced_sources == {
+        "1000ABCUSDT": "bitget",
+        "BTC": "okx",
+        "xyz:TSLA": "hyperliquid",
+    }
 
     configured, extras = hp._partition_combined_exchange_roles(
         ["binanceusdm", "bybit", "binanceusdm"],
@@ -2228,6 +2296,169 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
         "bybit",
         "hyperliquid",
     )
+
+
+def test_plan_combined_coin_rejects_unknown_inception_when_minimum_age_enabled():
+    assert (
+        hp._plan_combined_coin(
+            coin="NEW",
+            base_start_ts=1_700_000_000_000,
+            end_ts=1_800_000_000_000,
+            first_timestamps_unified={"NEW": 0.0},
+            minimum_coin_age_days=30.0,
+            min_coin_age_ms=30 * 24 * 60 * 60 * 1000,
+            tradfi_for_stock_perps=False,
+            forced_sources={},
+            exchanges_to_consider=["bybit", "hyperliquid"],
+        )
+        is None
+    )
+
+
+def test_exact_forced_source_key_matches_active_alias(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": "BTC",
+        }
+    }
+    utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    assert hp._filter_forced_sources_for_coins(
+        {"BTCUSDT": "bitget"}, ["BTC"]
+    ) == {"BTC": "bitget"}
+
+
+def test_exact_forced_source_is_deferred_until_override_exchange_is_loaded(monkeypatch):
+    loaded = False
+
+    def resolve(identifier, exchange, verbose=False):
+        assert exchange == "bitget"
+        if not loaded:
+            raise utils.UnknownMarketIdentifier(identifier)
+        if identifier in {"BTC", "BTCUSDT"}:
+            return "BTC/USDT:USDT"
+        raise utils.UnknownMarketIdentifier(identifier)
+
+    monkeypatch.setattr(hp, "coin_to_symbol", resolve)
+
+    deferred = hp._filter_forced_sources_for_coins(
+        {"BTCUSDT": "bitget"}, ["BTC"], defer_unavailable=True
+    )
+    assert deferred == {"BTCUSDT": "bitget"}
+
+    loaded = True
+    assert hp._filter_forced_sources_for_coins(deferred, ["BTC"]) == {
+        "BTC": "bitget"
+    }
+
+
+@pytest.mark.parametrize(
+    ("filter_sources", "field_name"),
+    [
+        (hp._filter_forced_sources_for_coins, "backtest.coin_sources"),
+        (
+            hp._filter_market_settings_sources_for_coins,
+            "backtest.market_settings_sources",
+        ),
+    ],
+)
+def test_unknown_exact_source_for_active_canonical_coin_fails_closed(
+    monkeypatch, filter_sources, field_name
+):
+    def resolve(identifier, exchange, verbose=False):
+        if identifier == "BTCUSDT":
+            raise utils.UnknownMarketIdentifier(identifier)
+        return "BTC/USDT:USDT"
+
+    monkeypatch.setattr(hp, "coin_to_symbol", resolve)
+
+    with pytest.raises(
+        utils.UnknownMarketIdentifier,
+        match=rf"{field_name} key 'BTCUSDT' is unavailable on bitget",
+    ):
+        filter_sources({"BTCUSDT": "bitget"}, ["BTC"])
+
+
+def test_unknown_exact_source_outside_active_universe_is_dropped(monkeypatch):
+    def resolve(identifier, exchange, verbose=False):
+        raise utils.UnknownMarketIdentifier(identifier)
+
+    monkeypatch.setattr(hp, "coin_to_symbol", resolve)
+
+    assert hp._filter_forced_sources_for_coins(
+        {"OLDUSDTM": "kucoin"}, ["BTC"]
+    ) == {}
+
+
+@pytest.mark.asyncio
+async def test_combined_source_roles_drop_inactive_deferred_keys_after_loading(
+    monkeypatch,
+):
+    loaded = False
+
+    async def fake_load_markets(exchange, verbose=False):
+        nonlocal loaded
+        assert exchange == "kucoin"
+        loaded = True
+        return {}
+
+    def resolve(identifier, exchange, verbose=False):
+        assert loaded
+        assert exchange == "kucoin"
+        if identifier == "OLDUSDTM":
+            return "OLD/USDT:USDT"
+        if identifier == "BTC":
+            return "BTC/USDT:USDT"
+        raise utils.UnknownMarketIdentifier(identifier)
+
+    monkeypatch.setattr(hp, "load_markets", fake_load_markets)
+    monkeypatch.setattr(hp, "coin_to_symbol", resolve)
+
+    forced, market_settings = await hp._load_and_reconcile_combined_sources(
+        {"OLDUSDTM": "kucoin"}, {}, ["BTC"]
+    )
+
+    assert forced == {}
+    assert market_settings == {}
+
+
+@pytest.mark.parametrize(
+    "filter_sources",
+    [
+        hp._filter_forced_sources_for_coins,
+        hp._filter_market_settings_sources_for_coins,
+    ],
+)
+@pytest.mark.parametrize("active_coin", ["BTC", "bitget::BTCUSDT"])
+def test_qualified_source_rejects_contradictory_exchange(filter_sources, active_coin):
+    with pytest.raises(
+        utils.MarketIdentifierExchangeMismatch,
+        match="targets bitget, not bybit",
+    ):
+        filter_sources(
+            {"bitget::BTCUSDT": "bybit"},
+            [active_coin],
+            defer_unavailable=True,
+        )
+
+
+def test_market_settings_source_key_matches_active_exact_identifier(monkeypatch):
+    def resolve(identifier, exchange, verbose=False):
+        assert exchange == "bybit"
+        if identifier in {"BTC", "BTCUSDT"}:
+            return "BTC/USDT:USDT"
+        raise utils.UnknownMarketIdentifier(identifier)
+
+    monkeypatch.setattr(hp, "coin_to_symbol", resolve)
+
+    assert hp._filter_market_settings_sources_for_coins(
+        {"BTC": "bybit"}, ["BTCUSDT"]
+    ) == {"BTCUSDT": "bybit"}
 
 
 def test_volume_reference_exchange_uses_config_order_not_selected_coin_count():

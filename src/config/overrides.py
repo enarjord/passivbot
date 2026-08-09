@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Callable
 
 from pure_funcs import sort_dict_keys
-from utils import symbol_to_coin
+from utils import looks_like_exact_market_identifier, symbol_to_coin
 
 from .load import load_input_config, prepare_config
 from .log_output import log_config_message
@@ -692,7 +692,9 @@ def parse_overrides(
     for coin, overrides in result["coin_overrides"].items():
         if not isinstance(coin, str):
             raise TypeError("coin_overrides keys must be strings")
-        formatted_coin = symbol_normalizer(coin)
+        formatted_coin = (
+            coin if looks_like_exact_market_identifier(coin) else symbol_normalizer(coin)
+        )
         if not formatted_coin:
             raise ValueError(f"coin_overrides.{coin} is not a valid coin or symbol")
         if formatted_coin in normalized_overrides:

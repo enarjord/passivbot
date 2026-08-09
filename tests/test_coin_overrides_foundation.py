@@ -272,7 +272,7 @@ def test_non_positive_leverage_override_fails(value):
 def test_normalized_coin_collision_fails():
     with pytest.raises(ValueError, match=r"both normalize to 'BTC'"):
         _parse(
-            {"BTC": {}, "BTCUSDT": {}},
+            {"BTC": {}, "XBT": {}},
             symbol_normalizer=lambda coin: "BTC",
         )
 

@@ -87,7 +87,16 @@
     },
     "summary": {
       "coin_to_symbol_map": {
-        "ABCD-USA500": [
+        "160000": [
+          "ABCD-USA500/USDC:USDC"
+        ],
+        "180001": [
+          "PARA-OTHERS/USDC:USDC"
+        ],
+        "180002": [
+          "PARA-BTCD/USDC:USDC"
+        ],
+        "ABCD-USA500/USDC:USDC": [
           "ABCD-USA500/USDC:USDC"
         ],
         "BTCD": [
@@ -99,19 +108,28 @@
         "PARA-BTCD": [
           "PARA-BTCD/USDC:USDC"
         ],
+        "PARA-BTCD/USDC:USDC": [
+          "PARA-BTCD/USDC:USDC"
+        ],
         "PARA-OTHERS": [
           "PARA-OTHERS/USDC:USDC"
         ],
-        "USA500": [
-          "ABCD-USA500/USDC:USDC"
+        "PARA-OTHERS/USDC:USDC": [
+          "PARA-OTHERS/USDC:USDC"
         ],
-        "abcd:USA500": [
+        "abcd:USA500/USDC:USDC": [
           "ABCD-USA500/USDC:USDC"
         ],
         "para:BTCD": [
           "PARA-BTCD/USDC:USDC"
         ],
+        "para:BTCD/USDC:USDC": [
+          "PARA-BTCD/USDC:USDC"
+        ],
         "para:OTHERS": [
+          "PARA-OTHERS/USDC:USDC"
+        ],
+        "para:OTHERS/USDC:USDC": [
           "PARA-OTHERS/USDC:USDC"
         ]
       },
@@ -164,7 +182,6 @@
         "160000": "abcd:USA500",
         "180001": "para:OTHERS",
         "180002": "para:BTCD",
-        "ABCD-USA500": "abcd:USA500",
         "ABCD-USA500/USDC:USDC": "abcd:USA500",
         "BTCD": "para:BTCD",
         "OTHERS": "para:OTHERS",
@@ -172,10 +189,11 @@
         "PARA-BTCD/USDC:USDC": "para:BTCD",
         "PARA-OTHERS": "para:OTHERS",
         "PARA-OTHERS/USDC:USDC": "para:OTHERS",
-        "USA500": "abcd:USA500",
-        "abcd:USA500": "abcd:USA500",
+        "abcd:USA500/USDC:USDC": "abcd:USA500",
         "para:BTCD": "para:BTCD",
-        "para:OTHERS": "para:OTHERS"
+        "para:BTCD/USDC:USDC": "para:BTCD",
+        "para:OTHERS": "para:OTHERS",
+        "para:OTHERS/USDC:USDC": "para:OTHERS"
       }
     }
   }

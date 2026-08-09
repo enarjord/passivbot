@@ -67,6 +67,20 @@ def test_parse_overrides_keeps_nested_strategy_mods(monkeypatch):
     }
 
 
+@pytest.mark.parametrize("identifier", ["1000ABCUSDT", "1000ABC/USDT:USDT"])
+def test_parse_overrides_preserves_exact_market_identifier(identifier, monkeypatch):
+    cfg = _base_config_with_override(
+        identifier, {"live": {"forced_mode_long": "manual"}}
+    )
+    monkeypatch.setattr(config_utils, "symbol_to_coin", lambda _value: "ABC")
+    monkeypatch.setattr(config_utils, "load_override_config", lambda c, coin: {})
+
+    parsed = config_utils.parse_overrides(deepcopy(cfg), verbose=False)
+
+    assert identifier in parsed["coin_overrides"]
+    assert "ABC" not in parsed["coin_overrides"]
+
+
 def test_parse_overrides_retains_coin_flags_key(monkeypatch):
     cfg = _base_config_with_override("BTC", {"live": {"forced_mode_long": "manual"}})
     cfg["live"]["coin_flags"] = None

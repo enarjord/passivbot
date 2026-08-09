@@ -86,12 +86,20 @@ from config_utils import (
 from backtest_dataset import dump_backtest_dataset_metadata
 from analysis_visibility import filter_analysis_for_visibility
 from utils import (
+    MarketIdentifierResolutionError,
+    MarketIdentifierExchangeMismatch,
+    UnknownMarketIdentifier,
+    coin_to_symbol,
+    heuristic_symbol_to_coin,
+    looks_like_exact_market_identifier,
     utc_ms,
     make_get_filepath,
     load_markets,
     format_end_date,
     format_approved_ignored_coins,
     date_to_ts,
+    to_standard_exchange_name,
+    to_ccxt_exchange_id,
 )
 from pure_funcs import (
     ts_to_date,
@@ -103,6 +111,7 @@ import pprint
 from copy import deepcopy
 from hlcv_preparation import (
     HLCV_PREPARATION_ALGORITHM_VERSION,
+    _load_and_reconcile_combined_sources,
     prepare_hlcvs,
     prepare_hlcvs_combined,
     try_prepare_hlcvs_v2_local,
@@ -384,16 +393,60 @@ def _apply_market_settings_override(
     market_settings: dict,
     overrides: dict,
 ) -> dict:
+    def find_override(mapping: dict, venue: str, field_name: str):
+        direct_override = mapping.get(coin_key)
+        if venue == "combined" or not (
+            looks_like_exact_market_identifier(coin_key)
+            or any(looks_like_exact_market_identifier(key) for key in mapping)
+        ):
+            return direct_override
+        try:
+            target_symbol = coin_to_symbol(coin_key, venue, verbose=False)
+        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+            return direct_override
+        matches = (
+            [(coin_key, direct_override)] if direct_override is not None else []
+        )
+        for identifier, override in mapping.items():
+            if identifier == coin_key:
+                continue
+            try:
+                override_symbol = coin_to_symbol(identifier, venue, verbose=False)
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                continue
+            if override_symbol == target_symbol:
+                matches.append((identifier, override))
+        if len(matches) > 1:
+            first_override = matches[0][1]
+            if any(override != first_override for _, override in matches[1:]):
+                raise ValueError(
+                    f"conflicting {field_name} keys resolve to {coin!r} on {venue}: "
+                    f"{sorted(identifier for identifier, _ in matches)}"
+                )
+            return first_override
+        return matches[0][1] if matches else None
+
     result = dict(market_settings)
     coin_key = normalize_backtest_coin(coin)
-    global_override = overrides.get("global", {}).get(coin_key)
+    entry_exchange = str(result.get("exchange") or exchange)
+    global_override = find_override(
+        overrides.get("global", {}),
+        entry_exchange,
+        "backtest.market_settings.overrides",
+    )
     if global_override:
         result.update(deepcopy(global_override))
-    entry_exchange = str(result.get("exchange") or exchange)
-    exchange_override = (
-        overrides.get("by_exchange", {}).get(entry_exchange, {}).get(coin_key)
-        or overrides.get("by_exchange", {}).get(str(exchange), {}).get(coin_key)
+    exchange_override = find_override(
+        overrides.get("by_exchange", {}).get(entry_exchange, {}),
+        entry_exchange,
+        f"backtest.market_settings.overrides_by_exchange.{entry_exchange}",
     )
+    if exchange_override is None and str(exchange) != entry_exchange:
+        exchange_override = find_override(
+            overrides.get("by_exchange", {}).get(str(exchange), {}),
+            str(exchange),
+            f"backtest.market_settings.overrides_by_exchange.{exchange}",
+        )
     if exchange_override:
         result.update(deepcopy(exchange_override))
     return result
@@ -1428,6 +1481,30 @@ def get_cache_hash(config, exchange):
     market_settings_sources_sorted = sorted(
         (str(k), str(v)) for k, v in market_settings_sources.items()
     )
+    identity_exchanges = (
+        [
+            *exchanges_cfg,
+            *coin_sources.values(),
+            *market_settings_sources.values(),
+        ]
+        if exchange == "combined"
+        else [exchange]
+    )
+    identity_exchanges = sorted(
+        {
+            to_standard_exchange_name(str(venue))
+            for venue in identity_exchanges
+            if str(venue).strip()
+        }
+    )
+    resolved_market_identities = []
+    for venue in identity_exchanges:
+        for coin in data_coins:
+            try:
+                symbol = coin_to_symbol(coin, venue, verbose=False)
+            except MarketIdentifierResolutionError:
+                symbol = None
+            resolved_market_identities.append((venue, str(coin), symbol))
     to_hash = {
         "coins": data_coins,
         "end_date": format_end_date(require_config_value(config, "backtest.end_date")),
@@ -1440,12 +1517,13 @@ def get_cache_hash(config, exchange):
         "ohlcv_source_dir": config.get("backtest", {}).get("ohlcv_source_dir"),
         "coin_sources": coin_sources_sorted,
         "market_settings_sources": market_settings_sources_sorted,
+        "resolved_market_identities": resolved_market_identities,
+        "hlcv_preparation_algorithm_version": HLCV_PREPARATION_ALGORITHM_VERSION,
     }
     if exchange == "combined":
         to_hash["volume_normalization"] = bool(
             config.get("backtest", {}).get("volume_normalization", True)
         )
-        to_hash["hlcv_preparation_algorithm_version"] = HLCV_PREPARATION_ALGORITHM_VERSION
     return calc_hash(to_hash)
 
 
@@ -1929,6 +2007,34 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
     backtest_warmup_minutes = compute_backtest_warmup_minutes(config)
+    if exchange == "combined":
+        backtest_cfg = config.setdefault("backtest", {})
+        configured_exchanges = [
+            to_ccxt_exchange_id(value)
+            for value in require_config_value(config, "backtest.exchanges")
+        ]
+        forced_sources = {
+            str(coin): to_ccxt_exchange_id(source_exchange)
+            for coin, source_exchange in (backtest_cfg.get("coin_sources") or {}).items()
+            if source_exchange
+        }
+        market_settings_sources = {
+            str(coin): to_ccxt_exchange_id(source_exchange)
+            for coin, source_exchange in (
+                backtest_cfg.get("market_settings_sources") or {}
+            ).items()
+            if source_exchange
+        }
+        forced_sources, market_settings_sources = (
+            await _load_and_reconcile_combined_sources(
+                forced_sources,
+                market_settings_sources,
+                effective_backtest_data_coins(config),
+                configured_exchanges,
+            )
+        )
+        backtest_cfg["coin_sources"] = forced_sources
+        backtest_cfg["market_settings_sources"] = market_settings_sources
     override_result = load_hlcvs_data_override(config, exchange)
     if override_result is not None:
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
@@ -2115,6 +2221,45 @@ def log_backtest_execution_settings(
     )
 
 
+def _get_backtest_coin_override(config, mss, exchange, coin):
+    overrides = config.get("coin_overrides", {})
+    direct_override = overrides.get(coin)
+    market_settings = mss.get(coin, {})
+    venue = market_settings.get("exchange") or exchange
+    if venue == "combined":
+        return {}
+    target_symbol = market_settings.get("symbol")
+    if not target_symbol:
+        try:
+            target_symbol = coin_to_symbol(coin, venue, verbose=False)
+        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+            return direct_override or {}
+    matches = [(coin, direct_override)] if direct_override is not None else []
+    for identifier, override in overrides.items():
+        if identifier == coin:
+            continue
+        if not (
+            looks_like_exact_market_identifier(identifier)
+            or looks_like_exact_market_identifier(coin)
+        ):
+            continue
+        try:
+            override_symbol = coin_to_symbol(identifier, venue, verbose=False)
+        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+            continue
+        if override_symbol == target_symbol:
+            matches.append((identifier, override))
+    if len(matches) > 1:
+        first_override = matches[0][1]
+        if any(override != first_override for _, override in matches[1:]):
+            raise ValueError(
+                f"conflicting coin_overrides resolve to {coin!r} on {venue}: "
+                f"{sorted(identifier for identifier, _ in matches)}"
+            )
+        return first_override
+    return matches[0][1] if matches else {}
+
+
 def prep_backtest_args(
     config,
     mss,
@@ -2146,7 +2291,7 @@ def prep_backtest_args(
     for coin in coins:
         coin_specific_bot_params = {}
         coin_specific_strategy_params = {}
-        coin_override = config.get("coin_overrides", {}).get(coin, {})
+        coin_override = _get_backtest_coin_override(config, mss, exchange, coin)
         coin_override_bot = coin_override.get("bot", {})
         for pside in ["long", "short"]:
             override_side = coin_override_bot.get(pside, {})
@@ -2167,8 +2312,15 @@ def prep_backtest_args(
                 coin_override.get("live", {}).get(f"forced_mode_{pside}", "") == "normal"
             )
         coin_key = normalize_backtest_coin(coin)
+        coin_canonical = heuristic_symbol_to_coin(coin_key)
         for pside in POSITION_SIDES:
-            if coin_key not in approved_by_side[pside]:
+            approved_exact = approved_by_side[pside]
+            approved_by_alias = any(
+                not looks_like_exact_market_identifier(identifier)
+                and heuristic_symbol_to_coin(identifier) == coin_canonical
+                for identifier in approved_exact
+            )
+            if coin_key not in approved_exact and not approved_by_alias:
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
             elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
@@ -2848,7 +3000,9 @@ async def main():
 
     for ex in backtest_exchanges:
         await load_markets(ex)
-    await format_approved_ignored_coins(config, backtest_exchanges)
+    await format_approved_ignored_coins(
+        config, backtest_exchanges, prefer_backtest_coin_source_keys=True
+    )
     config["disable_plotting"] = (
         args.disable_plotting if args.disable_plotting is not None else False
     )

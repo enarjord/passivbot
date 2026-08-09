@@ -8,6 +8,7 @@ import tempfile
 import shutil
 
 from candlestick_manager import CandlestickManager, CANDLE_DTYPE, ONE_MIN_MS
+from utils import FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION
 
 
 @pytest.fixture
@@ -16,6 +17,27 @@ def tmp_cache_dir():
     d = tempfile.mkdtemp()
     yield d
     shutil.rmtree(d, ignore_errors=True)
+
+
+def mark_first_ohlcv_cache_current(cache_dir):
+    with open(
+        os.path.join(cache_dir, "first_ohlcv_timestamps_unified.version"),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        f.write(str(FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION))
+
+
+def write_first_ohlcv_cache_provenance(cache_dir, cache_key, exchange_name, symbol):
+    with open(
+        os.path.join(
+            cache_dir,
+            "first_ohlcv_timestamps_unified_exchange_specific_symbols.json",
+        ),
+        "w",
+        encoding="utf-8",
+    ) as f:
+        json.dump({cache_key: {exchange_name: symbol}}, f)
 
 
 def make_candles(timestamps: list[int]) -> np.ndarray:
@@ -292,8 +314,12 @@ class TestInceptionDateTracking:
         day2_end = day2 + 1439 * ONE_MIN_MS
 
         cache_path = os.path.join(tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json")
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump({"ETH": {"binanceusdm": authoritative_ts}}, f)
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir, "ETH", "binanceusdm", symbol
+        )
 
         calls = []
 
@@ -316,3 +342,169 @@ class TestInceptionDateTracking:
             g["start_ts"] == day1 and g["end_ts"] == day2 - ONE_MIN_MS and g["reason"] == "pre_inception"
             for g in gaps
         )
+
+    def test_exact_symbol_key_in_exchange_specific_cache_is_authoritative(self, tmp_cache_dir):
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "ETH/USDT:USDT"
+        authoritative_ts = 1672617600000
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({symbol: {"binanceusdm": authoritative_ts}}, f)
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir, symbol, "binanceusdm", symbol
+        )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
+
+    def test_mismatched_market_provenance_is_not_authoritative(self, tmp_cache_dir):
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "1000ABC/USDT:USDT"
+        authoritative_ts = 1672617600000
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"ABC": {"binanceusdm": authoritative_ts}}, f)
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir, "ABC", "binanceusdm", "ABC/USDT:USDT"
+        )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) is None
+
+    def test_unversioned_exchange_specific_cache_is_not_authoritative(self, tmp_cache_dir):
+        cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=tmp_cache_dir)
+        symbol = "ETH/USDT:USDT"
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({symbol: {"binanceusdm": 1672617600000}}, f)
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) is None
+
+    def test_native_market_id_key_in_exchange_specific_cache_is_authoritative(
+        self, tmp_cache_dir
+    ):
+        symbol = "1000ABC/USDT:USDT"
+        native_id = "1000ABCUSDT"
+        authoritative_ts = 1672617600000
+        exchange = type(
+            "FakeExchange",
+            (),
+            {
+                "id": "bitget",
+                "markets": {
+                    symbol: {
+                        "symbol": symbol,
+                        "id": native_id,
+                    }
+                },
+            },
+        )()
+        cm = CandlestickManager(
+            exchange=exchange, exchange_name="bitget", cache_dir=tmp_cache_dir
+        )
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({native_id: {"bitget": authoritative_ts}}, f)
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir, native_id, "bitget", symbol
+        )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
+
+    def test_qualified_native_market_id_cache_key_is_authoritative(self, tmp_cache_dir):
+        symbol = "ABC/USDT:USDT"
+        native_id = "ABCUSDT"
+        authoritative_ts = 1672617600000
+        exchange = type(
+            "FakeExchange",
+            (),
+            {
+                "id": "bitget",
+                "markets": {
+                    symbol: {
+                        "symbol": symbol,
+                        "id": native_id,
+                    }
+                },
+            },
+        )()
+        cm = CandlestickManager(
+            exchange=exchange, exchange_name="bitget", cache_dir=tmp_cache_dir
+        )
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {f"bitget::{native_id}": {"bitget": authoritative_ts}},
+                f,
+            )
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir, f"bitget::{native_id}", "bitget", symbol
+        )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
+
+    @pytest.mark.parametrize(
+        ("exchange_name", "exchange_id", "qualified_prefix", "cache_exchange"),
+        [
+            ("binance", "binanceusdm", "binance", "binanceusdm"),
+            ("gateio", "gate", "gate", "gateio"),
+        ],
+    )
+    def test_qualified_native_cache_lookup_accepts_exchange_aliases(
+        self,
+        tmp_cache_dir,
+        exchange_name,
+        exchange_id,
+        qualified_prefix,
+        cache_exchange,
+    ):
+        symbol = "ABC/USDT:USDT"
+        native_id = "ABCUSDT"
+        authoritative_ts = 1672617600000
+        exchange = type(
+            "FakeExchange",
+            (),
+            {
+                "id": exchange_id,
+                "markets": {
+                    symbol: {
+                        "symbol": symbol,
+                        "id": native_id,
+                    }
+                },
+            },
+        )()
+        cm = CandlestickManager(
+            exchange=exchange,
+            exchange_name=exchange_name,
+            cache_dir=tmp_cache_dir,
+        )
+        cache_path = os.path.join(
+            tmp_cache_dir, "first_ohlcv_timestamps_unified_exchange_specific.json"
+        )
+        mark_first_ohlcv_cache_current(tmp_cache_dir)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {f"{qualified_prefix}::{native_id}": {cache_exchange: authoritative_ts}},
+                f,
+            )
+        write_first_ohlcv_cache_provenance(
+            tmp_cache_dir,
+            f"{qualified_prefix}::{native_id}",
+            cache_exchange,
+            symbol,
+        )
+
+        assert cm._lookup_cached_authoritative_start_ts(symbol) == authoritative_ts
