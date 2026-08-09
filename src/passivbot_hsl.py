@@ -3042,13 +3042,17 @@ def _equity_hard_stop_runtime_tier(self, pside: str) -> str:
     return str(self._hsl_state(pside)["runtime"].tier())
 
 
-def _equity_hard_stop_fill_pside(fill: Any) -> str:
+def _equity_hard_stop_fill_pside_optional(fill: Any) -> Optional[str]:
     if isinstance(fill, dict):
-        raw = fill.get("position_side", fill.get("pside", "long"))
+        raw = fill.get("position_side", fill.get("pside"))
     else:
-        raw = getattr(fill, "position_side", getattr(fill, "pside", "long"))
+        raw = getattr(fill, "position_side", getattr(fill, "pside", None))
     out = str(raw).lower()
-    return out if out in {"long", "short"} else "long"
+    return out if out in {"long", "short"} else None
+
+
+def _equity_hard_stop_fill_pside(fill: Any) -> str:
+    return _equity_hard_stop_fill_pside_optional(fill) or "long"
 
 
 def _equity_hard_stop_fill_symbol(fill: Any) -> str:
@@ -3399,36 +3403,6 @@ def _orchestrator_exchange_params(self, symbol: str) -> dict:
     }
 
 
-def _equity_hard_stop_coin_episode_start_covered(self, pside: str, symbol: str) -> bool:
-    """Whether covered fills prove the coin scope's current-episode start.
-
-    Walks the pair's covered fills backward from the current exchange
-    position; if the reversed running size reaches flat inside coverage, the
-    episode boundary is provable from available evidence. Ambiguous fills
-    (unknown action/qty) make the reconstruction unprovable.
-    """
-    if self._pnls_manager is None:
-        return False
-    slot = (self.positions or {}).get(symbol, {}).get(pside, {})
-    size = abs(float(slot.get("size", 0.0) or 0.0))
-    qty_step = _hsl_qty_step_for_symbol(self, symbol)
-    flat_epsilon = _hsl_flat_epsilon(qty_step)
-    if size <= flat_epsilon:
-        # Flat scope: the current episode is empty; nothing to reconstruct.
-        return True
-    replay_events, ambiguous = _equity_hard_stop_coin_replay_events(
-        list(self._pnls_manager.get_events()), pside, symbol, qty_step=qty_step
-    )
-    if ambiguous:
-        return False
-    running = size
-    for _ts, action, qty, _realized_delta in reversed(replay_events):
-        running = running - qty if action == "increase" else running + qty
-        if running <= flat_epsilon:
-            return True
-    return False
-
-
 def _equity_hard_stop_coverage_allow_incomplete(
     self, pside: str, symbol: Optional[str] = None
 ) -> bool:
@@ -3437,11 +3411,11 @@ def _equity_hard_stop_coverage_allow_incomplete(
     Coverage-category failures on HSL PnL inputs may be waived only when:
     - the explicit per-run operator override is active
       (`live.hsl_accept_incomplete_history`), or
-    - `restart_after_red_policy=always` for the scope AND the coin scope's
-      current-episode start is provable from covered fills (the `always`
-      policy ignores the historical no-restart evidence, so pre-episode
-      history may degrade to a warning). `threshold`/`never` always require
-      full configured lookback coverage; pside/unified scopes stay strict.
+    - coin `restart_after_red_policy=always` AND canonical HSL readiness proves
+      every held episode plus the flat-scope cooldown horizon (the `always`
+      policy ignores older no-restart evidence). `threshold`/`never` always
+      require full configured lookback coverage; pside/unified scopes stay
+      strict.
     """
     config = getattr(self, "config", None)
     if isinstance(config, dict):
@@ -3450,7 +3424,7 @@ def _equity_hard_stop_coverage_allow_incomplete(
             live_cfg.get("hsl_accept_incomplete_history", False)
         ):
             return True
-    if symbol is None:
+    if symbol is None or self._pnls_manager is None:
         return False
     hsl_cfg = getattr(self, "hsl", None)
     if not isinstance(hsl_cfg, dict) or pside not in hsl_cfg:
@@ -3462,7 +3436,22 @@ def _equity_hard_stop_coverage_allow_incomplete(
     )
     if policy != "always":
         return False
-    return self._equity_hard_stop_coin_episode_start_covered(pside, symbol)
+    now_ms = int(self.get_exchange_time())
+    lookback = parse_pnls_max_lookback_days(
+        self.live_value("pnls_max_lookback_days"),
+        field_name="live.pnls_max_lookback_days",
+    )
+    required, start_ms = self._equity_hard_stop_required_fill_history_start_ms(
+        now_ms,
+        pnl_start_ms=lookback.fill_cache_age_limit_ms(now_ms),
+    )
+    if not required:
+        return True
+    coverage = self._fill_history_coverage_status(
+        start_ms=start_ms,
+        end_ms=now_ms,
+    )
+    return bool(coverage.get("ready", False))
 
 
 def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> float:
@@ -4132,6 +4121,170 @@ def _equity_hard_stop_coin_bounded_required_replay_start_ts(
     return required_start_ts
 
 
+def _equity_hard_stop_required_fill_history_scope(
+    self,
+    now_ms: int,
+    *,
+    pnl_start_ms: Optional[int],
+) -> tuple[bool, Optional[int], Optional[dict[tuple[str, str], int]]]:
+    """Return aggregate coverage and exact coin-PnL boundaries.
+
+    The pair map is present only when coin ``always`` scopes prove bounded
+    current episodes. ``None`` means every PnL event in the aggregate window
+    remains relevant.
+    """
+    if not self._equity_hard_stop_enabled():
+        return False, None, {}
+    if self._equity_hard_stop_signal_mode() != "coin":
+        return True, pnl_start_ms, None
+    manager = getattr(self, "_pnls_manager", None)
+    if manager is None:
+        return True, pnl_start_ms, None
+
+    fill_events = [
+        event
+        for event in manager.get_events()
+        if pnl_start_ms is None
+        or _equity_hard_stop_fill_timestamp_ms(event) >= int(pnl_start_ms)
+    ]
+    if any(_equity_hard_stop_fill_pside_optional(event) is None for event in fill_events):
+        return True, pnl_start_ms, None
+    events_by_pair = _equity_hard_stop_index_coin_fill_events(fill_events)
+    floor_ms = 0 if pnl_start_ms is None else max(0, int(pnl_start_ms))
+
+    def clamp(value: int) -> int:
+        return max(floor_ms, int(value))
+
+    required_starts: list[int] = []
+    max_cooldown_ms_by_pside: dict[str, int] = {}
+    held_pairs: set[tuple[str, str]] = set()
+    required_start_by_pair: dict[tuple[str, str], int] = {}
+    override_symbols = sorted((getattr(self, "coin_overrides", {}) or {}).keys())
+
+    for pside in self._hsl_psides():
+        for scope_symbol in [None, *override_symbols]:
+            cfg = _equity_hard_stop_config(self, pside, scope_symbol)
+            if not bool(cfg["enabled"]):
+                continue
+            policy = normalize_hsl_restart_after_red_policy(
+                cfg.get("restart_after_red_policy", "threshold"),
+                path=(
+                    f"hsl.{pside}.restart_after_red_policy"
+                    if scope_symbol is None
+                    else f"coin HSL {scope_symbol} {pside}.restart_after_red_policy"
+                ),
+            )
+            if policy != "always":
+                return True, pnl_start_ms, None
+            cooldown_ms = max(
+                0,
+                int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000.0)),
+            )
+            if cooldown_ms > 0:
+                max_cooldown_ms_by_pside[pside] = max(
+                    cooldown_ms,
+                    max_cooldown_ms_by_pside.get(pside, 0),
+                )
+                required_starts.append(clamp(int(now_ms) - cooldown_ms))
+        for symbol in sorted((self.positions or {}).keys()):
+            symbol = str(symbol)
+            if not self._equity_hard_stop_enabled(pside, symbol=symbol):
+                continue
+            if not self._equity_hard_stop_has_open_position_symbol(pside, symbol):
+                continue
+            pair = (pside, symbol)
+            held_pairs.add(pair)
+            bounded_start = _equity_hard_stop_coin_bounded_required_replay_start_ts(
+                self,
+                pside,
+                symbol,
+                events_by_pair.get(pair, []),
+            )
+            if bounded_start is None:
+                return True, pnl_start_ms, None
+            required_start_by_pair[pair] = clamp(bounded_start)
+            required_starts.append(required_start_by_pair[pair])
+
+    for event in fill_events:
+        pside = _equity_hard_stop_fill_pside(event)
+        if pside not in max_cooldown_ms_by_pside:
+            continue
+        symbol = _equity_hard_stop_fill_symbol(event)
+        if not symbol:
+            if _equity_hard_stop_fill_timestamp_ms(event) >= clamp(
+                int(now_ms) - max_cooldown_ms_by_pside[pside]
+            ):
+                return True, pnl_start_ms, None
+            continue
+        cfg = _equity_hard_stop_config(self, pside, symbol)
+        if not bool(cfg["enabled"]):
+            continue
+        cooldown_ms = max(
+            0,
+            int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000.0)),
+        )
+        if cooldown_ms <= 0 or _equity_hard_stop_fill_timestamp_ms(event) < clamp(
+            int(now_ms) - cooldown_ms
+        ):
+            continue
+        if (pside, symbol) not in held_pairs:
+            return True, pnl_start_ms, None
+
+    if not required_starts:
+        return False, None, {}
+    return True, min(required_starts), required_start_by_pair
+
+
+def _equity_hard_stop_required_fill_history_start_ms(
+    self,
+    now_ms: int,
+    *,
+    pnl_start_ms: Optional[int],
+) -> tuple[bool, Optional[int]]:
+    """Return the earliest fill needed by enabled HSL consumers."""
+    required, start_ms, _pair_starts = _equity_hard_stop_required_fill_history_scope(
+        self,
+        now_ms,
+        pnl_start_ms=pnl_start_ms,
+    )
+    return required, start_ms
+
+
+def _equity_hard_stop_required_pnl_events(
+    self,
+    events: list[Any],
+    now_ms: int,
+    *,
+    pnl_start_ms: Optional[int],
+) -> list[Any]:
+    """Select only PnL rows consumed by the canonical HSL replay scope."""
+    required, start_ms, pair_starts = _equity_hard_stop_required_fill_history_scope(
+        self,
+        now_ms,
+        pnl_start_ms=pnl_start_ms,
+    )
+    if not required:
+        return []
+    if pair_starts is None:
+        if start_ms is None:
+            return list(events)
+        return [
+            event
+            for event in events
+            if _equity_hard_stop_fill_timestamp_ms(event) >= int(start_ms)
+        ]
+    out: list[Any] = []
+    for event in events:
+        pside = _equity_hard_stop_fill_pside_optional(event)
+        symbol = _equity_hard_stop_fill_symbol(event)
+        pair_start_ms = pair_starts.get((pside, symbol)) if pside is not None else None
+        if pair_start_ms is not None and _equity_hard_stop_fill_timestamp_ms(
+            event
+        ) >= int(pair_start_ms):
+            out.append(event)
+    return out
+
+
 def _equity_hard_stop_coin_replay_size_at(
     replay_events: list[tuple[int, str, float, float]], row_ts_ms: int
 ) -> float:
@@ -4161,8 +4314,6 @@ def _equity_hard_stop_activate_coin_red_from_metrics(
     pside: str,
     symbol: str,
     metrics: dict,
-    *,
-    realized_pnl_total: Optional[float],
 ) -> None:
     state = self._hsl_coin_state(pside, symbol)
     if state["pending_red_since_ms"] is None:
@@ -4492,7 +4643,7 @@ async def _equity_hard_stop_compute_coin_stop_event(
         "stop_event_timestamp_ms": int(stop_event_ts_ms),
         "balance": float(metrics["balance"]),
         "slot_budget": float(metrics["slot_budget"]),
-        "realized_pnl_total": float(self._equity_hard_stop_realized_pnl_now()),
+        "realized_pnl_total": None,
         "realized_pnl": float(metrics["realized_pnl"]),
         "peak_realized_pnl": float(metrics["peak_realized_pnl"]),
         "unrealized_pnl": float(metrics["unrealized_pnl"]),
@@ -4650,7 +4801,7 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
         symbol=symbol,
         stop_event_timestamp_ms=stop_ts_ms,
         balance=float(stop_event["balance"]),
-        realized_pnl_total=float(stop_event["realized_pnl_total"]),
+        realized_pnl_total=stop_event.get("realized_pnl_total"),
         realized_pnl=float(stop_event["realized_pnl"]),
         unrealized_pnl=float(stop_event["unrealized_pnl"]),
         strategy_pnl=float(stop_event["strategy_pnl"]),
@@ -6726,7 +6877,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         pside,
                         symbol,
                         current_metrics,
-                        realized_pnl_total=float(self._equity_hard_stop_realized_pnl_now()),
                     )
                 pair_rows_applied[(pside, symbol)] = int(applied_rows)
                 mark_pair_ready(pside, symbol)

@@ -89,7 +89,14 @@
     across its maximum configured cooldown horizon. Trailing reconstruction retains
     its symbol/position-side confirmation and bounded recovery. With no historical
     consumer enabled, routine ingestion starts from a bounded recent fetch rather
-    than proving an unrelated PnL window.
+    than proving an unrelated PnL window. Coin HSL with
+    `restart_after_red_policy=always` uses its canonical fill-proven held-episode
+    boundary plus the flat-scope RED cooldown horizon; a recent fill for a flat
+    scope, ambiguous reconstruction, another restart policy, or a broader HSL
+    signal mode preserves the configured PnL lookback. Coin scopes use their
+    effective per-coin HSL policy and cooldown. Recompute both coverage and PnL
+    requirements after fetching so delayed fills cannot be accepted under the
+    earlier boundary and older discarded episodes cannot remain PnL blockers.
 
 ## Runtime Provenance
 

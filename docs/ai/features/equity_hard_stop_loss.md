@@ -45,7 +45,16 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    their gains, losses, and fees cannot affect the retained episode. Unavailable candles before the
    resulting boundary cannot strand an otherwise provable held episode; unavailable required
    candles at or after it still fail closed.
-9. Restart price reconstruction fetches 1m history first. When an exchange cannot provide the
+   Live fill-history readiness uses that same fill-derived boundary as its only held-episode owner
+   and also proves every enabled side's flat-scope cooldown horizon. A recent fill for a currently
+   flat pair may still own a RED cooldown and therefore preserves the full configured lookback.
+   Ambiguous or delayed held evidence also preserves or restores the full requirement before fills
+   become authoritative. PnL blockers are evaluated against each held pair's own canonical episode
+   boundary; the aggregate earliest boundary exists only to fetch and prove coverage. Coin stop
+   finalization consumes pair metrics and must not add an account-wide PnL dependency. Coin mode
+   evaluates each configured coin's effective HSL enablement, restart policy, and cooldown.
+   `threshold`, `never`, pside, and unified modes remain full-lookback strict.
+10. Restart price reconstruction fetches 1m history first. When an exchange cannot provide the
    older leading portion, it may use 5m, then 15m, then 1h candles for that prefix. This is an
    explicitly approximate price path: the finest source wins and its contribution is reported.
    Coarser candles never repair missing rows at or after the first available 1m candle. Fill-based

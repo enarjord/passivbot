@@ -6325,6 +6325,103 @@ async def test_update_pnls_empty_cache_uses_bounded_recent_fetch_without_history
 
 
 @pytest.mark.asyncio
+async def test_update_pnls_rechecks_hsl_requirement_after_delayed_flat_fill():
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    full_start_ms = now_ms - 30 * 86_400_000
+    bounded_start_ms = now_ms - 5 * 60_000
+    delayed_fill = SimpleNamespace(
+        timestamp=now_ms - 60_000,
+        id="delayed-flat-fill",
+        source_ids=["delayed-flat-fill"],
+        symbol="BTC/USDT:USDT",
+        position_side="long",
+        side="sell",
+        qty=0.1,
+        price=10.0,
+        pnl=1.0,
+        fee_paid=0.0,
+        pnl_status="complete",
+    )
+
+    class _Cache:
+        def load_metadata(self):
+            return {
+                "covered_start_ms": bounded_start_ms,
+                "oldest_event_ts": 0,
+                "newest_event_ts": 0,
+                "history_scope": "window",
+                "known_gaps": [],
+            }
+
+        def get_known_gaps(self):
+            return []
+
+        def get_covered_start_ms(self):
+            return bounded_start_ms
+
+    class _Manager:
+        def __init__(self):
+            self._events = []
+            self.cache = _Cache()
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock(side_effect=self._refresh_latest)
+            self.history_scope = "window"
+
+        async def _refresh_latest(self, **kwargs):
+            self._events.append(delayed_fill)
+
+        def get_events(self, start_ms=None):
+            events = list(self._events)
+            if start_ms is not None:
+                events = [event for event in events if event.timestamp >= int(start_ms)]
+            return events
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    manager = _with_fill_coverage_api(_Manager())
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": 30.0,
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = manager
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._live_risk_uses_authoritative_pnl = lambda: True
+    bot._required_fill_history_start_ms = (
+        lambda _now_ms, *, pnl_start_ms: (
+            (True, full_start_ms)
+            if manager.get_events()
+            else (True, bounded_start_ms)
+        )
+    )
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls(source="staged_blocking")
+
+    assert result is False
+    manager.refresh_latest.assert_awaited_once()
+    assert bot._last_fill_refresh_block_reason == "fill_history_coverage"
+    assert manager.get_coverage_status(
+        start_ms=full_start_ms,
+        end_ms=now_ms,
+    )["ready"] is False
+
+
+@pytest.mark.asyncio
 async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists(
     monkeypatch,
 ):
@@ -6827,9 +6924,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         ("complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
     ],
 )
-@pytest.mark.parametrize("coverage_ready", [True, False])
-async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disabled(
-    pnl_status, pnl_source, coverage_ready
+@pytest.mark.parametrize(
+    ("consumer_scope", "coverage_ready"),
+    [("disabled", True), ("disabled", False), ("after_event", True)],
+)
+async def test_update_pnls_ignores_pnl_without_an_active_consumer(
+    pnl_status, pnl_source, consumer_scope, coverage_ready
 ):
     bot = Passivbot.__new__(Passivbot)
     now_ms = 1_800_000_000_000
@@ -6895,7 +6995,15 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
     }
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
-    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: consumer_scope != "disabled"
+    if consumer_scope == "after_event":
+        required_start_ms = event.timestamp + 1
+        bot._required_pnl_history_start_ms = (
+            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        )
+        bot._required_fill_history_start_ms = (
+            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        )
     bot._max_configured_entry_cooldown_minutes = lambda: 0.0
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -9728,7 +9836,10 @@ def test_required_fill_history_start_follows_enabled_consumer(
     pnl_required, cooldown_minutes, pnl_start_ms, expected
 ):
     bot = Passivbot.__new__(Passivbot)
-    bot._live_risk_uses_authoritative_pnl = lambda: pnl_required
+    bot._orchestrator_uses_realized_pnl = lambda: pnl_required
+    bot._equity_hard_stop_required_fill_history_start_ms = (
+        lambda now_ms, *, pnl_start_ms: (False, None)
+    )
     bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
 
     assert (
@@ -9738,6 +9849,37 @@ def test_required_fill_history_start_follows_enabled_consumer(
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("hsl_required", "hsl_start_ms", "cooldown_minutes", "expected"),
+    [
+        (False, None, 0.0, (False, None)),
+        (True, 9_800_000, 0.0, (True, 9_800_000)),
+        (True, 9_800_000, 5.0, (True, 9_640_000)),
+        (True, None, 5.0, (True, None)),
+    ],
+    ids=["none", "hsl_only", "hsl_and_cooldown", "full_hsl"],
+)
+def test_required_fill_history_start_composes_hsl_and_entry_cooldown(
+    hsl_required, hsl_start_ms, cooldown_minutes, expected
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.hsl = {
+        "long": {"enabled": True},
+        "short": {"enabled": False},
+    }
+    bot._equity_hard_stop_enabled = lambda: True
+    bot._orchestrator_uses_realized_pnl = lambda: False
+    bot._equity_hard_stop_required_fill_history_start_ms = (
+        lambda now_ms, *, pnl_start_ms: (hsl_required, hsl_start_ms)
+    )
+    bot._max_configured_entry_cooldown_minutes = lambda: cooldown_minutes
+
+    assert bot._required_fill_history_start_ms(
+        10_000_000,
+        pnl_start_ms=1_000_000,
+    ) == expected
 
 
 def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):

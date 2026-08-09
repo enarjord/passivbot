@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Scope coin-mode HSL fill-history readiness for `restart_after_red_policy=always` to the
+  fill-proven held episode plus the flat-scope cooldown horizon. Recent fills for a currently flat
+  scope, ambiguous held reconstruction, `threshold`/`never`, and pside/unified modes retain the full
+  configured lookback; effective per-coin HSL settings are honored, pending/degraded PnL blockers
+  use each pair's own active episode, and the requirement is rechecked after refresh so delayed or
+  side-ambiguous fills fail closed. Coin finalization no longer requests unused account-wide PnL.
+
 - Gate.io multi-currency futures balance events now publish bounded settle-currency
   composition diagnostics (wallet amount, available margin, reserved IM/order
   margin, unrealized PnL) and select the quote-matched futures-account row instead
