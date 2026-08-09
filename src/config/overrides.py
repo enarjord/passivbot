@@ -475,7 +475,12 @@ def _validate_patch_leaf_types(
 
 
 def _validate_effective_coin_config(
-    config: dict, patch: dict, *, coin: str, origin: str
+    config: dict,
+    patch: dict,
+    *,
+    coin: str,
+    origin: str,
+    retain_derived_hsl_dependents: bool = False,
 ) -> dict:
     effective = deepcopy(config)
     for metadata_key in (
@@ -529,7 +534,7 @@ def _validate_effective_coin_config(
             deepcopy(normalized_value),
             create_missing=True,
         )
-    for pside in ("long", "short"):
+    for pside in ("long", "short") if retain_derived_hsl_dependents else ():
         hsl_patch = patch.get("bot", {}).get(pside, {}).get("hsl")
         if not isinstance(hsl_patch, dict) or not hsl_patch:
             continue
@@ -759,6 +764,7 @@ def parse_overrides(
             parsed_overrides,
             coin=coin,
             origin="file and inline precedence resolution",
+            retain_derived_hsl_dependents=True,
         )
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         log_config_message(

@@ -552,15 +552,17 @@ def normalize_hsl_risk_unstuck_numerics(
             tier_ratios.get("yellow"),
             path=f"{hsl_path}.tier_ratios.yellow",
             max_value=1.0,
+            min_inclusive=False,
         )
         orange = _validate_ratio(
             tier_ratios.get("orange"),
             path=f"{hsl_path}.tier_ratios.orange",
             max_value=1.0,
+            min_inclusive=False,
         )
-        if yellow > orange:
+        if not yellow < orange or orange >= 1.0:
             raise ValueError(
-                f"{hsl_path}.tier_ratios.yellow must be <= {hsl_path}.tier_ratios.orange"
+                f"{hsl_path}.tier_ratios must satisfy 0 < yellow < orange < 1"
             )
         restart_after_red_policy = normalize_hsl_restart_after_red_policy(
             get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),

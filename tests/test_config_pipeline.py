@@ -2178,7 +2178,7 @@ def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
             "hsl",
             "tier_ratios",
             {"yellow": 0.9, "orange": 0.8},
-            r"bot\.long\.hsl\.tier_ratios\.yellow must be <= bot\.long\.hsl\.tier_ratios\.orange",
+            r"bot\.long\.hsl\.tier_ratios must satisfy 0 < yellow < orange < 1",
         ),
         (
             "risk",

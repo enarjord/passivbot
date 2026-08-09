@@ -201,9 +201,33 @@ def test_hsl_dependent_normalization_is_retained_in_resolved_patch():
     assert hsl["no_restart_drawdown_threshold"] == 0.2
 
 
+def test_hsl_dependent_normalization_runs_after_file_inline_precedence():
+    def configure(source):
+        source["bot"]["long"]["hsl"]["red_threshold"] = 0.05
+        source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.1
+
+    parsed = _parse(
+        {
+            "BTC": {
+                "override_config_path": "unused-by-test.json",
+                "bot": {"long": {"hsl": {"red_threshold": 0.05}}},
+            }
+        },
+        loaded={"bot": {"long": {"hsl": {"red_threshold": 0.2}}}},
+        configure_source=configure,
+    )
+
+    hsl = parsed["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]
+    assert hsl["red_threshold"] == 0.05
+    assert "no_restart_drawdown_threshold" not in hsl
+
+
 @pytest.mark.parametrize(
     "hsl_patch",
     [
+        {"tier_ratios": {"yellow": 0.0, "orange": 0.8}},
+        {"tier_ratios": {"yellow": 0.8, "orange": 0.8}},
+        {"tier_ratios": {"yellow": 0.8, "orange": 1.0}},
         {"tier_ratios": {"yellow": 0.9, "orange": 0.8}},
         {"orange_tier_mode": "invalid"},
         {"panic_close_order_type": "invalid"},
