@@ -139,7 +139,8 @@ instead of extending the current feature branch indefinitely.
 - [x] Rebuild and verify the Rust extension.
 - [x] Run real HSL backtests with public fixtures and compare expected behavior.
 - [x] Run deterministic offline fake-live HSL scenarios, including restart behavior.
-- [ ] Open a regular ready-for-review PR and request Codex review.
+- [x] Open a regular ready-for-review PR and request Codex review; first pass requested on
+  `d0a6e4a4976a1b18199cce27eeb0e1b55aa97230`.
 - [ ] Address findings and repeat review plus validation until the current head is green.
 - [ ] Merge the reviewed current head and mark this section complete.
 
