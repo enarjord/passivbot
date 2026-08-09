@@ -1243,8 +1243,15 @@ def market_denomination_identity(
             return expected_upper, 1000
         return base.upper(), 1
 
-    if "k_prefix" in conventions and base.startswith(("k", "K")) and base[1:]:
-        return base[1:].upper(), 1000
+    if "k_prefix" in conventions and isinstance(market, dict):
+        metadata_base = market.get("baseName")
+        if (
+            isinstance(metadata_base, str)
+            and metadata_base.startswith("k")
+            and metadata_base[1:].isupper()
+            and base.upper() == metadata_base.upper()
+        ):
+            return metadata_base[1:].upper(), 1000
     if "prefix" in conventions:
         prefix_match = re.fullmatch(r"(1(?:0+))(.+)", base)
         if prefix_match:
@@ -1539,12 +1546,6 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
     }
 
 
-def _identifier_is_exact_market_alias(identifier, symbol, market) -> bool:
-    """Return whether resolution used an exact CCXT symbol or native market ID."""
-    raw = str(identifier).strip()
-    return raw == str(symbol) or raw == str((market or {}).get("id") or "")
-
-
 def _preserve_market_identifiers(values) -> list[str]:
     """Strip configured identifiers without collapsing exchange market identity."""
     return [raw for value in values if (raw := str(value).strip())]
@@ -1600,10 +1601,9 @@ async def reject_cross_exchange_market_identifier_collisions(
                 "underlying": underlying,
                 "denomination": denomination,
                 "identity": f"{underlying}@{denomination}",
-                "exact": _identifier_is_exact_market_alias(identifier, symbol, market),
             }
         requested_upper = str(identifier).strip().upper()
-        compare_denomination = any(item["exact"] for item in resolved.values()) or any(
+        compare_denomination = looks_like_exact_market_identifier(identifier) or any(
             item["underlying"] != requested_upper for item in resolved.values()
         )
         comparison_identities = {

@@ -280,7 +280,16 @@ def test_coin_to_symbol_rejects_multiple_candidates(tmp_path, monkeypatch):
         ("1000SHIB/USDT:USDT", {"exchange": "binance"}, ("SHIB", 1000)),
         ("SHIB1000/USDT:USDT", {"exchange": "bybit"}, ("SHIB", 1000)),
         ("SHIB100000/USDT:USDT", {"exchange": "bybit"}, ("SHIB", 100000)),
-        ("KSHIB/USDC:USDC", {"exchange": "hyperliquid"}, ("SHIB", 1000)),
+        (
+            "KSHIB/USDC:USDC",
+            {"exchange": "hyperliquid", "market": {"baseName": "kSHIB"}},
+            ("SHIB", 1000),
+        ),
+        (
+            "KAVA/USDC:USDC",
+            {"exchange": "hyperliquid", "market": {"baseName": "KAVA"}},
+            ("KAVA", 1),
+        ),
         ("LUNA2/USDT:USDT", {"exchange": "binance"}, ("LUNA2", 1)),
         ("1INCH/USDT:USDT", {"exchange": "binance"}, ("1INCH", 1)),
         ("NDX100/USDT:USDT", {"exchange": "bitget"}, ("NDX100", 1)),
@@ -419,6 +428,34 @@ def test_numeric_ticker_suffix_is_not_fabricated_as_bitget_denomination():
     assert coin_to_symbol_map["NDX"] == ["NDX/USDT:USDT"]
     assert coin_to_symbol_map["NDX100"] == ["NDX100/USDT:USDT"]
     assert symbol_to_coin_map["NDX100/USDT:USDT"] == "NDX100"
+
+
+def test_hyperliquid_k_prefix_requires_lowercase_k_basename_metadata():
+    markets = {
+        "KSHIB/USDC:USDC": {
+            "id": "38",
+            "swap": True,
+            "linear": True,
+            "base": "KSHIB",
+            "baseName": "kSHIB",
+        },
+        "KAVA/USDC:USDC": {
+            "id": "KAVA",
+            "swap": True,
+            "linear": True,
+            "base": "KAVA",
+            "baseName": "KAVA",
+        },
+    }
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(
+        markets, "USDC", exchange="hyperliquid"
+    )
+
+    assert coin_to_symbol_map["SHIB"] == ["KSHIB/USDC:USDC"]
+    assert coin_to_symbol_map["KAVA"] == ["KAVA/USDC:USDC"]
+    assert "AVA" not in coin_to_symbol_map
+    assert symbol_to_coin_map["KAVA/USDC:USDC"] == "KAVA"
 
 
 def test_inactive_multiplier_market_does_not_pollute_convenience_alias():

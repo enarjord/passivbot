@@ -5220,9 +5220,17 @@ def _resolve_combined_market_settings(
                     raise LookupError("market identifier unavailable on settings source")
                 best_symbol = om_dict[best_exchange].get_symbol(coin)
                 settings_symbol = settings_om.get_symbol(coin)
+                best_market = om_dict[best_exchange].get_market_specific_settings(coin)
+                settings_market = settings_om.get_market_specific_settings(coin)
                 if market_denomination_identity(
-                    settings_symbol, exchange=settings_exchange
-                ) != market_denomination_identity(best_symbol, exchange=best_exchange):
+                    settings_symbol,
+                    exchange=settings_exchange,
+                    market=settings_market,
+                ) != market_denomination_identity(
+                    best_symbol,
+                    exchange=best_exchange,
+                    market=best_market,
+                ):
                     raise LookupError(
                         "market denomination differs from OHLCV source "
                         f"({settings_symbol} vs {best_symbol})"

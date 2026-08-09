@@ -283,6 +283,58 @@ async def test_cross_exchange_plain_alias_unifies_prefix_and_suffix_denomination
 
 
 @pytest.mark.asyncio
+async def test_approved_all_plain_alias_is_not_upgraded_by_coincident_native_id(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets_by_exchange = {
+        "binance": {
+            "1000ABC/USDT:USDT": {
+                "id": "1000ABCUSDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "1000ABC",
+            }
+        },
+        "hyperliquid": {
+            "ABC/USDC:USDC": {
+                "id": "ABC",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "ABC",
+            }
+        },
+    }
+
+    async def fake_load_markets(exchange, verbose=False, quote=None):
+        markets = markets_by_exchange[exchange]
+        assert utils.create_coin_symbol_map_cache(
+            exchange, markets, quote=quote, verbose=False
+        )
+        return markets
+
+    monkeypatch.setattr(utils, "load_markets", fake_load_markets)
+    monkeypatch.setattr(
+        utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
+    )
+    config = {
+        "live": {
+            "approved_coins": "all",
+            "ignored_coins": {"long": [], "short": []},
+        }
+    }
+
+    await format_approved_ignored_coins(config, ["binance", "hyperliquid"])
+
+    assert config["live"]["approved_coins"] == {
+        "long": ["ABC"],
+        "short": ["ABC"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_cross_exchange_native_id_allows_quote_variants_of_same_underlying(
     tmp_path: Path, monkeypatch
 ):

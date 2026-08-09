@@ -103,6 +103,43 @@ def test_combined_market_settings_rejects_cross_denomination_override(caplog):
     assert result["exchange"] == "binance"
     assert "market denomination differs from OHLCV source" in caplog.text
 
+
+def test_combined_market_settings_uses_metadata_proven_denomination():
+    class StubManager:
+        def __init__(self, symbol, exchange, base_name=None):
+            self.symbol = symbol
+            self.exchange = exchange
+            self.base_name = base_name
+
+        def has_coin(self, _coin):
+            return True
+
+        def get_symbol(self, _coin):
+            return self.symbol
+
+        def get_market_specific_settings(self, _coin):
+            result = {"exchange": self.exchange, "c_mult": 1.0}
+            if self.base_name is not None:
+                result["baseName"] = self.base_name
+            return result
+
+    result = hp._resolve_combined_market_settings(
+        coin="SHIB",
+        best_exchange="bitget",
+        market_settings_sources={"SHIB": "bybit"},
+        om_dict={
+            "bitget": StubManager(
+                "SHIB1000/USDT:USDT", "bitget", base_name="SHIB"
+            ),
+            "bybit": StubManager("SHIB1000/USDT:USDT", "bybit"),
+        },
+        per_coin_warmups={},
+        default_warm=0,
+    )
+
+    assert result["exchange"] == "bybit"
+    assert result["ohlcv_source"] == "bitget"
+
 # ============================================================================
 # Fixtures
 # ============================================================================
