@@ -17,7 +17,7 @@ from live.balance_composition import (
 )
 from passivbot import logging
 from passivbot_exceptions import FatalBotException
-from utils import symbol_to_coin, ts_to_date, utc_ms
+from utils import MarketIdentifierResolutionError, symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import calc_hash
 from procedures import print_async_exception, assert_correct_ccxt_version
@@ -1476,7 +1476,13 @@ class HyperliquidBot(CCXTBot):
         for coin, price_raw in fetched.items():
             symbol = self.symbol_ids_inv.get(coin)
             if symbol is None:
-                symbol = self.coin_to_symbol(coin, verbose=False)
+                try:
+                    symbol = self.coin_to_symbol(coin, verbose=False)
+                except MarketIdentifierResolutionError:
+                    # allMids includes spot and unloaded DEX rows outside this
+                    # bot's derivatives market universe. Requested-market
+                    # completeness is enforced by the snapshot caller.
+                    continue
             if symbol not in self.markets_dict:
                 continue
             price = float(price_raw)
