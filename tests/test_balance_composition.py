@@ -11,6 +11,7 @@ from live.balance_composition import (
     format_balance_composition_sample,
     malformed_balance_composition,
     normalize_ccxt_balance_composition,
+    normalize_gateio_balance_composition,
     normalize_hyperliquid_unified_balance_composition,
     normalize_okx_balance_composition,
     public_balance_composition,
@@ -204,6 +205,125 @@ def test_ccxt_balance_composition_is_explicit_for_missing_or_partial_fields():
             "amount": 0.0,
         },
     ]
+
+
+def test_gateio_balance_composition_exposes_multi_currency_margin_components():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "total": {"USDT": 0.0},
+            "info": [
+                {
+                    "currency": "BTC",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "1",
+                    "cross_initial_margin": "0",
+                    "cross_order_margin": "0",
+                    "cross_unrealised_pnl": "0",
+                },
+                {
+                    "currency": "USDT",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "670.0",
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": "12.5",
+                    "cross_unrealised_pnl": "2.5",
+                    "secret": "must-not-leak",
+                },
+            ],
+        },
+        quote="USDT",
+    )
+
+    assert snapshot["status"] == "available"
+    assert snapshot["source"] == "gateio.info.futures_account"
+    assert snapshot["count"] == 1
+    row = snapshot["asset_balances"][0]
+    assert row == {
+        "asset": "USDT",
+        "amount": 690.0,
+        "free_amount": 670.0,
+        "used_amount": 22.5,
+        "unrealized_pnl": 2.5,
+        "field_provenance": {
+            "asset": "currency",
+            "amount": "wallet_balance",
+            "free_amount": "cross_available",
+            "used_amount": "cross_margin",
+            "unrealized_pnl": "cross_unrealised_pnl",
+        },
+    }
+    assert "secret" not in str(snapshot)
+    public = public_balance_composition(snapshot)
+    assert public["source"] == "gateio.info.futures_account"
+    assert public["asset_balances"][0]["free_amount"] == 670.0
+    assert public["asset_balances"][0]["used_amount"] == 22.5
+
+
+def test_gateio_balance_composition_marks_malformed_multi_currency_fields():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "info": [
+                {
+                    "currency": "USDT",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "670.0",
+                    "cross_initial_margin": "nan",
+                    "cross_order_margin": "0",
+                    "cross_unrealised_pnl": "0",
+                }
+            ]
+        },
+        quote="USDT",
+    )
+
+    assert snapshot == malformed_balance_composition(
+        source="gateio.info.futures_account", reason="missing_cross_fields"
+    )
+
+
+def test_gateio_balance_composition_rejects_singleton_mismatched_currency():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "info": [
+                {
+                    "currency": "BTC",
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "1.0",
+                    "cross_initial_margin": "0.0",
+                    "cross_order_margin": "0.0",
+                    "cross_unrealised_pnl": "0.0",
+                }
+            ]
+        },
+        quote="USDT",
+    )
+
+    assert snapshot == malformed_balance_composition(
+        source="gateio.info.futures_account", reason="missing_account"
+    )
+
+
+def test_gateio_balance_composition_labels_quote_derived_asset_provenance():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "info": [
+                {
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "670.0",
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": "12.5",
+                    "cross_unrealised_pnl": "2.5",
+                }
+            ]
+        },
+        quote="USDT",
+    )
+
+    row = snapshot["asset_balances"][0]
+    assert row["asset"] == "USDT"
+    assert row["field_provenance"]["asset"] == "quote"
+    public = public_balance_composition(snapshot)
+    assert public["asset_balances"][0]["field_provenance"]["asset"] == "quote"
 
 
 def test_ccxt_balance_composition_public_contract_keeps_bounded_provenance():

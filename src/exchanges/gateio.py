@@ -110,6 +110,103 @@ class GateIOBot(CCXTBot):
         balance_fetched = await self._do_fetch_balance()
         return self._get_balance(balance_fetched)
 
+    def _select_futures_account_row(self, balance_fetched: dict) -> dict:
+        """Select the settle-currency futures account row from a CCXT balance payload.
+
+        CCXT wraps Gate's single futures-account object as ``info=[account]``. Prefer an
+        exact ``currency`` match to ``self.quote`` so a multi-row payload cannot silently
+        use the first unrelated row. When currency is absent, accept only a single row.
+        """
+        info = balance_fetched.get("info")
+        if not isinstance(info, list) or not info:
+            raise KeyError(f"{self.exchange}: fetch_balance response missing info list")
+        quote = str(self.quote).strip().upper()
+        if not quote:
+            raise ValueError(f"{self.exchange}: quote currency is required for balance parsing")
+
+        currency_matches: list[dict] = []
+        dict_rows: list[dict] = []
+        for row in info:
+            if not isinstance(row, dict):
+                continue
+            dict_rows.append(row)
+            raw_currency = row.get("currency")
+            if raw_currency is None:
+                continue
+            currency = str(raw_currency).strip().upper()
+            if currency == quote:
+                currency_matches.append(row)
+
+        if len(currency_matches) == 1:
+            return currency_matches[0]
+        if len(currency_matches) > 1:
+            raise ValueError(
+                f"{self.exchange}: fetch_balance response has multiple info rows "
+                f"for settle currency {quote}"
+            )
+        # No currency match: accept a singleton only when currency is omitted.
+        # An explicit mismatched currency must fail closed (wrong denomination).
+        if len(dict_rows) == 1 and dict_rows[0].get("currency") is None:
+            return dict_rows[0]
+        raise KeyError(
+            f"{self.exchange}: fetch_balance response missing unique info row "
+            f"for settle currency {quote}"
+        )
+
+    @staticmethod
+    def _require_finite_account_field(primary: dict, key: str, *, exchange: str) -> float:
+        if key not in primary:
+            raise KeyError(
+                f"{exchange}: fetch_balance response missing multi-currency field {key}"
+            )
+        try:
+            value = float(primary[key])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"{exchange}: fetch_balance response has non-numeric multi-currency "
+                f"field {key}"
+            ) from exc
+        if not math.isfinite(value):
+            raise ValueError(
+                f"{exchange}: fetch_balance response has non-finite multi-currency "
+                f"field {key}"
+            )
+        return value
+
+    def _multi_currency_wallet_balance(self, primary: dict) -> float:
+        """Stable wallet balance for multi-currency cross-margin accounts.
+
+        ``cross_available`` is spendable margin, not account equity: it falls when
+        resting orders reserve margin and rises when those orders are cancelled.
+        Reconstruct wallet balance from the same authoritative futures-account row:
+
+            cross_available + cross_initial_margin + cross_order_margin
+            - cross_unrealised_pnl
+
+        Unrealized PnL is removed because Passivbot adds position PnL separately when
+        deriving equity.
+        """
+        exchange = self.exchange
+        available = self._require_finite_account_field(
+            primary, "cross_available", exchange=exchange
+        )
+        initial_margin = self._require_finite_account_field(
+            primary, "cross_initial_margin", exchange=exchange
+        )
+        order_margin = self._require_finite_account_field(
+            primary, "cross_order_margin", exchange=exchange
+        )
+        unrealised_pnl = self._require_finite_account_field(
+            primary, "cross_unrealised_pnl", exchange=exchange
+        )
+        balance = available + initial_margin + order_margin - unrealised_pnl
+        if not math.isfinite(balance):
+            raise ValueError(
+                f"{exchange}: fetch_balance response has non-finite "
+                "multi-currency margin balance"
+            )
+        return balance
+
     def _get_balance(self, balance_fetched: dict) -> float:
         """Extract Gate.io futures balance for classic and multi-currency margin modes.
 
@@ -117,10 +214,7 @@ class GateIOBot(CCXTBot):
         fetch_balance() and calls this hook directly. Keep Gate.io's margin-mode
         specific parsing here so legacy and staged paths use the same balance.
         """
-        info = balance_fetched.get("info")
-        if not isinstance(info, list) or not info:
-            raise KeyError(f"{self.exchange}: fetch_balance response missing info[0]")
-        primary = info[0]
+        primary = self._select_futures_account_row(balance_fetched)
         if not hasattr(self, "uid") or not self.uid:
             # Gate's REST payload currently returns ``user`` as an integer,
             # while CCXT Pro's private futures subscription treats the UID as
@@ -128,12 +222,12 @@ class GateIOBot(CCXTBot):
             raw_uid = primary["user"]
             if isinstance(raw_uid, bool) or not isinstance(raw_uid, (str, int)):
                 raise ValueError(
-                    f"{self.exchange}: fetch_balance response has invalid info[0].user"
+                    f"{self.exchange}: fetch_balance response has invalid account user"
                 )
             uid = str(raw_uid).strip()
             if not uid:
                 raise ValueError(
-                    f"{self.exchange}: fetch_balance response has empty info[0].user"
+                    f"{self.exchange}: fetch_balance response has empty account user"
                 )
             self.uid = uid
             self.cca.uid = self.uid
@@ -144,32 +238,16 @@ class GateIOBot(CCXTBot):
         if margin_mode_name == "classic":
             balance = float(balance_fetched[self.quote]["total"])
         elif margin_mode_name == "multi_currency":
-            # ``cross_available`` is spendable margin, not account equity. It
-            # falls when resting orders reserve margin and rises again when
-            # those orders are cancelled, which would make Passivbot resize its
-            # ideal orders on every reconciliation cycle. Reconstruct the
-            # stable cross-margin balance from the same authoritative account
-            # payload by adding back position and resting-order initial margin.
-            margin_balance = sum(
-                float(primary[key])
-                for key in (
-                    "cross_available",
-                    "cross_initial_margin",
-                    "cross_order_margin",
-                )
-            )
-            # Margin balance includes unrealized cross-position PnL. Passivbot
-            # adds position PnL separately when deriving equity, so remove it
-            # here to retain wallet-balance semantics and avoid double-counting.
-            balance = margin_balance - float(primary["cross_unrealised_pnl"])
-            if not math.isfinite(balance):
-                raise ValueError(
-                    f"{self.exchange}: fetch_balance response has non-finite "
-                    "multi-currency margin balance"
-                )
+            balance = self._multi_currency_wallet_balance(primary)
         else:
             raise Exception(f"unknown margin_mode_name {balance_fetched}")
         return balance
+
+    def _normalize_balance_diagnostics(self, fetched: object) -> dict:
+        """Expose Gate settle-currency margin components for balance events only."""
+        from live.balance_composition import normalize_gateio_balance_composition
+
+        return normalize_gateio_balance_composition(fetched, quote=self.quote)
 
     async def fetch_pnls(
         self,
