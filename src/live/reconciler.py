@@ -1397,7 +1397,9 @@ def _expected_rust_effective_mode(
 
 
 def _expected_rust_panic_execution_type(
-    global_input: dict, order_type: str, pside: str
+    global_input: dict,
+    symbol_side_hsl_execution: tuple[bool, str],
+    order_type: str,
 ) -> str | None:
     if order_type.rsplit("_", 1)[0] != "close_panic":
         return None
@@ -1405,32 +1407,24 @@ def _expected_rust_panic_execution_type(
     # this before market_orders_allowed, so Python must preserve the same rule.
     if global_input.get("panic_close_market", False) is True:
         return "market"
-    global_bot_params = global_input.get("global_bot_params")
-    if not isinstance(global_bot_params, dict):
-        return "limit"
-    side_params = global_bot_params.get(pside)
-    if not isinstance(side_params, dict):
-        return "limit"
+    hsl_enabled, panic_close_order_type = symbol_side_hsl_execution
     return (
         "market"
-        if (
-            side_params.get("hsl_enabled", False) is True
-            and side_params.get("hsl_panic_close_order_type", "market") == "market"
-        )
+        if hsl_enabled and panic_close_order_type == "market"
         else "limit"
     )
 
 
 def _expected_rust_execution_type(
     global_input: dict,
+    symbol_side_hsl_execution: tuple[bool, str],
     order_book: tuple[float, float],
     order_type: str,
-    pside: str,
     qty: float,
     price: float,
 ) -> str:
     panic_execution_type = _expected_rust_panic_execution_type(
-        global_input, order_type, pside
+        global_input, symbol_side_hsl_execution, order_type
     )
     if panic_execution_type is not None:
         return panic_execution_type
@@ -1468,6 +1462,7 @@ def _submitted_rust_input_context(
     dict[tuple[int, str], bool],
     dict[tuple[int, str], bool],
     dict[tuple[int, str], bool],
+    dict[tuple[int, str], tuple[bool, str]],
 ]:
     symbols = orchestrator_input.get("symbols")
     if not isinstance(symbols, list):
@@ -1484,6 +1479,7 @@ def _submitted_rust_input_context(
     entry_cooldown_positive: dict[tuple[int, str], bool] = {}
     entry_sequential_staging: dict[tuple[int, str], bool] = {}
     close_retracement_enabled: dict[tuple[int, str], bool] = {}
+    hsl_execution_policy: dict[tuple[int, str], tuple[bool, str]] = {}
     timestamp_ms = _validated_rust_u64(
         orchestrator_input.get("timestamp_ms", 0), "input has invalid timestamp_ms"
     )
@@ -1658,6 +1654,21 @@ def _submitted_rust_input_context(
                 raise FatalBotException(
                     f"Rust orchestrator symbol input {input_idx} has invalid {pside} bot_params"
                 )
+            hsl_enabled = bot_params.get("hsl_enabled", False)
+            panic_close_order_type = bot_params.get(
+                "hsl_panic_close_order_type", "market"
+            )
+            if not isinstance(hsl_enabled, bool) or panic_close_order_type not in {
+                "limit",
+                "market",
+            }:
+                raise FatalBotException(
+                    f"Rust orchestrator symbol input {input_idx} has invalid {pside} HSL execution policy"
+                )
+            hsl_execution_policy[(symbol_idx, pside)] = (
+                hsl_enabled,
+                panic_close_order_type,
+            )
             cooldown_minutes = _validated_rust_finite_number(
                 bot_params.get("risk_entry_cooldown_minutes", 0.0),
                 f"symbol input {input_idx} has invalid {pside} risk_entry_cooldown_minutes",
@@ -1775,6 +1786,7 @@ def _submitted_rust_input_context(
         entry_cooldown_positive,
         entry_sequential_staging,
         close_retracement_enabled,
+        hsl_execution_policy,
     )
 
 
@@ -1856,6 +1868,7 @@ def validate_rust_orchestrator_output(
         submitted_entry_cooldown_positive,
         submitted_entry_sequential_staging,
         submitted_close_retracement_enabled,
+        submitted_hsl_execution_policy,
     ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
@@ -2056,9 +2069,9 @@ def validate_rust_orchestrator_output(
             )
         expected_execution_type = _expected_rust_execution_type(
             global_input,
+            submitted_hsl_execution_policy[pair],
             submitted_order_books[symbol_idx],
             order_type,
-            pside,
             qty,
             price,
         )
@@ -2575,9 +2588,9 @@ def validate_rust_orchestrator_output(
             )
         block_execution_type = _expected_rust_execution_type(
             global_input,
+            submitted_hsl_execution_policy[pair],
             submitted_order_books[symbol_idx],
             order_type,
-            pside,
             qty,
             finite_values["price"],
         )

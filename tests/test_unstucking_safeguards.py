@@ -797,6 +797,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "ema_span_minutes": 60.0,
                 "cooldown_minutes_after_red": 0.0,
                 "no_restart_drawdown_threshold": 1.0,
+                "restart_after_red_policy": "threshold",
                 "tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "market",

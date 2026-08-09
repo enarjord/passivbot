@@ -997,7 +997,9 @@ async def test_hsl_replay_scenarios_run_end_to_end(
         )
     if scenario_rel.endswith("hsl_long_terminal_no_restart.hjson"):
         cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 0.02
+        cfg["bot"]["long"]["hsl_restart_after_red_policy"] = "threshold"
         cfg["bot"]["long"].setdefault("hsl", {})["no_restart_drawdown_threshold"] = 0.02
+        cfg["bot"]["long"].setdefault("hsl", {})["restart_after_red_policy"] = "threshold"
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0
         cfg["bot"]["long"]["total_wallet_exposure_limit"] = 2.5
         cfg["bot"]["long"].setdefault("risk", {})["total_wallet_exposure_limit"] = 2.5
@@ -1068,8 +1070,105 @@ async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
-    """Coin-mode RED must not fall through normal planning with confirmations pending."""
+async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monkeypatch):
+    """Exercise file and inline coin patches through a real fake-live restart scenario."""
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_coin_overrides_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    base_config = hjson.loads(
+        (REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson").read_text(
+            encoding="utf-8"
+        )
+    )
+    global_threshold = base_config["bot"]["long"]["strategy"][
+        "trailing_martingale"
+    ]["entry"]["threshold_base_pct"]
+    override_path = tmp_path / "btc_override.hjson"
+    override_path.write_text(
+        hjson.dumps(
+            {
+                "bot": {
+                    "long": {
+                        "risk": {"entry_cooldown_minutes": 3.0},
+                        "unstuck": {
+                            "ema_gating_enabled": False,
+                            "loss_allowance_pct": 0.1,
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    base_config["coin_overrides"] = {
+        "BTC": {
+            "override_config_path": override_path.name,
+            "bot": {
+                "long": {
+                    "risk": {"entry_cooldown_minutes": 0.05},
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": global_threshold}
+                        }
+                    }
+                }
+            },
+        }
+    }
+    config_path = tmp_path / "fake_live_coin_overrides.hjson"
+    config_path.write_text(hjson.dumps(base_config), encoding="utf-8")
+
+    captured = {}
+    real_setup_bot = run_fake_live_module.setup_bot
+
+    def capture_setup_bot(config):
+        bot = real_setup_bot(config)
+        captured["bot"] = bot
+        return bot
+
+    monkeypatch.setattr(run_fake_live_module, "setup_bot", capture_setup_bot)
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(
+                REPO_ROOT / "scenarios" / "fake_live" / "hsl_long_red_restart.hjson"
+            ),
+            user=user,
+            max_steps=None,
+            output_dir=str(tmp_path / "artifacts"),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await _async_main(args) == 0
+
+        bot = captured["bot"]
+        override = bot.coin_overrides["BTC/USDT:USDT"]
+        assert override["bot"]["long"]["risk"]["entry_cooldown_minutes"] == 0.05
+        assert override["bot"]["long"]["risk_entry_cooldown_minutes"] == 0.05
+        assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
+        assert override["bot"]["long"]["unstuck_ema_gating_enabled"] is False
+        assert override["bot"]["long"]["unstuck"]["loss_allowance_pct"] == 0.1
+        assert override["bot"]["long"]["strategy"]["trailing_martingale"][
+            "entry"
+        ]["threshold_base_pct"] == global_threshold
+        transform_steps = [item["step"] for item in bot.config["_transform_log"]]
+        assert transform_steps.index("parse_overrides") < transform_steps.index(
+            "compile_runtime_config"
+        )
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
+async def test_coin_hsl_restart_scenario_uses_protective_supervisor(
+    tmp_path, monkeypatch
+):
+    """A per-coin HSL patch must drive RED handling when global HSL is disabled."""
     import passivbot_rust as pbr
 
     if getattr(pbr, "__is_stub__", False):
@@ -1081,6 +1180,26 @@ async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
         str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False
     )
     cfg["live"]["hsl_signal_mode"] = "coin"
+    cfg["bot"]["long"]["hsl_enabled"] = False
+    cfg["coin_overrides"] = {
+        "BTC": {
+            "bot": {
+                "long": {
+                    "hsl": {
+                        "cooldown_minutes_after_red": 1.0,
+                        "ema_span_minutes": 1.0,
+                        "enabled": True,
+                        "no_restart_drawdown_threshold": 0.9,
+                        "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+                        "panic_close_order_type": "market",
+                        "red_threshold": 0.05,
+                        "restart_after_red_policy": "threshold",
+                        "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                    }
+                }
+            }
+        }
+    }
     config_path = tmp_path / "fake_live_hsl_btc_coin.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario = hjson.loads(
@@ -1091,6 +1210,16 @@ async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
     scenario.pop("assertions", None)
     scenario_path = tmp_path / "hsl_long_red_restart_coin.hjson"
     scenario_path.write_text(hjson.dumps(scenario), encoding="utf-8")
+
+    captured = {}
+    real_setup_bot = run_fake_live_module.setup_bot
+
+    def capture_setup_bot(config):
+        bot = real_setup_bot(config)
+        captured["bot"] = bot
+        return bot
+
+    monkeypatch.setattr(run_fake_live_module, "setup_bot", capture_setup_bot)
 
     try:
         args = argparse.Namespace(
@@ -1103,6 +1232,28 @@ async def test_coin_hsl_restart_scenario_uses_protective_supervisor(tmp_path):
             snapshot_each_step=False,
         )
         assert await _async_main(args) == 0
+
+        bot = captured["bot"]
+        override = bot.coin_overrides["BTC/USDT:USDT"]["bot"]["long"]
+        assert bot.config["bot"]["long"]["hsl_enabled"] is False
+        assert override["hsl"]["enabled"] is True
+        assert override["hsl_enabled"] is True
+        assert override["hsl"]["panic_close_order_type"] == "market"
+        assert override["hsl_panic_close_order_type"] == "market"
+        rust_params = bot._bot_params_to_rust_dict("long", "BTC/USDT:USDT")
+        assert rust_params["hsl_enabled"] is True
+        assert rust_params["hsl_red_threshold"] == pytest.approx(0.05)
+        assert rust_params["hsl_ema_span_minutes"] == pytest.approx(1.0)
+        assert rust_params["hsl_cooldown_minutes_after_red"] == pytest.approx(1.0)
+        assert rust_params["hsl_no_restart_drawdown_threshold"] == pytest.approx(0.9)
+        assert rust_params["hsl_restart_after_red_policy"] == "threshold"
+        assert rust_params["hsl_tier_ratio_yellow"] == pytest.approx(0.5)
+        assert rust_params["hsl_tier_ratio_orange"] == pytest.approx(0.75)
+        assert (
+            rust_params["hsl_orange_tier_mode"]
+            == "tp_only_with_active_entry_cancellation"
+        )
+        assert rust_params["hsl_panic_close_order_type"] == "market"
 
         run_dirs = sorted(
             path

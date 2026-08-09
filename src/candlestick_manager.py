@@ -89,7 +89,11 @@ from legacy_data_migrator import (
     normalize_ccxt_volume_to_base,
 )
 from live.diagnostic_safety import bounded_exception_type
-from utils import symbol_to_coin
+from utils import (
+    FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
+    exchange_name_aliases,
+    symbol_to_coin,
+)
 
 # Suppress portalocker's "timeout has no effect in blocking mode" warning
 warnings.filterwarnings(
@@ -4857,23 +4861,76 @@ class CandlestickManager:
     def _first_ohlcv_cache_path(self) -> Path:
         return Path(self.cache_dir) / "first_ohlcv_timestamps_unified_exchange_specific.json"
 
+    def _first_ohlcv_cache_version_path(self) -> Path:
+        return Path(self.cache_dir) / "first_ohlcv_timestamps_unified.version"
+
+    def _first_ohlcv_cache_symbols_path(self) -> Path:
+        return (
+            Path(self.cache_dir)
+            / "first_ohlcv_timestamps_unified_exchange_specific_symbols.json"
+        )
+
     def _first_ohlcv_cache_exchange_name(self) -> str:
         exchange_name = str(self.exchange_name or self._ex_id or "").lower()
         return _FIRST_OHLCV_EXCHANGE_CACHE_ALIASES.get(exchange_name, exchange_name)
 
     def _lookup_cached_authoritative_start_ts(self, symbol: str) -> Optional[int]:
         cache_path = self._first_ohlcv_cache_path()
-        if not cache_path.exists():
+        symbols_path = self._first_ohlcv_cache_symbols_path()
+        if not cache_path.exists() or not symbols_path.exists():
             return None
         try:
+            with open(self._first_ohlcv_cache_version_path(), "r", encoding="utf-8") as f:
+                if int(f.read().strip()) != FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION:
+                    return None
             with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if not isinstance(data, dict):
+            with open(symbols_path, "r", encoding="utf-8") as f:
+                cached_symbols = json.load(f)
+            if not isinstance(data, dict) or not isinstance(cached_symbols, dict):
                 return None
-            coin = symbol.split("/")[0].strip()
             exchange_name = self._first_ohlcv_cache_exchange_name()
-            value = data.get(coin, {}).get(exchange_name)
-            return int(value) if value is not None and float(value) > 0.0 else None
+            cache_keys = [symbol]
+            markets = getattr(self.exchange, "markets", {}) if self.exchange is not None else {}
+            if isinstance(markets, dict):
+                for market_symbol, market in markets.items():
+                    if not isinstance(market, dict):
+                        continue
+                    resolved_symbol = str(market.get("symbol") or market_symbol)
+                    if resolved_symbol != symbol:
+                        continue
+                    native_id = str(market.get("id") or "").strip()
+                    if native_id and native_id not in cache_keys:
+                        cache_keys.append(native_id)
+                    if native_id:
+                        qualifiers = set(exchange_name_aliases(exchange_name))
+                        qualifiers.update(exchange_name_aliases(self.exchange_name))
+                        qualifiers.update(exchange_name_aliases(self._ex_id))
+                        for qualifier in sorted(qualifiers):
+                            qualified_id = f"{qualifier}::{native_id}"
+                            if qualified_id not in cache_keys:
+                                cache_keys.append(qualified_id)
+            base_coin = symbol.split("/")[0].strip()
+            if base_coin != symbol:
+                cache_keys.append(base_coin)
+            for cache_key in cache_keys:
+                exchange_values = data.get(cache_key, {})
+                if not isinstance(exchange_values, dict):
+                    continue
+                value = exchange_values.get(exchange_name)
+                provenance_values = cached_symbols.get(cache_key, {})
+                cached_symbol = (
+                    provenance_values.get(exchange_name)
+                    if isinstance(provenance_values, dict)
+                    else None
+                )
+                if (
+                    value is not None
+                    and float(value) > 0.0
+                    and cached_symbol == symbol
+                ):
+                    return int(value)
+            return None
         except Exception:
             return None
 

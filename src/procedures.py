@@ -13,19 +13,25 @@ import re
 from collections import defaultdict
 from collections.abc import Sized
 from utils import (
+    FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
+    MarketIdentifierResolutionError,
+    UnknownMarketIdentifier,
     coin_to_symbol,
     symbol_to_coin,
     make_get_filepath,
     load_markets,
     get_file_mod_ms,
+    get_quote,
     date_to_ts,
     get_first_ohlcv_iteratively,
     load_ccxt_instance,
+    split_exchange_qualified_market_identifier,
+    to_ccxt_exchange_id,
     to_standard_exchange_name,
 )
 import sys
 import passivbot_rust as pbr
-from typing import Union, Optional, Set, Any, List
+from typing import Union, Optional, Set, Any, List, Sequence
 from pathlib import Path
 import ccxt.async_support as ccxta
 
@@ -307,10 +313,15 @@ def print_async_exception(coro):
         pass
 
 
-async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
+async def get_first_timestamps_unified(
+    coins: List[str],
+    exchange: str = None,
+    exchanges: Optional[Sequence[str]] = None,
+):
     """
     Returns earliest timestamp each coin was found on any exchange by default.
     If 'exchange' is specified, returns earliest timestamps specifically for that exchange.
+    If 'exchanges' is specified, returns the earliest timestamp across only those venues.
 
     Batches requests in groups of 10 coins at a time, and dumps results to disk
     immediately after each batch is processed.
@@ -343,27 +354,82 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             # Monthly timeframe; data since 2018
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2018-01-01")), timeframe="1M")
 
-        elif exchange_name == "bitget":
+        elif exchange_name in {"bitget", "bitunix"}:
             first_candle = await get_first_ohlcv_iteratively(cc, symbol)
             return [first_candle] if first_candle else []
 
-        else:  # e.g., 'hyperliquid'
+        elif exchange_name == "hyperliquid":
             # Weekly timeframe; data since 2021
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2021-01-01")), timeframe="1w")
 
-    # Remove duplicates and sort the input coins for consistency
-    coins = sorted(set(symbol_to_coin(coin) for coin in coins))
+        else:
+            # Dynamic CCXT venues must not inherit another exchange's listing
+            # horizon. Ask for the first daily candle from the epoch instead.
+            return await cc.fetch_ohlcv(symbol, since=1, timeframe="1d", limit=1)
+
+    # Preserve exact market identifiers until each exchange-specific resolver
+    # sees them.  Eager canonicalization can collapse unrelated contracts.
+    coins = sorted({str(coin).strip() for coin in coins if str(coin).strip()})
+
+    if exchange is not None and exchanges is not None:
+        raise ValueError("pass either exchange or exchanges, not both")
+    if exchanges is not None:
+        selected_exchanges = list(
+            dict.fromkeys(str(item).strip() for item in exchanges if str(item).strip())
+        )
+        if not selected_exchanges:
+            raise ValueError("exchanges must contain at least one venue")
+        scoped_results = []
+        for selected_exchange in selected_exchanges:
+            scoped_results.append(
+                await get_first_timestamps_unified(coins, exchange=selected_exchange)
+            )
+        return {
+            coin: min(
+                (
+                    float(result[coin])
+                    for result in scoped_results
+                    if coin in result and float(result[coin]) > 0.0
+                ),
+                default=0.0,
+            )
+            for coin in coins
+        }
 
     # Paths to the cache files
     cache_fpath = make_get_filepath("caches/first_ohlcv_timestamps_unified.json")
     cache_fpath_exchange_specific = "caches/first_ohlcv_timestamps_unified_exchange_specific.json"
+    cache_symbols_fpath_exchange_specific = (
+        "caches/first_ohlcv_timestamps_unified_exchange_specific_symbols.json"
+    )
+    cache_version_fpath = make_get_filepath(
+        "caches/first_ohlcv_timestamps_unified.version"
+    )
 
     # In-memory dictionaries for storing timestamps
     ftss = {}  # coin -> earliest timestamp across all exchanges
     ftss_exchange_specific = {}  # coin -> {exchange -> earliest timestamp}
+    fts_symbols_exchange_specific = {}  # coin -> {exchange -> resolved symbol}
 
-    # Load main cache if it exists
-    if os.path.exists(cache_fpath):
+    cache_version_is_current = False
+    if os.path.exists(cache_version_fpath):
+        try:
+            with open(cache_version_fpath, "r", encoding="utf-8") as f:
+                cache_version_is_current = (
+                    int(f.read().strip()) == FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION
+                )
+        except Exception as e:
+            logging.warning("error reading %s: %s", cache_version_fpath, e)
+    if not cache_version_is_current and (
+        os.path.exists(cache_fpath) or os.path.exists(cache_fpath_exchange_specific)
+    ):
+        logging.info(
+            "ignoring legacy first-OHLCV timestamp caches without resolver version %s",
+            FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
+        )
+
+    # Load caches only when they match the current resolver semantics.
+    if cache_version_is_current and os.path.exists(cache_fpath):
         try:
             with open(cache_fpath, "r") as f:
                 ftss = json.load(f)
@@ -372,7 +438,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             logging.warning("error reading %s: %s", cache_fpath, e)
 
     # Load exchange-specific cache if it exists
-    if os.path.exists(cache_fpath_exchange_specific):
+    if cache_version_is_current and os.path.exists(cache_fpath_exchange_specific):
         try:
             with open(cache_fpath_exchange_specific, "r") as f:
                 ftss_exchange_specific = json.load(f)
@@ -384,9 +450,21 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         except Exception as e:
             logging.warning("error reading %s: %s", cache_fpath_exchange_specific, e)
 
-    # If an exchange is specified, handle "binance" alias
-    if exchange == "binance":
-        exchange = "binanceusdm"
+    if cache_version_is_current and os.path.exists(cache_symbols_fpath_exchange_specific):
+        try:
+            with open(cache_symbols_fpath_exchange_specific, "r") as f:
+                fts_symbols_exchange_specific = json.load(f)
+            if not isinstance(fts_symbols_exchange_specific, dict):
+                fts_symbols_exchange_specific = {}
+        except Exception as e:
+            logging.warning("error reading %s: %s", cache_symbols_fpath_exchange_specific, e)
+
+    # Exchange-specific cache keys use canonical names, except for the legacy
+    # Binance key retained for compatibility with existing caches/readers.
+    if exchange is not None:
+        exchange = to_standard_exchange_name(exchange)
+        if exchange == "binance":
+            exchange = "binanceusdm"
 
     def _valid_first_timestamp(value: Any) -> bool:
         try:
@@ -394,23 +472,53 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         except Exception:
             return False
 
+    resolved_symbol_cache = {}
+
+    def _current_resolved_symbol(coin: str, exchange_name: str):
+        key = (coin, exchange_name)
+        if key not in resolved_symbol_cache:
+            try:
+                resolved_symbol_cache[key] = coin_to_symbol(coin, exchange_name)
+            except MarketIdentifierResolutionError:
+                resolved_symbol_cache[key] = None
+        return resolved_symbol_cache[key]
+
+    def _valid_exchange_cache_entry(coin: str, exchange_name: str) -> bool:
+        value = ftss_exchange_specific.get(coin, {}).get(exchange_name)
+        cached_symbol = fts_symbols_exchange_specific.get(coin, {}).get(exchange_name)
+        return (
+            _valid_first_timestamp(value)
+            and bool(cached_symbol)
+            and cached_symbol == _current_resolved_symbol(coin, exchange_name)
+        )
+
+    def _valid_unified_cache_entry(coin: str) -> bool:
+        value = ftss.get(coin)
+        if not _valid_first_timestamp(value):
+            return False
+        return any(
+            _valid_exchange_cache_entry(coin, exchange_name)
+            and float(exchange_value) == float(value)
+            for exchange_name, exchange_value in ftss_exchange_specific.get(coin, {}).items()
+        )
+
     # 1) If no exchange is specified and all coins have valid cached timestamps, just return ftss
     if exchange is None:
-        if all(_valid_first_timestamp(ftss.get(coin)) for coin in coins):
-            return ftss
+        if all(_valid_unified_cache_entry(coin) for coin in coins):
+            return {coin: ftss[coin] for coin in coins}
 
     # 2) If a specific exchange is requested:
     else:
         # If all coins exist in the exchange-specific cache for that exchange, return them
-        if all(_valid_first_timestamp(ftss_exchange_specific.get(coin, {}).get(exchange)) for coin in coins):
+        if all(_valid_exchange_cache_entry(coin, exchange) for coin in coins):
             return {c: ftss_exchange_specific[c][exchange] for c in coins}
 
     # Figure out which coins are missing from the relevant cache or have invalid cached timestamps
     if exchange is None:
-        missing_coins = {c for c in coins if not _valid_first_timestamp(ftss.get(c))}
+        missing_coins = {c for c in coins if not _valid_unified_cache_entry(c)}
     else:
         missing_coins = {
-            c for c in coins if not _valid_first_timestamp(ftss_exchange_specific.get(c, {}).get(exchange))
+            c for c in coins if not _valid_exchange_cache_entry(c, exchange)
         }
     if not missing_coins:
         if exchange is not None:
@@ -428,12 +536,46 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
         "bitget": "USDT",
         "hyperliquid": "USDC",
     }
+    qualified_only_exchanges = set()
+    if exchange is not None:
+        target_exchange = to_standard_exchange_name(exchange)
+        exchange_map = {
+            ex_name: quote
+            for ex_name, quote in exchange_map.items()
+            if to_standard_exchange_name(ex_name) == target_exchange
+        }
+        if not exchange_map:
+            exchange_map = {exchange: get_quote(exchange)}
+    else:
+        for coin in coins:
+            qualified_exchange, _ = split_exchange_qualified_market_identifier(coin)
+            if qualified_exchange is None or any(
+                to_standard_exchange_name(ex_name) == qualified_exchange
+                for ex_name in exchange_map
+            ):
+                continue
+            exchange_map[qualified_exchange] = get_quote(qualified_exchange)
+            qualified_only_exchanges.add(qualified_exchange)
 
     # Initialize ccxt clients for each exchange
     ccxt_clients = {}
     for ex_name in sorted(exchange_map):
         try:
-            ccxt_clients[ex_name] = load_ccxt_instance(ex_name)
+            if ex_name == "bitunix":
+                from exchanges.bitunix import BitunixClient, apply_bitunix_endpoint_override
+                from custom_endpoint_overrides import resolve_custom_endpoint_override
+
+                client_config = apply_bitunix_endpoint_override(
+                    {
+                        "enableRateLimit": True,
+                        "timeout": 60_000,
+                        "wsEnabled": False,
+                    },
+                    resolve_custom_endpoint_override(ex_name),
+                )
+                ccxt_clients[ex_name] = BitunixClient(client_config)
+            else:
+                ccxt_clients[ex_name] = load_ccxt_instance(to_ccxt_exchange_id(ex_name))
         except Exception as e:
             print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
             del exchange_map[ex_name]
@@ -471,13 +613,30 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             # Create tasks for every coin/exchange pair in this batch
             tasks = {}
             bitget_symbols = {}
+            attempted_exchanges = {}
+            resolved_symbols = {}
             for coin in batch:
                 tasks[coin] = {}
+                attempted_exchanges[coin] = set()
+                resolved_symbols[coin] = {}
+                qualified_exchange, _ = split_exchange_qualified_market_identifier(coin)
                 for ex_name, quote in exchange_map.items():
+                    if (
+                        qualified_exchange is not None
+                        and qualified_exchange != to_standard_exchange_name(ex_name)
+                    ):
+                        continue
+                    if qualified_exchange is None and ex_name in qualified_only_exchanges:
+                        continue
+                    attempted_exchanges[coin].add(ex_name)
                     # Convert coin to a symbol recognized by the exchange, e.g. "BTC/USDT:USDT"
-                    symbol = coin_to_symbol(coin, ex_name)
+                    try:
+                        symbol = coin_to_symbol(coin, ex_name)
+                    except UnknownMarketIdentifier:
+                        continue
                     if not symbol:
                         continue
+                    resolved_symbols[coin][ex_name] = symbol
                     if ex_name == "bitget":
                         bitget_symbols[coin] = symbol
                         continue
@@ -529,8 +688,44 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             # Process results for each coin in this batch
             for coin in batch:
                 exchange_data = batch_results.get(coin, {})
-                fts_for_this_coin = {ex: 0.0 for ex in exchange_map}  # default 0.0 for all
-                earliest_candidates = []
+                cached_exchange_data = ftss_exchange_specific.get(coin, {})
+                if not isinstance(cached_exchange_data, dict):
+                    fts_for_this_coin = {}
+                elif exchange is not None:
+                    fts_for_this_coin = dict(cached_exchange_data)
+                else:
+                    fts_for_this_coin = {
+                        ex_name: value
+                        for ex_name, value in cached_exchange_data.items()
+                        if _valid_exchange_cache_entry(coin, ex_name)
+                    }
+                cached_symbol_data = fts_symbols_exchange_specific.get(coin, {})
+                symbols_for_this_coin = (
+                    {
+                        ex_name: value
+                        for ex_name, value in cached_symbol_data.items()
+                        if ex_name in fts_for_this_coin
+                    }
+                    if isinstance(cached_symbol_data, dict)
+                    else {}
+                )
+                for ex_name in attempted_exchanges[coin]:
+                    fts_for_this_coin[ex_name] = 0.0
+                    if ex_name in resolved_symbols[coin]:
+                        symbols_for_this_coin[ex_name] = resolved_symbols[coin][ex_name]
+                    else:
+                        symbols_for_this_coin.pop(ex_name, None)
+                earliest_candidates = [
+                    value
+                    for value in fts_for_this_coin.values()
+                    if _valid_first_timestamp(value) and float(value) > 1262304000000.0
+                ]
+                if (
+                    exchange is not None
+                    and _valid_unified_cache_entry(coin)
+                    and float(ftss[coin]) > 1262304000000.0
+                ):
+                    earliest_candidates.append(ftss[coin])
 
                 for ex_name, arr in exchange_data.items():
                     if arr and len(arr) > 0:
@@ -549,6 +744,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
                 # Update the exchange-specific dictionary
                 ftss_exchange_specific[coin] = fts_for_this_coin
+                fts_symbols_exchange_specific[coin] = symbols_for_this_coin
 
             # Immediately dump updated dictionaries to disk after each batch
             with open(cache_fpath, "w") as f:
@@ -556,6 +752,12 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
 
             with open(cache_fpath_exchange_specific, "w") as f:
                 json.dump(ftss_exchange_specific, f, indent=4, sort_keys=True)
+
+            with open(cache_symbols_fpath_exchange_specific, "w") as f:
+                json.dump(fts_symbols_exchange_specific, f, indent=4, sort_keys=True)
+
+            with open(cache_version_fpath, "w", encoding="utf-8") as f:
+                f.write(str(FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION))
 
             print(f"Finished batch {batch}. Caches updated.")
 
@@ -566,7 +768,7 @@ async def get_first_timestamps_unified(coins: List[str], exchange: str = None):
             return {coin: ftss_exchange_specific.get(coin, {}).get(exchange, 0.0) for coin in coins}
 
         # Otherwise, return earliest cross-exchange timestamps
-        return ftss
+        return {coin: ftss.get(coin, 0.0) for coin in coins}
     finally:
         await asyncio.gather(
             *(ccxt_clients[e].close() for e in ccxt_clients if hasattr(ccxt_clients[e], "close"))

@@ -750,18 +750,14 @@ mod core {
         order: &IdealOrder,
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
+        symbol_bot_params: Option<&BotParams>,
     ) -> bool {
         if is_panic_close_order_type(order.order_type) {
-            let pside_market = match order.pside {
-                PositionSide::Long => {
-                    global.global_bot_params.long.hsl_enabled
-                        && global.global_bot_params.long.hsl_panic_close_order_type == "market"
-                }
-                PositionSide::Short => {
-                    global.global_bot_params.short.hsl_enabled
-                        && global.global_bot_params.short.hsl_panic_close_order_type == "market"
-                }
-            };
+            let params = symbol_bot_params.unwrap_or(match order.pside {
+                PositionSide::Long => &global.global_bot_params.long,
+                PositionSide::Short => &global.global_bot_params.short,
+            });
+            let pside_market = params.hsl_enabled && params.hsl_panic_close_order_type == "market";
             return pside_market || global.panic_close_market;
         }
         if !global.market_orders_allowed {
@@ -791,8 +787,11 @@ mod core {
         order_book: &OrderBook,
         exchange: &ExchangeParams,
         position: &Position,
+        bot_params: &BotParams,
     ) {
-        if !order.order_type.is_close() || !should_use_market_execution(order, global, order_book) {
+        if !order.order_type.is_close()
+            || !should_use_market_execution(order, global, order_book, Some(bot_params))
+        {
             return;
         }
 
@@ -822,11 +821,12 @@ mod core {
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
         exchange: &ExchangeParams,
+        bot_params: &BotParams,
     ) {
         if order.pside != PositionSide::Short
             || !order.order_type.is_entry()
             || order.qty >= 0.0
-            || !should_use_market_execution(order, global, order_book)
+            || !should_use_market_execution(order, global, order_book, Some(bot_params))
         {
             return;
         }
@@ -854,7 +854,12 @@ mod core {
             let Some(symbol) = symbols.get(order.symbol_idx) else {
                 return false;
             };
-            if !should_use_market_execution(order, global, &symbol.order_book) {
+            if !should_use_market_execution(
+                order,
+                global,
+                &symbol.order_book,
+                Some(&symbol.short.bot_params),
+            ) {
                 return true;
             }
             let minimum_qty = calc_min_entry_qty(symbol.order_book.bid, &symbol.exchange);
@@ -869,12 +874,14 @@ mod core {
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
         mode: TradingMode,
+        bot_params: &BotParams,
     ) -> ExecutableOrder {
-        let execution_type = if should_use_market_execution(&order, global, order_book) {
-            ExecutionType::Market
-        } else {
-            ExecutionType::Limit
-        };
+        let execution_type =
+            if should_use_market_execution(&order, global, order_book, Some(bot_params)) {
+                ExecutionType::Market
+            } else {
+                ExecutionType::Limit
+            };
         let execution_priority = if is_protective_close_reducer(order.order_type, order.pside)
             || (mode == TradingMode::GracefulStop && order.order_type.is_close())
         {
@@ -1344,6 +1351,7 @@ mod core {
         ob: &OrderBook,
         exchange: &ExchangeParams,
         global: Option<&OrchestratorGlobal>,
+        bot_params: Option<&BotParams>,
     ) {
         const EPS: f64 = 1e-12;
         if closes.is_empty() {
@@ -1361,7 +1369,9 @@ mod core {
         // when the authoritative position is below every candidate's effective minimum. In a mixed
         // ladder, drop each below-min leg before the remaining close wave is trimmed.
         let minimum_price = |order: &IdealOrder| {
-            if global.is_some_and(|policy| should_use_market_execution(order, policy, ob)) {
+            if global
+                .is_some_and(|policy| should_use_market_execution(order, policy, ob, bot_params))
+            {
                 executable_touch_for_order_side(ob, order.qty)
             } else {
                 order.price
@@ -1569,9 +1579,11 @@ mod core {
         exchange: &ExchangeParams,
         global: &OrchestratorGlobal,
         order_book: &OrderBook,
+        bot_params: &BotParams,
     ) -> Option<f64> {
         const EPS: f64 = 1e-12;
-        let market_execution = should_use_market_execution(order, global, order_book);
+        let market_execution =
+            should_use_market_execution(order, global, order_book, Some(bot_params));
         let execution_price = if market_execution {
             projected_market_fill_price(order, global, order_book, exchange)?
         } else {
@@ -1709,6 +1721,7 @@ mod core {
             &symbol.exchange,
             &input.global,
             &symbol.order_book,
+            &symbol_side_input(symbol, order.pside).bot_params,
         ) else {
             return true;
         };
@@ -1766,6 +1779,7 @@ mod core {
             &symbol.order_book,
             &symbol.exchange,
             Some(global),
+            Some(&symbol_side_input(symbol, pside).bot_params),
         );
         finalized
     }
@@ -2924,7 +2938,12 @@ mod core {
             };
             let ob = &sym.order_book;
             let exch = &sym.exchange;
-            let fill_price = if should_use_market_execution(o, global, ob) {
+            let fill_price = if should_use_market_execution(
+                o,
+                global,
+                ob,
+                Some(&symbol_side_input(sym, o.pside).bot_params),
+            ) {
                 executable_touch_for_order_side(ob, o.qty)
             } else {
                 o.price
@@ -3127,7 +3146,12 @@ mod core {
                 Some(v) => v,
                 None => continue,
             };
-            let minimum_price = if should_use_market_execution(&o, global, &sym.order_book) {
+            let minimum_price = if should_use_market_execution(
+                &o,
+                global,
+                &sym.order_book,
+                Some(&symbol_side_input(sym, o.pside).bot_params),
+            ) {
                 executable_touch_for_order_side(&sym.order_book, o.qty)
             } else {
                 o.price
@@ -4098,6 +4122,7 @@ mod core {
                     &symbol.order_book,
                     &symbol.exchange,
                     &side.pos,
+                    &symbol.long.bot_params,
                 );
             }
         }
@@ -4109,6 +4134,7 @@ mod core {
                     &input.global,
                     &symbol.order_book,
                     &symbol.exchange,
+                    &symbol.short.bot_params,
                 );
             }
             for close in &mut side.closes {
@@ -4118,6 +4144,7 @@ mod core {
                     &symbol.order_book,
                     &symbol.exchange,
                     &side.pos,
+                    &symbol.short.bot_params,
                 );
             }
         }
@@ -4361,7 +4388,13 @@ mod core {
                 // normal so it can emit closes, but those closes remain risk-critical
                 // for live execution priority.
                 let mode = side.mode.unwrap_or(TradingMode::Normal);
-                to_executable_order(order, &input.global, &symbol.order_book, mode)
+                to_executable_order(
+                    order,
+                    &input.global,
+                    &symbol.order_book,
+                    mode,
+                    &side.bot_params,
+                )
             })
             .collect();
 
@@ -4766,8 +4799,19 @@ mod core {
                 price: 100.05,
                 order_type: OrderType::CloseGridLong,
             };
-            assert!(should_use_market_execution(&order, &global, &order_book));
-            let executable = to_executable_order(order, &global, &order_book, TradingMode::Normal);
+            assert!(should_use_market_execution(
+                &order,
+                &global,
+                &order_book,
+                Some(&global.global_bot_params.long),
+            ));
+            let executable = to_executable_order(
+                order,
+                &global,
+                &order_book,
+                TradingMode::Normal,
+                &global.global_bot_params.long,
+            );
             assert_eq!(executable.execution_type, ExecutionType::Market);
         }
 
@@ -4814,6 +4858,7 @@ mod core {
                     &order_book,
                     &exchange,
                     &position,
+                    &global.global_bot_params.long,
                 );
 
                 assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
@@ -4850,6 +4895,7 @@ mod core {
                 &global,
                 &order_book,
                 &exchange,
+                &global.global_bot_params.short,
             );
 
             assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
@@ -5070,6 +5116,7 @@ mod core {
                         &global,
                         &order_book,
                         TradingMode::Normal,
+                        &global.global_bot_params.long,
                     )
                     .execution_priority,
                     ExecutionPriority::RiskCritical,
@@ -5082,6 +5129,7 @@ mod core {
                     &global,
                     &order_book,
                     TradingMode::GracefulStop,
+                    &global.global_bot_params.long,
                 )
                 .execution_priority,
                 ExecutionPriority::RiskCritical
@@ -5091,8 +5139,14 @@ mod core {
                 make(OrderType::EntryGridNormalLong, 1.0),
             ] {
                 assert_eq!(
-                    to_executable_order(order, &global, &order_book, TradingMode::Normal,)
-                        .execution_priority,
+                    to_executable_order(
+                        order,
+                        &global,
+                        &order_book,
+                        TradingMode::Normal,
+                        &global.global_bot_params.long,
+                    )
+                    .execution_priority,
                     ExecutionPriority::Ordinary
                 );
             }
@@ -5170,14 +5224,38 @@ mod core {
                 price: 100.0,
                 order_type: OrderType::CloseGridLong,
             };
-            assert!(should_use_market_execution(&buy, &global, &order_book));
-            assert!(should_use_market_execution(&sell, &global, &order_book));
+            assert!(should_use_market_execution(
+                &buy,
+                &global,
+                &order_book,
+                Some(&global.global_bot_params.long),
+            ));
+            assert!(should_use_market_execution(
+                &sell,
+                &global,
+                &order_book,
+                Some(&global.global_bot_params.long),
+            ));
             assert_eq!(
-                to_executable_order(buy, &global, &order_book, TradingMode::Normal).execution_type,
+                to_executable_order(
+                    buy,
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                    &global.global_bot_params.long,
+                )
+                .execution_type,
                 ExecutionType::Market
             );
             assert_eq!(
-                to_executable_order(sell, &global, &order_book, TradingMode::Normal).execution_type,
+                to_executable_order(
+                    sell,
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                    &global.global_bot_params.long,
+                )
+                .execution_type,
                 ExecutionType::Market
             );
         }
@@ -5196,10 +5274,21 @@ mod core {
                 price: 100.0,
                 order_type: OrderType::CloseGridLong,
             };
-            assert!(!should_use_market_execution(&order, &global, &order_book));
+            assert!(!should_use_market_execution(
+                &order,
+                &global,
+                &order_book,
+                Some(&global.global_bot_params.long),
+            ));
             assert_eq!(
-                to_executable_order(order, &global, &order_book, TradingMode::Normal)
-                    .execution_type,
+                to_executable_order(
+                    order,
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                    &global.global_bot_params.long,
+                )
+                .execution_type,
                 ExecutionType::Limit
             );
         }
@@ -5411,12 +5500,17 @@ mod core {
         }
 
         #[test]
-        fn panic_close_respects_side_local_hsl_order_type() {
+        fn panic_close_respects_symbol_side_hsl_order_type() {
             let mut global = make_basic_global();
-            global.global_bot_params.long.hsl_enabled = true;
-            global.global_bot_params.long.hsl_panic_close_order_type = "market".to_string();
+            global.global_bot_params.long.hsl_enabled = false;
+            global.global_bot_params.long.hsl_panic_close_order_type = "limit".to_string();
             global.global_bot_params.short.hsl_enabled = true;
-            global.global_bot_params.short.hsl_panic_close_order_type = "limit".to_string();
+            global.global_bot_params.short.hsl_panic_close_order_type = "market".to_string();
+            let mut symbol_long = global.global_bot_params.long.clone();
+            symbol_long.hsl_enabled = true;
+            symbol_long.hsl_panic_close_order_type = "market".to_string();
+            let mut symbol_short = global.global_bot_params.short.clone();
+            symbol_short.hsl_panic_close_order_type = "limit".to_string();
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
@@ -5441,6 +5535,7 @@ mod core {
                     &global,
                     &order_book,
                     TradingMode::Normal,
+                    &symbol_long,
                 )
                 .execution_type,
                 ExecutionType::Market
@@ -5451,14 +5546,21 @@ mod core {
                     &global,
                     &order_book,
                     TradingMode::Normal,
+                    &symbol_short,
                 )
                 .execution_type,
                 ExecutionType::Limit
             );
             global.panic_close_market = true;
             assert_eq!(
-                to_executable_order(short_order, &global, &order_book, TradingMode::Normal,)
-                    .execution_type,
+                to_executable_order(
+                    short_order,
+                    &global,
+                    &order_book,
+                    TradingMode::Normal,
+                    &symbol_short,
+                )
+                .execution_type,
                 ExecutionType::Market
             );
         }
@@ -6230,7 +6332,15 @@ mod core {
                     order_type: OrderType::CloseGridLong,
                 },
             ];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Long,
+                &mut closes,
+                1.5,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
             let total: f64 = closes.iter().map(|o| o.qty.abs()).sum();
             assert!(total <= 1.5 + 1e-9);
             assert_eq!(closes.len(), 2);
@@ -6284,6 +6394,7 @@ mod core {
                 &ob,
                 &exchange,
                 None,
+                None,
             );
 
             let total: f64 = closes.iter().map(|order| order.qty.abs()).sum();
@@ -6322,7 +6433,15 @@ mod core {
                 },
             ];
 
-            trim_closes_to_position(PositionSide::Long, &mut closes, 1.5, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Long,
+                &mut closes,
+                1.5,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
 
             let reducer = closes
                 .iter()
@@ -6951,7 +7070,15 @@ mod core {
                 price: 101.0,
                 order_type: OrderType::CloseGridLong,
             }];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 100.0, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Long,
+                &mut closes,
+                100.0,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
             assert!(closes.is_empty());
 
             // pos smaller than effective min => allow full close of tiny pos
@@ -6962,7 +7089,15 @@ mod core {
                 price: 101.0,
                 order_type: OrderType::CloseGridLong,
             }];
-            trim_closes_to_position(PositionSide::Long, &mut closes, 5.0, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Long,
+                &mut closes,
+                5.0,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty + 5.0).abs() < 1e-9);
         }
@@ -6989,7 +7124,15 @@ mod core {
                 order_type: OrderType::CloseGridShort,
             }];
 
-            trim_closes_to_position(PositionSide::Short, &mut closes, -1.0, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Short,
+                &mut closes,
+                -1.0,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
 
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty - 1.0).abs() < 1e-12);
@@ -7027,7 +7170,15 @@ mod core {
                 },
             ];
 
-            trim_closes_to_position(PositionSide::Short, &mut closes, -5.0, &ob, &exchange, None);
+            trim_closes_to_position(
+                PositionSide::Short,
+                &mut closes,
+                -5.0,
+                &ob,
+                &exchange,
+                None,
+                None,
+            );
 
             assert_eq!(closes.len(), 1);
             assert!((closes[0].qty - 5.0).abs() < 1e-12);
@@ -7066,6 +7217,7 @@ mod core {
                 &ob,
                 &exchange,
                 Some(&global),
+                Some(&global.global_bot_params.short),
             );
 
             assert_eq!(closes.len(), 1);
@@ -7717,8 +7869,15 @@ mod core {
                 price: 101.0,
             };
 
-            let projected =
-                projected_close_pnl(&order, &pos, &exchange, &global, &order_book).unwrap();
+            let projected = projected_close_pnl(
+                &order,
+                &pos,
+                &exchange,
+                &global,
+                &order_book,
+                &global.global_bot_params.long,
+            )
+            .unwrap();
 
             assert!((projected - -2.0).abs() < 1e-12);
         }

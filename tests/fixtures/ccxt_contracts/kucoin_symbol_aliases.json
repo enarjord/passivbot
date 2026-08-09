@@ -57,7 +57,19 @@
         "EDGE": [
           "EDGE/USDT:USDT"
         ],
+        "EDGE/USDT:USDT": [
+          "EDGE/USDT:USDT"
+        ],
+        "EDGEUSDTM": [
+          "EDGE/USDT:USDT"
+        ],
         "HOT": [
+          "HOT/USDT:USDT"
+        ],
+        "HOT/USDT:USDT": [
+          "HOT/USDT:USDT"
+        ],
+        "HOTUSDTM": [
           "HOT/USDT:USDT"
         ]
       },

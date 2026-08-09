@@ -59,6 +59,18 @@ Use `pside` when:
 
 Use `coin` when one symbol should be stopped because it has high adverse UPnL or has recently realized heavy losses through unstuck/WEL enforcement, while unrelated symbols should keep trading.
 
+### Per-coin HSL configuration
+
+When the main config uses `live.hsl_signal_mode = "coin"`, any field in
+`bot.<side>.hsl.*` may be overridden for an individual coin through `coin_overrides`. This includes
+enablement, red and tier thresholds, EMA span, cooldown and restart policy, orange-tier behavior,
+and panic-close execution type. Live supervision and Rust backtests both consume the resolved
+per-coin values. Coins without an HSL patch inherit the main side config.
+
+The signal mode remains one global setting. Per-coin HSL patches are rejected in `pside` and
+`unified` modes, and a signal-mode value inside an override cannot switch or authorize the patch.
+See [Coin Overrides](coin_overrides.md) for the full field list, precedence, and examples.
+
 This is separate from auto-unstuck and the realized-loss gate:
 
 1. Auto-unstuck gradually trims stuck positions while continuing to trade.

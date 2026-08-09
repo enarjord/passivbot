@@ -1659,7 +1659,7 @@ class TestIndividualToConfig:
         vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
         vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
         vector[key_to_idx["short_close_retracement_base_pct"]] = 0.002
-        vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 41.0
+        vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 71.0
 
         config = _canonicalize_optimizer_individual(
             vector,
@@ -1681,10 +1681,10 @@ class TestIndividualToConfig:
         )
         assert vector[key_to_idx["short_close_retracement_base_pct"]] == pytest.approx(0.002)
         assert vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] == pytest.approx(
-            40.0
+            70.0
         )
         assert long_close["retracement_base_pct"] == pytest.approx(0.0)
-        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(40.0)
+        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(70.0)
 
     def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
         template = {

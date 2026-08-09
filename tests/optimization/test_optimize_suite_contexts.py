@@ -21,6 +21,19 @@ class _FakeAttachment:
         self.closed += 1
 
 
+def _stub_market_identity_validation(monkeypatch):
+    async def fake_reject_cross_exchange_market_identifier_collisions(
+        _identifiers, _exchanges, **_kwargs
+    ):
+        return None
+
+    monkeypatch.setattr(
+        optimize_suite,
+        "reject_cross_exchange_market_identifier_collisions",
+        fake_reject_cross_exchange_market_identifier_collisions,
+    )
+
+
 def _make_lazy_dataset(
     *,
     exchange="combined",
@@ -61,6 +74,7 @@ def _make_lazy_dataset(
 async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
     monkeypatch,
 ):
+    _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -80,7 +94,9 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     async def fake_load_markets(_exchange, verbose=False):
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, _exchanges, verbose=False, **_kwargs
+    ):
         return None
 
     async def fake_prepare_master_datasets(*_args, **_kwargs):
@@ -166,7 +182,9 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     async def fake_load_markets(_exchange, verbose=False):
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, _exchanges, verbose=False, **_kwargs
+    ):
         return None
 
     async def fake_prepare_master_datasets(base_config, exchanges, *_args, **_kwargs):
@@ -202,6 +220,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
 
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkeypatch):
+    _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -219,7 +238,9 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
         loaded_exchanges.append(exchange)
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, exchanges, verbose=False, **_kwargs
+    ):
         captured["formatted_exchanges"] = list(exchanges)
         return None
 
@@ -252,6 +273,7 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
 
 @pytest.mark.asyncio
 async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(monkeypatch):
+    _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
@@ -266,7 +288,9 @@ async def test_prepare_suite_contexts_rejects_unavailable_scenario_exchange(monk
     async def fake_load_markets(_exchange, verbose=False):
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, _exchanges, verbose=False, **_kwargs
+    ):
         return None
 
     async def fake_prepare_master_datasets(*_args, **_kwargs):
@@ -303,7 +327,9 @@ async def test_prepare_suite_contexts_rejects_scenario_with_no_usable_coins(monk
     async def fake_load_markets(_exchange, verbose=False):
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, _exchanges, verbose=False, **_kwargs
+    ):
         return None
 
     async def fake_prepare_master_datasets(*_args, **_kwargs):
@@ -340,7 +366,9 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
     async def fake_load_markets(_exchange, verbose=False):
         return {}
 
-    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+    async def fake_format_approved_ignored_coins(
+        _config, _exchanges, verbose=False, **_kwargs
+    ):
         return None
 
     monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)

@@ -13,7 +13,9 @@ from utils import format_approved_ignored_coins
 
 async def warm_ohlcv_caches(config: dict, *, force_refetch_gaps: bool = False) -> None:
     exchanges = require_config_value(config, "backtest.exchanges")
-    await format_approved_ignored_coins(config, exchanges)
+    await format_approved_ignored_coins(
+        config, exchanges, prefer_backtest_coin_source_keys=True
+    )
     config.setdefault("backtest", {})
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}

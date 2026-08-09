@@ -129,6 +129,7 @@ from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
+from config.runtime_compile import compile_runtime_config
 from risk_limits import (
     effective_we_excess_allowance_pct,
     normalize_we_excess_allowance_mode,
@@ -140,6 +141,7 @@ from logging_setup import (
     resolve_log_level,
 )
 from utils import (
+    MarketIdentifierResolutionError,
     load_markets,
     coin_to_symbol,
     symbol_to_coin,
@@ -2191,6 +2193,7 @@ class Passivbot:
     _hsl_psides = pb_hsl._hsl_psides
     _hsl_state = pb_hsl._hsl_state
     _parse_hsl_config = pb_hsl._parse_hsl_config
+    _equity_hard_stop_config = pb_hsl._equity_hard_stop_config
     _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
     _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
     _equity_hard_stop_balance_override_active = (
@@ -4461,11 +4464,20 @@ class Passivbot:
 
     def init_coin_overrides(self):
         """Populate coin override map keyed by symbols for quick lookup."""
-        self.coin_overrides = {
-            s: v
-            for k, v in self.config.get("coin_overrides", {}).items()
-            if (s := self.coin_to_symbol(k))
-        }
+        resolved_coin_overrides = {}
+        override_keys_by_symbol = {}
+        for key, value in self.config.get("coin_overrides", {}).items():
+            symbol = self.coin_to_symbol(key)
+            if not symbol:
+                continue
+            if symbol in resolved_coin_overrides and resolved_coin_overrides[symbol] != value:
+                raise ValueError(
+                    f"conflicting coin_overrides keys resolve to {symbol}: "
+                    f"{override_keys_by_symbol[symbol]!r} and {key!r}"
+                )
+            resolved_coin_overrides[symbol] = value
+            override_keys_by_symbol.setdefault(symbol, key)
+        self.coin_overrides = resolved_coin_overrides
         if self.coin_overrides:
             logging.debug(
                 "Initialized coin overrides for %s",
@@ -4479,6 +4491,12 @@ class Passivbot:
         log_key = None
         if symbol and symbol in self.coin_overrides:
             d = self.coin_overrides[symbol]
+            if len(path) == 3 and path[0] == "bot" and path[1] in {"long", "short"}:
+                side = d.get("bot", {}).get(path[1], {})
+                sentinel = object()
+                grouped_value = get_grouped_bot_value(side, path[2], default=sentinel)
+                if grouped_value is not sentinel:
+                    return grouped_value
             for p in path:
                 if isinstance(d, dict) and p in d:
                     d = d[p]
@@ -5330,7 +5348,28 @@ class Passivbot:
         )
         if all([s in self.first_timestamps for s in symbols]):
             return
-        first_timestamps = await get_first_timestamps_unified(symbols)
+        if self.exchange == "fake":
+            first_timestamps = {}
+            for symbol in symbols:
+                symbolf = self.coin_to_symbol(symbol, verbose=False)
+                try:
+                    candles = await self.cca.fetch_ohlcv(
+                        symbolf, timeframe="1m", since=1
+                    )
+                except Exception as e:
+                    logging.warning(
+                        "fake: unable to derive first timestamp for %s: %s",
+                        symbolf,
+                        e,
+                    )
+                    candles = []
+                first_timestamps[symbol] = (
+                    int(candles[0][0]) if candles else 0.0
+                )
+        else:
+            first_timestamps = await get_first_timestamps_unified(
+                symbols, exchange=self.exchange
+            )
         self.first_timestamps.update(first_timestamps)
         for symbol in sorted(self.first_timestamps):
             symbolf = self.coin_to_symbol(symbol, verbose=False)
@@ -5937,17 +5976,9 @@ class Passivbot:
         """Map a coin identifier to the exchange-specific trading symbol."""
         if coin == "":
             return ""
-        if not hasattr(self, "coin_to_symbol_map"):
-            self.coin_to_symbol_map = {}
-        if coin in self.coin_to_symbol_map:
-            return self.coin_to_symbol_map[coin]
-        coinf = symbol_to_coin(coin, verbose=verbose)
-        if coinf in self.coin_to_symbol_map:
-            self.coin_to_symbol_map[coin] = self.coin_to_symbol_map[coinf]
-            return self.coin_to_symbol_map[coinf]
-        result = coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
-        self.coin_to_symbol_map[coin] = result
-        return result
+        # The shared resolver already caches maps with file-change detection.
+        # A second bot-level result cache would hide newly ambiguous aliases.
+        return coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
 
     def order_to_order_tuple(self, order):
         """Convert an order dictionary into a normalized tuple for comparisons."""
@@ -16710,35 +16741,63 @@ class Passivbot:
                     )
             else:
                 out[out_key] = float(val or 0.0)
-        out.update(
-            {
-                "hsl_enabled": bool(self.bot_value(pside, "hsl_enabled")),
-                "hsl_red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
-                "hsl_ema_span_minutes": float(
+        hsl_cfg = (
+            self._equity_hard_stop_config(pside, symbol)
+            if symbol is not None and hasattr(self, "_equity_hard_stop_config")
+            else {
+                "enabled": bool(self.bot_value(pside, "hsl_enabled")),
+                "red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
+                "ema_span_minutes": float(
                     self.bot_value(pside, "hsl_ema_span_minutes")
                 ),
-                "hsl_cooldown_minutes_after_red": float(
+                "cooldown_minutes_after_red": float(
                     self.bot_value(pside, "hsl_cooldown_minutes_after_red")
                 ),
-                "hsl_no_restart_drawdown_threshold": float(
+                "no_restart_drawdown_threshold": float(
                     self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
                 ),
+                "restart_after_red_policy": self.bot_value(
+                    pside, "hsl_restart_after_red_policy"
+                ),
+                "tier_ratios": {
+                    "yellow": float(
+                        self.bot_value(pside, "hsl_tier_ratios.yellow")
+                    ),
+                    "orange": float(
+                        self.bot_value(pside, "hsl_tier_ratios.orange")
+                    ),
+                },
+                "orange_tier_mode": str(
+                    self.bot_value(pside, "hsl_orange_tier_mode")
+                ),
+                "panic_close_order_type": str(
+                    self.bot_value(pside, "hsl_panic_close_order_type")
+                ),
+            }
+        )
+        out.update(
+            {
+                "hsl_enabled": bool(hsl_cfg["enabled"]),
+                "hsl_red_threshold": float(hsl_cfg["red_threshold"]),
+                "hsl_ema_span_minutes": float(hsl_cfg["ema_span_minutes"]),
+                "hsl_cooldown_minutes_after_red": float(
+                    hsl_cfg["cooldown_minutes_after_red"]
+                ),
+                "hsl_no_restart_drawdown_threshold": float(
+                    hsl_cfg["no_restart_drawdown_threshold"]
+                ),
                 "hsl_restart_after_red_policy": normalize_hsl_restart_after_red_policy(
-                    self.bot_value(pside, "hsl_restart_after_red_policy"),
+                    hsl_cfg["restart_after_red_policy"],
                     path=f"bot.{pside}.hsl_restart_after_red_policy",
                 ),
                 "hsl_tier_ratio_yellow": float(
-                    self.bot_value(pside, "hsl_tier_ratios.yellow")
+                    hsl_cfg["tier_ratios"]["yellow"]
                 ),
                 "hsl_tier_ratio_orange": float(
-                    self.bot_value(pside, "hsl_tier_ratios.orange")
+                    hsl_cfg["tier_ratios"]["orange"]
                 ),
-                "hsl_orange_tier_mode": str(
-                    self.bot_value(pside, "hsl_orange_tier_mode")
-                ),
-                "hsl_panic_close_order_type": str(
-                    self.bot_value(pside, "hsl_panic_close_order_type")
-                ),
+                "hsl_orange_tier_mode": str(hsl_cfg["orange_tier_mode"]),
+                "hsl_panic_close_order_type": str(hsl_cfg["panic_close_order_type"]),
             }
         )
         return out
@@ -21882,13 +21941,23 @@ class Passivbot:
         if log_psides is None:
             log_psides = set(content.keys())
         symbols = None
+        resolved_identifier_symbols = None
+        resolution_error_identifiers = None
+        identifier_symbol_cache = getattr(self, "_coin_list_identifier_symbols", None)
+        if not isinstance(identifier_symbol_cache, dict):
+            identifier_symbol_cache = {}
+            self._coin_list_identifier_symbols = identifier_symbol_cache
+        list_identifier_symbol_cache = identifier_symbol_cache.setdefault(k_coins, {})
         result = {"added": {}, "removed": {}}
         psides_equal = content["long"] == content["short"]
         for pside in content:
+            symbols_already = getattr(self, k_coins)[pside]
             if not psides_equal or symbols is None:
                 coins = content[pside]
                 if k_coins == "approved_coins" and _coins_source_side_is_all(coins):
                     symbols = set(getattr(self, "eligible_symbols", set()))
+                    resolved_identifier_symbols = {}
+                    resolution_error_identifiers = set()
                 else:
                     # Check if coins is a single string that needs to be split
                     if isinstance(coins, str):
@@ -21903,11 +21972,29 @@ class Passivbot:
                                 expanded_coins.append(item)
                         coins = expanded_coins
 
-                    symbols = [
-                        self.coin_to_symbol(coin, verbose=False)
-                        for coin in coins
-                        if coin
-                    ]
+                    symbols = []
+                    resolved_identifier_symbols = {}
+                    resolution_error_identifiers = set()
+                    for coin in coins:
+                        if not coin:
+                            continue
+                        identifier = str(coin).strip()
+                        try:
+                            symbol = self.coin_to_symbol(coin, verbose=False)
+                        except MarketIdentifierResolutionError as e:
+                            resolution_error_identifiers.add(identifier)
+                            logging.error(
+                                "[forager] market identifier unavailable | "
+                                "list_kind=%s pside=%s error_type=%s "
+                                "action=skip_identifier",
+                                k_coins,
+                                pside,
+                                bounded_exception_type(e),
+                            )
+                            continue
+                        if symbol:
+                            symbols.append(symbol)
+                            resolved_identifier_symbols[identifier] = symbol
                     symbols = {s for s in symbols if s}
                     eligible = getattr(self, "eligible_symbols", None)
                     if eligible:
@@ -21964,15 +22051,28 @@ class Passivbot:
                                     if emitted:
                                         event_keys.add(event_key)
                             symbols = symbols - set(skipped)
-            symbols_already = getattr(self, k_coins)[pside]
-            if symbols_already != symbols:
-                added = symbols - symbols_already
-                removed = symbols_already - symbols
+            symbols_for_pside = set(symbols)
+            identifier_symbols_for_pside = dict(resolved_identifier_symbols or {})
+            if k_coins == "ignored_coins":
+                previous_identifier_symbols = list_identifier_symbol_cache.get(pside, {})
+                for identifier in resolution_error_identifiers or ():
+                    previous_symbol = previous_identifier_symbols.get(identifier)
+                    if previous_symbol in symbols_already:
+                        symbols_for_pside.add(previous_symbol)
+                        identifier_symbols_for_pside[identifier] = previous_symbol
+            list_identifier_symbol_cache[pside] = {
+                identifier: symbol
+                for identifier, symbol in identifier_symbols_for_pside.items()
+                if symbol in symbols_for_pside
+            }
+            if symbols_already != symbols_for_pside:
+                added = symbols_for_pside - symbols_already
+                removed = symbols_already - symbols_for_pside
                 if added and pside in log_psides:
                     result["added"][pside] = added
                 if removed and pside in log_psides:
                     result["removed"][pside] = removed
-                getattr(self, k_coins)[pside] = symbols
+                getattr(self, k_coins)[pside] = symbols_for_pside
         return result
 
     def refresh_approved_ignored_coins_lists(self):
@@ -22093,6 +22193,17 @@ class Passivbot:
             except Exception:
                 pass
             self._log_coin_symbol_fallback_summary()
+        except MarketIdentifierResolutionError as e:
+            psides = set(getattr(self, "approved_coins", {})) | {"long", "short"}
+            self.approved_coins = {pside: set() for pside in psides}
+            self.approved_coins_minus_ignored_coins = {
+                pside: set() for pside in psides
+            }
+            logging.error(
+                "[forager] approved/ignored coin refresh failed closed | "
+                "error_type=%s action=clear_approved_eligibility",
+                bounded_exception_type(e),
+            )
         except Exception as e:
             logging.error(
                 "[forager] approved/ignored coin refresh failed | "
@@ -22352,7 +22463,6 @@ async def main():
         live_only=True,
         verbose=True,
         target="live",
-        runtime="live",
         raw_snapshot=raw_snapshot,
     )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
@@ -22443,6 +22553,7 @@ async def main():
     await load_markets(user_info["exchange"], verbose=True)
 
     config = parse_overrides(config, verbose=True)
+    config = compile_runtime_config(config, runtime="live")
     cooldown_secs = 60
     restarts = []
     while True:

@@ -2636,6 +2636,15 @@ fn validate_hsl_risk_unstuck_bot_params(
     pside: &str,
     params: &BotParams,
 ) -> PyResult<()> {
+    match params.hsl_panic_close_order_type.as_str() {
+        "market" | "limit" => {}
+        raw => {
+            return Err(PyValueError::new_err(format!(
+                "{path_prefix}.hsl_panic_close_order_type must be one of: market, limit; got {:?}",
+                raw
+            )));
+        }
+    }
     validate_finite_range(
         &format!("{path_prefix}.hsl_ema_span_minutes"),
         params.hsl_ema_span_minutes,
@@ -2683,18 +2692,20 @@ fn validate_hsl_risk_unstuck_bot_params(
         params.hsl_tier_ratio_yellow,
         0.0,
         Some(1.0),
-        true,
+        false,
     )?;
     validate_finite_range(
         &format!("{path_prefix}.hsl_tier_ratio_orange"),
         params.hsl_tier_ratio_orange,
         0.0,
         Some(1.0),
-        true,
+        false,
     )?;
-    if params.hsl_tier_ratio_yellow > params.hsl_tier_ratio_orange {
+    if !(params.hsl_tier_ratio_yellow < params.hsl_tier_ratio_orange
+        && params.hsl_tier_ratio_orange < 1.0)
+    {
         return Err(PyValueError::new_err(format!(
-            "{path_prefix}.hsl_tier_ratio_yellow must be <= {path_prefix}.hsl_tier_ratio_orange"
+            "{path_prefix}.hsl tier ratios must satisfy 0 < yellow < orange < 1"
         )));
     }
     validate_finite_range(

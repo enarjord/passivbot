@@ -19,16 +19,18 @@ Testnet, sandbox, demo, and paper-trading modes are not assumed safe or unauthen
 
 ## Public Repository Data Boundary
 
-Treat material specific to a local environment, private host, account, or operator as private unless
-the user explicitly identifies that exact material as intended for public release. Never commit or
-push private credentials, configs, logs, telemetry, debugging output, optimization results, dumps,
-or artifacts copied or derived from private VPSs to a public repository.
+Public surfaces (commits, PRs, issues, comments, docs, and any pushed artifact) must be useful to a
+reader who has only this public repository and other public references. Private or local material
+may inform the agent; it must not appear on a public surface unless the user explicitly authorizes
+that exact material for public release.
 
-Configuration files are private by default. The only configs that may be published without
-case-specific approval are the repository's intentionally public template/example configs under
-`configs/examples/`. A new config outside that established public set requires explicit user
-authorization before it is committed or pushed. Keep private inputs outside the tracked tree and
-redact any derived evidence that is appropriate to publish.
+If only you can see it, the public repo should not hear about it. Do not publish investigation
+provenance, local clone or path names, private hosts, accounts, operator-only audits, private logs,
+telemetry, dumps, credentials, or other unreproducible context. Restate conclusions in public-only
+terms, or omit them. Task input is not publication license.
+
+Configuration is private by default. Without case-specific approval, publish only the repository's
+intentional templates under `configs/examples/`. Keep private inputs outside the tracked tree.
 
 ## Instruction Precedence
 
