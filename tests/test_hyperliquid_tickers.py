@@ -1,6 +1,55 @@
 import pytest
 
 from exchanges.hyperliquid import HyperliquidBot
+from utils import UnknownMarketIdentifier
+
+
+@pytest.mark.asyncio
+async def test_fetch_tickers_skips_unloaded_all_mids_market_identifiers():
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.markets_dict = {"BTC/USDC:USDC": {}}
+    bot.symbol_ids_inv = {}
+
+    class FakeCCA:
+        async def fetch(self, url, method=None, headers=None, body=None):
+            return {"BTC": "100000.0", "PURR/USDC": "0.1"}
+
+    def resolve_coin(coin, verbose=True):
+        if coin == "BTC":
+            return "BTC/USDC:USDC"
+        raise UnknownMarketIdentifier(f"unavailable market identifier {coin!r}")
+
+    bot.cca = FakeCCA()
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    bot.coin_to_symbol = resolve_coin
+
+    out = await bot.fetch_tickers()
+
+    assert out == {
+        "BTC/USDC:USDC": {
+            "bid": 100_000.0,
+            "ask": 100_000.0,
+            "last": 100_000.0,
+            "source": "hyperliquid_all_mids",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_tickers_propagates_malformed_loaded_market_price():
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.markets_dict = {"BTC/USDC:USDC": {}}
+    bot.symbol_ids_inv = {"BTC": "BTC/USDC:USDC"}
+
+    class FakeCCA:
+        async def fetch(self, url, method=None, headers=None, body=None):
+            return {"BTC": "not-a-price"}
+
+    bot.cca = FakeCCA()
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+
+    with pytest.raises(ValueError):
+        await bot.fetch_tickers()
 
 
 @pytest.mark.asyncio

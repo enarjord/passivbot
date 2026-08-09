@@ -11,6 +11,11 @@ All notable user-facing changes will be documented in this file.
   use each pair's own active episode, and the requirement is rechecked after refresh so delayed or
   side-ambiguous fills fail closed. Coin finalization no longer requests unused account-wide PnL.
 
+- Prevent unrelated spot or unloaded-DEX rows in Hyperliquid's public `allMids` payload from
+  aborting live ticker snapshots. Unknown exchange-returned identifiers are filtered at the
+  connector boundary, while requested-market completeness and malformed known-market prices
+  remain fail-closed.
+
 - Allow the complete per-side HSL group in coin overrides when the global
   `live.hsl_signal_mode` is `"coin"`. Resolved per-coin HSL settings now drive both live
   supervision and Rust backtests; inline HSL patches fail in `pside` or `unified` mode, while HSL
