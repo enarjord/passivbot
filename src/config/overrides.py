@@ -11,6 +11,7 @@ from utils import symbol_to_coin
 from .load import load_input_config, prepare_config
 from .log_output import log_config_message
 from .schema import get_template_config
+from .coerce import normalize_hsl_signal_mode
 from .shared_bot import BOT_GROUP_FIELD_MAP, canonicalize_shared_bot_side
 from .strategy import (
     TRAILING_GRID_V7_FLAT_ONLY_KEYS,
@@ -64,6 +65,20 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
     return result
 
 
+CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
+    {
+        "hsl.cooldown_minutes_after_red",
+        "hsl.ema_span_minutes",
+        "hsl.enabled",
+        "hsl.no_restart_drawdown_threshold",
+        "hsl.orange_tier_mode",
+        "hsl.panic_close_order_type",
+        "hsl.red_threshold",
+        "hsl.restart_after_red_policy",
+        "hsl.tier_ratios.orange",
+        "hsl.tier_ratios.yellow",
+    }
+)
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     {
         "risk.entry_cooldown_minutes",
@@ -77,14 +92,30 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "unstuck.loss_allowance_pct",
         "unstuck.threshold",
     }
+    | CONDITIONAL_HSL_OVERRIDE_PATHS
 )
 OVERRIDABLE_STANDALONE_BOT_KEYS = frozenset({"wallet_exposure_limit"})
 REMOVED_COIN_OVERRIDE_PATHS = frozenset({"risk.we_excess_allowance_mode"})
 
 
-def _flat_bot_side_modification_policy() -> dict[str, bool]:
+def _active_shared_bot_override_paths(hsl_signal_mode: str) -> frozenset[str]:
+    if normalize_hsl_signal_mode(hsl_signal_mode) == "coin":
+        return OVERRIDABLE_SHARED_BOT_PATHS
+    return OVERRIDABLE_SHARED_BOT_PATHS - CONDITIONAL_HSL_OVERRIDE_PATHS
+
+
+def _flat_bot_side_modification_policy(
+    *, hsl_signal_mode: str = "coin"
+) -> dict[str, bool]:
+    active_paths = _active_shared_bot_override_paths(hsl_signal_mode)
     policy = {
-        flat_key: f"{group_name}.{local_key}" in OVERRIDABLE_SHARED_BOT_PATHS
+        flat_key: (
+            f"{group_name}.{local_key}" in active_paths
+            or any(
+                path.startswith(f"{group_name}.{local_key}.")
+                for path in active_paths
+            )
+        )
         for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
         for local_key, flat_key in field_map.items()
     }
@@ -92,10 +123,14 @@ def _flat_bot_side_modification_policy() -> dict[str, bool]:
     return policy
 
 
-def allowed_flat_bot_side_modification_keys() -> frozenset[str]:
+def allowed_flat_bot_side_modification_keys(
+    *, hsl_signal_mode: str = "coin"
+) -> frozenset[str]:
     return frozenset(
         key
-        for key, allowed in _flat_bot_side_modification_policy().items()
+        for key, allowed in _flat_bot_side_modification_policy(
+            hsl_signal_mode=hsl_signal_mode
+        ).items()
         if allowed is True
     )
 
@@ -140,7 +175,7 @@ def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
             )
 
 
-def _allowed_bot_side_modifications() -> dict:
+def _allowed_bot_side_modifications(*, hsl_signal_mode: str = "coin") -> dict:
     def _allow_dotted_paths(keys: tuple[str, ...]) -> dict:
         result = {}
         for key in keys:
@@ -151,27 +186,30 @@ def _allowed_bot_side_modifications() -> dict:
             current[parts[-1]] = True
         return result
 
-    side = _flat_bot_side_modification_policy()
+    active_paths = _active_shared_bot_override_paths(hsl_signal_mode)
+    side = _flat_bot_side_modification_policy(hsl_signal_mode=hsl_signal_mode)
     side["strategy"] = {
         strategy_kind: _allow_dotted_paths(keys)
         for strategy_kind in get_supported_strategy_kinds()
         for keys in (get_strategy_param_keys(strategy_kind),)
     }
-    for group_name, field_map in BOT_GROUP_FIELD_MAP.items():
-        grouped_allowed = {
-            local_key: f"{group_name}.{local_key}" in OVERRIDABLE_SHARED_BOT_PATHS
-            for local_key in field_map
-        }
-        if any(grouped_allowed.values()):
+    for group_name in BOT_GROUP_FIELD_MAP:
+        relative_paths = tuple(
+            path.removeprefix(f"{group_name}.")
+            for path in active_paths
+            if path.startswith(f"{group_name}.")
+        )
+        if relative_paths:
+            grouped_allowed = _allow_dotted_paths(relative_paths)
             side[group_name] = grouped_allowed
     return side
 
 
-def get_allowed_modifications():
+def get_allowed_modifications(*, hsl_signal_mode: str = "coin"):
     return {
         "bot": {
-            "long": _allowed_bot_side_modifications(),
-            "short": _allowed_bot_side_modifications(),
+            "long": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
+            "short": _allowed_bot_side_modifications(hsl_signal_mode=hsl_signal_mode),
         },
         "live": {
             "forced_mode_long": True,
@@ -236,6 +274,7 @@ def _extract_allowed_patch(
     source: str,
     strict: bool,
     strategy_kind: str,
+    hsl_signal_mode: str,
 ) -> dict:
     """Extract explicitly supplied allowed leaves without hydrating defaults."""
 
@@ -259,6 +298,20 @@ def _extract_allowed_patch(
                 continue
             if not isinstance(side, dict):
                 raise TypeError(f"{source}.bot.{pside} must be a dict")
+            hsl_group = side.get("hsl")
+            hsl_flat_keys = set(BOT_GROUP_FIELD_MAP["hsl"].values())
+            has_hsl_patch = (
+                isinstance(hsl_group, dict) and bool(hsl_group)
+            ) or any(key in side for key in hsl_flat_keys)
+            if has_hsl_patch and hsl_signal_mode != "coin":
+                path = _format_override_path(coin, ("bot", pside, "hsl"))
+                message = (
+                    f"{path} is overridable only when the effective global "
+                    f"live.hsl_signal_mode is 'coin'; got {hsl_signal_mode!r}"
+                )
+                if strict:
+                    raise ValueError(message)
+                logging.warning("%s; the file HSL values are ignored", message)
             for removed_path in REMOVED_COIN_OVERRIDE_PATHS:
                 group_name, local_key = removed_path.split(".", 1)
                 flat_key = BOT_GROUP_FIELD_MAP[group_name][local_key]
@@ -305,7 +358,7 @@ def _extract_allowed_patch(
                 for kind in mismatched:
                     strategy.pop(kind, None)
 
-    allowed = get_allowed_modifications()
+    allowed = get_allowed_modifications(hsl_signal_mode=hsl_signal_mode)
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
@@ -422,7 +475,12 @@ def _validate_patch_leaf_types(
 
 
 def _validate_effective_coin_config(
-    config: dict, patch: dict, *, coin: str, origin: str
+    config: dict,
+    patch: dict,
+    *,
+    coin: str,
+    origin: str,
+    retain_derived_hsl_dependents: bool = False,
 ) -> dict:
     effective = deepcopy(config)
     for metadata_key in (
@@ -442,6 +500,7 @@ def _validate_effective_coin_config(
     validation_input = get_template_config()
     nested_update(validation_input, effective)
     effective = validation_input
+    canonical_base = deepcopy(effective)
     for root in ("bot", "live"):
         if root in patch:
             nested_update(effective[root], deepcopy(patch[root]))
@@ -475,6 +534,25 @@ def _validate_effective_coin_config(
             deepcopy(normalized_value),
             create_missing=True,
         )
+    for pside in ("long", "short") if retain_derived_hsl_dependents else ():
+        hsl_patch = patch.get("bot", {}).get(pside, {}).get("hsl")
+        if not isinstance(hsl_patch, dict) or not hsl_patch:
+            continue
+        dependent_path = (
+            "bot",
+            pside,
+            "hsl",
+            "no_restart_drawdown_threshold",
+        )
+        normalized_value = _get_nested_value(prepared, dependent_path)
+        base_value = _get_nested_value(canonical_base, dependent_path)
+        if normalized_value != base_value:
+            set_nested_value_safe(
+                normalized_patch,
+                list(dependent_path),
+                deepcopy(normalized_value),
+                create_missing=True,
+            )
     return normalized_patch
 
 
@@ -635,6 +713,10 @@ def parse_overrides(
             )
     result["coin_overrides"] = normalized_overrides
     strategy_kind = normalize_strategy_kind(result.get("live", {}).get("strategy_kind"))
+    live_config = result.get("live", {})
+    hsl_signal_mode = normalize_hsl_signal_mode(
+        live_config["hsl_signal_mode"] if "hsl_signal_mode" in live_config else "coin"
+    )
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
         loaded = override_loader(result, coin)
@@ -645,6 +727,7 @@ def parse_overrides(
                 source=f"coin_overrides.{coin}.override_config_path",
                 strict=False,
                 strategy_kind=strategy_kind,
+                hsl_signal_mode=hsl_signal_mode,
             )
             _validate_patch_leaf_types(
                 result,
@@ -664,6 +747,7 @@ def parse_overrides(
             source=f"coin_overrides.{coin}",
             strict=True,
             strategy_kind=strategy_kind,
+            hsl_signal_mode=hsl_signal_mode,
         )
         _validate_patch_leaf_types(
             result,
@@ -680,6 +764,7 @@ def parse_overrides(
             parsed_overrides,
             coin=coin,
             origin="file and inline precedence resolution",
+            retain_derived_hsl_dependents=True,
         )
         result.setdefault("coin_overrides", {})[coin] = parsed_overrides
         log_config_message(

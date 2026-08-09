@@ -108,8 +108,6 @@ MANUAL_REVIEW_BOUND_KEYS = {
 COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
     "wallet_exposure_limit",
 }
-COIN_OVERRIDE_SUPPORTED_SHARED_FLAT_KEYS = allowed_flat_bot_side_modification_keys()
-
 V7_ABSENT_RISK_DEFAULTS = {
     "risk_entry_cooldown_minutes": 0.0,
     "risk_we_excess_allowance_mode": WE_EXCESS_ALLOWANCE_MODE_BOUNDED,
@@ -1260,6 +1258,9 @@ def _migrate_coin_overrides(source: dict, target: dict, report: dict) -> None:
     if not isinstance(coin_overrides, dict):
         return
     allowed_live_keys = set(target.get("live", {}))
+    allowed_shared_flat_keys = allowed_flat_bot_side_modification_keys(
+        hsl_signal_mode=target.get("live", {}).get("hsl_signal_mode", "pside")
+    )
     result = {}
     for coin, override in coin_overrides.items():
         if not isinstance(override, dict):
@@ -1299,7 +1300,7 @@ def _migrate_coin_overrides(source: dict, target: dict, report: dict) -> None:
                     report,
                     source_prefix=prefix,
                     target_prefix=prefix,
-                    allowed_flat_keys=COIN_OVERRIDE_SUPPORTED_SHARED_FLAT_KEYS,
+                    allowed_flat_keys=allowed_shared_flat_keys,
                 )
                 _move_strategy_side_fields(
                     side,

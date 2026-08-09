@@ -13,8 +13,8 @@ instead of extending the current feature branch indefinitely.
 - [x] Remove `bot.<pside>.risk.we_excess_allowance_mode` from the override surface.
 - [x] Add `bot.<pside>.unstuck.ema_gating_enabled` to the override surface.
 - [x] Add `bot.<pside>.risk.entry_cooldown_minutes` to the override surface.
-- [x] Make the complete `bot.<pside>.hsl.*` group overridable when that side's
-  `hsl_signal_mode` is `"coin"`.
+- [x] Make the complete `bot.<pside>.hsl.*` group overridable when the global
+  `live.hsl_signal_mode` is `"coin"`.
 - [x] Do not add any new `live.*` overrides in this series.
 
 ## Cross-PR invariants
@@ -113,32 +113,37 @@ instead of extending the current feature branch indefinitely.
 - [x] Run real backtest comparisons that exercise entry cooldown and unstuck EMA gating.
 - [x] Run deterministic offline fake-live scenarios that exercise the new parameters.
 - [x] Open a regular ready-for-review PR.
-- [ ] Request Codex review and record the reviewed head SHA.
-- [ ] Address findings and repeat review plus validation until the current head is green.
-- [ ] Merge the reviewed current head and mark this section complete.
+- [x] Request Codex review; clean pass reviewed
+  `145b497315e65934870d0aec381d2316403b803d`.
+- [x] Address findings and repeat review plus validation until the current head is green.
+- [x] Merge the reviewed current head and mark this section complete.
 
 ## PR 3: conditional per-coin HSL group
 
 ### Implementation
 
-- [ ] Branch from the merged PR 2 result.
-- [ ] Allow the complete `bot.<pside>.hsl.*` group only when that side's effective
-  `hsl_signal_mode` is `"coin"`.
-- [ ] Define and test precedence when the signal mode and HSL fields come from different
+- [x] Branch from the merged PR 2 result.
+- [x] Allow the complete `bot.<pside>.hsl.*` group only when the effective global
+  `live.hsl_signal_mode` is `"coin"`.
+- [x] Define and test precedence when the signal mode and HSL fields come from different
   sources.
-- [ ] Reject HSL coin patches in non-coin signal modes with actionable errors.
-- [ ] Validate every resolved HSL cross-field invariant.
-- [ ] Update HSL and coin-override documentation and the changelog.
+- [x] Reject HSL coin patches in non-coin signal modes with actionable errors.
+- [x] Validate every resolved HSL cross-field invariant.
+- [x] Update HSL and coin-override documentation and the changelog.
 
 ### Validation and release gate
 
-- [ ] Add table-driven coverage for every HSL field on both sides.
-- [ ] Cover global, file, and inline signal-mode transitions and invalid combinations.
-- [ ] Run focused and broader Python tests.
-- [ ] Rebuild and verify the Rust extension.
-- [ ] Run real HSL backtests with public fixtures and compare expected behavior.
-- [ ] Run deterministic offline fake-live HSL scenarios, including restart behavior.
-- [ ] Open a regular ready-for-review PR and request Codex review.
+- [x] Add table-driven coverage for every HSL field on both sides.
+- [x] Cover global, file, and inline signal-mode transitions and invalid combinations.
+- [x] Run focused and broader Python tests.
+- [x] Rebuild and verify the Rust extension.
+- [x] Run real HSL backtests with public fixtures and compare expected behavior.
+- [x] Run deterministic offline fake-live HSL scenarios, including restart behavior.
+- [x] Open a regular ready-for-review PR and request Codex review; first pass reviewed
+  `295abf6221006e8e1cbc0a73519438d670a6b57b`.
+- [x] Address the five first-pass findings in
+  `c151cbb44642228204dc8e47e765093d7d0f60f3`, add regressions, and rerun the full
+  Python suite, full Rust library suite, fake-live tests, and controlled HSL backtests.
 - [ ] Address findings and repeat review plus validation until the current head is green.
 - [ ] Merge the reviewed current head and mark this section complete.
 
@@ -163,5 +168,6 @@ instead of extending the current feature branch indefinitely.
 - [x] PR 1 under review.
 - [x] PR 1 merged as `75116d1954c19e2bf54ef8313c18d332815a00e1`.
 - [x] PR 2 under review.
-- [ ] PR 2 merged.
+- [x] PR 2 merged as `9cc3cad58c566364d0ef5e01e9ef6457132246ea`.
+- [x] PR 3 first-pass findings addressed; current-head re-review pending.
 - [ ] PR 3 merged.

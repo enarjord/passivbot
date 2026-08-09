@@ -751,8 +751,9 @@ def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk
     assert "total_wallet_exposure_limit" not in parsed_override.get("risk", {})
 
 
-def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias_fields():
+def test_migrate_v7_trailing_grid_coin_override_migrates_conditional_hsl_aliases():
     source = _minimal_v7_trailing_grid_config()
+    source["live"]["hsl_signal_mode"] = "coin"
     source["coin_overrides"]["BTC"] = {
         "bot": {
             "long": {
@@ -773,11 +774,12 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
     migrated, report = migrate_v7_trailing_grid_config(source)
 
     long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "hsl" not in long_override
+    assert long_override["hsl"]["tier_ratios"] == {
+        "yellow": pytest.approx(0.45),
+        "orange": pytest.approx(0.75),
+    }
     assert "forager" not in long_override
     for key in (
-        "hsl_tier_ratio_yellow",
-        "hsl_tier_ratio_orange",
         "forager_score_weights",
         "forager_volatility_ema_span",
         "filter_volume_ema_span",
@@ -785,6 +787,15 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
         source_path = f"coin_overrides.BTC.bot.long.{key}"
         assert source_path in report["manual_review_fields"]
         assert not any(moved.startswith(f"{source_path} ->") for moved in report["moved_fields"])
+    for source_key, target_path in (
+        ("hsl_tier_ratio_yellow", "hsl.tier_ratios.yellow"),
+        ("hsl_tier_ratio_orange", "hsl.tier_ratios.orange"),
+    ):
+        source_path = f"coin_overrides.BTC.bot.long.{source_key}"
+        assert (
+            f"{source_path} -> coin_overrides.BTC.bot.long.{target_path}"
+            in report["moved_fields"]
+        )
 
     prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
     parsed = parse_overrides(
@@ -793,8 +804,34 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
         symbol_normalizer=lambda coin: coin,
     )
     parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "hsl" not in parsed_override
+    assert parsed_override["hsl"]["tier_ratios"] == {
+        "yellow": pytest.approx(0.45),
+        "orange": pytest.approx(0.75),
+    }
     assert "forager" not in parsed_override
+
+
+def test_migrate_v7_trailing_grid_coin_override_rejects_hsl_aliases_outside_coin_mode():
+    source = _minimal_v7_trailing_grid_config()
+    source["live"]["hsl_signal_mode"] = "pside"
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "hsl_tier_ratio_yellow": 0.45,
+                "hsl_tier_ratio_orange": 0.75,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert "hsl" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    for key in ("hsl_tier_ratio_yellow", "hsl_tier_ratio_orange"):
+        source_path = f"coin_overrides.BTC.bot.long.{key}"
+        assert source_path in report["manual_review_fields"]
+        assert not any(
+            moved.startswith(f"{source_path} ->") for moved in report["moved_fields"]
+        )
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
@@ -2141,7 +2178,7 @@ def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
             "hsl",
             "tier_ratios",
             {"yellow": 0.9, "orange": 0.8},
-            r"bot\.long\.hsl\.tier_ratios\.yellow must be <= bot\.long\.hsl\.tier_ratios\.orange",
+            r"bot\.long\.hsl\.tier_ratios must satisfy 0 < yellow < orange < 1",
         ),
         (
             "risk",

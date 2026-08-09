@@ -2169,6 +2169,7 @@ class Passivbot:
     _hsl_psides = pb_hsl._hsl_psides
     _hsl_state = pb_hsl._hsl_state
     _parse_hsl_config = pb_hsl._parse_hsl_config
+    _equity_hard_stop_config = pb_hsl._equity_hard_stop_config
     _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
     _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
     _equity_hard_stop_balance_override_active = (
@@ -16688,35 +16689,63 @@ class Passivbot:
                     )
             else:
                 out[out_key] = float(val or 0.0)
-        out.update(
-            {
-                "hsl_enabled": bool(self.bot_value(pside, "hsl_enabled")),
-                "hsl_red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
-                "hsl_ema_span_minutes": float(
+        hsl_cfg = (
+            self._equity_hard_stop_config(pside, symbol)
+            if symbol is not None and hasattr(self, "_equity_hard_stop_config")
+            else {
+                "enabled": bool(self.bot_value(pside, "hsl_enabled")),
+                "red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
+                "ema_span_minutes": float(
                     self.bot_value(pside, "hsl_ema_span_minutes")
                 ),
-                "hsl_cooldown_minutes_after_red": float(
+                "cooldown_minutes_after_red": float(
                     self.bot_value(pside, "hsl_cooldown_minutes_after_red")
                 ),
-                "hsl_no_restart_drawdown_threshold": float(
+                "no_restart_drawdown_threshold": float(
                     self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
                 ),
+                "restart_after_red_policy": self.bot_value(
+                    pside, "hsl_restart_after_red_policy"
+                ),
+                "tier_ratios": {
+                    "yellow": float(
+                        self.bot_value(pside, "hsl_tier_ratios.yellow")
+                    ),
+                    "orange": float(
+                        self.bot_value(pside, "hsl_tier_ratios.orange")
+                    ),
+                },
+                "orange_tier_mode": str(
+                    self.bot_value(pside, "hsl_orange_tier_mode")
+                ),
+                "panic_close_order_type": str(
+                    self.bot_value(pside, "hsl_panic_close_order_type")
+                ),
+            }
+        )
+        out.update(
+            {
+                "hsl_enabled": bool(hsl_cfg["enabled"]),
+                "hsl_red_threshold": float(hsl_cfg["red_threshold"]),
+                "hsl_ema_span_minutes": float(hsl_cfg["ema_span_minutes"]),
+                "hsl_cooldown_minutes_after_red": float(
+                    hsl_cfg["cooldown_minutes_after_red"]
+                ),
+                "hsl_no_restart_drawdown_threshold": float(
+                    hsl_cfg["no_restart_drawdown_threshold"]
+                ),
                 "hsl_restart_after_red_policy": normalize_hsl_restart_after_red_policy(
-                    self.bot_value(pside, "hsl_restart_after_red_policy"),
+                    hsl_cfg["restart_after_red_policy"],
                     path=f"bot.{pside}.hsl_restart_after_red_policy",
                 ),
                 "hsl_tier_ratio_yellow": float(
-                    self.bot_value(pside, "hsl_tier_ratios.yellow")
+                    hsl_cfg["tier_ratios"]["yellow"]
                 ),
                 "hsl_tier_ratio_orange": float(
-                    self.bot_value(pside, "hsl_tier_ratios.orange")
+                    hsl_cfg["tier_ratios"]["orange"]
                 ),
-                "hsl_orange_tier_mode": str(
-                    self.bot_value(pside, "hsl_orange_tier_mode")
-                ),
-                "hsl_panic_close_order_type": str(
-                    self.bot_value(pside, "hsl_panic_close_order_type")
-                ),
+                "hsl_orange_tier_mode": str(hsl_cfg["orange_tier_mode"]),
+                "hsl_panic_close_order_type": str(hsl_cfg["panic_close_order_type"]),
             }
         )
         return out

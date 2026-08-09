@@ -108,6 +108,10 @@ def _raw_rust_input(
     short_entry_retracement_base_pct=0.0,
     long_close_retracement_base_pct=0.0,
     short_close_retracement_base_pct=0.0,
+    long_hsl_enabled=False,
+    short_hsl_enabled=False,
+    long_hsl_panic_close_order_type="market",
+    short_hsl_panic_close_order_type="market",
     **global_overrides,
 ) -> dict:
     global_input = {
@@ -174,6 +178,8 @@ def _raw_rust_input(
                         }
                     },
                     "bot_params": {
+                        "hsl_enabled": long_hsl_enabled,
+                        "hsl_panic_close_order_type": long_hsl_panic_close_order_type,
                         "wallet_exposure_limit": long_wallet_exposure_limit,
                         "risk_entry_cooldown_minutes": long_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
@@ -199,6 +205,8 @@ def _raw_rust_input(
                         }
                     },
                     "bot_params": {
+                        "hsl_enabled": short_hsl_enabled,
+                        "hsl_panic_close_order_type": short_hsl_panic_close_order_type,
                         "wallet_exposure_limit": short_wallet_exposure_limit,
                         "risk_entry_cooldown_minutes": short_entry_cooldown_minutes,
                         "risk_wel_enforcer_enabled": True,
@@ -1177,26 +1185,18 @@ def test_raw_rust_output_rejects_non_panic_execution_type_mismatch(
 
 
 @pytest.mark.parametrize(
-    "global_overrides",
+    "input_overrides",
     [
         {
-            "global_bot_params": {
-                "long": {
-                    "hsl_enabled": True,
-                    "hsl_panic_close_order_type": "market",
-                },
-                "short": {
-                    "hsl_enabled": False,
-                    "hsl_panic_close_order_type": "market",
-                },
-            }
+            "long_hsl_enabled": True,
+            "long_hsl_panic_close_order_type": "market",
         },
         {"panic_close_market": True},
     ],
-    ids=["side-local-hsl-market", "global-panic-market"],
+    ids=["symbol-side-hsl-market", "global-panic-market"],
 )
 def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disabled(
-    global_overrides,
+    input_overrides,
 ):
     order = _raw_rust_order(
         qty=-1.0,
@@ -1211,7 +1211,7 @@ def test_raw_rust_output_allows_configured_market_panic_close_when_markets_disab
         _raw_rust_input(
             long_mode="panic",
             market_orders_allowed=False,
-            **global_overrides,
+            **input_overrides,
         ),
     ) == [order]
 
@@ -1382,26 +1382,18 @@ def test_raw_rust_output_accepts_panic_limit_price_derived_from_book(
 
 
 @pytest.mark.parametrize(
-    "global_overrides",
+    "input_overrides",
     [
         {
-            "global_bot_params": {
-                "long": {
-                    "hsl_enabled": True,
-                    "hsl_panic_close_order_type": "market",
-                },
-                "short": {
-                    "hsl_enabled": False,
-                    "hsl_panic_close_order_type": "market",
-                },
-            }
+            "long_hsl_enabled": True,
+            "long_hsl_panic_close_order_type": "market",
         },
         {"panic_close_market": True},
     ],
-    ids=["side-local-hsl-market", "global-panic-market"],
+    ids=["symbol-side-hsl-market", "global-panic-market"],
 )
 def test_raw_rust_output_rejects_limit_panic_close_when_market_is_configured(
-    global_overrides,
+    input_overrides,
 ):
     order = _raw_rust_order(
         qty=-1.0,
@@ -1419,7 +1411,7 @@ def test_raw_rust_output_rejects_limit_panic_close_when_market_is_configured(
             _raw_rust_input(
                 long_mode="panic",
                 market_orders_allowed=False,
-                **global_overrides,
+                **input_overrides,
             ),
         )
 
@@ -1431,17 +1423,6 @@ def test_raw_rust_output_rejects_market_panic_close_when_limit_is_configured():
         execution_type="market",
         execution_priority="risk_critical",
     )
-    global_bot_params = {
-        "long": {
-            "hsl_enabled": True,
-            "hsl_panic_close_order_type": "limit",
-        },
-        "short": {
-            "hsl_enabled": False,
-            "hsl_panic_close_order_type": "market",
-        },
-    }
-
     with pytest.raises(
         FatalBotException, match="inconsistent with its submitted input"
     ):
@@ -1451,31 +1432,24 @@ def test_raw_rust_output_rejects_market_panic_close_when_limit_is_configured():
             _raw_rust_input(
                 long_mode="panic",
                 market_orders_allowed=True,
-                global_bot_params=global_bot_params,
+                long_hsl_enabled=True,
+                long_hsl_panic_close_order_type="limit",
             ),
         )
 
 
 @pytest.mark.parametrize(
-    "global_overrides",
+    "input_overrides",
     [
         {},
         {
-            "global_bot_params": {
-                "long": {
-                    "hsl_enabled": True,
-                    "hsl_panic_close_order_type": "limit",
-                },
-                "short": {
-                    "hsl_enabled": False,
-                    "hsl_panic_close_order_type": "market",
-                },
-            }
+            "long_hsl_enabled": True,
+            "long_hsl_panic_close_order_type": "limit",
         },
     ],
     ids=["hsl-disabled", "hsl-limit"],
 )
-def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_overrides):
+def test_raw_rust_output_rejects_unconfigured_market_panic_close(input_overrides):
     order = _raw_rust_order(
         qty=-1.0,
         order_type="close_panic_long",
@@ -1492,7 +1466,7 @@ def test_raw_rust_output_rejects_unconfigured_market_panic_close(global_override
             _raw_rust_input(
                 long_mode="panic",
                 market_orders_allowed=False,
-                **global_overrides,
+                **input_overrides,
             ),
         )
 

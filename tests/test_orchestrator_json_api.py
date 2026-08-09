@@ -3128,10 +3128,10 @@ def test_panic_close_order_type_is_side_local():
     import passivbot_rust as pbr
 
     global_bp = bot_params_pair(
-        long_overrides={"hsl_enabled": True, "hsl_panic_close_order_type": "market"},
+        long_overrides={"hsl_enabled": False, "hsl_panic_close_order_type": "limit"},
         short_overrides={
             "hsl_enabled": True,
-            "hsl_panic_close_order_type": "limit",
+            "hsl_panic_close_order_type": "market",
             "n_positions": 1,
             "total_wallet_exposure_limit": 1.0,
         },
@@ -3150,6 +3150,11 @@ def test_panic_close_order_type_is_side_local():
                 long_pos_price=100.0,
                 short_pos_size=-1.5,
                 short_pos_price=100.0,
+                long_bp={"hsl_enabled": True, "hsl_panic_close_order_type": "market"},
+                short_bp={
+                    "hsl_enabled": True,
+                    "hsl_panic_close_order_type": "limit",
+                },
             )
         ],
     )
@@ -3176,6 +3181,27 @@ def test_panic_close_order_type_rejects_invalid_values():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[])
 
     with pytest.raises(ValueError, match="hsl_panic_close_order_type"):
+        compute(pbr, inp)
+
+
+def test_panic_close_order_type_rejects_invalid_symbol_value():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"hsl_panic_close_order_type": "iceberg"},
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError, match=r"symbols\[0\]\.long\.bot_params\.hsl_panic_close_order_type"
+    ):
         compute(pbr, inp)
 
 

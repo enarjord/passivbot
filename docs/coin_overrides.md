@@ -12,6 +12,7 @@ Allowed fields are intentionally limited:
   (`entry_cooldown_minutes`, position-exposure enforcer settings, and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
   `ema_gating_enabled`, `enabled`, `loss_allowance_pct`, and `threshold`); and
+  every HSL field when the global `live.hsl_signal_mode` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
@@ -26,6 +27,26 @@ nested v8 strategy path instead.
 patches that contain it fail with a migration message. A complete file used through
 `override_config_path` may contain the global field, but it is warned about and ignored for the
 coin patch; set the value in the main config instead.
+
+The complete conditional HSL override group is:
+
+- `hsl.enabled`
+- `hsl.red_threshold`
+- `hsl.ema_span_minutes`
+- `hsl.cooldown_minutes_after_red`
+- `hsl.no_restart_drawdown_threshold`
+- `hsl.restart_after_red_policy`
+- `hsl.tier_ratios.yellow`
+- `hsl.tier_ratios.orange`
+- `hsl.orange_tier_mode`
+- `hsl.panic_close_order_type`
+
+These fields are per `coin+side` only when the main config selects
+`live.hsl_signal_mode = "coin"`. The signal mode itself remains global and is not overridable.
+An inline HSL patch in `pside` or `unified` mode is rejected. HSL values in a complete override
+file are warned about and ignored in those modes, while other eligible fields in that file still
+apply. A `live.hsl_signal_mode` value inside an override file or inline patch cannot authorize the
+HSL patch; the main config's effective global mode always decides.
 
 ## How overrides are loaded
 
@@ -72,6 +93,17 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
           },
           "risk": {
             "entry_cooldown_minutes": 0.05
+          },
+          "hsl": {
+            "enabled": true,
+            "red_threshold": 0.08,
+            "ema_span_minutes": 10.0,
+            "cooldown_minutes_after_red": 60.0,
+            "no_restart_drawdown_threshold": 0.25,
+            "restart_after_red_policy": "threshold",
+            "tier_ratios": {"yellow": 0.5, "orange": 0.75},
+            "orange_tier_mode": "tp_only_with_active_entry_cancellation",
+            "panic_close_order_type": "market"
           },
           "wallet_exposure_limit": 0.18
         },
@@ -159,6 +191,9 @@ Main config:
 - A per-coin `risk.entry_cooldown_minutes` gates only position-increasing entries for the selected
   coin+side. A per-coin `unstuck.ema_gating_enabled=false` disables only that coin+side's unstuck
   EMA trigger/readiness gate; the other unstuck eligibility checks still apply.
+- In global `coin` signal mode, per-coin HSL values drive the live supervisor and Rust backtest for
+  only the selected `coin+side`, including enablement, tier thresholds, cooldown/restart policy,
+  orange behavior, and panic execution type. Other coins inherit the main config.
 
 ## Common pitfalls
 
@@ -170,3 +205,5 @@ Main config:
 - Mis-keyed coins: invalid coin names and normalized-name collisions are rejected.
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
+- Conditional HSL: setting HSL fields in a coin patch while the main config uses `pside` or
+  `unified` mode is invalid; changing `live.hsl_signal_mode` inside the patch does not change that.
