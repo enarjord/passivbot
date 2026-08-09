@@ -274,19 +274,26 @@ def test_coin_to_symbol_rejects_multiple_candidates(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("symbol", "expected"),
+    ("symbol", "kwargs", "expected"),
     [
-        ("SHIB/USDT:USDT", ("SHIB", 1)),
-        ("1000SHIB/USDT:USDT", ("SHIB", 1000)),
-        ("SHIB1000/USDT:USDT", ("SHIB", 1000)),
-        ("SHIB100000/USDT:USDT", ("SHIB", 100000)),
-        ("kSHIB/USDC:USDC", ("SHIB", 1000)),
-        ("LUNA2/USDT:USDT", ("LUNA2", 1)),
-        ("1INCH/USDT:USDT", ("1INCH", 1)),
+        ("SHIB/USDT:USDT", {"exchange": "bitget"}, ("SHIB", 1)),
+        ("1000SHIB/USDT:USDT", {"exchange": "binance"}, ("SHIB", 1000)),
+        ("SHIB1000/USDT:USDT", {"exchange": "bybit"}, ("SHIB", 1000)),
+        ("SHIB100000/USDT:USDT", {"exchange": "bybit"}, ("SHIB", 100000)),
+        ("KSHIB/USDC:USDC", {"exchange": "hyperliquid"}, ("SHIB", 1000)),
+        ("LUNA2/USDT:USDT", {"exchange": "binance"}, ("LUNA2", 1)),
+        ("1INCH/USDT:USDT", {"exchange": "binance"}, ("1INCH", 1)),
+        ("NDX100/USDT:USDT", {"exchange": "bitget"}, ("NDX100", 1)),
+        ("NAS100/USDT:USDT", {"exchange": "gate"}, ("NAS100", 1)),
+        (
+            "XYZ-XYZ100/USDC:USDC",
+            {"exchange": "hyperliquid", "market": {"info": {"hip3": True}}},
+            ("XYZ-XYZ100", 1),
+        ),
     ],
 )
-def test_market_denomination_identity(symbol, expected):
-    assert utils.market_denomination_identity(symbol) == expected
+def test_market_denomination_identity(symbol, kwargs, expected):
+    assert utils.market_denomination_identity(symbol, **kwargs) == expected
 
 
 def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkeypatch):
@@ -309,9 +316,9 @@ def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkey
         },
     }
 
-    c2s, s2c = utils._build_coin_symbol_maps(markets, "USDT")
+    c2s, s2c = utils._build_coin_symbol_maps(markets, "USDT", exchange="bitget")
     reverse_c2s, reverse_s2c = utils._build_coin_symbol_maps(
-        dict(reversed(list(markets.items()))), "USDT"
+        dict(reversed(list(markets.items()))), "USDT", exchange="bitget"
     )
     assert c2s == reverse_c2s
     assert s2c == reverse_s2c
@@ -387,6 +394,31 @@ def test_single_multiplier_market_keeps_legacy_convenience_alias():
     assert coin_to_symbol_map["SHIB"] == ["1000SHIB/USDT:USDT"]
     assert coin_to_symbol_map["1000SHIB"] == ["1000SHIB/USDT:USDT"]
     assert symbol_to_coin_map["1000SHIBUSDT"] == "SHIB"
+
+
+def test_numeric_ticker_suffix_is_not_fabricated_as_bitget_denomination():
+    markets = {
+        "NDX/USDT:USDT": {
+            "id": "NDXUSDT",
+            "swap": True,
+            "linear": True,
+            "base": "NDX",
+        },
+        "NDX100/USDT:USDT": {
+            "id": "NDX100USDT",
+            "swap": True,
+            "linear": True,
+            "base": "NDX100",
+        },
+    }
+
+    coin_to_symbol_map, symbol_to_coin_map = utils._build_coin_symbol_maps(
+        markets, "USDT", exchange="bitget"
+    )
+
+    assert coin_to_symbol_map["NDX"] == ["NDX/USDT:USDT"]
+    assert coin_to_symbol_map["NDX100"] == ["NDX100/USDT:USDT"]
+    assert symbol_to_coin_map["NDX100/USDT:USDT"] == "NDX100"
 
 
 def test_inactive_multiplier_market_does_not_pollute_convenience_alias():

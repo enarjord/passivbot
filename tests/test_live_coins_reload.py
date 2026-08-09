@@ -153,6 +153,50 @@ async def test_cross_exchange_native_id_collision_preserves_multiplier_identity(
 
 
 @pytest.mark.asyncio
+async def test_cross_exchange_lowercase_native_id_preserves_multiplier_identity(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets_by_exchange = {
+        "bitget": {
+            "ABC/USDT:USDT": {
+                "id": "same-id",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "ABC",
+            }
+        },
+        "bybit": {
+            "1000ABC/USDT:USDT": {
+                "id": "same-id",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "1000ABC",
+            }
+        },
+    }
+
+    async def fake_load_markets(exchange, verbose=False, quote=None):
+        markets = markets_by_exchange[exchange]
+        assert utils.create_coin_symbol_map_cache(
+            exchange, markets, quote=quote, verbose=False
+        )
+        return markets
+
+    monkeypatch.setattr(utils, "load_markets", fake_load_markets)
+
+    with pytest.raises(
+        utils.AmbiguousMarketIdentifier,
+        match="different contracts across configured exchanges",
+    ):
+        await utils.reject_cross_exchange_market_identifier_collisions(
+            ["same-id"], ["bitget", "bybit"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_cross_exchange_plain_alias_resolves_each_venue_denomination(
     tmp_path: Path, monkeypatch
 ):
@@ -717,7 +761,10 @@ async def test_format_approved_all_uses_plain_id_for_denomination_variants(monke
 
 
 @pytest.mark.asyncio
-async def test_format_approved_all_scopes_duplicate_same_denomination_markets(monkeypatch):
+async def test_format_approved_all_preserves_distinct_numeric_suffix_ticker(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
     markets = {
         "1000ABC/USDT:USDT": {
             "swap": True,
@@ -734,6 +781,9 @@ async def test_format_approved_all_scopes_duplicate_same_denomination_markets(mo
     }
 
     async def fake_load_markets(exchange, verbose=False, quote=None):
+        assert utils.create_coin_symbol_map_cache(
+            exchange, markets, quote=quote, verbose=False
+        )
         return markets
 
     monkeypatch.setattr(utils, "load_markets", fake_load_markets)
@@ -749,7 +799,7 @@ async def test_format_approved_all_scopes_duplicate_same_denomination_markets(mo
 
     await format_approved_ignored_coins(config, ["bitget"])
 
-    expected = ["bitget::1000ABCUSDT", "bitget::ABC1000USDT"]
+    expected = ["ABC", "ABC1000"]
     assert config["live"]["approved_coins"] == {
         "long": expected,
         "short": expected,
@@ -980,11 +1030,12 @@ async def test_format_approved_all_unifies_exchange_denomination_conventions(
             }
         },
         "hyperliquid": {
-            "kSHIB/USDC:USDC": {
+            "KSHIB/USDC:USDC": {
                 "swap": True,
                 "linear": True,
-                "base": "kSHIB",
-                "id": "kSHIB",
+                "base": "KSHIB",
+                "baseName": "kSHIB",
+                "id": "38",
             }
         },
         "mexc": {
@@ -992,6 +1043,7 @@ async def test_format_approved_all_unifies_exchange_denomination_conventions(
                 "swap": True,
                 "linear": True,
                 "base": "SHIB100000",
+                "baseName": "SHIB",
                 "id": "SHIB100000USDT",
             }
         },

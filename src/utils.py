@@ -831,7 +831,7 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-def _build_coin_symbol_maps(markets, quote):
+def _build_coin_symbol_maps(markets, quote, exchange=None):
     """
     Build coin_to_symbol_map (as dict of lists) and symbol_to_coin_map from markets data.
     This function is pure and performs no disk I/O.
@@ -879,10 +879,12 @@ def _build_coin_symbol_maps(markets, quote):
             for k0 in ["baseName", "base"]:
                 if base := v.get(k0):
                     variants.add(base)
-                    variants.add(base.replace("k", ""))
-                    variants.add(remove_powers_of_ten(base))
-                    cleaned = remove_powers_of_ten(base.replace("k", ""))
-                    variants.add(cleaned)
+                    underlying, denomination = market_denomination_identity(
+                        base, exchange=exchange, market=v
+                    )
+                    cleaned = underlying if denomination != 1 else base
+                    if denomination != 1:
+                        variants.add(underlying)
                     if not coin:
                         coin = cleaned
                     namespaced_aliases = _namespaced_aliases(base, v)
@@ -1032,7 +1034,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     logging.error("failed to load symbol_to_coin_map %s", e)
 
                 # Build fresh maps from provided markets (pure logic)
-                coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+                coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(
+                    markets, quote, exchange=exchange
+                )
 
                 # Persist ambiguity ownership per exchange.  The global label
                 # map cannot represent an alias which is ambiguous on any
@@ -1169,10 +1173,10 @@ def looks_like_exact_market_identifier(identifier: str) -> bool:
         or (":" in raw and all(raw.split(":", 1)))
     ):
         return True
-    if raw != raw.upper():
-        return False
     if "-" in raw:
         return True
+    if raw != raw.upper():
+        return False
     for quote in ("USDT", "USDC", "BUSD", "USD"):
         match = re.search(rf"{quote}[A-Z0-9_-]*$", raw)
         if match is not None and match.start() >= 1:
@@ -1180,22 +1184,77 @@ def looks_like_exact_market_identifier(identifier: str) -> bool:
     return False
 
 
-def market_denomination_identity(symbol: str) -> tuple[str, int]:
-    """Return canonical underlying and power-of-ten denomination for a market symbol."""
-    base = str(symbol).split("/", 1)[0].strip()
-    if base.startswith("k") and base[1:].isupper():
-        return base[1:].upper(), 1000
+_MARKET_DENOMINATION_CONVENTIONS = {
+    "binance": frozenset({"prefix"}),
+    "bitget": frozenset({"prefix"}),
+    "bybit": frozenset({"prefix", "suffix"}),
+    "hyperliquid": frozenset({"k_prefix"}),
+    "kucoin": frozenset({"prefix"}),
+}
 
-    prefix_match = re.fullmatch(r"(1(?:0+))(.+)", base)
-    suffix_match = re.fullmatch(r"(.+?)(1(?:0+))", base)
-    if bool(prefix_match) != bool(suffix_match):
-        match = prefix_match or suffix_match
+
+def market_denomination_identity(
+    symbol: str, *, underlying=None, exchange=None, market=None
+) -> tuple[str, int]:
+    """Return a denomination only when an alias or venue convention establishes it."""
+    base = str(symbol).split("/", 1)[0].strip()
+    expected = str(underlying).strip() if underlying is not None else None
+    conventions = set()
+    if exchange:
+        conventions = set(
+            _MARKET_DENOMINATION_CONVENTIONS.get(
+                to_standard_exchange_name(str(exchange)), frozenset()
+            )
+        )
+    if isinstance(market, dict) and bool((market.get("info") or {}).get("hip3")):
+        # HIP-3 contains legitimate numeric ticker suffixes such as XYZ100.
+        conventions.discard("prefix")
+        conventions.discard("suffix")
+    elif isinstance(market, dict):
+        metadata_underlying = market.get("baseName")
+        if (
+            isinstance(metadata_underlying, str)
+            and metadata_underlying
+            and ":" not in metadata_underlying
+            and "-" not in metadata_underlying
+            and not (
+                metadata_underlying.startswith("k")
+                and metadata_underlying[1:].isupper()
+            )
+        ):
+            metadata_identity = market_denomination_identity(
+                base, underlying=metadata_underlying
+            )
+            if metadata_identity[1] != 1:
+                return metadata_identity
+
+    if expected:
+        expected_upper = expected.upper()
+        if base.upper() == expected_upper:
+            return expected_upper, 1
+        prefix_match = re.fullmatch(rf"(1(?:0+)){re.escape(expected)}", base, re.IGNORECASE)
+        suffix_match = re.fullmatch(rf"{re.escape(expected)}(1(?:0+))", base, re.IGNORECASE)
+        k_prefix_match = re.fullmatch(rf"[kK]{re.escape(expected)}", base)
         if prefix_match:
-            multiplier, underlying = match.groups()
-        else:
-            underlying, multiplier = match.groups()
-        if underlying:
-            return underlying.upper(), int(multiplier)
+            return expected_upper, int(prefix_match.group(1))
+        if suffix_match:
+            return expected_upper, int(suffix_match.group(1))
+        if k_prefix_match:
+            return expected_upper, 1000
+        return base.upper(), 1
+
+    if "k_prefix" in conventions and base.startswith(("k", "K")) and base[1:]:
+        return base[1:].upper(), 1000
+    if "prefix" in conventions:
+        prefix_match = re.fullmatch(r"(1(?:0+))(.+)", base)
+        if prefix_match:
+            multiplier, parsed_underlying = prefix_match.groups()
+            return parsed_underlying.upper(), int(multiplier)
+    if "suffix" in conventions:
+        suffix_match = re.fullmatch(r"(.+?)(1(?:0+))", base)
+        if suffix_match:
+            parsed_underlying, multiplier = suffix_match.groups()
+            return parsed_underlying.upper(), int(multiplier)
     return base.upper(), 1
 
 
@@ -1203,12 +1262,11 @@ def _preferred_convenience_market_candidate(raw, candidates):
     """Choose one denomination variant for a plain underlying, if selection is safe."""
     if looks_like_exact_market_identifier(raw):
         return None
-    requested_underlying, requested_denomination = market_denomination_identity(raw)
-    if requested_denomination != 1:
-        return None
+    requested_underlying = str(raw).strip().upper()
 
     identities = {
-        candidate: market_denomination_identity(candidate) for candidate in candidates
+        candidate: market_denomination_identity(candidate, underlying=requested_underlying)
+        for candidate in candidates
     }
     if (
         {underlying for underlying, _denomination in identities.values()}
@@ -1435,7 +1493,9 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
     collision_canonicals = set()
     canonical_underlyings = defaultdict(set)
     for exchange, markets, quote in exchange_markets_quotes:
-        coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+        coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(
+            markets, quote, exchange=exchange
+        )
         canonical_groups = defaultdict(list)
         for symbol, market in markets.items():
             if (market or {}).get("active") is False:
@@ -1447,7 +1507,8 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
         exchange_name = to_standard_exchange_name(exchange)
         for canonical, symbols in canonical_groups.items():
             identities = {
-                symbol: market_denomination_identity(symbol) for symbol in symbols
+                symbol: market_denomination_identity(symbol, underlying=canonical)
+                for symbol in symbols
             }
             canonical_underlyings[canonical].update(
                 underlying for underlying, _denomination in identities.values()
@@ -1478,10 +1539,10 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
     }
 
 
-def _quote_agnostic_market_identity(symbol: str) -> str:
-    """Identify an underlying and denomination across venue naming conventions."""
-    underlying, denomination = market_denomination_identity(symbol)
-    return f"{underlying}@{denomination}"
+def _identifier_is_exact_market_alias(identifier, symbol, market) -> bool:
+    """Return whether resolution used an exact CCXT symbol or native market ID."""
+    raw = str(identifier).strip()
+    return raw == str(symbol) or raw == str((market or {}).get("id") or "")
 
 
 def _preserve_market_identifiers(values) -> list[str]:
@@ -1516,9 +1577,10 @@ async def reject_cross_exchange_market_identifier_collisions(
     if not candidates:
         return
 
-    await asyncio.gather(
+    loaded_markets = await asyncio.gather(
         *[load_markets(exchange, verbose=False, quote=quote) for exchange in standard_exchanges]
     )
+    markets_by_exchange = dict(zip(standard_exchanges, loaded_markets))
     for identifier in candidates:
         resolved = {}
         for exchange in standard_exchanges:
@@ -1528,20 +1590,21 @@ async def reject_cross_exchange_market_identifier_collisions(
                 )
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
-            underlying, denomination = market_denomination_identity(symbol)
+            market = markets_by_exchange[exchange].get(symbol) or {}
+            underlying, denomination = market_denomination_identity(
+                symbol, exchange=exchange, market=market
+            )
             resolved[exchange] = {
                 "coin": heuristic_symbol_to_coin(symbol),
                 "symbol": symbol,
                 "underlying": underlying,
                 "denomination": denomination,
-                "identity": _quote_agnostic_market_identity(symbol),
+                "identity": f"{underlying}@{denomination}",
+                "exact": _identifier_is_exact_market_alias(identifier, symbol, market),
             }
-        _requested_underlying, requested_denomination = market_denomination_identity(
-            identifier
-        )
-        compare_denomination = (
-            looks_like_exact_market_identifier(identifier)
-            or requested_denomination != 1
+        requested_upper = str(identifier).strip().upper()
+        compare_denomination = any(item["exact"] for item in resolved.values()) or any(
+            item["underlying"] != requested_upper for item in resolved.values()
         )
         comparison_identities = {
             (

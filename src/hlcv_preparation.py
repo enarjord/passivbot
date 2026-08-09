@@ -5221,8 +5221,8 @@ def _resolve_combined_market_settings(
                 best_symbol = om_dict[best_exchange].get_symbol(coin)
                 settings_symbol = settings_om.get_symbol(coin)
                 if market_denomination_identity(
-                    settings_symbol
-                ) != market_denomination_identity(best_symbol):
+                    settings_symbol, exchange=settings_exchange
+                ) != market_denomination_identity(best_symbol, exchange=best_exchange):
                     raise LookupError(
                         "market denomination differs from OHLCV source "
                         f"({settings_symbol} vs {best_symbol})"

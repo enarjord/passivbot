@@ -82,11 +82,12 @@ All notable user-facing changes will be documented in this file.
   overrides are rebuilt atomically so a failed metadata refresh cannot expose a partial override map.
 
 - Resolve plain underlying names across exchange denomination conventions. Prefix forms such as
-  `1000SHIB`, suffix forms such as `SHIB1000`, arbitrary power-of-ten variants, and Hyperliquid's
-  `kSHIB` notation now share one denomination-aware identity. A plain coin selects one active
-  venue market deterministically, while exact identifiers continue to request a specific contract.
-  Combined backtests keep market settings on the OHLCV denomination when an override venue uses a
-  different scale.
+  `1000SHIB`, suffix forms such as `SHIB1000`, and Hyperliquid's `kSHIB` notation now share one
+  denomination-aware identity when established by that venue's market convention. Numeric ticker
+  affixes outside a recognized convention remain part of the asset name. A plain coin selects one
+  active venue market deterministically, while exact identifiers continue to request a specific
+  contract. Combined backtests keep market settings on the OHLCV denomination when an override
+  venue uses a different scale.
 
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
