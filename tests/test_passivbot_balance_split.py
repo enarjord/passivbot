@@ -6924,9 +6924,12 @@ async def test_update_pnls_repairs_old_degraded_pnl_before_marking_fills_authori
         ("complete", fem.PNL_SOURCE_SYNTHETIC_DEGRADED),
     ],
 )
-@pytest.mark.parametrize("coverage_ready", [True, False])
-async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disabled(
-    pnl_status, pnl_source, coverage_ready
+@pytest.mark.parametrize(
+    ("consumer_scope", "coverage_ready"),
+    [("disabled", True), ("disabled", False), ("after_event", True)],
+)
+async def test_update_pnls_ignores_pnl_without_an_active_consumer(
+    pnl_status, pnl_source, consumer_scope, coverage_ready
 ):
     bot = Passivbot.__new__(Passivbot)
     now_ms = 1_800_000_000_000
@@ -6992,7 +6995,15 @@ async def test_update_pnls_keeps_structural_fills_ready_when_pnl_consumers_disab
     }
     bot._authoritative_pending_confirmations = {}
     bot._pnls_manager = _with_fill_coverage_api(_Manager())
-    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: consumer_scope != "disabled"
+    if consumer_scope == "after_event":
+        required_start_ms = event.timestamp + 1
+        bot._required_pnl_history_start_ms = (
+            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        )
+        bot._required_fill_history_start_ms = (
+            lambda now_ms, *, pnl_start_ms: (True, required_start_ms)
+        )
     bot._max_configured_entry_cooldown_minutes = lambda: 0.0
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -9858,6 +9869,7 @@ def test_required_fill_history_start_composes_hsl_and_entry_cooldown(
         "long": {"enabled": True},
         "short": {"enabled": False},
     }
+    bot._equity_hard_stop_enabled = lambda: True
     bot._orchestrator_uses_realized_pnl = lambda: False
     bot._equity_hard_stop_required_fill_history_start_ms = (
         lambda now_ms, *, pnl_start_ms: (hsl_required, hsl_start_ms)

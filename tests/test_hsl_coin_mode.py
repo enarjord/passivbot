@@ -1381,6 +1381,31 @@ def _episode_fill(ts, action, qty):
     )
 
 
+def _set_coin_hsl_override(bot, symbol, **changes):
+    effective = dict(bot.hsl["long"])
+    effective["tier_ratios"] = dict(effective["tier_ratios"])
+    effective.update(changes)
+    bot.coin_overrides = {symbol: {}}
+    values = {
+        "hsl_cooldown_minutes_after_red": effective["cooldown_minutes_after_red"],
+        "hsl_ema_span_minutes": effective["ema_span_minutes"],
+        "hsl_enabled": effective["enabled"],
+        "hsl_no_restart_drawdown_threshold": effective[
+            "no_restart_drawdown_threshold"
+        ],
+        "hsl_orange_tier_mode": effective["orange_tier_mode"],
+        "hsl_panic_close_order_type": effective["panic_close_order_type"],
+        "hsl_red_threshold": effective["red_threshold"],
+        "hsl_restart_after_red_policy": effective["restart_after_red_policy"],
+        "hsl_tier_ratios": effective["tier_ratios"],
+    }
+    bot.bp = lambda pside, key, scope_symbol=None: (
+        values[key]
+        if pside == "long" and scope_symbol == symbol
+        else bot.hsl[pside][key.removeprefix("hsl_")]
+    )
+
+
 def test_incomplete_history_policy_gates_hsl_coverage(caplog):
     import logging as logging_module
 
@@ -1476,6 +1501,47 @@ def test_coin_always_fill_requirement_covers_held_episode_and_flat_cooldown():
         now_ms, pnl_start_ms=pnl_start_ms
     ) == (True, pnl_start_ms)
 
+
+def test_coin_fill_requirement_uses_effective_hsl_override_policy_and_cooldown():
+    pnl_start_ms = 100_000
+    now_ms = 1_000_000
+
+    # A coin override can be the only enabled HSL scope.
+    bot = _incomplete_history_bot(
+        policy="threshold", fills=(), position_size=0.0
+    )
+    bot.hsl["long"]["enabled"] = False
+    _set_coin_hsl_override(
+        bot,
+        "A",
+        enabled=True,
+        restart_after_red_policy="always",
+        cooldown_minutes_after_red=10.0,
+    )
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, 400_000)
+
+    # A strict effective policy keeps the full lookback even if the global
+    # side policy is always.
+    bot = _incomplete_history_bot(
+        policy="always", fills=(), position_size=0.0
+    )
+    _set_coin_hsl_override(bot, "A", restart_after_red_policy="threshold")
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, pnl_start_ms)
+
+    # Fills for a disabled override do not create a false flat-scope blocker.
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[_episode_fill(800_000, "decrease", 1.0)],
+        position_size=0.0,
+    )
+    _set_coin_hsl_override(bot, "A", enabled=False)
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        now_ms, pnl_start_ms=pnl_start_ms
+    ) == (True, 700_000)
 
 @pytest.mark.parametrize("policy", ["threshold", "never"])
 def test_coin_non_always_fill_requirement_remains_full_lookback(policy):

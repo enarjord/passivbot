@@ -4132,17 +4132,6 @@ def _equity_hard_stop_required_fill_history_start_ms(
     if manager is None:
         return True, pnl_start_ms
 
-    enabled_psides = [
-        pside for pside in self._hsl_psides() if self._equity_hard_stop_enabled(pside)
-    ]
-    for pside in enabled_psides:
-        policy = normalize_hsl_restart_after_red_policy(
-            self.hsl[pside].get("restart_after_red_policy", "threshold"),
-            path=f"hsl.{pside}.restart_after_red_policy",
-        )
-        if policy != "always":
-            return True, pnl_start_ms
-
     fill_events = [
         event
         for event in manager.get_events()
@@ -4156,20 +4145,39 @@ def _equity_hard_stop_required_fill_history_start_ms(
         return max(floor_ms, int(value))
 
     required_starts: list[int] = []
-    cooldown_starts: dict[str, int] = {}
+    max_cooldown_ms_by_pside: dict[str, int] = {}
     held_pairs: set[tuple[str, str]] = set()
+    override_symbols = sorted((getattr(self, "coin_overrides", {}) or {}).keys())
 
-    for pside in enabled_psides:
-        cooldown_ms = max(
-            0,
-            int(round(float(self.hsl[pside]["cooldown_minutes_after_red"]) * 60_000.0)),
-        )
-        if cooldown_ms > 0:
-            cooldown_start = clamp(int(now_ms) - cooldown_ms)
-            cooldown_starts[pside] = cooldown_start
-            required_starts.append(cooldown_start)
+    for pside in self._hsl_psides():
+        for scope_symbol in [None, *override_symbols]:
+            cfg = _equity_hard_stop_config(self, pside, scope_symbol)
+            if not bool(cfg["enabled"]):
+                continue
+            policy = normalize_hsl_restart_after_red_policy(
+                cfg.get("restart_after_red_policy", "threshold"),
+                path=(
+                    f"hsl.{pside}.restart_after_red_policy"
+                    if scope_symbol is None
+                    else f"coin HSL {scope_symbol} {pside}.restart_after_red_policy"
+                ),
+            )
+            if policy != "always":
+                return True, pnl_start_ms
+            cooldown_ms = max(
+                0,
+                int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000.0)),
+            )
+            if cooldown_ms > 0:
+                max_cooldown_ms_by_pside[pside] = max(
+                    cooldown_ms,
+                    max_cooldown_ms_by_pside.get(pside, 0),
+                )
+                required_starts.append(clamp(int(now_ms) - cooldown_ms))
         for symbol in sorted((self.positions or {}).keys()):
             symbol = str(symbol)
+            if not self._equity_hard_stop_enabled(pside, symbol=symbol):
+                continue
             if not self._equity_hard_stop_has_open_position_symbol(pside, symbol):
                 continue
             pair = (pside, symbol)
@@ -4186,12 +4194,27 @@ def _equity_hard_stop_required_fill_history_start_ms(
 
     for event in fill_events:
         pside = _equity_hard_stop_fill_pside(event)
-        if pside not in cooldown_starts:
-            continue
-        if _equity_hard_stop_fill_timestamp_ms(event) < cooldown_starts[pside]:
+        if pside not in max_cooldown_ms_by_pside:
             continue
         symbol = _equity_hard_stop_fill_symbol(event)
-        if not symbol or (pside, symbol) not in held_pairs:
+        if not symbol:
+            if _equity_hard_stop_fill_timestamp_ms(event) >= clamp(
+                int(now_ms) - max_cooldown_ms_by_pside[pside]
+            ):
+                return True, pnl_start_ms
+            continue
+        cfg = _equity_hard_stop_config(self, pside, symbol)
+        if not bool(cfg["enabled"]):
+            continue
+        cooldown_ms = max(
+            0,
+            int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000.0)),
+        )
+        if cooldown_ms <= 0 or _equity_hard_stop_fill_timestamp_ms(event) < clamp(
+            int(now_ms) - cooldown_ms
+        ):
+            continue
+        if (pside, symbol) not in held_pairs:
             return True, pnl_start_ms
 
     if not required_starts:

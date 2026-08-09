@@ -2010,10 +2010,10 @@ class Passivbot:
             for pside in ("long", "short")
         )
 
-    def _required_fill_history_start_ms(
+    def _required_pnl_history_start_ms(
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
-        """Return whether planning needs historical coverage and its earliest timestamp."""
+        """Return the earliest fill whose PnL an enabled risk consumer needs."""
         hsl_enabled = self._equity_hard_stop_enabled()
         pnl_required = (
             self._orchestrator_uses_realized_pnl()
@@ -2022,8 +2022,7 @@ class Passivbot:
         )
         if pnl_required:
             return True, pnl_start_ms
-        required_starts: list[Optional[int]] = []
-        hsl_required, hsl_start_ms = (
+        return (
             self._equity_hard_stop_required_fill_history_start_ms(
                 int(now_ms),
                 pnl_start_ms=pnl_start_ms,
@@ -2031,8 +2030,26 @@ class Passivbot:
             if hsl_enabled
             else (False, None)
         )
-        if hsl_required:
-            required_starts.append(hsl_start_ms)
+
+    def _required_fill_history_start_ms(
+        self, now_ms: int, *, pnl_start_ms: Optional[int]
+    ) -> tuple[bool, Optional[int]]:
+        """Return whether planning needs historical coverage and its earliest timestamp."""
+        hsl_enabled = self._equity_hard_stop_enabled()
+        orchestrator_pnl_required = (
+            self._orchestrator_uses_realized_pnl()
+            if hsl_enabled
+            else self._live_risk_uses_authoritative_pnl()
+        )
+        if orchestrator_pnl_required:
+            return True, pnl_start_ms
+        pnl_required, pnl_start_ms = self._required_pnl_history_start_ms(
+            now_ms,
+            pnl_start_ms=pnl_start_ms,
+        )
+        required_starts: list[Optional[int]] = []
+        if pnl_required:
+            required_starts.append(pnl_start_ms)
         cooldown_lookback_minutes = self._entry_cooldown_fill_lookback_minutes(
             self._max_configured_entry_cooldown_minutes()
         )
@@ -12868,7 +12885,6 @@ class Passivbot:
             return False
 
         try:
-            authoritative_pnl_required = self._live_risk_uses_authoritative_pnl()
             # Use the same lookback window
             lookback_config_value = self.live_value("pnls_max_lookback_days")
             lookback = parse_pnls_max_lookback_days(
@@ -12877,6 +12893,24 @@ class Passivbot:
             )
             exchange_time_ms = self.get_exchange_time()
             pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
+            pnl_required, required_pnl_start_ms = (
+                self._required_pnl_history_start_ms(
+                    exchange_time_ms,
+                    pnl_start_ms=pnl_age_limit,
+                )
+            )
+
+            def scoped_pnl_events(
+                events: list, required: bool, start_ms: Optional[int]
+            ) -> list:
+                if not required:
+                    return []
+                if start_ms is None:
+                    return events
+                return [
+                    event for event in events if int(event.timestamp) >= int(start_ms)
+                ]
+
             coverage_required, age_limit = self._required_fill_history_start_ms(
                 exchange_time_ms,
                 pnl_start_ms=pnl_age_limit,
@@ -13010,17 +13044,19 @@ class Passivbot:
             fill_fetch_completed = False
             degraded_repair_attempted = False
             history_scope = str(coverage_status.get("history_scope", "unknown"))
-            degraded_before = [
-                event
-                for event in FillEventsManager.degraded_pnl_events(events)
-                if pnl_age_limit is None
-                or int(event.timestamp) >= int(pnl_age_limit)
-            ]
+            pnl_events_before = scoped_pnl_events(
+                events,
+                pnl_required,
+                required_pnl_start_ms,
+            )
+            degraded_before = FillEventsManager.degraded_pnl_events(
+                pnl_events_before
+            )
             repair_degraded = getattr(
                 self._pnls_manager, "refresh_degraded_pnl_events", None
             )
             if (
-                authoritative_pnl_required
+                pnl_required
                 and coverage_ready
                 and degraded_before
                 and callable(repair_degraded)
@@ -13029,7 +13065,9 @@ class Passivbot:
                 try:
                     await repair_degraded(
                         start_ms=(
-                            None if pnl_age_limit is None else int(pnl_age_limit)
+                            None
+                            if required_pnl_start_ms is None
+                            else int(required_pnl_start_ms)
                         ),
                         end_ms=int(self.get_exchange_time()),
                     )
@@ -13204,6 +13242,24 @@ class Passivbot:
                 self._log_new_fill_events(new_events)
             if new_events or mixed_source_confirmation_required:
                 request_account_confirmation()
+            post_now_ms = self.get_exchange_time()
+            post_pnl_required, post_pnl_start_ms = (
+                self._required_pnl_history_start_ms(
+                    post_now_ms,
+                    pnl_start_ms=pnl_age_limit,
+                )
+            )
+            relevant_pnl_events = scoped_pnl_events(
+                all_events,
+                post_pnl_required,
+                post_pnl_start_ms,
+            )
+            pending_pnl_blockers = FillEventsManager.pending_pnl_events(
+                relevant_pnl_events
+            )
+            degraded_pnl_blockers = FillEventsManager.degraded_pnl_events(
+                relevant_pnl_events
+            )
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             degraded_pnl_events = [
                 event
@@ -13213,17 +13269,17 @@ class Passivbot:
             ]
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             self._last_fill_refresh_degraded_pnl_count = len(degraded_pnl_events)
-            pnls_safe = not pending_pnl_events and not degraded_pnl_events
+            pnls_safe = not pending_pnl_blockers and not degraded_pnl_blockers
             post_coverage_required, post_age_limit = (
                 self._required_fill_history_start_ms(
-                    self.get_exchange_time(),
+                    post_now_ms,
                     pnl_start_ms=pnl_age_limit,
                 )
             )
             if post_coverage_required:
                 post_refresh_coverage_status = self._fill_history_coverage_status(
                     start_ms=post_age_limit,
-                    end_ms=self.get_exchange_time(),
+                    end_ms=post_now_ms,
                 )
                 coverage_ready_after = bool(
                     post_refresh_coverage_status.get("ready", False)
@@ -13232,7 +13288,7 @@ class Passivbot:
                 post_refresh_coverage_status = dict(coverage_status)
                 coverage_ready_after = True
             fills_ready = coverage_ready_after and (
-                pnls_safe or not authoritative_pnl_required
+                pnls_safe or not post_pnl_required
             )
             if fills_ready:
                 self._record_authoritative_surface(
@@ -13295,10 +13351,10 @@ class Passivbot:
                     if fills_ready
                     else (
                         "pending_pnl_enrichment"
-                        if authoritative_pnl_required and pending_pnl_events
+                        if post_pnl_required and pending_pnl_blockers
                         else (
                             "degraded_pnl_enrichment"
-                            if authoritative_pnl_required and degraded_pnl_events
+                            if post_pnl_required and degraded_pnl_blockers
                             else "fill_history_coverage_unavailable"
                         )
                     )

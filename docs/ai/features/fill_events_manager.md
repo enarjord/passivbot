@@ -93,8 +93,10 @@
     `restart_after_red_policy=always` uses its canonical fill-proven held-episode
     boundary plus the flat-scope RED cooldown horizon; a recent fill for a flat
     scope, ambiguous reconstruction, another restart policy, or a broader HSL
-    signal mode preserves the configured PnL lookback. Recompute the requirement
-    after fetching so delayed fills cannot be accepted under the earlier boundary.
+    signal mode preserves the configured PnL lookback. Coin scopes use their
+    effective per-coin HSL policy and cooldown. Recompute both coverage and PnL
+    requirements after fetching so delayed fills cannot be accepted under the
+    earlier boundary and older discarded episodes cannot remain PnL blockers.
 
 ## Runtime Provenance
 

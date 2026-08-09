@@ -49,7 +49,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    and also proves every enabled side's flat-scope cooldown horizon. A recent fill for a currently
    flat pair may still own a RED cooldown and therefore preserves the full configured lookback.
    Ambiguous or delayed held evidence also preserves or restores the full requirement before fills
-   become authoritative. `threshold`, `never`, pside, and unified modes remain full-lookback strict.
+   become authoritative. Coin mode evaluates each configured coin's effective HSL enablement,
+   restart policy, and cooldown. `threshold`, `never`, pside, and unified modes remain
+   full-lookback strict.
 10. Restart price reconstruction fetches 1m history first. When an exchange cannot provide the
    older leading portion, it may use 5m, then 15m, then 1h candles for that prefix. This is an
    explicitly approximate price path: the finest source wins and its contribution is reported.

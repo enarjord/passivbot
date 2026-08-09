@@ -7,7 +7,9 @@ All notable user-facing changes will be documented in this file.
 - Scope coin-mode HSL fill-history readiness for `restart_after_red_policy=always` to the
   fill-proven held episode plus the flat-scope cooldown horizon. Recent fills for a currently flat
   scope, ambiguous held reconstruction, `threshold`/`never`, and pside/unified modes retain the full
-  configured lookback; the requirement is rechecked after refresh so delayed fills fail closed.
+  configured lookback; effective per-coin HSL settings are honored, pending/degraded PnL blockers
+  use the same active window, and the requirement is rechecked after refresh so delayed fills fail
+  closed.
 
 - Allow the complete per-side HSL group in coin overrides when the global
   `live.hsl_signal_mode` is `"coin"`. Resolved per-coin HSL settings now drive both live
