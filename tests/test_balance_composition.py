@@ -303,6 +303,29 @@ def test_gateio_balance_composition_rejects_singleton_mismatched_currency():
     )
 
 
+def test_gateio_balance_composition_labels_quote_derived_asset_provenance():
+    snapshot = normalize_gateio_balance_composition(
+        {
+            "info": [
+                {
+                    "margin_mode_name": "multi_currency",
+                    "cross_available": "670.0",
+                    "cross_initial_margin": "10.0",
+                    "cross_order_margin": "12.5",
+                    "cross_unrealised_pnl": "2.5",
+                }
+            ]
+        },
+        quote="USDT",
+    )
+
+    row = snapshot["asset_balances"][0]
+    assert row["asset"] == "USDT"
+    assert row["field_provenance"]["asset"] == "quote"
+    public = public_balance_composition(snapshot)
+    assert public["asset_balances"][0]["field_provenance"]["asset"] == "quote"
+
+
 def test_ccxt_balance_composition_public_contract_keeps_bounded_provenance():
     public = public_balance_composition(
         normalize_ccxt_balance_composition(

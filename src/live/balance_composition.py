@@ -315,8 +315,16 @@ def normalize_gateio_balance_composition(
     if primary is None:
         return malformed_balance_composition(source=source, reason="missing_account")
 
-    asset = _asset_name(primary.get("currency")) or _asset_name(quote)
-    if asset is None:
+    payload_asset = _asset_name(primary.get("currency"))
+    quote_asset = _asset_name(quote)
+    if payload_asset is not None:
+        asset = payload_asset
+        asset_provenance = "currency"
+    elif quote_asset is not None:
+        # Singleton form may omit currency; label asset as config quote, not payload.
+        asset = quote_asset
+        asset_provenance = "quote"
+    else:
         return malformed_balance_composition(source=source, reason="missing_currency")
 
     margin_mode = primary.get("margin_mode_name")
@@ -341,7 +349,7 @@ def normalize_gateio_balance_composition(
             "used_amount": initial_margin + order_margin,
             "unrealized_pnl": unrealized_pnl,
             "field_provenance": {
-                "asset": "currency",
+                "asset": asset_provenance,
                 "amount": "wallet_balance",
                 "free_amount": "cross_available",
                 "used_amount": "cross_margin",
@@ -365,7 +373,7 @@ def normalize_gateio_balance_composition(
             "asset": asset,
             "amount": amount,
             "field_provenance": {
-                "asset": "currency",
+                "asset": asset_provenance,
                 "amount": "total",
             },
         }
@@ -427,7 +435,7 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         provenance = item.get("field_provenance")
         if isinstance(provenance, Mapping):
             allowed_sources = {
-                "asset": {"ccy", "coin", "currency", "currency_map_key"},
+                "asset": {"ccy", "coin", "currency", "currency_map_key", "quote"},
                 "amount": {"cashBal", "total", "wallet_balance"},
                 "free_amount": {"free", "available", "cross_available"},
                 "used_amount": {"used", "cross_margin"},
