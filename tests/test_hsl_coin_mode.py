@@ -1543,6 +1543,71 @@ def test_coin_fill_requirement_uses_effective_hsl_override_policy_and_cooldown()
         now_ms, pnl_start_ms=pnl_start_ms
     ) == (True, 700_000)
 
+
+def test_coin_fill_requirement_treats_unknown_pside_as_recent_ambiguity():
+    bot = _incomplete_history_bot(
+        policy="always",
+        fills=[
+            SimpleNamespace(
+                position_side="unknown",
+                symbol="A",
+                timestamp=800_000,
+                action="decrease",
+                qty=1.0,
+                pnl=0.0,
+            )
+        ],
+        position_size=0.0,
+    )
+    bot.hsl["long"]["enabled"] = False
+    bot.hsl["short"]["enabled"] = True
+    bot.hsl["short"]["restart_after_red_policy"] = "always"
+
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        1_000_000, pnl_start_ms=100_000
+    ) == (True, 100_000)
+
+
+def test_coin_required_pnl_events_preserve_each_held_episode_boundary():
+    def fill(ts, symbol, action, *, pnl_status="complete"):
+        return SimpleNamespace(
+            position_side="long",
+            symbol=symbol,
+            timestamp=ts,
+            action=action,
+            qty=1.0,
+            pnl=0.0,
+            pnl_status=pnl_status,
+        )
+
+    fills = [
+        fill(650_000, "A", "increase"),
+        fill(660_000, "B", "increase"),
+        fill(700_000, "B", "decrease", pnl_status="pending"),
+        fill(800_000, "B", "increase"),
+    ]
+    bot = _incomplete_history_bot(policy="always", fills=fills)
+    bot.hsl["long"]["cooldown_minutes_after_red"] = 1.0
+    bot.positions["B"] = {
+        "long": {"size": 1.0, "price": 100.0},
+        "short": {"size": 0.0},
+    }
+
+    assert bot._equity_hard_stop_required_fill_history_start_ms(
+        1_000_000, pnl_start_ms=100_000
+    ) == (True, 650_000)
+    relevant = bot._equity_hard_stop_required_pnl_events(
+        fills,
+        1_000_000,
+        pnl_start_ms=100_000,
+    )
+
+    assert [(event.symbol, event.timestamp) for event in relevant] == [
+        ("A", 650_000),
+        ("B", 800_000),
+    ]
+
+
 @pytest.mark.parametrize("policy", ["threshold", "never"])
 def test_coin_non_always_fill_requirement_remains_full_lookback(policy):
     bot = _incomplete_history_bot(
@@ -2339,6 +2404,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_latest_flatten_fill_timestamp_optional_ms",
         "_equity_hard_stop_coverage_allow_incomplete",
         "_equity_hard_stop_required_fill_history_start_ms",
+        "_equity_hard_stop_required_pnl_events",
         "_equity_hard_stop_refresh_halted_runtime_forced_modes",
         "_equity_hard_stop_set_red_runtime_forced_modes",
         "_equity_hard_stop_runtime_red_latched",
@@ -5865,6 +5931,32 @@ async def test_coin_hsl_check_defers_stop_event_until_flat_confirmation():
     assert state["pending_red_since_ms"] == 180_000
     assert state["pending_stop_event"] is None
     assert bot._runtime_forced_modes["long"][symbol] == "panic"
+
+
+@pytest.mark.asyncio
+async def test_coin_stop_event_does_not_read_unscoped_account_pnl():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long",
+        symbol,
+        180_000,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+
+    def fail_unscoped_read(*_args, **_kwargs):
+        raise AssertionError("coin stop finalization must not read account-wide PnL")
+
+    bot._equity_hard_stop_realized_pnl_now = fail_unscoped_read
+
+    stop_event = await bot._equity_hard_stop_compute_coin_stop_event(
+        "long", symbol, 180_000
+    )
+
+    assert stop_event["realized_pnl_total"] is None
 
 
 @pytest.mark.asyncio

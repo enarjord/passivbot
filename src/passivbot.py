@@ -2063,6 +2063,36 @@ class Passivbot:
             return True, None
         return True, min(int(start) for start in required_starts if start is not None)
 
+    def _required_pnl_events(
+        self,
+        events: list,
+        now_ms: int,
+        *,
+        pnl_start_ms: Optional[int],
+        required: bool,
+        required_start_ms: Optional[int],
+    ) -> list:
+        """Select rows that can block the enabled live PnL consumers."""
+        if not required:
+            return []
+        hsl_enabled = self._equity_hard_stop_enabled()
+        orchestrator_pnl_required = (
+            self._orchestrator_uses_realized_pnl()
+            if hsl_enabled
+            else self._live_risk_uses_authoritative_pnl()
+        )
+        if hsl_enabled and not orchestrator_pnl_required:
+            return self._equity_hard_stop_required_pnl_events(
+                events,
+                int(now_ms),
+                pnl_start_ms=pnl_start_ms,
+            )
+        if required_start_ms is None:
+            return list(events)
+        return [
+            event for event in events if int(event.timestamp) >= int(required_start_ms)
+        ]
+
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
             return []
@@ -2267,6 +2297,9 @@ class Passivbot:
     )
     _equity_hard_stop_required_fill_history_start_ms = (
         pb_hsl._equity_hard_stop_required_fill_history_start_ms
+    )
+    _equity_hard_stop_required_pnl_events = (
+        pb_hsl._equity_hard_stop_required_pnl_events
     )
     _equity_hard_stop_coin_realized_pnl_peak_last = (
         pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
@@ -12901,15 +12934,18 @@ class Passivbot:
             )
 
             def scoped_pnl_events(
-                events: list, required: bool, start_ms: Optional[int]
+                events: list,
+                now_ms: int,
+                required: bool,
+                start_ms: Optional[int],
             ) -> list:
-                if not required:
-                    return []
-                if start_ms is None:
-                    return events
-                return [
-                    event for event in events if int(event.timestamp) >= int(start_ms)
-                ]
+                return self._required_pnl_events(
+                    events,
+                    now_ms,
+                    pnl_start_ms=pnl_age_limit,
+                    required=required,
+                    required_start_ms=start_ms,
+                )
 
             coverage_required, age_limit = self._required_fill_history_start_ms(
                 exchange_time_ms,
@@ -13046,6 +13082,7 @@ class Passivbot:
             history_scope = str(coverage_status.get("history_scope", "unknown"))
             pnl_events_before = scoped_pnl_events(
                 events,
+                exchange_time_ms,
                 pnl_required,
                 required_pnl_start_ms,
             )
@@ -13251,6 +13288,7 @@ class Passivbot:
             )
             relevant_pnl_events = scoped_pnl_events(
                 all_events,
+                post_now_ms,
                 post_pnl_required,
                 post_pnl_start_ms,
             )

@@ -8,8 +8,8 @@ All notable user-facing changes will be documented in this file.
   fill-proven held episode plus the flat-scope cooldown horizon. Recent fills for a currently flat
   scope, ambiguous held reconstruction, `threshold`/`never`, and pside/unified modes retain the full
   configured lookback; effective per-coin HSL settings are honored, pending/degraded PnL blockers
-  use the same active window, and the requirement is rechecked after refresh so delayed fills fail
-  closed.
+  use each pair's own active episode, and the requirement is rechecked after refresh so delayed or
+  side-ambiguous fills fail closed. Coin finalization no longer requests unused account-wide PnL.
 
 - Allow the complete per-side HSL group in coin overrides when the global
   `live.hsl_signal_mode` is `"coin"`. Resolved per-coin HSL settings now drive both live
