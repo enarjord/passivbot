@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Refine the coin-override policy: allow per-coin
+  `bot.<side>.risk.entry_cooldown_minutes` and
+  `bot.<side>.unstuck.ema_gating_enabled`, retain
+  `bot.<side>.unstuck.loss_allowance_pct`, and stop allowing per-coin
+  `bot.<side>.risk.we_excess_allowance_mode`. Configure the allowance mode globally.
+
 - Make coin overrides explicit, typed patches instead of hydrated config diffs. File values now
   precede inline values without losing intentional resets to defaults, false, or zero; each resolved
   per-coin config is validated before use; normalized symbol collisions and strategy-kind mismatches
