@@ -139,8 +139,11 @@ instead of extending the current feature branch indefinitely.
 - [x] Rebuild and verify the Rust extension.
 - [x] Run real HSL backtests with public fixtures and compare expected behavior.
 - [x] Run deterministic offline fake-live HSL scenarios, including restart behavior.
-- [x] Open a regular ready-for-review PR and request Codex review; first pass requested on
-  `d0a6e4a4976a1b18199cce27eeb0e1b55aa97230`.
+- [x] Open a regular ready-for-review PR and request Codex review; first pass reviewed
+  `295abf6221006e8e1cbc0a73519438d670a6b57b`.
+- [x] Address the five first-pass findings in
+  `c151cbb44642228204dc8e47e765093d7d0f60f3`, add regressions, and rerun the full
+  Python suite, full Rust library suite, fake-live tests, and controlled HSL backtests.
 - [ ] Address findings and repeat review plus validation until the current head is green.
 - [ ] Merge the reviewed current head and mark this section complete.
 
@@ -166,4 +169,5 @@ instead of extending the current feature branch indefinitely.
 - [x] PR 1 merged as `75116d1954c19e2bf54ef8313c18d332815a00e1`.
 - [x] PR 2 under review.
 - [x] PR 2 merged as `9cc3cad58c566364d0ef5e01e9ef6457132246ea`.
+- [x] PR 3 first-pass findings addressed; current-head re-review pending.
 - [ ] PR 3 merged.
