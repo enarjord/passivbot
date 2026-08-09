@@ -270,6 +270,122 @@ def normalize_hyperliquid_unified_balance_composition(fetched: Any) -> dict[str,
     )
 
 
+def _select_gateio_account_row(fetched: Mapping[str, Any], quote: str) -> Mapping[str, Any] | None:
+    """Pick the unique Gate futures-account row for the settle currency when possible.
+
+    Prefer an exact currency match to ``quote``. A singleton is accepted only when
+    ``currency`` is omitted; an explicit mismatched currency is rejected.
+    """
+    info = fetched.get("info")
+    if not isinstance(info, list) or not info:
+        return None
+    quote_name = _asset_name(quote)
+    currency_matches: list[Mapping[str, Any]] = []
+    dict_rows: list[Mapping[str, Any]] = []
+    for row in info:
+        if not isinstance(row, Mapping):
+            continue
+        dict_rows.append(row)
+        asset = _asset_name(row.get("currency"))
+        if quote_name is not None and asset == quote_name:
+            currency_matches.append(row)
+    if len(currency_matches) == 1:
+        return currency_matches[0]
+    if len(currency_matches) > 1:
+        return None
+    if len(dict_rows) == 1 and dict_rows[0].get("currency") is None:
+        return dict_rows[0]
+    return None
+
+
+def normalize_gateio_balance_composition(
+    fetched: Any, *, quote: str | None = None
+) -> dict[str, Any]:
+    """Normalize Gate futures-account margin components for observability only.
+
+    Multi-currency accounts expose available margin, position IM, order margin, and
+    unrealized PnL on the settle-currency futures-account row. Trading balance continues
+    to use the connector's wallet reconstruction; this helper only publishes a bounded
+    diagnostic view of those components.
+    """
+    source = "gateio.info.futures_account"
+    if not isinstance(fetched, Mapping):
+        return malformed_balance_composition(source=source, reason="invalid_payload")
+    primary = _select_gateio_account_row(fetched, quote or "")
+    if primary is None:
+        return malformed_balance_composition(source=source, reason="missing_account")
+
+    payload_asset = _asset_name(primary.get("currency"))
+    quote_asset = _asset_name(quote)
+    if payload_asset is not None:
+        asset = payload_asset
+        asset_provenance = "currency"
+    elif quote_asset is not None:
+        # Singleton form may omit currency; label asset as config quote, not payload.
+        asset = quote_asset
+        asset_provenance = "quote"
+    else:
+        return malformed_balance_composition(source=source, reason="missing_currency")
+
+    margin_mode = primary.get("margin_mode_name")
+    if margin_mode == "multi_currency":
+        available = _finite_number(primary.get("cross_available"))
+        initial_margin = _finite_number(primary.get("cross_initial_margin"))
+        order_margin = _finite_number(primary.get("cross_order_margin"))
+        unrealized_pnl = _finite_number(primary.get("cross_unrealised_pnl"))
+        if None in (available, initial_margin, order_margin, unrealized_pnl):
+            return malformed_balance_composition(
+                source=source, reason="missing_cross_fields"
+            )
+        wallet_balance = available + initial_margin + order_margin - unrealized_pnl
+        if not math.isfinite(wallet_balance):
+            return malformed_balance_composition(
+                source=source, reason="non_finite_wallet"
+            )
+        row = {
+            "asset": asset,
+            "amount": wallet_balance,
+            "free_amount": available,
+            "used_amount": initial_margin + order_margin,
+            "unrealized_pnl": unrealized_pnl,
+            "field_provenance": {
+                "asset": asset_provenance,
+                "amount": "wallet_balance",
+                "free_amount": "cross_available",
+                "used_amount": "cross_margin",
+                "unrealized_pnl": "cross_unrealised_pnl",
+            },
+        }
+        return _finalize_snapshot(status="available", source=source, assets=[row])
+
+    if margin_mode == "classic":
+        total_map = fetched.get("total")
+        amount = None
+        if isinstance(total_map, Mapping):
+            amount = _finite_number(total_map.get(asset))
+            if amount is None and quote is not None:
+                amount = _finite_number(total_map.get(quote))
+        if amount is None:
+            amount = _finite_number(primary.get("total"))
+        if amount is None:
+            return malformed_balance_composition(source=source, reason="missing_total")
+        row: dict[str, Any] = {
+            "asset": asset,
+            "amount": amount,
+            "field_provenance": {
+                "asset": asset_provenance,
+                "amount": "total",
+            },
+        }
+        available = _finite_number(primary.get("available"))
+        if available is not None:
+            row["free_amount"] = available
+            row["field_provenance"]["free_amount"] = "available"
+        return _finalize_snapshot(status="available", source=source, assets=[row])
+
+    return malformed_balance_composition(source=source, reason="unknown_margin_mode")
+
+
 def public_balance_composition(value: Any) -> dict[str, Any] | None:
     """Copy only the bounded event contract; never publish an internal signature."""
     if not isinstance(value, Mapping):
@@ -287,6 +403,7 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
             "unsupported",
             "normalizer",
             "ccxt.unified_balance",
+            "gateio.info.futures_account",
             "hyperliquid.info.balances",
             "okx.info.data[0].details",
         }
@@ -318,12 +435,12 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         provenance = item.get("field_provenance")
         if isinstance(provenance, Mapping):
             allowed_sources = {
-                "asset": {"ccy", "coin", "currency_map_key"},
-                "amount": {"cashBal", "total"},
-                "free_amount": {"free"},
-                "used_amount": {"used"},
+                "asset": {"ccy", "coin", "currency", "currency_map_key", "quote"},
+                "amount": {"cashBal", "total", "wallet_balance"},
+                "free_amount": {"free", "available", "cross_available"},
+                "used_amount": {"used", "cross_margin"},
                 "usd_value": "eqUsd",
-                "unrealized_pnl": "upl",
+                "unrealized_pnl": {"upl", "cross_unrealised_pnl"},
                 "liability": {"debt", "liab"},
                 "collateral_enabled": "collateralEnabled",
             }
