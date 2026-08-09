@@ -32,6 +32,10 @@ CLIFF_EDGE_THRESHOLD_KEYS = (
     "unstuck_threshold",
 )
 TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
+HSL_ORANGE_TIER_MODES = frozenset(
+    {"graceful_stop", "tp_only_with_active_entry_cancellation"}
+)
+HSL_PANIC_CLOSE_ORDER_TYPES = frozenset({"limit", "market"})
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
@@ -73,6 +77,15 @@ def _validate_bool(value, *, path: str) -> bool:
     if isinstance(value, bool):
         return value
     raise TypeError(f"{path} must be a boolean")
+
+
+def _validate_string_choice(value, *, path: str, allowed: frozenset[str]) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{path} must be a string")
+    if value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"{path} must be one of {{{choices}}}, got {value!r}")
+    return value
 
 
 def _validate_positive_ratio_when_enabled(
@@ -478,6 +491,20 @@ def normalize_hsl_risk_unstuck_numerics(
             path=f"{hsl_path}.ema_span_minutes",
             verbose=verbose,
             tracker=tracker,
+        )
+        _validate_bool(
+            get_grouped_bot_value(bot_side, "hsl_enabled"),
+            path=f"{hsl_path}.enabled",
+        )
+        _validate_string_choice(
+            get_grouped_bot_value(bot_side, "hsl_orange_tier_mode"),
+            path=f"{hsl_path}.orange_tier_mode",
+            allowed=HSL_ORANGE_TIER_MODES,
+        )
+        _validate_string_choice(
+            get_grouped_bot_value(bot_side, "hsl_panic_close_order_type"),
+            path=f"{hsl_path}.panic_close_order_type",
+            allowed=HSL_PANIC_CLOSE_ORDER_TYPES,
         )
         red_threshold = _validate_ratio(
             get_grouped_bot_value(bot_side, "hsl_red_threshold"),

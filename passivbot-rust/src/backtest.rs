@@ -3204,13 +3204,16 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
-    fn hard_stop_orange_target_mode_pside(&self, pside: usize) -> orchestrator::TradingMode {
-        if self
-            .hard_stop_cfg_pside(pside)
-            .hsl_orange_tier_mode
-            .as_str()
-            == "graceful_stop"
-        {
+    fn hard_stop_orange_target_mode(
+        &self,
+        pside: usize,
+        coin_idx: Option<usize>,
+    ) -> orchestrator::TradingMode {
+        let cfg = coin_idx.map_or_else(
+            || self.hard_stop_cfg_pside(pside),
+            |idx| self.hard_stop_cfg_coin(pside, idx),
+        );
+        if cfg.hsl_orange_tier_mode.as_str() == "graceful_stop" {
             orchestrator::TradingMode::GracefulStop
         } else {
             orchestrator::TradingMode::TpOnly
@@ -3266,7 +3269,7 @@ impl<'a> Backtest<'a> {
                 }
             }
             ehsl::HardStopTier::Orange => {
-                let target = self.hard_stop_orange_target_mode_pside(pside);
+                let target = self.hard_stop_orange_target_mode(pside, None);
                 Self::apply_orange_override(mode, target);
             }
             _ => {}
@@ -3280,7 +3283,7 @@ impl<'a> Backtest<'a> {
         idx: usize,
         pside: usize,
     ) {
-        let cfg = self.hard_stop_cfg_pside(pside);
+        let cfg = self.hard_stop_cfg_coin(pside, idx);
         if !cfg.hsl_enabled || cfg.total_wallet_exposure_limit == 0.0 {
             return;
         }
@@ -3306,7 +3309,7 @@ impl<'a> Backtest<'a> {
                 }
             }
             ehsl::HardStopTier::Orange => {
-                let target = self.hard_stop_orange_target_mode_pside(pside);
+                let target = self.hard_stop_orange_target_mode(pside, Some(idx));
                 Self::apply_orange_override(mode, target);
             }
             _ => {}
@@ -3351,7 +3354,9 @@ impl<'a> Backtest<'a> {
                 }
                 self.record_hard_stop_pside_strategy_equity_sample(k, pside)?;
                 for idx in 0..self.n_coins {
-                    self.update_hard_stop_state_coin(k, idx, pside)?;
+                    if self.hard_stop_coin_should_update(pside, idx)? {
+                        self.update_hard_stop_state_coin(k, idx, pside)?;
+                    }
                 }
                 self.record_hard_stop_coin_drawdown_sample(pside);
             }
@@ -3463,8 +3468,10 @@ impl<'a> Backtest<'a> {
     }
 
     fn record_hard_stop_coin_drawdown_sample(&mut self, pside: usize) {
-        let cfg = self.hard_stop_cfg_pside(pside);
-        if !cfg.hsl_enabled || cfg.total_wallet_exposure_limit == 0.0 {
+        if !self
+            .hard_stop_coin_should_update_pside(pside)
+            .unwrap_or(false)
+        {
             return;
         }
         let Some(&timestamp_ms) = self.equities.timestamps_ms.last() else {
@@ -3708,8 +3715,7 @@ impl<'a> Backtest<'a> {
         idx: usize,
         pside: usize,
     ) -> Result<(), String> {
-        if !self.hard_stop_coin_should_update_pside(pside)?
-            || self.hard_stop_coin[pside][idx].halted
+        if !self.hard_stop_coin_should_update(pside, idx)? || self.hard_stop_coin[pside][idx].halted
         {
             return Ok(());
         }
@@ -3727,7 +3733,7 @@ impl<'a> Backtest<'a> {
                     k, idx, pside, e
                 )
             })?;
-        let cfg = self.hard_stop_cfg_pside(pside);
+        let cfg = self.hard_stop_cfg_coin(pside, idx);
         let hsl_red_threshold = cfg.hsl_red_threshold;
         let hsl_ema_span_minutes = cfg.hsl_ema_span_minutes;
         let hsl_tier_ratio_yellow = cfg.hsl_tier_ratio_yellow;
@@ -4687,12 +4693,30 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
+    fn hard_stop_cfg_coin(&self, pside: usize, idx: usize) -> &BotParams {
+        match pside {
+            LONG => &self.bot_params[idx].long,
+            SHORT => &self.bot_params[idx].short,
+            _ => unreachable!("invalid pside"),
+        }
+    }
+
+    #[inline(always)]
     fn hard_stop_enabled_pside(&self, pside: usize) -> bool {
         self.hard_stop_cfg_pside(pside).hsl_enabled
     }
 
     fn hard_stop_coin_should_update_pside(&self, pside: usize) -> Result<bool, String> {
-        let cfg = self.hard_stop_cfg_pside(pside);
+        for idx in 0..self.n_coins {
+            if self.hard_stop_coin_should_update(pside, idx)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn hard_stop_coin_should_update(&self, pside: usize, idx: usize) -> Result<bool, String> {
+        let cfg = self.hard_stop_cfg_coin(pside, idx);
         if !cfg.hsl_enabled {
             return Ok(false);
         }
@@ -4717,6 +4741,12 @@ impl<'a> Backtest<'a> {
 
     #[inline(always)]
     fn hard_stop_reporting_enabled_pside(&self, pside: usize) -> bool {
+        if self.hard_stop_signal_mode() == "coin" {
+            return (0..self.n_coins).any(|idx| {
+                let cfg = self.hard_stop_cfg_coin(pside, idx);
+                cfg.hsl_enabled && cfg.n_positions > 0 && cfg.total_wallet_exposure_limit > 0.0
+            });
+        }
         let cfg = self.hard_stop_cfg_pside(pside);
         cfg.hsl_enabled && cfg.n_positions > 0 && cfg.total_wallet_exposure_limit > 0.0
     }
@@ -4777,7 +4807,7 @@ impl<'a> Backtest<'a> {
         idx: usize,
         pside: usize,
     ) -> Result<(f64, f64, f64, f64, f64), String> {
-        let cfg = self.hard_stop_cfg_pside(pside);
+        let cfg = self.hard_stop_cfg_coin(pside, idx);
         let n_positions = self.hard_stop_coin_slot_n_positions(pside);
         let total_wallet_exposure_limit = cfg.total_wallet_exposure_limit;
         if n_positions == 0 {
@@ -4936,13 +4966,23 @@ impl<'a> Backtest<'a> {
         self.market_fill_price_for_qty(k, idx, order.qty)
     }
 
-    fn order_uses_market_execution(&self, order: &BacktestOrder) -> bool {
+    fn order_uses_market_execution(&self, idx: usize, order: &BacktestOrder) -> bool {
         match order.order.order_type {
             OrderType::ClosePanicLong => {
-                return self.bot_params_master.long.hsl_panic_close_order_type == "market";
+                let cfg = if self.hard_stop_signal_mode() == "coin" {
+                    &self.bot_params[idx].long
+                } else {
+                    &self.bot_params_master.long
+                };
+                return cfg.hsl_panic_close_order_type == "market";
             }
             OrderType::ClosePanicShort => {
-                return self.bot_params_master.short.hsl_panic_close_order_type == "market";
+                let cfg = if self.hard_stop_signal_mode() == "coin" {
+                    &self.bot_params[idx].short
+                } else {
+                    &self.bot_params_master.short
+                };
+                return cfg.hsl_panic_close_order_type == "market";
             }
             _ => {}
         }
@@ -4955,7 +4995,7 @@ impl<'a> Backtest<'a> {
         idx: usize,
         order: &BacktestOrder,
     ) -> Option<OrderFillExecution> {
-        if self.order_uses_market_execution(order) {
+        if self.order_uses_market_execution(idx, order) {
             return self
                 .market_fill_price(k, idx, &order.order)
                 .map(|price| OrderFillExecution {

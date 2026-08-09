@@ -216,6 +216,45 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
 
 
+def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
+    config = _multi_coin_config()
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["bot"]["long"]["hsl"]["enabled"] = False
+    config["bot"]["long"]["hsl"]["red_threshold"] = 0.2
+    config["coin_overrides"] = {
+        "BTC/USDT:USDT": {
+            "bot": {
+                "long": {
+                    "hsl": {
+                        "enabled": True,
+                        "red_threshold": 0.01,
+                        "tier_ratios": {"yellow": 0.4},
+                    }
+                }
+            }
+        }
+    }
+
+    bot_params_list, _, _, _ = prep_backtest_args(
+        config, _multi_coin_mss(), "binance"
+    )
+
+    btc_long = bot_params_list[0]["long"]
+    eth_long = bot_params_list[1]["long"]
+    assert btc_long["hsl_enabled"] is True
+    assert btc_long["hsl_red_threshold"] == pytest.approx(0.01)
+    assert btc_long["hsl_tier_ratios"] == {
+        "yellow": pytest.approx(0.4),
+        "orange": pytest.approx(0.75),
+    }
+    assert eth_long["hsl_enabled"] is False
+    assert eth_long["hsl_red_threshold"] == pytest.approx(0.2)
+    assert eth_long["hsl_tier_ratios"] == {
+        "yellow": pytest.approx(0.5),
+        "orange": pytest.approx(0.75),
+    }
+
+
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
     config = _base_config()
     config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0

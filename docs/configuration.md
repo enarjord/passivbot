@@ -402,6 +402,16 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         risk.position_exposure_enforcer_threshold,
         risk.entry_cooldown_minutes,
         risk.we_excess_allowance_pct,
+        hsl.cooldown_minutes_after_red,
+        hsl.ema_span_minutes,
+        hsl.enabled,
+        hsl.no_restart_drawdown_threshold,
+        hsl.orange_tier_mode,
+        hsl.panic_close_order_type,
+        hsl.red_threshold,
+        hsl.restart_after_red_policy,
+        hsl.tier_ratios.orange,
+        hsl.tier_ratios.yellow,
         unstuck.close_pct,
         unstuck.ema_dist,
         unstuck.ema_gating_enabled,
@@ -411,6 +421,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         wallet_exposure_limit
       ]
       ```
+      The `hsl.*` entries are eligible only when the main config's global
+      `live.hsl_signal_mode` is `"coin"`. The signal mode is not itself overridable.
     - `config.live`:
     ```
     [forced_mode_long, forced_mode_short, leverage]
