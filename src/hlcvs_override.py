@@ -21,7 +21,14 @@ from hlcvs_manifest import (
     manifest_has_required_schema,
     verify_hlcvs_manifest,
 )
-from utils import date_to_ts, format_end_date, ts_to_date
+from utils import (
+    MarketIdentifierExchangeMismatch,
+    UnknownMarketIdentifier,
+    coin_to_symbol,
+    date_to_ts,
+    format_end_date,
+    ts_to_date,
+)
 from warmup_utils import compute_backtest_warmup_minutes
 
 
@@ -97,8 +104,47 @@ def _load_hlcvs_cache_arrays(cache_dir: Path, manifest, preloaded_arrays=None):
     return coins, hlcvs, mss, btc_usd_prices, timestamps
 
 
-def _side_membership_for_override(config: dict, dataset_coins: list[str], manifest, mode: str) -> dict:
-    input_sides = effective_backtest_approved_coins_by_side(config)
+def _reconcile_override_identifiers(
+    identifiers, dataset_coins: list[str], exchange: str
+) -> list[str]:
+    dataset_by_symbol = {}
+    for dataset_coin in dataset_coins:
+        try:
+            symbol = coin_to_symbol(dataset_coin, exchange, verbose=False)
+        except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+            continue
+        existing = dataset_by_symbol.get(symbol)
+        if existing is not None and existing != dataset_coin:
+            raise ValueError(
+                f"HLCV dataset coins {existing!r} and {dataset_coin!r} resolve "
+                f"to the same {exchange} market {symbol!r}"
+            )
+        dataset_by_symbol[symbol] = dataset_coin
+
+    reconciled = []
+    dataset_coin_set = set(dataset_coins)
+    for identifier in identifiers:
+        if identifier in dataset_coin_set:
+            resolved = identifier
+        else:
+            try:
+                symbol = coin_to_symbol(identifier, exchange, verbose=False)
+            except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
+                resolved = identifier
+            else:
+                resolved = dataset_by_symbol.get(symbol, identifier)
+        if resolved not in reconciled:
+            reconciled.append(resolved)
+    return reconciled
+
+
+def _side_membership_for_override(
+    config: dict, dataset_coins: list[str], manifest, mode: str, exchange: str
+) -> dict:
+    input_sides = {
+        pside: _reconcile_override_identifiers(coins, dataset_coins, exchange)
+        for pside, coins in effective_backtest_approved_coins_by_side(config).items()
+    }
     dataset_coin_set = set(dataset_coins)
     if mode == "intersection":
         return {
@@ -206,7 +252,9 @@ def load_hlcvs_data_override(config, exchange):
         cache_dir, manifest, preloaded_arrays=verified_arrays
     )
     dataset_coins = [normalize_backtest_coin(coin) for coin in dataset_coins]
-    requested_coins = effective_backtest_data_coins(config)
+    requested_coins = _reconcile_override_identifiers(
+        effective_backtest_data_coins(config), dataset_coins, exchange
+    )
     if mode == "intersection":
         selected_coins = [coin for coin in dataset_coins if coin in set(requested_coins)]
     else:
@@ -259,7 +307,9 @@ def load_hlcvs_data_override(config, exchange):
         meta = deepcopy(mss.get(coin, {}))
         _slice_valid_window_metadata(meta, row_start=row_start, row_end=row_end)
         selected_mss[coin] = meta
-    side_membership = _side_membership_for_override(config, selected_coins, manifest, mode)
+    side_membership = _side_membership_for_override(
+        config, selected_coins, manifest, mode, exchange
+    )
     side_membership = {
         pside: sorted([coin for coin in side_membership.get(pside, []) if coin in selected_coins])
         for pside in POSITION_SIDES

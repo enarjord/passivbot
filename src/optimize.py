@@ -3202,7 +3202,9 @@ async def main():
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
-    await format_approved_ignored_coins(config, backtest_exchanges)
+    await format_approved_ignored_coins(
+        config, backtest_exchanges, prefer_backtest_coin_source_keys=True
+    )
     data_config = build_optimizer_data_config(config)
     interrupted = False
     failed = False

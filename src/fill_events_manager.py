@@ -44,9 +44,21 @@ from config import load_input_config, prepare_config
 from live.diagnostic_safety import bounded_exception_type, exception_text_contains
 
 try:
-    from utils import ts_to_date  # type: ignore
+    from utils import (  # type: ignore
+        AmbiguousMarketIdentifier,
+        MarketIdentifierResolutionError,
+        MarketIdentifierExchangeMismatch,
+        UnknownMarketIdentifier,
+        ts_to_date,
+    )
 except ImportError:  # pragma: no cover - fallback for package-relative execution
-    from .utils import ts_to_date
+    from .utils import (
+        AmbiguousMarketIdentifier,
+        MarketIdentifierResolutionError,
+        MarketIdentifierExchangeMismatch,
+        UnknownMarketIdentifier,
+        ts_to_date,
+    )
 
 from logging_setup import configure_logging
 from procedures import load_user_info
@@ -2973,6 +2985,15 @@ class BitgetFetcher(BaseFetcher):
             return ""
         try:
             resolved = self._symbol_resolver(market_symbol)
+        except UnknownMarketIdentifier:
+            logger.warning(
+                "BitgetFetcher._resolve_symbol: historical symbol '%s' is absent from "
+                "current markets; preserving raw value",
+                market_symbol,
+            )
+            return str(market_symbol)
+        except (AmbiguousMarketIdentifier, MarketIdentifierExchangeMismatch):
+            raise
         except Exception as exc:
             logger.warning(
                 "BitgetFetcher._resolve_symbol: resolver failed for %s error_type=%s; using fallback",
@@ -3611,6 +3632,15 @@ class BinanceFetcher(BaseFetcher):
             resolved = self._symbol_resolver(value)
             if resolved:
                 return resolved
+        except UnknownMarketIdentifier:
+            logger.warning(
+                "BinanceFetcher._resolve_symbol: historical symbol '%s' is absent from "
+                "current markets; preserving raw value",
+                value,
+            )
+            return str(value)
+        except (AmbiguousMarketIdentifier, MarketIdentifierExchangeMismatch):
+            raise
         except Exception as exc:
             logger.warning(
                 "BinanceFetcher._resolve_symbol: resolver failed for %s error_type=%s",
@@ -8306,6 +8336,8 @@ def _symbol_resolver(bot) -> Callable[[Optional[str]], str]:
             mapped = bot.coin_to_symbol(value, verbose=False)
             if mapped:
                 return mapped
+        except MarketIdentifierResolutionError:
+            raise
         except Exception:
             pass
         upper = value.upper()

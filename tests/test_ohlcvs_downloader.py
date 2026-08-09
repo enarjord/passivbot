@@ -140,7 +140,7 @@ def test_attempt_gap_fix_ohlcvs_raises_on_huge_gap():
 async def test_download_uses_backtest_materialization_path(monkeypatch, tmp_path):
     calls = []
 
-    async def fake_format_approved_ignored_coins(config, exchanges):
+    async def fake_format_approved_ignored_coins(config, exchanges, **_kwargs):
         calls.append(("format", tuple(exchanges)))
 
     async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):

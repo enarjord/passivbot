@@ -138,6 +138,7 @@ unstuck thresholds remain in the config but do not create orders.
 `bot.<side>.unstuck.ema_gating_enabled` controls only the EMA trigger/readiness check for
 auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger without EMA bands, but it
 still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
+The field may be overridden for an individual coin+side through `coin_overrides`.
 
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is

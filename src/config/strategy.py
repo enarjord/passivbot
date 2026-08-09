@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import Optional
 
-from .shared_bot import BOT_SHARED_GROUPS
+from .shared_bot import flatten_shared_bot_side
 from .strategy_spec import (
     BOT_POSITION_SIDES,
     DEFAULT_STRATEGY_KIND,
@@ -344,20 +344,31 @@ def merge_runtime_bot_side(
     override_side: dict | None = None,
     strategy_kind: str = DEFAULT_STRATEGY_KIND,
 ) -> dict:
+    def merge_patch(base: dict, patch: dict) -> dict:
+        result = deepcopy(base)
+        for patch_key, patch_value in patch.items():
+            if isinstance(result.get(patch_key), dict) and isinstance(
+                patch_value, dict
+            ):
+                result[patch_key] = merge_patch(result[patch_key], patch_value)
+            else:
+                result[patch_key] = deepcopy(patch_value)
+        return result
+
     normalized_kind = normalize_strategy_kind(strategy_kind)
     strategy_keys = set(get_strategy_param_keys(normalized_kind))
-    merged = deepcopy(bot_side) if isinstance(bot_side, dict) else {}
-    merged.pop("strategy", None)
-    for group_name in BOT_SHARED_GROUPS:
-        merged.pop(group_name, None)
+    merged = flatten_shared_bot_side(bot_side)
     for key in list(merged):
         if key in strategy_keys:
             merged.pop(key)
     if isinstance(override_side, dict):
-        for key, value in override_side.items():
+        for key, value in flatten_shared_bot_side(override_side).items():
             if key == "strategy":
                 continue
             if key in strategy_keys:
                 continue
-            merged[key] = deepcopy(value)
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = merge_patch(merged[key], value)
+            else:
+                merged[key] = deepcopy(value)
     return merged

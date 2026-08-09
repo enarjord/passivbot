@@ -590,9 +590,7 @@ def parse_overrides(config, verbose=True):
 
 
 def load_override_config(config, coin):
-    return staged_load_override_config(
-        config, coin, config_loader=lambda path: load_config(path, verbose=False)
-    )
+    return staged_load_override_config(config, coin)
 
 
 def parse_old_coin_flags(config) -> dict:

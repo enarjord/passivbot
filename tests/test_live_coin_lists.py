@@ -1,9 +1,75 @@
 import logging
 
 import pytest
+import passivbot as passivbot_module
 
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 from passivbot import Passivbot
+from utils import AmbiguousMarketIdentifier, UnknownMarketIdentifier
+
+
+@pytest.mark.asyncio
+async def test_update_first_timestamps_scopes_discovery_to_live_exchange(monkeypatch):
+    captured = {}
+
+    async def fake_get_first_timestamps(symbols, exchange=None, exchanges=None):
+        captured["symbols"] = list(symbols)
+        captured["exchange"] = exchange
+        captured["exchanges"] = exchanges
+        return {symbol: 1710115200000 for symbol in symbols}
+
+    monkeypatch.setattr(
+        passivbot_module,
+        "get_first_timestamps_unified",
+        fake_get_first_timestamps,
+    )
+    symbol = "EDGE/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+    bot.markets_dict = {symbol: {}}
+    bot.coin_to_symbol = lambda value, verbose=False: value
+
+    await bot.update_first_timestamps()
+
+    assert captured == {
+        "symbols": [symbol],
+        "exchange": "kucoin",
+        "exchanges": None,
+    }
+    assert bot.first_timestamps[symbol] == 1710115200000
+
+
+@pytest.mark.asyncio
+async def test_update_first_timestamps_uses_fake_harness_ohlcv(monkeypatch):
+    async def unexpected_discovery(*_args, **_kwargs):
+        pytest.fail("fake inception must not route through CCXT discovery")
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_ohlcv(self, symbol, timeframe="1m", since=None):
+            self.calls.append((symbol, timeframe, since))
+            return [[1700000000000, 1.0, 1.0, 1.0, 1.0, 1.0]]
+
+    monkeypatch.setattr(
+        passivbot_module,
+        "get_first_timestamps_unified",
+        unexpected_discovery,
+    )
+    symbol = "FAKE/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "fake"
+    bot.cca = FakeClient()
+    bot.approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+    bot.markets_dict = {symbol: {}}
+    bot.coin_to_symbol = lambda value, verbose=False: value
+
+    await bot.update_first_timestamps()
+
+    assert bot.cca.calls == [(symbol, "1m", 1)]
+    assert bot.first_timestamps[symbol] == 1700000000000
 
 
 def _make_mode_override_bot(auto_gs=True):
@@ -479,6 +545,159 @@ def test_refresh_approved_ignored_coin_lists_supports_migrated_global_all():
 
     assert bot.approved_coins["long"] == {"AAA/USDT:USDT", "BBB/USDT:USDT"}
     assert bot.approved_coins["short"] == {"AAA/USDT:USDT", "BBB/USDT:USDT"}
+
+
+@pytest.mark.parametrize(
+    "error_cls", [AmbiguousMarketIdentifier, UnknownMarketIdentifier]
+)
+def test_refresh_market_resolution_error_skips_affected_identifier(
+    error_cls, caplog
+):
+    bot = _make_eligibility_event_bot()
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {"STALE/USDT:USDT"},
+        "short": {"STALE/USDT:USDT"},
+    }
+
+    def fail_closed(_coin, verbose=True):
+        raise error_cls("unresolvable test market")
+
+    bot.coin_to_symbol = fail_closed
+
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot.approved_coins == {"long": set(), "short": set()}
+    assert bot.approved_coins_minus_ignored_coins == {
+        "long": set(),
+        "short": set(),
+    }
+    assert any(
+        "action=skip_identifier" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_refresh_market_resolution_error_retains_other_valid_markets(caplog):
+    bot = _make_eligibility_event_bot()
+    bot.config["_coins_sources"]["approved_coins"] = {
+        "long": ["BTC", "OLDUSDT"],
+        "short": ["BTC", "OLDUSDT"],
+    }
+    bot.config["_coins_sources"]["ignored_coins"] = {"long": [], "short": []}
+    bot.eligible_symbols.add("BTC/USDT:USDT")
+
+    def resolve(coin, verbose=True):
+        if coin == "BTC":
+            return "BTC/USDT:USDT"
+        raise UnknownMarketIdentifier("unresolvable test market")
+
+    bot.coin_to_symbol = resolve
+
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot.approved_coins == {
+        "long": {"BTC/USDT:USDT"},
+        "short": {"BTC/USDT:USDT"},
+    }
+    assert bot.approved_coins_minus_ignored_coins == bot.approved_coins
+    assert any(
+        "action=skip_identifier" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_refresh_ignored_resolution_error_retains_prior_restriction(caplog):
+    bot = _make_eligibility_event_bot()
+    bot.config["_coins_sources"]["approved_coins"] = {
+        "long": ["BTC", "ETH"],
+        "short": ["BTC", "ETH"],
+    }
+    bot.config["_coins_sources"]["ignored_coins"] = {
+        "long": ["OLDUSDT"],
+        "short": ["OLDUSDT"],
+    }
+    bot.eligible_symbols.update({"BTC/USDT:USDT", "ETH/USDT:USDT"})
+    bot.ignored_coins = {
+        "long": {"BTC/USDT:USDT"},
+        "short": {"ETH/USDT:USDT"},
+    }
+    bot._coin_list_identifier_symbols = {
+        "ignored_coins": {
+            "long": {"OLDUSDT": "BTC/USDT:USDT"},
+            "short": {"OLDUSDT": "ETH/USDT:USDT"},
+        }
+    }
+
+    def resolve(coin, verbose=True):
+        if coin in {"BTC", "ETH"}:
+            return f"{coin}/USDT:USDT"
+        raise AmbiguousMarketIdentifier("ambiguous ignored test market")
+
+    bot.coin_to_symbol = resolve
+
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+
+    assert bot.ignored_coins == {
+        "long": {"BTC/USDT:USDT"},
+        "short": {"ETH/USDT:USDT"},
+    }
+    assert bot.approved_coins_minus_ignored_coins == {
+        "long": {"ETH/USDT:USDT"},
+        "short": {"BTC/USDT:USDT"},
+    }
+    assert any(
+        "list_kind=ignored_coins" in record.getMessage()
+        and "action=skip_identifier" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_refresh_ignored_resolution_error_does_not_restore_unrelated_removals(caplog):
+    bot = _make_eligibility_event_bot()
+    bot.config["_coins_sources"]["approved_coins"] = {
+        "long": ["BTC", "DOGE", "ETH"],
+        "short": ["BTC", "DOGE", "ETH"],
+    }
+    bot.config["_coins_sources"]["ignored_coins"] = {
+        "long": ["ETH", "DOGE"],
+        "short": ["ETH", "DOGE"],
+    }
+    bot.eligible_symbols.update(
+        {"BTC/USDT:USDT", "DOGE/USDT:USDT", "ETH/USDT:USDT"}
+    )
+    bot.ignored_coins = {
+        "long": {"BTC/USDT:USDT", "DOGE/USDT:USDT"},
+        "short": {"BTC/USDT:USDT", "DOGE/USDT:USDT"},
+    }
+    bot._coin_list_identifier_symbols = {
+        "ignored_coins": {
+            "long": {
+                "BTC": "BTC/USDT:USDT",
+                "DOGE": "DOGE/USDT:USDT",
+            },
+            "short": {
+                "BTC": "BTC/USDT:USDT",
+                "DOGE": "DOGE/USDT:USDT",
+            },
+        }
+    }
+
+    def resolve(coin, verbose=True):
+        if coin == "DOGE":
+            raise AmbiguousMarketIdentifier("ambiguous ignored test market")
+        return f"{coin}/USDT:USDT"
+
+    bot.coin_to_symbol = resolve
+
+    with caplog.at_level(logging.ERROR):
+        bot.refresh_approved_ignored_coins_lists()
+
+    expected = {"DOGE/USDT:USDT", "ETH/USDT:USDT"}
+    assert bot.ignored_coins == {"long": expected, "short": expected}
+    assert "BTC/USDT:USDT" not in bot.ignored_coins["long"]
 
 
 def _make_eligibility_event_bot():

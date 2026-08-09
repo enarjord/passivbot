@@ -684,7 +684,7 @@ def test_migrated_v7_trailing_grid_config_prepares_and_validates():
     assert set(prepared["optimize"]["bounds"]["long"]["strategy"]) == {"trailing_grid_v7"}
 
 
-def test_migrate_v7_trailing_grid_coin_override_preserves_wallet_exposure_limit():
+def test_migrate_v7_coin_override_preserves_supported_fields_and_reports_removed_mode():
     source = _minimal_v7_trailing_grid_config()
     source["coin_overrides"]["BTC"] = {
         "bot": {
@@ -702,18 +702,22 @@ def test_migrate_v7_trailing_grid_coin_override_preserves_wallet_exposure_limit(
     long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
     assert long_override["wallet_exposure_limit"] == pytest.approx(0.25)
     assert long_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert long_override["risk"]["we_excess_allowance_mode"] == "LEGACY_RAW"
+    assert "we_excess_allowance_mode" not in long_override["risk"]
     assert long_override["strategy"]["trailing_grid_v7"]["ema_span_0"] == pytest.approx(3.0)
     assert (
         "coin_overrides.BTC.bot.long.wallet_exposure_limit -> "
         "coin_overrides.BTC.bot.long.wallet_exposure_limit"
     ) in report["moved_fields"]
+    assert (
+        "coin_overrides.BTC.bot.long.risk_we_excess_allowance_mode"
+        in report["manual_review_fields"]
+    )
     prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
     parsed = parse_overrides(prepared, verbose=False)
     parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
     assert parsed_override["wallet_exposure_limit"] == pytest.approx(0.25)
     assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
-    assert parsed_override["risk"]["we_excess_allowance_mode"] == "legacy_raw"
+    assert "we_excess_allowance_mode" not in parsed_override["risk"]
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk_fields():
@@ -747,8 +751,9 @@ def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk
     assert "total_wallet_exposure_limit" not in parsed_override.get("risk", {})
 
 
-def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias_fields():
+def test_migrate_v7_trailing_grid_coin_override_migrates_conditional_hsl_aliases():
     source = _minimal_v7_trailing_grid_config()
+    source["live"]["hsl_signal_mode"] = "coin"
     source["coin_overrides"]["BTC"] = {
         "bot": {
             "long": {
@@ -769,11 +774,12 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
     migrated, report = migrate_v7_trailing_grid_config(source)
 
     long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "hsl" not in long_override
+    assert long_override["hsl"]["tier_ratios"] == {
+        "yellow": pytest.approx(0.45),
+        "orange": pytest.approx(0.75),
+    }
     assert "forager" not in long_override
     for key in (
-        "hsl_tier_ratio_yellow",
-        "hsl_tier_ratio_orange",
         "forager_score_weights",
         "forager_volatility_ema_span",
         "filter_volume_ema_span",
@@ -781,6 +787,15 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
         source_path = f"coin_overrides.BTC.bot.long.{key}"
         assert source_path in report["manual_review_fields"]
         assert not any(moved.startswith(f"{source_path} ->") for moved in report["moved_fields"])
+    for source_key, target_path in (
+        ("hsl_tier_ratio_yellow", "hsl.tier_ratios.yellow"),
+        ("hsl_tier_ratio_orange", "hsl.tier_ratios.orange"),
+    ):
+        source_path = f"coin_overrides.BTC.bot.long.{source_key}"
+        assert (
+            f"{source_path} -> coin_overrides.BTC.bot.long.{target_path}"
+            in report["moved_fields"]
+        )
 
     prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
     parsed = parse_overrides(
@@ -789,8 +804,34 @@ def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias
         symbol_normalizer=lambda coin: coin,
     )
     parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert "hsl" not in parsed_override
+    assert parsed_override["hsl"]["tier_ratios"] == {
+        "yellow": pytest.approx(0.45),
+        "orange": pytest.approx(0.75),
+    }
     assert "forager" not in parsed_override
+
+
+def test_migrate_v7_trailing_grid_coin_override_rejects_hsl_aliases_outside_coin_mode():
+    source = _minimal_v7_trailing_grid_config()
+    source["live"]["hsl_signal_mode"] = "pside"
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "hsl_tier_ratio_yellow": 0.45,
+                "hsl_tier_ratio_orange": 0.75,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert "hsl" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    for key in ("hsl_tier_ratio_yellow", "hsl_tier_ratio_orange"):
+        source_path = f"coin_overrides.BTC.bot.long.{key}"
+        assert source_path in report["manual_review_fields"]
+        assert not any(
+            moved.startswith(f"{source_path} ->") for moved in report["moved_fields"]
+        )
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
@@ -1712,7 +1753,7 @@ def test_prepare_config_normalizes_coin_override_we_excess_allowance_mode():
     )
 
 
-def test_parse_overrides_normalizes_coin_override_we_excess_allowance_mode():
+def test_parse_overrides_rejects_coin_override_we_excess_allowance_mode():
     source = get_template_config()
     source["coin_overrides"] = {
         "BTC": {
@@ -1726,11 +1767,12 @@ def test_parse_overrides_normalizes_coin_override_we_excess_allowance_mode():
         }
     }
 
-    parsed = parse_overrides(source, verbose=False)
-
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
-        "we_excess_allowance_mode"
-    ] == "legacy_raw"
+    with pytest.raises(
+        ValueError,
+        match=r"coin_overrides\.BTC\.bot\.long\.risk\.we_excess_allowance_mode "
+        r"is no longer overridable.*configure bot\.long\.risk\.we_excess_allowance_mode globally",
+    ):
+        parse_overrides(source, verbose=False)
 
 
 def test_prepare_config_rejects_invalid_we_excess_allowance_mode():
@@ -2136,7 +2178,7 @@ def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
             "hsl",
             "tier_ratios",
             {"yellow": 0.9, "orange": 0.8},
-            r"bot\.long\.hsl\.tier_ratios\.yellow must be <= bot\.long\.hsl\.tier_ratios\.orange",
+            r"bot\.long\.hsl\.tier_ratios must satisfy 0 < yellow < orange < 1",
         ),
         (
             "risk",

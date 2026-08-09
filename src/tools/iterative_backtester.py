@@ -572,7 +572,10 @@ class IterativeBacktestSession:
         for ex in require_config_value(config, "backtest.exchanges"):
             await load_markets(ex, verbose=False)
         await format_approved_ignored_coins(
-            config, require_config_value(config, "backtest.exchanges"), verbose=False
+            config,
+            require_config_value(config, "backtest.exchanges"),
+            verbose=False,
+            prefer_backtest_coin_source_keys=True,
         )
         config.setdefault("backtest", {})
         config["backtest"].setdefault("cache_dir", {})
