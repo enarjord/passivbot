@@ -648,9 +648,9 @@ Handling in Passivbot:
    finalized tail covers the remaining range.
 2. Exclude the forming candle and require exact finalized-candle coverage before
    publishing close, volume, quote-volume, or volatility EMAs.
-3. Require exact 1m coverage before rebuilding trailing extrema or extending an
-   HSL replay cache. Missing coverage marks trailing state unavailable or makes
-   HSL fall back to its authoritative full replay path.
+3. Require exact 1m coverage before rebuilding trailing extrema. HSL restart reconstruction uses
+   the documented 1m/5m/15m/1h resolution ladder for the older leading prefix and remains
+   authoritative for fill timestamps, realized PnL, fees, and episode boundaries.
 4. Keep bulk historical WEEX backtest downloading out of scope; this bounded
    paging exists for live warmup, restart reconstruction, and runtime indicators.
 

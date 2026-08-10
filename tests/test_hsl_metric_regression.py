@@ -2,7 +2,7 @@
 
 These tests freeze the numeric drawdown/tier semantics of the three HSL signal
 modes with hand-computed fixtures so future refactors (canonical equity-history
-redesign, replay-cache reuse) cannot silently change metric meaning.
+redesign) cannot silently change metric meaning.
 
 All fixtures use ema_span_minutes=1.0 so drawdown_ema == drawdown_raw ==
 drawdown_score and expected values stay hand-checkable.

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Remove the persisted HSL replay cache and reconstruct every restart from authoritative fill/PnL
+  history, candles, exchange state, config, and current time. Compact/sparse replay remains the
+  performance path; obsolete replay-cache artifacts are ignored and no longer inspected by the
+  cache doctor.
+
 - Scope coin-mode HSL fill-history readiness for `restart_after_red_policy=always` to the
   fill-proven held episode plus the flat-scope cooldown horizon. Recent fills for a currently flat
   scope, ambiguous held reconstruction, `threshold`/`never`, and pside/unified modes retain the full
