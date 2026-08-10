@@ -240,6 +240,53 @@ async def test_cross_exchange_plain_alias_resolves_each_venue_denomination(
 
 
 @pytest.mark.asyncio
+async def test_user_plain_alias_remains_plain_when_matching_native_ids(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets_by_exchange = {
+        "bitget": {
+            "ABC/USDT:USDT": {
+                "id": "ABC",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "ABC",
+            }
+        },
+        "bybit": {
+            "1000ABC/USDT:USDT": {
+                "id": "ABC",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "1000ABC",
+            }
+        },
+    }
+
+    async def fake_load_markets(exchange, verbose=False, quote=None):
+        markets = markets_by_exchange[exchange]
+        assert utils.create_coin_symbol_map_cache(
+            exchange, markets, quote=quote, verbose=False
+        )
+        return markets
+
+    monkeypatch.setattr(utils, "load_markets", fake_load_markets)
+    config = {
+        "live": {
+            "approved_coins": {"long": ["ABC"], "short": ["ABC"]},
+            "ignored_coins": {"long": [], "short": []},
+        }
+    }
+
+    await format_approved_ignored_coins(config, ["bitget", "bybit"])
+
+    assert utils.coin_to_symbol("ABC", "bitget") == "ABC/USDT:USDT"
+    assert utils.coin_to_symbol("ABC", "bybit") == "1000ABC/USDT:USDT"
+
+
+@pytest.mark.asyncio
 async def test_cross_exchange_plain_alias_unifies_prefix_and_suffix_denominations(
     tmp_path: Path, monkeypatch
 ):

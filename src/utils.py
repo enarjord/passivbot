@@ -1554,7 +1554,7 @@ def _preserve_market_identifiers(values) -> list[str]:
 async def reject_cross_exchange_market_identifier_collisions(
     identifiers, exchanges, *, quote=None, verbose=True
 ) -> None:
-    """Require venue scope when one native ID names different configured contracts."""
+    """Reject cross-venue collisions for explicit exact market identifiers."""
     standard_exchanges = list(
         dict.fromkeys(
             to_standard_exchange_name(str(exchange))
@@ -1603,6 +1603,9 @@ async def reject_cross_exchange_market_identifier_collisions(
                 "identity": f"{underlying}@{denomination}",
             }
         requested_upper = str(identifier).strip().upper()
+        # A canonical-looking unqualified name denotes the economic underlying, even
+        # when it happens to equal one venue's native market ID. Exact contract intent
+        # must be expressed with exact syntax (for example exchange::<native-id>).
         compare_denomination = looks_like_exact_market_identifier(identifier) or any(
             item["underlying"] != requested_upper for item in resolved.values()
         )
