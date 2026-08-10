@@ -831,7 +831,7 @@ def _load_symbol_to_coin_map() -> dict:
         return {}
 
 
-def _build_coin_symbol_maps(markets, quote):
+def _build_coin_symbol_maps(markets, quote, exchange=None):
     """
     Build coin_to_symbol_map (as dict of lists) and symbol_to_coin_map from markets data.
     This function is pure and performs no disk I/O.
@@ -862,6 +862,13 @@ def _build_coin_symbol_maps(markets, quote):
     exact_alias_to_symbols = defaultdict(set)
     alias_to_coins = defaultdict(set)
     exact_alias_to_coins = defaultdict(set)
+    exchange_name = to_standard_exchange_name(exchange) if exchange else None
+
+    def add_exact_alias(alias, symbol, coin):
+        alias = str(alias)
+        exact_alias_to_symbols[alias].add(symbol)
+        exact_alias_to_coins[alias].add(coin)
+
     for k, v in markets.items():
         try:
             # Only include swap markets with the right quote.
@@ -879,10 +886,12 @@ def _build_coin_symbol_maps(markets, quote):
             for k0 in ["baseName", "base"]:
                 if base := v.get(k0):
                     variants.add(base)
-                    variants.add(base.replace("k", ""))
-                    variants.add(remove_powers_of_ten(base))
-                    cleaned = remove_powers_of_ten(base.replace("k", ""))
-                    variants.add(cleaned)
+                    underlying, denomination = market_denomination_identity(
+                        base, exchange=exchange, market=v
+                    )
+                    cleaned = underlying if denomination != 1 else base
+                    if denomination != 1:
+                        variants.add(underlying)
                     if not coin:
                         coin = cleaned
                     namespaced_aliases = _namespaced_aliases(base, v)
@@ -895,27 +904,31 @@ def _build_coin_symbol_maps(markets, quote):
             # Exact exchange identifiers are lossless routing aliases.  They
             # must be available before any convenience normalization such as
             # removing a 1000/k contract multiplier.
-            exact_alias_to_symbols[k].add(k)
-            exact_alias_to_coins[k].add(coin)
+            add_exact_alias(k, k, coin)
             for alias in namespaced_full_aliases:
-                exact_alias_to_symbols[alias].add(k)
-                exact_alias_to_coins[alias].add(coin)
+                add_exact_alias(alias, k, coin)
             if active:
                 for variant in variants:
                     alias_to_coins[variant].add(coin)
                     alias_to_symbols[variant].add(k)
             if symbol_id := v.get("id"):
-                symbol_id = str(symbol_id)
-                exact_alias_to_coins[symbol_id].add(coin)
-                exact_alias_to_symbols[symbol_id].add(k)
+                add_exact_alias(symbol_id, k, coin)
         except Exception:
             # Skip malformed market entries but continue processing others
             continue
 
-    # Exact aliases outrank convenience aliases even if exchange metadata
-    # happens to make their text collide.  All remaining multi-market aliases
-    # stay visible so the resolver can reject them rather than guess.
-    alias_to_symbols.update(exact_alias_to_symbols)
+    # A canonical-looking unqualified alias keeps all convenience candidates
+    # when its text also equals a native ID. Explicitly qualified aliases retain
+    # the lossless native-ID route, while other exact aliases remain unchanged.
+    for alias, symbols in list(exact_alias_to_symbols.items()):
+        if alias in alias_to_symbols and not looks_like_exact_market_identifier(alias):
+            alias_to_symbols[alias].update(symbols)
+            if exchange_name:
+                qualified_alias = f"{exchange_name}::{alias}"
+                alias_to_symbols[qualified_alias] = set(symbols)
+                exact_alias_to_coins[qualified_alias].update(exact_alias_to_coins[alias])
+        else:
+            alias_to_symbols[alias] = set(symbols)
     coin_to_symbol_map = {
         alias: sorted(symbols) for alias, symbols in sorted(alias_to_symbols.items())
     }
@@ -1032,7 +1045,9 @@ def create_coin_symbol_map_cache(exchange: str, markets, quote=None, verbose=Tru
                     logging.error("failed to load symbol_to_coin_map %s", e)
 
                 # Build fresh maps from provided markets (pure logic)
-                coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+                coin_to_symbol_map, new_symbol_to_coin_map = _build_coin_symbol_maps(
+                    markets, quote, exchange=exchange
+                )
 
                 # Persist ambiguity ownership per exchange.  The global label
                 # map cannot represent an alias which is ambiguous on any
@@ -1169,10 +1184,10 @@ def looks_like_exact_market_identifier(identifier: str) -> bool:
         or (":" in raw and all(raw.split(":", 1)))
     ):
         return True
-    if raw != raw.upper():
-        return False
     if "-" in raw:
         return True
+    if raw != raw.upper():
+        return False
     for quote in ("USDT", "USDC", "BUSD", "USD"):
         match = re.search(rf"{quote}[A-Z0-9_-]*$", raw)
         if match is not None and match.start() >= 1:
@@ -1180,11 +1195,120 @@ def looks_like_exact_market_identifier(identifier: str) -> bool:
     return False
 
 
+_MARKET_DENOMINATION_CONVENTIONS = {
+    "binance": frozenset({"prefix"}),
+    "bitget": frozenset({"prefix"}),
+    "bybit": frozenset({"prefix", "suffix"}),
+    "hyperliquid": frozenset({"k_prefix"}),
+    "kucoin": frozenset({"prefix"}),
+}
+
+
+def market_denomination_identity(
+    symbol: str, *, underlying=None, exchange=None, market=None
+) -> tuple[str, int]:
+    """Return a denomination only when an alias or venue convention establishes it."""
+    base = str(symbol).split("/", 1)[0].strip()
+    expected = str(underlying).strip() if underlying is not None else None
+    conventions = set()
+    if exchange:
+        conventions = set(
+            _MARKET_DENOMINATION_CONVENTIONS.get(
+                to_standard_exchange_name(str(exchange)), frozenset()
+            )
+        )
+    if isinstance(market, dict) and bool((market.get("info") or {}).get("hip3")):
+        # HIP-3 contains legitimate numeric ticker suffixes such as XYZ100.
+        conventions.discard("prefix")
+        conventions.discard("suffix")
+    elif isinstance(market, dict):
+        metadata_underlying = market.get("baseName")
+        if (
+            isinstance(metadata_underlying, str)
+            and metadata_underlying
+            and ":" not in metadata_underlying
+            and "-" not in metadata_underlying
+            and not (
+                metadata_underlying.startswith("k")
+                and metadata_underlying[1:].isupper()
+            )
+        ):
+            metadata_identity = market_denomination_identity(
+                base, underlying=metadata_underlying
+            )
+            if metadata_identity[1] != 1:
+                return metadata_identity
+
+    if expected:
+        expected_upper = expected.upper()
+        if base.upper() == expected_upper:
+            return expected_upper, 1
+        prefix_match = re.fullmatch(rf"(1(?:0+)){re.escape(expected)}", base, re.IGNORECASE)
+        suffix_match = re.fullmatch(rf"{re.escape(expected)}(1(?:0+))", base, re.IGNORECASE)
+        k_prefix_match = re.fullmatch(rf"[kK]{re.escape(expected)}", base)
+        if prefix_match:
+            return expected_upper, int(prefix_match.group(1))
+        if suffix_match:
+            return expected_upper, int(suffix_match.group(1))
+        if k_prefix_match:
+            return expected_upper, 1000
+        return base.upper(), 1
+
+    if "k_prefix" in conventions and isinstance(market, dict):
+        metadata_base = market.get("baseName")
+        if (
+            isinstance(metadata_base, str)
+            and metadata_base.startswith("k")
+            and metadata_base[1:].isupper()
+            and base.upper() == metadata_base.upper()
+        ):
+            return metadata_base[1:].upper(), 1000
+    if "prefix" in conventions:
+        prefix_match = re.fullmatch(r"(1(?:0+))(.+)", base)
+        if prefix_match:
+            multiplier, parsed_underlying = prefix_match.groups()
+            return parsed_underlying.upper(), int(multiplier)
+    if "suffix" in conventions:
+        suffix_match = re.fullmatch(r"(.+?)(1(?:0+))", base)
+        if suffix_match:
+            parsed_underlying, multiplier = suffix_match.groups()
+            return parsed_underlying.upper(), int(multiplier)
+    return base.upper(), 1
+
+
+def _preferred_convenience_market_candidate(raw, candidates):
+    """Choose one denomination variant for a plain underlying, if selection is safe."""
+    if looks_like_exact_market_identifier(raw):
+        return None
+    requested_underlying = str(raw).strip().upper()
+
+    identities = {
+        candidate: market_denomination_identity(candidate, underlying=requested_underlying)
+        for candidate in candidates
+    }
+    if (
+        {underlying for underlying, _denomination in identities.values()}
+        != {requested_underlying}
+        or len(set(identities.values())) != len(identities)
+    ):
+        return None
+    return min(
+        candidates,
+        key=lambda candidate: (
+            identities[candidate][1] != 1,
+            identities[candidate][1],
+            candidate,
+        ),
+    )
+
+
 def _resolve_market_candidates(raw, candidates, exchange):
     candidates = sorted(set(candidates or []))
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
+        if preferred := _preferred_convenience_market_candidate(raw, candidates):
+            return preferred
         raise AmbiguousMarketIdentifier(
             f"ambiguous market identifier {raw!r} on {exchange}: matches {candidates}; "
             "use an exact CCXT symbol, native market ID, or "
@@ -1212,10 +1336,14 @@ def coin_to_symbol(coin, exchange, quote=None, verbose=True):
         if loaded:
             # Exact identifiers and base aliases take precedence over lossy
             # canonicalization.  Ambiguous aliases fail closed.
-            if resolved := _resolve_market_candidates(
-                raw, loaded.get(lookup_raw, []), ex
-            ):
-                return resolved
+            lookup_keys = (
+                [raw, lookup_raw] if qualified_exchange is not None else [lookup_raw]
+            )
+            for lookup_key in lookup_keys:
+                if resolved := _resolve_market_candidates(
+                    raw, loaded.get(lookup_key, []), ex
+                ):
+                    return resolved
 
         coin_sanitized = symbol_to_coin(lookup_raw, verbose=verbose)
         if looks_like_exact_market_identifier(raw) or (
@@ -1385,9 +1513,11 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
     """Return identifiers whose collision scope is safe across all exchanges."""
     records = []
     collision_canonicals = set()
-    canonical_symbols = defaultdict(set)
+    canonical_underlyings = defaultdict(set)
     for exchange, markets, quote in exchange_markets_quotes:
-        coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+        coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(
+            markets, quote, exchange=exchange
+        )
         canonical_groups = defaultdict(list)
         for symbol, market in markets.items():
             if (market or {}).get("active") is False:
@@ -1398,11 +1528,21 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
 
         exchange_name = to_standard_exchange_name(exchange)
         for canonical, symbols in canonical_groups.items():
-            canonical_symbols[canonical].update(
-                _quote_agnostic_market_identity(symbol) for symbol in symbols
+            identities = {
+                symbol: market_denomination_identity(symbol, underlying=canonical)
+                for symbol in symbols
+            }
+            canonical_underlyings[canonical].update(
+                underlying for underlying, _denomination in identities.values()
             )
             candidates = coin_to_symbol_map.get(canonical, [])
-            if len(symbols) > 1 or len(candidates) > 1:
+            preferred_candidate = _preferred_convenience_market_candidate(
+                canonical, candidates
+            )
+            if (
+                len(set(identities.values())) != len(identities)
+                or (len(candidates) > 1 and preferred_candidate is None)
+            ):
                 collision_canonicals.add(canonical)
             for symbol in symbols:
                 market = markets.get(symbol) or {}
@@ -1411,22 +1551,14 @@ def _approved_all_market_identifiers(exchange_markets_quotes) -> set[str]:
 
     collision_canonicals.update(
         canonical
-        for canonical, symbols in canonical_symbols.items()
-        if len(symbols) > 1
+        for canonical, underlyings in canonical_underlyings.items()
+        if len(underlyings) > 1
     )
 
     return {
         f"{exchange}::{exact_identifier}" if canonical in collision_canonicals else canonical
         for exchange, canonical, exact_identifier in records
     }
-
-
-def _quote_agnostic_market_identity(symbol: str) -> str:
-    """Identify an underlying contract without collapsing scaled base tokens."""
-    base = str(symbol).split("/", 1)[0].strip()
-    if base.startswith("k") and base[1:].isupper():
-        base = f"1000{base[1:]}"
-    return base.upper()
 
 
 def _preserve_market_identifiers(values) -> list[str]:
@@ -1437,7 +1569,7 @@ def _preserve_market_identifiers(values) -> list[str]:
 async def reject_cross_exchange_market_identifier_collisions(
     identifiers, exchanges, *, quote=None, verbose=True
 ) -> None:
-    """Require venue scope when one native ID names different configured contracts."""
+    """Reject cross-venue collisions for explicit exact market identifiers."""
     standard_exchanges = list(
         dict.fromkeys(
             to_standard_exchange_name(str(exchange))
@@ -1461,9 +1593,10 @@ async def reject_cross_exchange_market_identifier_collisions(
     if not candidates:
         return
 
-    await asyncio.gather(
+    loaded_markets = await asyncio.gather(
         *[load_markets(exchange, verbose=False, quote=quote) for exchange in standard_exchanges]
     )
+    markets_by_exchange = dict(zip(standard_exchanges, loaded_markets))
     for identifier in candidates:
         resolved = {}
         for exchange in standard_exchanges:
@@ -1473,12 +1606,32 @@ async def reject_cross_exchange_market_identifier_collisions(
                 )
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
+            market = markets_by_exchange[exchange].get(symbol) or {}
+            underlying, denomination = market_denomination_identity(
+                symbol, exchange=exchange, market=market
+            )
             resolved[exchange] = {
                 "coin": heuristic_symbol_to_coin(symbol),
                 "symbol": symbol,
-                "identity": _quote_agnostic_market_identity(symbol),
+                "underlying": underlying,
+                "denomination": denomination,
+                "identity": f"{underlying}@{denomination}",
             }
-        if len({item["identity"] for item in resolved.values()}) > 1:
+        requested_upper = str(identifier).strip().upper()
+        # A canonical-looking unqualified name denotes the economic underlying, even
+        # when it happens to equal one venue's native market ID. Exact contract intent
+        # must be expressed with exact syntax (for example exchange::<native-id>).
+        compare_denomination = looks_like_exact_market_identifier(identifier) or any(
+            item["underlying"] != requested_upper for item in resolved.values()
+        )
+        comparison_identities = {
+            (
+                item["underlying"],
+                item["denomination"] if compare_denomination else None,
+            )
+            for item in resolved.values()
+        }
+        if len(comparison_identities) > 1:
             raise AmbiguousMarketIdentifier(
                 f"market identifier {identifier!r} resolves to different contracts across "
                 f"configured exchanges: {resolved}; use exchange::<native-id>"
@@ -1527,9 +1680,10 @@ async def _remove_resolved_ignored_markets(
     )
     if not standard_exchanges:
         return
-    await asyncio.gather(
+    loaded_markets = await asyncio.gather(
         *[load_markets(ex, verbose=False, quote=quote) for ex in standard_exchanges]
     )
+    markets_by_exchange = dict(zip(standard_exchanges, loaded_markets))
 
     def resolve_if_available(identifier, exchange):
         try:
@@ -1546,15 +1700,32 @@ async def _remove_resolved_ignored_markets(
             }
             for exchange in standard_exchanges
         }
-        approved_by_side[pside] = [
-            identifier
-            for identifier in approved_by_side[pside]
-            if not any(
-                (symbol := resolve_if_available(identifier, exchange)) is not None
-                and symbol in ignored_symbols_by_exchange[exchange]
+        surviving_approved = []
+        for identifier in approved_by_side[pside]:
+            resolved_symbols = {
+                exchange: symbol
                 for exchange in standard_exchanges
-            )
-        ]
+                if (symbol := resolve_if_available(identifier, exchange)) is not None
+            }
+            ignored_exchanges = {
+                exchange
+                for exchange, symbol in resolved_symbols.items()
+                if symbol in ignored_symbols_by_exchange[exchange]
+            }
+            if not ignored_exchanges:
+                surviving_approved.append(identifier)
+                continue
+            surviving_exchanges = [
+                exchange
+                for exchange in standard_exchanges
+                if exchange in resolved_symbols and exchange not in ignored_exchanges
+            ]
+            for exchange in surviving_exchanges:
+                symbol = resolved_symbols[exchange]
+                market = markets_by_exchange[exchange].get(symbol) or {}
+                exact_identifier = str(market.get("id") or symbol)
+                surviving_approved.append(f"{exchange}::{exact_identifier}")
+        approved_by_side[pside] = list(dict.fromkeys(surviving_approved))
 
 
 async def _coalesce_resolved_approved_markets(

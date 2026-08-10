@@ -71,8 +71,9 @@ All notable user-facing changes will be documented in this file.
   and namespaced HIP-3 aliases fail closed instead of normalizing to another market,
   suffix-bearing native IDs remain lossless,
   contradictory qualified source mappings are rejected, unqualified native IDs that identify
-  different contracts across configured exchanges require venue scope, and the same scaled-contract
-  identity check applies to ordinary convenience aliases; suite scenario identifiers
+  different contracts across configured exchanges require venue scope, and ordinary convenience
+  aliases are compared by underlying while scaled or exact inputs retain denomination identity;
+  suite scenario identifiers
   are validated and reconciled after union, inception discovery is limited to requested/live
   venues and uses the offline fake timeline locally,
   source and approved-market aliases are coalesced before dataset preparation, conflicting
@@ -85,11 +86,19 @@ All notable user-facing changes will be documented in this file.
   backtest-only coin sources cannot rewrite live approvals,
   invalid live identifiers disable only their own eligibility while unresolved ignored IDs retain
   only their own prior restrictions, `approved_coins="all"`
-  unifies quote variants and equivalent `k`/`1000` scaled contracts while keeping scaled and
-  unscaled markets distinct, rejects unavailable exact source overrides for active coins,
+  unifies quote variants and venue denomination spellings under one underlying while exact
+  scaled identifiers remain lossless, rejects unavailable exact source overrides for active coins,
   emits exchange-scoped identities for remaining collisions, and generated symbol maps plus durable
   per-exchange ambiguity tombstones remain deterministic across cache refresh order. Live coin
   overrides are rebuilt atomically so a failed metadata refresh cannot expose a partial override map.
+
+- Resolve plain underlying names across exchange denomination conventions. Prefix forms such as
+  `1000SHIB`, suffix forms such as `SHIB1000`, and Hyperliquid's `kSHIB` notation now share one
+  denomination-aware identity when established by that venue's market convention. Numeric ticker
+  affixes outside a recognized convention remain part of the asset name. A plain coin selects one
+  active venue market deterministically, while exact identifiers continue to request a specific
+  contract. Combined backtests keep market settings on the OHLCV denomination when an override
+  venue uses a different scale.
 
 - Reconstruct trailing extrema for positions older than an exchange's retained 1m candles with
   the shared 1m, 5m, 15m, then 1h historical-resolution ladder. Coarser candles are limited to
