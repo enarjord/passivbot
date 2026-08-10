@@ -209,7 +209,9 @@ def derive_market_contracts(exchange: str, quote: str, markets: dict[str, dict])
 
 def summarize_market_snapshot(exchange: str, quote: str, markets: dict[str, dict]) -> dict[str, Any]:
     eligible, ineligible, reasons = filter_markets(markets, exchange, quote=quote)
-    coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(markets, quote)
+    coin_to_symbol_map, symbol_to_coin_map = _build_coin_symbol_maps(
+        markets, quote, exchange=exchange
+    )
     return sanitize_for_json(
         {
             "contracts": derive_market_contracts(exchange, quote, markets),
