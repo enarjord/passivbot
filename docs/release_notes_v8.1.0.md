@@ -32,7 +32,8 @@ data-path improvements, and stricter live execution contracts.
 ## Configuration And Compatibility
 
 - The canonical config schema is now `v8.1.0`. Existing `v8.0.0` configs are accepted and
-  normalized to the current v8 schema; source files are not rewritten automatically.
+  normalized to the current v8 schema; source files are not rewritten automatically. Unreleased
+  or unrecognized same-major schema versions are rejected instead of guessed compatible.
 - New configs should start from a maintained file under `configs/examples/`, all of which now carry
   `config_version: "v8.1.0"`.
 - The v7 migration boundary is unchanged. `trailing_grid_v7` remains the explicit compatibility
