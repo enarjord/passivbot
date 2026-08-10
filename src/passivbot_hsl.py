@@ -3575,11 +3575,22 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             status="started",
             reason_code="coin_history_replay",
         )
+        now_ms = int(self.get_exchange_time())
+        configured_start_ms = lookback.balance_history_start_ms(now_ms)
+        history_required, replay_start_ms = (
+            self._equity_hard_stop_required_fill_history_start_ms(
+                now_ms,
+                pnl_start_ms=configured_start_ms,
+            )
+        )
+        if not history_required:
+            replay_start_ms = now_ms
         history_fetch_started_s = time.monotonic()
         history = await self.get_balance_equity_history(
             current_balance=self.get_raw_balance(),
             hsl_replay_signal_mode="coin",
             hsl_coin_compact_replay=True,
+            hsl_replay_start_ms=replay_start_ms,
         )
         history_loaded_s = time.monotonic()
         history_fetch_elapsed_s = max(0.0, history_loaded_s - history_fetch_started_s)

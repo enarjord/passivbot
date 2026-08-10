@@ -14616,6 +14616,7 @@ class Passivbot:
         current_balance: Optional[float] = None,
         hsl_replay_signal_mode: Optional[str] = None,
         hsl_coin_compact_replay: bool = False,
+        hsl_replay_start_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Replay canonical fills into public curves or private compact coin-HSL input.
 
@@ -14627,6 +14628,17 @@ class Passivbot:
             raise ValueError(
                 "hsl_coin_compact_replay requires hsl_replay_signal_mode='coin'"
             )
+        if hsl_replay_start_ms is not None and not hsl_coin_compact_replay:
+            raise ValueError(
+                "hsl_replay_start_ms requires hsl_coin_compact_replay=True"
+            )
+        if hsl_replay_start_ms is not None:
+            try:
+                hsl_replay_start_ms = int(hsl_replay_start_ms)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("hsl_replay_start_ms must be an integer timestamp") from exc
+            if hsl_replay_start_ms < 0:
+                raise ValueError("hsl_replay_start_ms must be nonnegative")
         history_started_s = time.monotonic()
         external_fill_events = fill_events is not None
         await self.init_pnls()
@@ -14717,6 +14729,9 @@ class Passivbot:
 
         events = self._hsl_extract_fill_events(fill_events)
         current_position_state = _current_position_state()
+        ts_now = self.get_exchange_time()
+        if hsl_replay_start_ms is not None and hsl_replay_start_ms > int(ts_now):
+            raise ValueError("hsl_replay_start_ms cannot be later than exchange time")
         _emit_hsl_history_progress(
             "history_inputs_loaded",
             {
@@ -14731,17 +14746,8 @@ class Passivbot:
             reason_code=ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
         )
         if events:
-            try:
-                compute_psize_pprice(
-                    events,
-                    final_state=current_position_state,
-                    log_discrepancies=True,
-                    log_prefix=f"{self.exchange}:{self.user} balance-equity replay",
-                )
-            except TypeError:
-                compute_psize_pprice(events)
+            compute_psize_pprice(events)
         if not events:
-            ts_now = self.get_exchange_time()
             balance_now = (
                 float(current_balance)
                 if current_balance is not None
@@ -14790,6 +14796,10 @@ class Passivbot:
                         ).display_value,
                         "resolution_ms": ONE_MIN_MS,
                         "events_used": 0,
+                        "replay_events": 0,
+                        "pre_window_events_applied": 0,
+                        "materialized_start_ms": int(ts_now),
+                        "bounded_history": hsl_replay_start_ms is not None,
                         "symbols_covered": [],
                         "missing_price_symbols": [],
                         "history_format": "compact",
@@ -14824,8 +14834,13 @@ class Passivbot:
             self.live_value("pnls_max_lookback_days"),
             field_name="live.pnls_max_lookback_days",
         )
-        ts_now = self.get_exchange_time()
         lookback_start = lookback.balance_history_start_ms(ts_now)
+        if hsl_replay_start_ms is not None:
+            lookback_start = (
+                hsl_replay_start_ms
+                if lookback_start is None
+                else max(int(lookback_start), hsl_replay_start_ms)
+            )
 
         balance_now = (
             float(current_balance)
@@ -14854,6 +14869,15 @@ class Passivbot:
         end_minute = int(math.floor(ts_now / ONE_MIN_MS) * ONE_MIN_MS)
         if end_minute < record_start_minute:
             end_minute = record_start_minute
+        replay_fill_events = (
+            [
+                event
+                for event in events
+                if int(event["timestamp"]) >= int(record_start_ts)
+            ]
+            if hsl_replay_start_ms is not None
+            else events
+        )
 
         current_position_symbols = {
             symbol
@@ -14873,7 +14897,7 @@ class Passivbot:
         symbols.update(current_position_symbols)
         panic_event_symbols = {
             evt["symbol"]
-            for evt in events
+            for evt in replay_fill_events
             if evt["symbol"]
             and "panic" in str(evt.get("pb_order_type") or "").lower()
         }
@@ -15485,7 +15509,10 @@ class Passivbot:
             "lookback_days": lookback.display_value,
             "resolution_ms": ONE_MIN_MS,
             "events_used": len(events),
+            "replay_events": len(replay_fill_events),
             "pre_window_events_applied": int(pre_window_events_applied),
+            "materialized_start_ms": int(record_start_ts),
+            "bounded_history": hsl_replay_start_ms is not None,
             "symbols_covered": sorted(price_replay_symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
@@ -15514,7 +15541,7 @@ class Passivbot:
         )
         result = {
             "panic_flatten_events": panic_flatten_events,
-            "fill_events": events,
+            "fill_events": replay_fill_events,
             "metadata": metadata,
         }
         if compact_coin_replay:

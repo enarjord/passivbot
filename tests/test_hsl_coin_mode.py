@@ -1302,6 +1302,39 @@ def test_passivbot_binds_coin_hsl_replay_support_helper():
     assert hasattr(Passivbot, "_equity_hard_stop_symbol_supported_for_coin_replay")
 
 
+@pytest.mark.asyncio
+async def test_coin_hsl_initializer_uses_canonical_required_history_start():
+    bot = make_coin_bot()
+    captured = {}
+    bot._equity_hard_stop_required_fill_history_start_ms = (
+        lambda now_ms, pnl_start_ms=None: (True, 120_000)
+    )
+
+    async def fake_history(**kwargs):
+        captured.update(kwargs)
+        return {
+            "timeline": [
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert captured["hsl_replay_signal_mode"] == "coin"
+    assert captured["hsl_coin_compact_replay"] is True
+    assert captured["hsl_replay_start_ms"] == 120_000
+
+
 def test_coin_hsl_restart_reset_preserves_persistent_no_restart_peak():
     bot = make_coin_bot()
     state = bot._hsl_coin_state("long", "BTC/USDT:USDT")
@@ -2052,6 +2085,8 @@ async def _run_parity_history(
     *,
     compact: bool = False,
     fill_events_override: list[dict] | None = None,
+    hsl_replay_start_ms: int | None = None,
+    candle_calls: list[dict] | None = None,
 ):
     """Run the real coin-mode collection over a small two-close scenario."""
     import numpy as np
@@ -2095,6 +2130,8 @@ async def _run_parity_history(
 
     class _CM:
         async def get_candles(self, sym, **kwargs):
+            if candle_calls is not None:
+                candle_calls.append({"symbol": sym, **kwargs})
             return np.array(
                 [
                     (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
@@ -2132,6 +2169,7 @@ async def _run_parity_history(
         current_balance=100.0,
         hsl_replay_signal_mode="coin",
         hsl_coin_compact_replay=compact,
+        hsl_replay_start_ms=hsl_replay_start_ms,
     )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
     return history, symbol
@@ -2193,6 +2231,103 @@ async def test_hsl_compact_coin_history_zero_fill_shape(monkeypatch):
     assert compact["realized_pnl"].tolist() == [0.0]
     assert compact["pair_values"] == {}
     assert history["metadata"]["history_format"] == "compact"
+
+
+@pytest.mark.asyncio
+async def test_hsl_compact_coin_history_bounds_materialization_but_seeds_prior_fills(
+    monkeypatch,
+):
+    base_ts = 1_800_000_000_000
+    symbol = "BTC/USDT:USDT"
+    candle_calls = []
+    fill_events = [
+        {
+            "timestamp": base_ts - 120_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts - 60_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 95.0,
+            "pnl": -5.0,
+            "pb_order_type": "close_panic_long",
+        },
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 90_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 0.5,
+            "price": 101.0,
+            "pnl": 0.5,
+        },
+    ]
+
+    history, _symbol = await _run_parity_history(
+        monkeypatch,
+        compact=True,
+        fill_events_override=fill_events,
+        hsl_replay_start_ms=base_ts,
+        candle_calls=candle_calls,
+    )
+
+    compact = history["hsl_coin_compact_replay"]
+    assert compact["timestamps"].tolist() == [
+        base_ts,
+        base_ts + 60_000,
+        base_ts + 120_000,
+    ]
+    assert compact["balances"].tolist() == pytest.approx([99.5, 100.0, 100.0])
+    assert compact["realized_pnl"].tolist() == pytest.approx([0.0, 0.5, 0.5])
+    pair = compact["pair_values"][("long", symbol)]
+    assert pair["realized_pnl"].tolist() == pytest.approx([0.0, 0.5, 0.5])
+    assert [event["timestamp"] for event in history["fill_events"]] == [
+        base_ts,
+        base_ts + 90_000,
+    ]
+    assert history["panic_flatten_events"] == []
+    assert history["metadata"]["events_used"] == 4
+    assert history["metadata"]["replay_events"] == 2
+    assert history["metadata"]["pre_window_events_applied"] == 2
+    assert history["metadata"]["materialized_start_ms"] == base_ts
+    assert history["metadata"]["bounded_history"] is True
+    assert candle_calls
+    assert {call["start_ts"] for call in candle_calls} == {base_ts}
+
+
+@pytest.mark.asyncio
+async def test_hsl_replay_start_requires_compact_coin_mode_and_present_time(monkeypatch):
+    base_ts = 1_800_000_000_000
+
+    with pytest.raises(ValueError, match="requires hsl_coin_compact_replay"):
+        await _run_parity_history(
+            monkeypatch,
+            hsl_replay_start_ms=base_ts,
+        )
+
+    with pytest.raises(ValueError, match="cannot be later than exchange time"):
+        await _run_parity_history(
+            monkeypatch,
+            compact=True,
+            hsl_replay_start_ms=base_ts + 180_000,
+        )
 
 
 def test_calc_upnl_sum_strict_preserves_symbol_filter():
