@@ -42,6 +42,10 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    their gains, losses, and fees cannot affect the retained episode. Unavailable candles before the
    resulting boundary cannot strand an otherwise provable held episode; unavailable required
    candles at or after it still fail closed.
+   The same aggregate boundary limits candle fetches, minute-grid allocation, panic markers, and
+   replay events returned to the coin initializer. Sparse fills before the boundary remain input
+   only long enough to seed exact balance and position state at the boundary; they are not expanded
+   into replay rows or reconsidered as retained-episode events.
    Live fill-history readiness uses that same fill-derived boundary as its only held-episode owner
    and also proves every enabled side's flat-scope cooldown horizon. A recent fill for a currently
    flat pair may still own a RED cooldown and therefore preserves the full configured lookback.

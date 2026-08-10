@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Bound coin-mode HSL `always` restart reconstruction to its canonical fill-proven replay start.
+  Older sparse fills still seed exact balance and position state, but discarded closed episodes no
+  longer expand candle fetches, minute arrays, panic markers, or replay-event iteration;
+  ambiguous evidence and strict restart policies retain the full configured lookback.
 - Remove the persisted HSL replay cache and reconstruct every restart from authoritative fill/PnL
   history, candles, exchange state, config, and current time. Compact/sparse replay remains the
   performance path; obsolete replay-cache artifacts are ignored and no longer inspected by the

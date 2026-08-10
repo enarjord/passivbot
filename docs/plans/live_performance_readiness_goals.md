@@ -136,8 +136,13 @@ slices.
 - [x] Do not persist HSL replay matrices or runtime checkpoints. Proving exact fill-set identity,
   late-fill stability, every ordinary flattened cooldown scope, config compatibility, and candle
   compatibility cost more complexity than the avoided compact replay.
-- [ ] Feed the canonical consumer-owned HSL replay boundary into fill and candle materialization so
+- [x] Feed the canonical consumer-owned HSL replay boundary into fill and candle materialization so
   the authoritative builder does not fetch or construct discarded history.
+  - Result: coin-mode initialization passes the aggregate required-start boundary to the compact
+    history builder. It fetches candles and allocates minute/pair arrays only at or after that
+    boundary, returns only retained replay fills and panic markers, and applies older sparse fills
+    once to seed exact boundary balance and position state. Strict and ambiguous scopes continue to
+    pass the full configured lookback.
 - [ ] Continue optimizing the compact/sparse replay itself with deterministic equivalence coverage.
 
 ### Goal 6: Make Warm Restart Fast But Proven
@@ -700,11 +705,11 @@ Trading-impact labels:
 
 ### P1: Authoritative HSL Replay Scope
 
-- [ ] Make the canonical HSL required-start boundary the single owner of fill and candle history
+- [x] Make the canonical HSL required-start boundary the single owner of fill and candle history
   materialization for that replay.
-- [ ] Preserve exact fill timestamps, realized PnL, fees, episode boundaries, and every relevant
+- [x] Preserve exact fill timestamps, realized PnL, fees, episode boundaries, and every relevant
   flat-scope cooldown while avoiding work before a proven disposable prefix.
-- [ ] Keep pside/unified and `threshold`/`never` full-lookback strict.
+- [x] Keep pside/unified and `threshold`/`never` full-lookback strict.
 - [ ] Measure cold and warm reconstruction through the same authoritative path; do not add a
   parallel persisted replay-state compatibility matrix.
 
@@ -958,9 +963,11 @@ Each slice should update this checklist with its result.
    - Acceptance: equivalence tests pass against the old replay contract and the
      benchmark shows a material rows/s improvement.
 
-5. [ ] HSL bounded-history materialization slice.
+5. [x] HSL bounded-history materialization slice.
    - Pass the canonical consumer-owned replay boundary into authoritative fill/candle preparation.
-   - Acceptance: discarded history is neither fetched nor materialized, while full-lookback modes,
+   - Result: candles and dense minute/pair structures begin at the canonical boundary. Earlier
+     authoritative sparse fills remain available only to prove the boundary and seed exact balance
+     and position state; they are not returned as active replay events. Full-lookback modes,
      cooldown scopes, and ambiguous evidence remain strict.
 
 6. [ ] Shutdown and restart latency slice.
