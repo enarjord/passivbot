@@ -1364,6 +1364,8 @@ def _scan_root(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             continue
         if not entry.is_file():
             continue
+        if entry.name in {"hsl_replay_manifest.json", "hsl_replay_matrix.npz"}:
+            continue
         summary["file_count"] += 1
         suffix = entry.suffix.lower() or "<none>"
         by_extension[suffix] += 1

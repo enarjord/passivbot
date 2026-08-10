@@ -423,6 +423,46 @@ def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
     ]
 
 
+def test_cache_integrity_report_ignores_obsolete_hsl_replay_artifacts(tmp_path):
+    root = tmp_path / "caches"
+    hsl_dir = root / "equity_hard_stop" / "binance"
+    replay_dir = hsl_dir / "replay_matrix" / "user_01" / "long" / "BTCUSDT"
+    replay_dir.mkdir(parents=True)
+    (replay_dir / "hsl_replay_manifest.json").write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "fill_covered_start_ms": 1767225600000,
+                    "fill_covered_end_ms": 1767312000000,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (replay_dir / "hsl_replay_matrix.npz").write_bytes(b"obsolete replay cache")
+    (hsl_dir / "user_01.json").write_text(
+        json.dumps(
+            {
+                "pside": "long",
+                "tier": "red",
+                "last_red_ts": 1767312000000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["risk"]["metadata"]
+    assert report["summary"]["file_count"] == 1
+    assert report["issues"] == []
+    assert metadata["artifact_count"] == 1
+    assert metadata["hsl_artifact_count"] == 1
+    assert metadata["timestamp_field_count"] == 1
+    assert metadata["hsl_compatibility"] == "hsl_state_with_timestamps"
+    assert metadata["artifact_samples"][0]["path"] == str(hsl_dir / "user_01.json")
+
+
 def test_cache_integrity_report_derives_warm_cache_readiness(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "binance" / "1h" / "BTC_USDT" / "2026"
