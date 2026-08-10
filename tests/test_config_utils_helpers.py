@@ -138,6 +138,8 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
     assert example_paths
 
     for path in example_paths:
+        raw = json.loads(path.read_text())
+        assert raw["config_version"] == get_template_config()["config_version"]
         loaded = load_config(str(path), verbose=False)
         assert set(loaded["bot"]["long"]) == {
             "forager",
