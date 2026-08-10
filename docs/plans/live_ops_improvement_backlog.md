@@ -886,9 +886,10 @@ Related detailed plans:
     metadata compatibility evidence for candle known gaps, fill coverage proof,
     and HSL artifact/timestamp compatibility is also merged.
 
-    Add a read-only doctor for candle/fill/HSL caches that reports coverage,
-    metadata compatibility, corrupted shards, suspicious gaps, synthetic/no-trade
-    assumptions, and whether a short restart can safely use a warm-cache path.
+    Keep the read-only doctor focused on canonical candle/fill caches and diagnostic HSL latch/state
+    artifacts: report coverage, metadata compatibility, corrupted shards, suspicious gaps,
+    synthetic/no-trade assumptions, and whether a short restart has usable authoritative inputs.
+    Persisted HSL replay matrices are intentionally no longer a supported warm-cache path.
     This supports the separate warm-cache restart work.
 
     Work log:

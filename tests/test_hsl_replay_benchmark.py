@@ -38,7 +38,7 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
     )
 
     assert first["offline"] is True
-    assert first["schema_version"] == 3
+    assert first["schema_version"] == 4
     assert first["fixture"]["compact_rows"] == 4
     assert first["fixture"]["fill_events"] == 1
     assert first["counters"] == {
@@ -59,12 +59,10 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
     assert {stage: first["timings"][stage]["calls"] for stage in first["timings"]} == {
         "fixture_construction": 1,
         "history_load": 2,
-        "cache_reuse_skipped": 2,
         "coin_metrics_sample": 10,
         "held_coin_metrics_sample": 10,
         "background_coin_metrics_sample": 0,
         "current_upnl": 2,
-        "cache_persist_skipped": 2,
         "final_state_projection": 2,
         "full_replay": 2,
     }
@@ -75,8 +73,6 @@ def test_hsl_replay_benchmark_is_deterministic_and_has_no_side_effects():
     )
     assert first["throughput"]["applied_pair_samples_per_second"] > 0.0
     assert first["side_effects"] == {
-        "cache_reads": 0,
-        "cache_writes": 0,
         "latch_removals": 0,
         "latch_writes": 0,
         "monitor_events": 0,

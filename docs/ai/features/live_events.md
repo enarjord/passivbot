@@ -440,16 +440,11 @@ For coin-mode `hsl.replay.completed`, `full_elapsed_s` is total replay time;
 `protective_elapsed_s` and `startup_blocking_elapsed_s` measure held-pair protective readiness;
 `replay_loop_elapsed_s` covers the replay loop itself.
 
-Cache events use `hsl.replay.cache` with `cache_status=hit|miss|rejected`. Cache misses and
-rejections are non-authoritative performance outcomes and fall back to exchange-derived replay.
-Cache write/load rejection reasons and coin replay failures retain bounded exception types only,
-never exception text, tracebacks, or unsafe exception class names.
-HSL historical candle-fetch failures and passive account-series or replay-matrix cache observers
-follow the same boundary. Failed per-symbol progress events retain their existing stage, status,
-reason, symbol, timeframe, and timing fields plus a bounded exception type; the corresponding
-text diagnostics retain no exception text or unsafe exception class names. Redaction does
-not change candle fallback or degradation, retries, replay continuation, cache clearing, pair-only
-cache drops, timeline/compact replay, or trading state.
+HSL historical candle-fetch failures retain bounded exception types only, never exception text,
+tracebacks, or unsafe exception class names. Failed per-symbol progress events retain their existing
+stage, status, reason, symbol, timeframe, and timing fields plus a bounded exception type; the
+corresponding text diagnostics retain no exception text or unsafe exception class names. Redaction
+does not change candle fallback or degradation, retries, timeline/compact replay, or trading state.
 Pair progress exposes `applied_rows`/`total_applied_rows` and scan-cost fields
 `scanned_rows`/`total_scanned_rows`/`scanned_rows_per_second`/`pair_elapsed_s`.
 `is_held_pair`, `is_cooldown_pair`, and `pair_idx` expose deterministic

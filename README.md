@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-Current stable major version: **v8.0.0**.
+Current stable version: **[v8.1.0](docs/release_notes_v8.1.0.md)**.
 
 > **Upgrading from v7:** v8 is a breaking config and strategy release. Do not
 > start v8 live with an unreviewed v7 config. Read the

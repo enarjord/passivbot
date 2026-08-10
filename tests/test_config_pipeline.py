@@ -1941,6 +1941,35 @@ def test_prepare_config_assigns_current_schema_version_to_legacy_configs():
     assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
 
 
+def test_prepare_config_migrates_v8_0_config_to_current_v8_schema():
+    source = {
+        "config_version": "v8.0.0",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["config_version"] == CONFIG_SCHEMA_VERSION
+
+
+def test_prepare_config_rejects_unreleased_same_major_schema():
+    source = {
+        "config_version": "v8.0.999",
+        "backtest": {},
+        "bot": {"long": {}, "short": {}},
+        "coin_overrides": {},
+        "live": {},
+        "optimize": {"bounds": {}},
+    }
+
+    with pytest.raises(ValueError, match="not a supported previous schema"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_rejects_future_config_version():
     source = {
         "config_version": "v9.0.0",
