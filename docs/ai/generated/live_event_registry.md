@@ -64,7 +64,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl.raw_red_pending`
 - `hsl.red_finalized_without_order`
 - `hsl.red_triggered`
-- `hsl.replay.cache`
 - `hsl.replay.completed`
 - `hsl.replay.failed`
 - `hsl.replay.progress`
@@ -196,11 +195,6 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl_price_history_symbol_fetch_started`
 - `hsl_raw_red_pending_ema_confirmation`
 - `hsl_red_finalized_without_exchange_order`
-- `hsl_replay_cache_hit`
-- `hsl_replay_cache_miss`
-- `hsl_replay_cache_rejected`
-- `hsl_replay_cache_write_failed`
-- `hsl_replay_cache_written`
 - `hsl_replay_pending`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`

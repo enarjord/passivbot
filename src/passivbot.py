@@ -2308,30 +2308,6 @@ class Passivbot:
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
     _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
-    _hsl_replay_cache_config_digest = pb_hsl._hsl_replay_cache_config_digest
-    _hsl_replay_cache_expected_metadata = pb_hsl._hsl_replay_cache_expected_metadata
-    _hsl_replay_cache_dir = pb_hsl._hsl_replay_cache_dir
-    _hsl_replay_cache_account_config_digest = (
-        pb_hsl._hsl_replay_cache_account_config_digest
-    )
-    _hsl_replay_cache_account_series_dir = pb_hsl._hsl_replay_cache_account_series_dir
-    _hsl_replay_cache_account_expected_metadata = (
-        pb_hsl._hsl_replay_cache_account_expected_metadata
-    )
-    _equity_hard_stop_persist_replay_matrices = (
-        pb_hsl._equity_hard_stop_persist_replay_matrices
-    )
-    _try_load_hsl_replay_matrix_cache = pb_hsl._try_load_hsl_replay_matrix_cache
-    _hsl_replay_load_extend_and_reconcile_cache = (
-        pb_hsl._hsl_replay_load_extend_and_reconcile_cache
-    )
-    _hsl_reuse_assemble_history = pb_hsl._hsl_reuse_assemble_history
-    _equity_hard_stop_try_reuse_pside_replay_cache = (
-        pb_hsl._equity_hard_stop_try_reuse_pside_replay_cache
-    )
-    _equity_hard_stop_try_reuse_replay_cache = (
-        pb_hsl._equity_hard_stop_try_reuse_replay_cache
-    )
     _equity_hard_stop_maybe_emit_raw_red_pending = (
         pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
     )
@@ -14818,8 +14794,6 @@ class Passivbot:
                         "missing_price_symbols": [],
                         "history_format": "compact",
                     },
-                    "hsl_replay_matrices": {},
-                    "hsl_replay_account_series": [],
                 }
             return {
                 "timeline": [point],
@@ -15180,136 +15154,6 @@ class Passivbot:
         last_price: Dict[str, float] = {}
         pre_window_events_applied = 0
 
-        # Non-authoritative raw replay matrices (ts, price, psize, pprice, pnl, upnl)
-        # for currently held coin+psides. Written to the replay cache after a
-        # successful HSL replay in any signal mode; never read back for trading
-        # decisions here. The cache config digest includes the signal mode, so
-        # matrices persisted by one mode can never be reused by another.
-        replay_matrix_pairs: set[Tuple[str, str]] = set()
-        if (
-            str(hsl_replay_signal_mode or "").lower() in ("coin", "pside", "unified")
-            and not self.inverse
-        ):
-            replay_matrix_pairs = {
-                (pside, sym)
-                for (sym, pside), (size, _price) in current_position_state.items()
-                if not _is_flat_size(sym, size) and sym in price_replay_symbols
-            }
-        replay_matrix_rows: Dict[Tuple[str, str], List[dict]] = {
-            pair: [] for pair in replay_matrix_pairs
-        }
-        replay_matrix_prev_realized: Dict[Tuple[str, str], float] = {}
-        replay_matrix_last_price: Dict[str, float] = {}
-        # Account-level realized-pnl series: pair matrices are only reusable
-        # together with per-minute account balance (slot budgets), which is not
-        # derivable from held-pair rows alone.
-        replay_account_enabled = bool(replay_matrix_pairs)
-        replay_account_rows: List[dict] = []
-        replay_account_prev_balance: Optional[float] = None
-        replay_account_prev_realized_pside: Optional[Dict[str, float]] = None
-
-        def _collect_account_series_row(minute_ts: int, *, record: bool) -> None:
-            nonlocal replay_account_enabled, replay_account_prev_balance
-            nonlocal replay_account_prev_realized_pside
-            if not replay_account_enabled:
-                return
-            try:
-                balance_now = float(balance)
-                realized_pside_now = {
-                    "long": float(realized_pnl_pside_running["long"]),
-                    "short": float(realized_pnl_pside_running["short"]),
-                }
-                prev = (
-                    balance_now
-                    if replay_account_prev_balance is None
-                    else replay_account_prev_balance
-                )
-                prev_pside = (
-                    realized_pside_now
-                    if replay_account_prev_realized_pside is None
-                    else replay_account_prev_realized_pside
-                )
-                replay_account_prev_balance = balance_now
-                replay_account_prev_realized_pside = realized_pside_now
-                if not record:
-                    return
-                replay_account_rows.append(
-                    pb_hsl._hsl_replay_account_series_row(
-                        ts=int(minute_ts),
-                        pnl=balance_now - prev,
-                        pnl_long=realized_pside_now["long"] - prev_pside["long"],
-                        pnl_short=realized_pside_now["short"] - prev_pside["short"],
-                    )
-                )
-            except Exception as exc:
-                replay_account_enabled = False
-                replay_account_rows.clear()
-                logging.warning(
-                    "[risk] HSL account series row build failed; "
-                    "skipping account series cache | ts=%s error_type=%s",
-                    minute_ts,
-                    bounded_exception_type(exc),
-                )
-
-        def _collect_replay_matrix_rows(minute_ts: int, *, record: bool) -> None:
-            # Matrix collection is a passive observer of the replay; any
-            # per-pair failure drops that pair's cache and must never
-            # propagate into the replay itself.
-            for pair in list(replay_matrix_rows):
-                pside, sym = pair
-                try:
-                    running = float(
-                        realized_pnl_coin_pside_running.get(
-                            sym, {"long": 0.0, "short": 0.0}
-                        ).get(pside, 0.0)
-                    )
-                    # Track the running realized value every minute so the first
-                    # persisted row's pnl covers only its own minute.
-                    minute_pnl = running - replay_matrix_prev_realized.get(pair, running)
-                    replay_matrix_prev_realized[pair] = running
-                    mprice = price_lookup.get(sym, {}).get(minute_ts)
-                    if mprice is not None and mprice > 0.0:
-                        replay_matrix_last_price[sym] = float(mprice)
-                    else:
-                        mprice = replay_matrix_last_price.get(sym)
-                    if not record:
-                        continue
-                    if mprice is None or mprice <= 0.0:
-                        if replay_matrix_rows[pair]:
-                            # A gap after rows started would break 1m continuity;
-                            # drop the pair rather than persist an unprovable series.
-                            del replay_matrix_rows[pair]
-                        continue
-                    slot = positions.get(sym, {}).get(pside, {})
-                    size = float(slot.get("size", 0.0) or 0.0)
-                    if not _is_flat_size(sym, size):
-                        psize = size if pside == "long" else -size
-                        pprice = float(slot.get("price", 0.0) or 0.0)
-                    else:
-                        psize = 0.0
-                        pprice = 0.0
-                    replay_matrix_rows[pair].append(
-                        pb_hsl._hsl_replay_matrix_row(
-                            pside=pside,
-                            ts=int(minute_ts),
-                            price=float(mprice),
-                            psize=psize,
-                            pprice=pprice,
-                            pnl=minute_pnl,
-                            c_mult=float(self.c_mults.get(sym, 1.0)),
-                        )
-                    )
-                except Exception as exc:
-                    replay_matrix_rows.pop(pair, None)
-                    logging.warning(
-                        "[risk] HSL[%s:%s] replay matrix row build failed; "
-                        "skipping cache for this pair | ts=%s error_type=%s",
-                        pside,
-                        Passivbot._log_symbol(sym),
-                        minute_ts,
-                        bounded_exception_type(exc),
-                    )
-
         history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
         compact_coin_replay = bool(hsl_coin_compact_replay)
         compact_record_minutes = (
@@ -15428,18 +15272,6 @@ class Passivbot:
             event_idx += 1
             pre_window_events_applied += 1
         record_start_balance = float(balance)
-        for pair in replay_matrix_rows:
-            replay_matrix_prev_realized[pair] = float(
-                realized_pnl_coin_pside_running.get(
-                    pair[1], {"long": 0.0, "short": 0.0}
-                ).get(pair[0], 0.0)
-            )
-        if replay_account_enabled:
-            replay_account_prev_balance = float(balance)
-            replay_account_prev_realized_pside = {
-                "long": float(realized_pnl_pside_running["long"]),
-                "short": float(realized_pnl_pside_running["short"]),
-            }
         record_start_realized_pnl_pside = {
             "long": float(realized_pnl_pside_running["long"]),
             "short": float(realized_pnl_pside_running["short"]),
@@ -15613,12 +15445,6 @@ class Passivbot:
                             "panic_fill_count": int(panic_fill_count),
                         }
                     )
-            _collect_replay_matrix_rows(
-                int(minute), record=minute >= record_start_minute
-            )
-            _collect_account_series_row(
-                int(minute), record=minute >= record_start_minute
-            )
             minute += ONE_MIN_MS
 
         if compact_coin_replay and compact_row_idx != compact_record_minutes:
@@ -15686,43 +15512,10 @@ class Passivbot:
             status="succeeded",
             reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
         )
-        hsl_replay_matrices: Dict[str, Dict[str, List[dict]]] = {}
-        for (pside, sym), rows in replay_matrix_rows.items():
-            if rows:
-                hsl_replay_matrices.setdefault(pside, {})[sym] = rows
-        if external_fill_events:
-            # Caller-provided fills carry no pnls-manager coverage proof.
-            fill_coverage_status: Dict[str, object] = {
-                "ready": False,
-                "reason": "external_fill_events",
-                "history_scope": "unknown",
-            }
-        else:
-            fill_coverage_status = self._fill_history_coverage_status(
-                start_ms=None if lookback_start is None else int(record_start_ts),
-                end_ms=int(ts_now),
-            )
         result = {
             "panic_flatten_events": panic_flatten_events,
             "fill_events": events,
             "metadata": metadata,
-            "hsl_replay_matrices": hsl_replay_matrices,
-            "hsl_replay_account_series": (
-                replay_account_rows if hsl_replay_matrices else []
-            ),
-            "hsl_replay_matrix_coverage": {
-                "fill_covered_start_ms": int(record_start_ts),
-                "fill_covered_end_ms": int(ts_now),
-                "fill_history_scope": str(
-                    fill_coverage_status.get("history_scope", "unknown") or "unknown"
-                ),
-                "fill_coverage_proven": bool(fill_coverage_status.get("ready", False)),
-                "fill_coverage_reason": str(
-                    fill_coverage_status.get("reason", "unknown") or "unknown"
-                ),
-                "candle_covered_start_ms": int(start_minute),
-                "candle_covered_end_ms": int(end_minute),
-            },
         }
         if compact_coin_replay:
             result["hsl_coin_compact_replay"] = {

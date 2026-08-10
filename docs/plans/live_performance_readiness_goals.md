@@ -10,11 +10,10 @@ and partial/stale data. The goal is to measure every gap, reduce avoidable
 latency, and make unavoidable latency explicit in the event stream.
 
 The central readiness rule is speed with proof, not speed by assumption. A
-restart may use cached data and checkpoints aggressively only when metadata
-proves coverage, freshness, config compatibility, and code/schema
-compatibility. If proof is missing, the bot should perform the smallest exact
-repair needed for the affected order class instead of falling back to broad
-blocking reconstruction.
+restart may use canonical candle and fill caches only when their owners prove coverage and
+freshness. Persisted HSL replay state is deliberately excluded: restart reconstructs HSL from
+authoritative fill/PnL history, candles, exchange state, config, and current time. The optimization
+direction is bounded materialization plus compact/sparse replay, not another checkpoint proof layer.
 
 ## How To Use This Checklist
 
@@ -132,25 +131,21 @@ slices.
     `269.711s`, with `86.865%` to `93.449%` candidate-row reduction and no
     dense held/ambiguous-pair relaxation.
 
-### Goal 5: Add Conservative HSL Checkpoints
+### Goal 5: Keep HSL Replay Authoritative
 
-- [ ] Treat checkpoints as performance caches only, never as trading authority.
-- [ ] Validate exchange, user, signal mode, risk config, schema/code version,
-  fill coverage/hash, candle coverage/hash where required, market metadata, and
-  last processed timestamp before resume.
-- [ ] Resume only from a validated checkpoint boundary; replay exact
-  exchange/cache data after that boundary.
-- [ ] On any ambiguity, bypass the checkpoint and perform exact replay with a
-  structured reason event.
-- [ ] Acceptance: warm restart with valid proof reaches held-position
-  protective readiness quickly; invalid proof falls back loudly and safely.
+- [x] Do not persist HSL replay matrices or runtime checkpoints. Proving exact fill-set identity,
+  late-fill stability, every ordinary flattened cooldown scope, config compatibility, and candle
+  compatibility cost more complexity than the avoided compact replay.
+- [ ] Feed the canonical consumer-owned HSL replay boundary into fill and candle materialization so
+  the authoritative builder does not fetch or construct discarded history.
+- [ ] Continue optimizing the compact/sparse replay itself with deterministic equivalence coverage.
 
 ### Goal 6: Make Warm Restart Fast But Proven
 
 - [ ] Short downtime should not cause broad HSL, candle, or fill
   reconstruction when coverage proof is still valid.
-- [ ] Warm restart should use proven local cache/checkpoint state before
-  scheduling broad repair.
+- [ ] Warm restart should use proven canonical fill/candle cache state before scheduling broad
+  repair, then reconstruct HSL authoritatively.
 - [ ] A stale or missing proof for one symbol should trigger targeted repair,
   not a broad stall for every unrelated held position or forager candidate.
 - [ ] Acceptance: a quick restart after a clean shutdown reuses valid local
@@ -703,46 +698,15 @@ Trading-impact labels:
   - Add regression protection for rows/s or elapsed-time regressions with a
     deterministic offline fixture.
 
-### P1: HSL Checkpointing
+### P1: Authoritative HSL Replay Scope
 
-- [ ] Add resumable HSL checkpoints after successful exact reconstruction.
-  - Checkpoints are performance caches only. They must never become an
-    unverified source of trading truth.
-  - Invalid, incomplete, stale, or schema-mismatched checkpoints must fall back
-    to exact exchange/cache-derived reconstruction.
-
-- [ ] Include strong proof metadata in each checkpoint.
-  - Exchange, user, signal mode, pside, symbol scope, HSL config hash, bot
-    config hash for relevant risk fields, code/schema version, `c_mult` and
-    market metadata proof, lookback window, last processed timestamp, realized
-    PnL reset timestamp, fill cache coverage metadata, fill event count/hash,
-    candle coverage range/hash or known-gap proof when candles are required,
-    balance baseline, and serialized HSL runtime state.
-
-- [ ] Make checkpoint resume exact.
-  - Resume from checkpoint, replay only events/candles after checkpoint
-    timestamp, and compare final metrics to full replay in tests.
-  - Store checkpoint write timing and resume/fallback reason in structured
-    events.
-
-- [ ] Keep checkpointing stateless in behavior.
-  - A checkpoint may accelerate reconstruction, but every trading decision must
-    still be reproducible from exchange state, config, cache coverage proof, and
-    replay after the checkpoint boundary.
-  - Checkpoint invalidation must be conservative: if any required proof is
-    ambiguous, discard or bypass the checkpoint and emit the reason.
-
-- [ ] Treat checkpoints as resumable proof, not as authority.
-  - On every startup, validate the checkpoint against config, code/schema,
-    fill coverage, candle coverage where required, market metadata, and last
-    processed timestamp before using it.
-  - Resume only from the validated boundary and replay new exchange/cache data
-    after that boundary.
-  - Emit checkpoint load/resume/bypass/write events with elapsed time and
-    reason codes.
-  - Acceptance: a warm restart with a valid checkpoint reaches held-position
-    protective readiness quickly, while an invalid checkpoint falls back to
-    exact replay loudly and safely.
+- [ ] Make the canonical HSL required-start boundary the single owner of fill and candle history
+  materialization for that replay.
+- [ ] Preserve exact fill timestamps, realized PnL, fees, episode boundaries, and every relevant
+  flat-scope cooldown while avoiding work before a proven disposable prefix.
+- [ ] Keep pside/unified and `threshold`/`never` full-lookback strict.
+- [ ] Measure cold and warm reconstruction through the same authoritative path; do not add a
+  parallel persisted replay-state compatibility matrix.
 
 ### P1: General Live Performance Report
 
@@ -922,9 +886,8 @@ Trading-impact labels:
   exchange writes, confirmation, monitor/event pipeline, and shutdown.
 - [ ] Every slow operation has a structured event with enough correlation and
   timing data to explain whether it affected trading behavior.
-- [ ] HSL checkpointing reduces warm-restart replay without weakening
-  stateless correctness: checkpoints accelerate reconstruction only when their
-  proof matches exchange/cache-derived inputs.
+- [ ] HSL warm-restart performance is acceptable without persisted replay state; canonical
+  fill/candle cache proof and bounded compact/sparse reconstruction preserve stateless correctness.
 
 ## Candidate PR Slices
 
@@ -995,12 +958,10 @@ Each slice should update this checklist with its result.
    - Acceptance: equivalence tests pass against the old replay contract and the
      benchmark shows a material rows/s improvement.
 
-5. [ ] HSL checkpoint proof/resume slice.
-   - Write and resume from conservative performance checkpoints after exact
-     reconstruction.
-   - Acceptance: valid checkpoint warm restart is fast; stale/incompatible
-     checkpoint is bypassed with an observable reason; decisions remain
-     reproducible from exchange/cache-derived truth.
+5. [ ] HSL bounded-history materialization slice.
+   - Pass the canonical consumer-owned replay boundary into authoritative fill/candle preparation.
+   - Acceptance: discarded history is neither fetched nor materialized, while full-lookback modes,
+     cooldown scopes, and ambiguous evidence remain strict.
 
 6. [ ] Shutdown and restart latency slice.
    - Make long non-critical startup/background work interruptible and report
@@ -1028,9 +989,9 @@ Each slice should update this checklist with its result.
    - Prove equivalence against current replay with fixtures before using it in
      live.
 
-4. Add checkpoints after the exact optimized path is understood.
-   - Checkpoints should make warm restarts cheap, but they should not obscure
-     the baseline exact replay contract or make debugging harder.
+4. Optimize authoritative history materialization after the replay path is understood.
+   - Use the canonical required boundary to avoid discarded work. Do not reintroduce persisted HSL
+     replay state or a second compatibility/proof system.
 
 5. Keep the live performance report as the operator-facing scorecard.
    - Every merged performance slice should update this checklist, add a

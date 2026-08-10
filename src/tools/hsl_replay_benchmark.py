@@ -16,7 +16,7 @@ import passivbot_rust as pbr
 from passivbot import Passivbot
 
 
-BENCHMARK_SCHEMA_VERSION = 3
+BENCHMARK_SCHEMA_VERSION = 4
 DEFAULT_MINUTES = 240
 DEFAULT_SYMBOLS = 8
 DEFAULT_ITERATIONS = 1
@@ -41,22 +41,18 @@ REFERENCE_SAMPLE_COUNT_KEYS = (
 TIMING_STAGE_NAMES = (
     "fixture_construction",
     "history_load",
-    "cache_reuse_skipped",
     "coin_metrics_sample",
     "held_coin_metrics_sample",
     "background_coin_metrics_sample",
     "current_upnl",
-    "cache_persist_skipped",
     "final_state_projection",
     "full_replay",
 )
 FULL_REPLAY_LEAF_STAGE_NAMES = (
     "history_load",
-    "cache_reuse_skipped",
     "held_coin_metrics_sample",
     "background_coin_metrics_sample",
     "current_upnl",
-    "cache_persist_skipped",
 )
 
 
@@ -484,8 +480,6 @@ def _make_offline_replay_bot(
         now_ms = int(history["timeline"][-1]["timestamp"])
     side_effects = {
         "network_calls": 0,
-        "cache_reads": 0,
-        "cache_writes": 0,
         "latch_writes": 0,
         "latch_removals": 0,
         "monitor_events": 0,
@@ -560,26 +554,12 @@ def _make_offline_replay_bot(
         finally:
             _record_timing(timings, "history_load", started_ns)
 
-    async def no_cache_reuse(*_args, **_kwargs):
-        started_ns = time.perf_counter_ns()
-        try:
-            return None
-        finally:
-            _record_timing(timings, "cache_reuse_skipped", started_ns)
-
     async def current_upnl(*_args, **_kwargs):
         started_ns = time.perf_counter_ns()
         try:
             return 0.0
         finally:
             _record_timing(timings, "current_upnl", started_ns)
-
-    def skip_cache_persist(*_args, **_kwargs):
-        started_ns = time.perf_counter_ns()
-        try:
-            return 0
-        finally:
-            _record_timing(timings, "cache_persist_skipped", started_ns)
 
     def skip_latch_write(*_args, **_kwargs):
         side_effects["latch_writes"] += 1
@@ -609,9 +589,7 @@ def _make_offline_replay_bot(
             ] += 1
 
     bot.get_balance_equity_history = history_provider
-    bot._equity_hard_stop_try_reuse_replay_cache = no_cache_reuse
     bot._calc_upnl_sum_strict = current_upnl
-    bot._equity_hard_stop_persist_replay_matrices = skip_cache_persist
     bot._equity_hard_stop_write_latch = skip_latch_write
     bot._equity_hard_stop_remove_latch_file = skip_latch_remove
     bot._equity_hard_stop_apply_coin_metrics_sample = profile_coin_metrics_sample
