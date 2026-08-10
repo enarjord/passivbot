@@ -73,3 +73,13 @@ belong in canonical loading/formatting; runtime consumers must not reapply them.
 - Compatibility code is for supported released-version boundaries, not intermediate development
   iterations, unless the user explicitly requests it or a documented compatibility contract exists.
 - Add user-facing behavior changes to `../../CHANGELOG.md` under `Unreleased`.
+
+## Release Hygiene
+
+- Treat either 50 top-level user-facing entries under `../../CHANGELOG.md` `Unreleased`, or 14 days
+  since the latest stable tag with at least 10 such entries, as an advisory release-review trigger.
+- When a trigger is reached, no release is already in progress, and the accumulated changes form a
+  coherent release, tell the maintainer and recommend the appropriate semantic version. Ask for
+  explicit permission before editing versions, cutting a branch, tagging, or publishing a release.
+- Do not interrupt incident response or live-safety work with a release prompt. Raise it at the
+  handoff instead. Follow `runbooks/release.md` for version selection, validation, and publication.

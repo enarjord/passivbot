@@ -2,7 +2,7 @@ import logging
 from copy import deepcopy
 from typing import Optional
 
-from config.schema import CONFIG_SCHEMA_VERSION
+from config.schema import CONFIG_SCHEMA_VERSION, SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
 from config.transform_log import ConfigTransformTracker
 from utils import normalize_coins_source
 
@@ -35,6 +35,11 @@ def migrate_config_version(
     target_parsed = _parse_version_tuple(CONFIG_SCHEMA_VERSION)
     if target_parsed is None:
         raise ValueError(f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}")
+    supported_previous_parsed = {
+        parsed
+        for version in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
+        if (parsed := _parse_version_tuple(version)) is not None
+    }
     if current_version == CONFIG_SCHEMA_VERSION:
         return
     if current_version in (None, ""):
@@ -53,6 +58,16 @@ def migrate_config_version(
         raise ValueError(
             f"config.config_version {current_version!r} is newer than supported schema "
             f"{CONFIG_SCHEMA_VERSION}; upgrade Passivbot"
+        )
+    elif (
+        current_parsed != target_parsed
+        and current_parsed[0] == target_parsed[0]
+        and current_parsed not in supported_previous_parsed
+    ):
+        supported = ", ".join(sorted(SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS))
+        raise ValueError(
+            f"config.config_version {current_version!r} is not a supported previous schema; "
+            f"supported previous schemas: {supported}"
         )
     else:
         _log_config(

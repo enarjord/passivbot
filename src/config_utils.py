@@ -1638,7 +1638,7 @@ CLI_HELP_OVERRIDES = {
         "Terminal metric visibility config. null uses optimize scoring/limits; "
         "[] shows all; a list adds named metrics. Full analysis is still saved."
     ),
-    "config_version": "Config schema version. Canonical V8 configs use v8.0.0.",
+    "config_version": "Config schema version. Canonical V8 configs use v8.1.0.",
 }
 
 for _pside in ("long", "short"):
