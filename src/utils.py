@@ -862,6 +862,13 @@ def _build_coin_symbol_maps(markets, quote, exchange=None):
     exact_alias_to_symbols = defaultdict(set)
     alias_to_coins = defaultdict(set)
     exact_alias_to_coins = defaultdict(set)
+    exchange_name = to_standard_exchange_name(exchange) if exchange else None
+
+    def add_exact_alias(alias, symbol, coin):
+        alias = str(alias)
+        exact_alias_to_symbols[alias].add(symbol)
+        exact_alias_to_coins[alias].add(coin)
+
     for k, v in markets.items():
         try:
             # Only include swap markets with the right quote.
@@ -897,27 +904,31 @@ def _build_coin_symbol_maps(markets, quote, exchange=None):
             # Exact exchange identifiers are lossless routing aliases.  They
             # must be available before any convenience normalization such as
             # removing a 1000/k contract multiplier.
-            exact_alias_to_symbols[k].add(k)
-            exact_alias_to_coins[k].add(coin)
+            add_exact_alias(k, k, coin)
             for alias in namespaced_full_aliases:
-                exact_alias_to_symbols[alias].add(k)
-                exact_alias_to_coins[alias].add(coin)
+                add_exact_alias(alias, k, coin)
             if active:
                 for variant in variants:
                     alias_to_coins[variant].add(coin)
                     alias_to_symbols[variant].add(k)
             if symbol_id := v.get("id"):
-                symbol_id = str(symbol_id)
-                exact_alias_to_coins[symbol_id].add(coin)
-                exact_alias_to_symbols[symbol_id].add(k)
+                add_exact_alias(symbol_id, k, coin)
         except Exception:
             # Skip malformed market entries but continue processing others
             continue
 
-    # Exact aliases outrank convenience aliases even if exchange metadata
-    # happens to make their text collide.  All remaining multi-market aliases
-    # stay visible so the resolver can reject them rather than guess.
-    alias_to_symbols.update(exact_alias_to_symbols)
+    # A canonical-looking unqualified alias keeps all convenience candidates
+    # when its text also equals a native ID. Explicitly qualified aliases retain
+    # the lossless native-ID route, while other exact aliases remain unchanged.
+    for alias, symbols in list(exact_alias_to_symbols.items()):
+        if alias in alias_to_symbols and not looks_like_exact_market_identifier(alias):
+            alias_to_symbols[alias].update(symbols)
+            if exchange_name:
+                qualified_alias = f"{exchange_name}::{alias}"
+                alias_to_symbols[qualified_alias] = set(symbols)
+                exact_alias_to_coins[qualified_alias].update(exact_alias_to_coins[alias])
+        else:
+            alias_to_symbols[alias] = set(symbols)
     coin_to_symbol_map = {
         alias: sorted(symbols) for alias, symbols in sorted(alias_to_symbols.items())
     }
@@ -1325,10 +1336,14 @@ def coin_to_symbol(coin, exchange, quote=None, verbose=True):
         if loaded:
             # Exact identifiers and base aliases take precedence over lossy
             # canonicalization.  Ambiguous aliases fail closed.
-            if resolved := _resolve_market_candidates(
-                raw, loaded.get(lookup_raw, []), ex
-            ):
-                return resolved
+            lookup_keys = (
+                [raw, lookup_raw] if qualified_exchange is not None else [lookup_raw]
+            )
+            for lookup_key in lookup_keys:
+                if resolved := _resolve_market_candidates(
+                    raw, loaded.get(lookup_key, []), ex
+                ):
+                    return resolved
 
         coin_sanitized = symbol_to_coin(lookup_raw, verbose=verbose)
         if looks_like_exact_market_identifier(raw) or (
@@ -1665,9 +1680,10 @@ async def _remove_resolved_ignored_markets(
     )
     if not standard_exchanges:
         return
-    await asyncio.gather(
+    loaded_markets = await asyncio.gather(
         *[load_markets(ex, verbose=False, quote=quote) for ex in standard_exchanges]
     )
+    markets_by_exchange = dict(zip(standard_exchanges, loaded_markets))
 
     def resolve_if_available(identifier, exchange):
         try:
@@ -1684,15 +1700,32 @@ async def _remove_resolved_ignored_markets(
             }
             for exchange in standard_exchanges
         }
-        approved_by_side[pside] = [
-            identifier
-            for identifier in approved_by_side[pside]
-            if not any(
-                (symbol := resolve_if_available(identifier, exchange)) is not None
-                and symbol in ignored_symbols_by_exchange[exchange]
+        surviving_approved = []
+        for identifier in approved_by_side[pside]:
+            resolved_symbols = {
+                exchange: symbol
                 for exchange in standard_exchanges
-            )
-        ]
+                if (symbol := resolve_if_available(identifier, exchange)) is not None
+            }
+            ignored_exchanges = {
+                exchange
+                for exchange, symbol in resolved_symbols.items()
+                if symbol in ignored_symbols_by_exchange[exchange]
+            }
+            if not ignored_exchanges:
+                surviving_approved.append(identifier)
+                continue
+            surviving_exchanges = [
+                exchange
+                for exchange in standard_exchanges
+                if exchange in resolved_symbols and exchange not in ignored_exchanges
+            ]
+            for exchange in surviving_exchanges:
+                symbol = resolved_symbols[exchange]
+                market = markets_by_exchange[exchange].get(symbol) or {}
+                exact_identifier = str(market.get("id") or symbol)
+                surviving_approved.append(f"{exchange}::{exact_identifier}")
+        approved_by_side[pside] = list(dict.fromkeys(surviving_approved))
 
 
 async def _coalesce_resolved_approved_markets(

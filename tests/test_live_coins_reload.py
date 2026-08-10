@@ -707,6 +707,61 @@ async def test_exact_ignored_identifier_does_not_remove_distinct_multiplier_mark
 
 
 @pytest.mark.asyncio
+async def test_scoped_ignore_preserves_other_venues_from_approved_all(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    markets_by_exchange = {
+        "binance": {
+            "1000SHIB/USDT:USDT": {
+                "id": "1000SHIBUSDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "1000SHIB",
+            }
+        },
+        "bybit": {
+            "SHIB1000/USDT:USDT": {
+                "id": "SHIB1000USDT",
+                "swap": True,
+                "linear": True,
+                "active": True,
+                "base": "SHIB1000",
+            }
+        },
+    }
+
+    async def fake_load_markets(exchange, verbose=False, quote=None):
+        markets = markets_by_exchange[exchange]
+        assert utils.create_coin_symbol_map_cache(
+            exchange, markets, quote=quote, verbose=False
+        )
+        return markets
+
+    monkeypatch.setattr(utils, "load_markets", fake_load_markets)
+    monkeypatch.setattr(
+        utils, "filter_markets", lambda markets, exchange, quote=None: (markets, None)
+    )
+    config = {
+        "live": {
+            "approved_coins": "all",
+            "ignored_coins": {
+                "long": ["binance::1000SHIBUSDT"],
+                "short": [],
+            },
+        }
+    }
+
+    await format_approved_ignored_coins(config, ["binance", "bybit"])
+
+    assert config["live"]["approved_coins"] == {
+        "long": ["bybit::SHIB1000USDT"],
+        "short": ["SHIB"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_format_approved_ignored_coins_records_transform():
     config = {
         "live": {

@@ -350,6 +350,35 @@ def test_collision_aware_maps_preserve_exact_market_identifiers(tmp_path, monkey
     assert utils.coin_to_symbol("ABC", ex) == "ABC/USDT:USDT"
 
 
+def test_plain_alias_outranks_colliding_native_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        "ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "ABC",
+            "id": "ABCUSDT",
+        },
+        "1000ABC/USDT:USDT": {
+            "swap": True,
+            "linear": True,
+            "base": "1000ABC",
+            "id": "ABC",
+        },
+    }
+
+    c2s, _ = utils._build_coin_symbol_maps(markets, "USDT", exchange="bitget")
+    assert c2s["ABC"] == ["1000ABC/USDT:USDT", "ABC/USDT:USDT"]
+    assert c2s["bitget::ABC"] == ["1000ABC/USDT:USDT"]
+
+    path = tmp_path / "caches" / "bitget" / "coin_to_symbol_map.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(c2s))
+
+    assert utils.coin_to_symbol("ABC", "bitget") == "ABC/USDT:USDT"
+    assert utils.coin_to_symbol("bitget::ABC", "bitget") == "1000ABC/USDT:USDT"
+
+
 def test_plain_coin_prefers_smallest_available_denomination(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ex = "testexchange"
