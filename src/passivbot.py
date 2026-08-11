@@ -950,9 +950,6 @@ class Passivbot:
     _emit_execution_connector_call_started_event = (
         live_event_emitters.emit_execution_connector_call_started_event
     )
-    _emit_planning_defer_summary_event = (
-        live_event_emitters.emit_planning_defer_summary_event
-    )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _emit_health_summary_event = live_event_emitters.emit_health_summary_event
     _emit_market_snapshot_diagnostic_skipped_event = (
@@ -11757,107 +11754,6 @@ class Passivbot:
                 bounded_exception_type(exc),
             )
 
-    def _completed_candle_signature_mismatch_details(
-        self,
-        *,
-        expected_symbols: Iterable[str],
-        expected_signature,
-        stamped_signature,
-    ) -> list[dict]:
-        """Summarize why the completed-candle freshness stamp no longer matches."""
-
-        def _by_symbol(signature) -> dict[str, tuple]:
-            out: dict[str, tuple] = {}
-            if not isinstance(signature, (list, tuple)):
-                return out
-            for item in signature:
-                if not isinstance(item, (list, tuple)) or not item:
-                    continue
-                symbol = str(item[0] or "")
-                if symbol:
-                    out[symbol] = tuple(item)
-            return out
-
-        expected_symbols_tuple = tuple(
-            sorted(dict.fromkeys(str(symbol) for symbol in expected_symbols if symbol))
-        )
-        expected_by_symbol = _by_symbol(expected_signature)
-        stamped_by_symbol = _by_symbol(stamped_signature)
-        missing_from_stamp = [
-            symbol
-            for symbol in expected_symbols_tuple
-            if symbol not in stamped_by_symbol
-        ]
-        extra_in_stamp = [
-            symbol
-            for symbol in sorted(stamped_by_symbol)
-            if symbol not in expected_by_symbol
-        ]
-        changed_symbols = [
-            symbol
-            for symbol in expected_symbols_tuple
-            if symbol in expected_by_symbol
-            and symbol in stamped_by_symbol
-            and expected_by_symbol[symbol] != stamped_by_symbol[symbol]
-        ]
-        if missing_from_stamp or extra_in_stamp:
-            mismatch_type = "planning_universe_changed"
-        elif changed_symbols:
-            mismatch_type = "completed_candle_target_changed"
-        else:
-            mismatch_type = "signature_shape_changed"
-        return [
-            {
-                "reason": "signature_mismatch",
-                "mismatch_type": mismatch_type,
-                "expected_count": len(expected_by_symbol),
-                "stamped_count": len(stamped_by_symbol),
-                "expected_symbols": list(expected_symbols_tuple[:12]),
-                "stamped_symbols": list(tuple(sorted(stamped_by_symbol))[:12]),
-                "missing_symbols": missing_from_stamp[:12],
-                "missing_count": len(missing_from_stamp),
-                "extra_symbols": extra_in_stamp[:12],
-                "extra_count": len(extra_in_stamp),
-                "changed_symbols": changed_symbols[:12],
-                "changed_count": len(changed_symbols),
-            }
-        ]
-
-    def _completed_candle_signatures_equivalent(
-        self,
-        expected_signature,
-        stamped_signature,
-    ) -> bool:
-        """Return true when both signatures cover the same completed targets.
-
-        A stamped target may include bounded ``tail_gap_fallback`` metadata while
-        a later cache check at the same stamp time sees normal coverage after a
-        background cache improvement. That metadata shape change must not defer
-        planning when the required symbol and completed-candle timestamp are
-        unchanged.
-        """
-
-        def _targets_by_symbol(signature) -> dict[str, tuple[str, int]]:
-            out: dict[str, tuple[str, int]] = {}
-            if not isinstance(signature, (list, tuple)):
-                return out
-            for item in signature:
-                if not isinstance(item, (list, tuple)) or len(item) < 2:
-                    continue
-                symbol = str(item[0] or "")
-                if not symbol:
-                    continue
-                try:
-                    target_ts = int(item[1])
-                except (TypeError, ValueError):
-                    continue
-                out[symbol] = (symbol, target_ts)
-            return out
-
-        return _targets_by_symbol(expected_signature) == _targets_by_symbol(
-            stamped_signature
-        )
-
     def _staged_planner_precondition_state(
         self,
         *,
@@ -11918,14 +11814,6 @@ class Passivbot:
     def _log_staged_execution_defer(self, details: dict) -> None:
         """Log a throttled non-trading defer while staged inputs settle."""
         return planning_gates.log_staged_execution_defer(self, details)
-
-    def _is_routine_completed_candle_target_defer(self, details: dict) -> bool:
-        """Return true for self-recovering minute-boundary candle target changes."""
-        return planning_gates.is_routine_completed_candle_target_defer(self, details)
-
-    def _record_routine_completed_candle_defer(self, details: dict) -> None:
-        """Aggregate routine completed-candle target defers into periodic INFO summaries."""
-        return planning_gates.record_routine_completed_candle_defer(self, details)
 
     async def _defer_staged_execution_cycle(
         self, details: dict, loop_start_ms: int

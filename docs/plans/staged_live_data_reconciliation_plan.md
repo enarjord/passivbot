@@ -219,9 +219,10 @@ rules. Keep them narrow, visible, and test-covered.
   DEBUG for routine one-minute publication lag; INFO is reserved for multi-minute/persistent tails
   and periodic summaries, recovery is INFO only after persistent/near-cap tails, and WARNING is
   reserved for near-cap or sustained tail gaps.
-- [x] Demote self-recovering completed-candle target defers to DEBUG and add periodic INFO
-  summaries. Minute-boundary `completed_candle_target_changed` retries no longer appear as
-  repeated operator events unless they persist over a summary window.
+- [x] Remove completed candles from the account-wide staged planning barrier and scope candle/EMA
+  availability to its actual Rust consumers. The superseded completed-candle signature comparator,
+  defer aggregation state, and live `planning.defer_summary` producer are removed. Historical
+  `planning.defer_summary` events remain queryable by read-only reports.
 - [x] Aggregate cache-only EMA skip diagnostics per cycle instead of logging one DEBUG line per
   symbol. This keeps KuCoin DEBUG runs readable while preserving the unavailable-symbol/reason
   detail needed for remote-call economy diagnosis.

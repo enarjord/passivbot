@@ -190,7 +190,7 @@ stable names:
 - `data_packet.updated`
 - `snapshot.built`
 - `planning.unavailable`
-- `planning.defer_summary`
+- `planning.defer_summary` (historical compatibility only; no current live producer)
 - `forager.selection`
 - `forager.feature_unavailable`
 - `ema.bundle.started`

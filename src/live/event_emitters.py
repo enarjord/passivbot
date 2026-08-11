@@ -1147,55 +1147,6 @@ def emit_live_event(
     )
 
 
-def emit_planning_defer_summary_event(
-    bot: Any,
-    *,
-    reason_code: str,
-    count: int,
-    window_s: int,
-    symbols: list[str] | tuple[str, ...] | set[str],
-    details: dict | None = None,
-) -> None:
-    try:
-        details = dict(details or {})
-        invalid = details.get("invalid") if isinstance(details.get("invalid"), dict) else {}
-        all_symbols = sorted(str(symbol) for symbol in (symbols or []) if symbol)
-        symbol_limit = 32
-        bot._emit_live_event(
-            EventTypes.PLANNING_DEFER_SUMMARY,
-            level="info",
-            component="planning_gates",
-            tags=(
-                EventTags.PLANNING,
-                EventTags.GATE,
-                EventTags.DEFER,
-                EventTags.SUMMARY,
-            ),
-            cycle_id=bot._current_live_event_cycle_id(),
-            status="deferred",
-            reason_code=str(reason_code),
-            message="staged planning defer summary",
-            data={
-                "count": int(count),
-                "window_s": int(window_s),
-                "symbols": all_symbols[:symbol_limit],
-                "symbols_count": len(all_symbols),
-                "symbols_truncated": len(all_symbols) > symbol_limit,
-                "missing": sorted(str(item) for item in details.get("missing") or []),
-                "required": sorted(str(item) for item in details.get("required") or []),
-                "context": str(details.get("context") or "planning"),
-                "epoch": int(details.get("epoch", 0) or 0),
-                "invalid_surfaces": sorted(str(surface) for surface in invalid),
-                "will_retry": "automatic",
-            },
-        )
-    except Exception as exc:
-        logging.debug(
-            "[event] failed to emit planning defer summary event: %s",
-            _bounded_exception_type(exc),
-        )
-
-
 def emit_order_wave_completed_event(
     bot: Any, wave: dict | None, *, elapsed_ms: int, level: str = "info"
 ) -> None:
