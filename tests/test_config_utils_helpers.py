@@ -1591,12 +1591,14 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "Coin Selection:" in help_text
     assert "Date Range:" in help_text
     assert "Optimizer:" in help_text
+    assert "Suite:" in help_text
     _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     _assert_help_option_aliases(help_text, "--population-size", "-ps", "INT")
     _assert_help_option_aliases(help_text, "--backend", "-ob", "BACKEND")
     assert "--limits JSON_OR_HJSON" in help_text
     _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     assert "--clear-limits" in help_text
+    assert "--reducer-default MODE" in help_text
     _assert_help_option_aliases(
         help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
     )

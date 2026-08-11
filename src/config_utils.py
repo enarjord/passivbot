@@ -1410,7 +1410,7 @@ RESERVED_CLI_ARGS = {
         "type": str,
         "metavar": "MODE",
         "commands": {"backtest", "optimize"},
-        "group": {"backtest": "Suite"},
+        "group": {"backtest": "Suite", "optimize": "Suite"},
         "help": (
             "Suite-only default reducer for scenario metrics. Allowed modes: "
             "mean, min, max, std, median. Metric-specific backtest.reducer entries "
