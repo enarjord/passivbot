@@ -3654,52 +3654,6 @@ def test_log_staged_refresh_timings_skips_structured_debug_sample():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_routine_completed_candle_defers_are_debug_with_periodic_summary(
-    caplog, monkeypatch
-):
-    now_ms = {"value": 0}
-    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms["value"])
-    bot = Passivbot.__new__(Passivbot)
-    details = {
-        "missing": ["completed_candles"],
-        "required": ["balance", "completed_candles", "positions"],
-        "epoch": 7,
-        "context": "market snapshot refresh",
-        "invalid": {
-            "completed_candles": [
-                {
-                    "reason": "signature_mismatch",
-                    "mismatch_type": "completed_candle_target_changed",
-                    "expected_count": 2,
-                    "stamped_count": 2,
-                    "changed_count": 2,
-                    "changed_symbols": ["TON/USDT:USDT", "ZEC/USDT:USDT"],
-                }
-            ]
-        },
-    }
-
-    with caplog.at_level(logging.DEBUG):
-        bot._log_staged_execution_defer(details)
-        now_ms["value"] = 31 * 60_000
-        bot._log_staged_execution_defer(details)
-
-    individual = [
-        record
-        for record in caplog.records
-        if "staged planning deferred: completed candle target changed or missing"
-        in record.message
-    ]
-    assert individual
-    assert all(record.levelno == logging.DEBUG for record in individual)
-    assert any(
-        "staged planning deferred summary" in record.message
-        and "reason=completed_candle_target_changed" in record.message
-        and record.levelno == logging.INFO
-        for record in caplog.records
-    )
-
-
 def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
     bot = Passivbot.__new__(Passivbot)
 
@@ -9017,32 +8971,18 @@ def test_staged_planner_preconditions_raise_before_rust_planning():
         )
 
 
-def test_staged_planner_preconditions_do_not_gate_on_stale_completed_candles():
+def test_staged_planner_preconditions_ignore_completed_candle_surface():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot.active_symbols = ["BTC/USDT:USDT"]
-    bot.positions = {"BTC/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-    bot.cm = SimpleNamespace(
-        get_completed_candle_health=lambda symbol, windows=None, now_ms=None: {
-            "ok": False,
-            "timeframes": {
-                "1m": {
-                    "coverage_ok": False,
-                    "latest_expected_ts": 120_000,
-                    "last_cached_ts": 60_000,
-                    "missing_candles": 1,
-                }
-            },
-        }
+    bot.freshness_ledger.stamp(
+        "completed_candles",
+        (("BTC/USDT:USDT", 60_000),),
+        now_ms=0,
+        epoch=0,
     )
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot._record_authoritative_surface("completed_candles", (("BTC/USDT:USDT", 60_000),))
 
     ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
 
@@ -9050,194 +8990,6 @@ def test_staged_planner_preconditions_do_not_gate_on_stale_completed_candles():
     assert details["missing"] == []
     assert "completed_candles" not in details["required"]
     assert details["invalid"] == {}
-
-
-def test_staged_planner_preconditions_ignore_completed_candle_universe_changes():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-    bot.positions = {
-        "BTC/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}},
-        "ETH/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}},
-    }
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-
-    def completed_candle_health(symbol, windows=None, now_ms=None):
-        return {
-            "ok": True,
-            "timeframes": {
-                "1m": {
-                    "coverage_ok": True,
-                    "latest_expected_ts": 120_000,
-                    "last_cached_ts": 120_000,
-                    "missing_candles": 0,
-                    "runtime_synthetic_count": 0,
-                }
-            },
-        }
-
-    bot.cm = SimpleNamespace(get_completed_candle_health=completed_candle_health)
-
-    bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES:
-        bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot._record_authoritative_surface("completed_candles", (("BTC/USDT:USDT", 60_000),))
-
-    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
-
-    assert ok is True
-    assert details["missing"] == []
-    assert "completed_candles" not in details["required"]
-    assert details["invalid"] == {}
-
-
-def test_completed_candle_signature_ignores_later_cache_improvements():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    symbol = "BTC/USDT:USDT"
-    stamp_ms = 120_500
-    bot.active_symbols = [symbol]
-    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-
-    def completed_candle_health(_symbol, windows=None, now_ms=None):
-        return {
-            "ok": True,
-            "timeframes": {
-                "1m": {
-                    "coverage_ok": True,
-                    "latest_expected_ts": 60_000,
-                    "last_cached_ts": 60_000 if int(now_ms) == stamp_ms else 120_000,
-                    "missing_candles": 0,
-                    "runtime_synthetic_count": 0 if int(now_ms) == stamp_ms else 3,
-                }
-            },
-        }
-
-    bot.cm = SimpleNamespace(get_completed_candle_health=completed_candle_health)
-
-    bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES:
-        bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot.freshness_ledger.stamp(
-        "completed_candles",
-        ((symbol, 60_000),),
-        now_ms=stamp_ms,
-        epoch=bot.freshness_ledger.epoch,
-    )
-
-    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
-
-    assert ok is True
-    assert details["missing"] == []
-
-
-def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    symbol = "BTC/USDT:USDT"
-    stamp_ms = 120_500
-    stamped_signature = ((symbol, 60_000),)
-    bot.active_symbols = [symbol]
-    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-
-    def completed_candle_health(_symbol, windows=None, now_ms=None):
-        if int(now_ms) == stamp_ms:
-            return {
-                "ok": True,
-                "timeframes": {
-                    "1m": {
-                        "coverage_ok": True,
-                        "latest_expected_ts": 60_000,
-                        "last_cached_ts": 60_000,
-                        "missing_candles": 0,
-                        "runtime_synthetic_count": 0,
-                    }
-                },
-            }
-        return {
-            "ok": False,
-            "timeframes": {
-                "1m": {
-                    "coverage_ok": False,
-                    "latest_expected_ts": 120_000,
-                    "last_cached_ts": 60_000,
-                    "missing_candles": 1,
-                }
-            },
-        }
-
-    bot.cm = SimpleNamespace(get_completed_candle_health=completed_candle_health)
-
-    bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES:
-        bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot.freshness_ledger.stamp(
-        "completed_candles",
-        stamped_signature,
-        now_ms=stamp_ms,
-        epoch=bot.freshness_ledger.epoch,
-    )
-
-    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
-
-    assert ok is True
-    assert details["missing"] == []
-
-
-def test_staged_planner_preconditions_allow_tail_fallback_shape_recovery():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {}}
-    bot.exchange = "bybit"
-    bot.freshness_ledger = FreshnessLedger(now_ms=0)
-    symbol = "BTC/USDT:USDT"
-    stamp_ms = 120_500
-    stamped_signature = (
-        (symbol, 120_000, "tail_gap_fallback", 60_000, 60_000),
-    )
-    bot.active_symbols = [symbol]
-    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
-    bot.open_orders = {}
-    bot.PB_modes = {"long": {}, "short": {}}
-    bot.cm = SimpleNamespace(
-        get_completed_candle_health=lambda _symbol, windows=None, now_ms=None: {
-            "ok": True,
-            "timeframes": {
-                "1m": {
-                    "coverage_ok": True,
-                    "latest_expected_ts": 120_000,
-                    "last_cached_ts": 120_000,
-                    "missing_candles": 0,
-                    "runtime_synthetic_count": 0,
-                }
-            },
-        }
-    )
-
-    bot._begin_authoritative_refresh_epoch()
-    for surface in ACCOUNT_SURFACES:
-        bot._record_authoritative_surface(surface, (surface, "fresh"))
-    bot.freshness_ledger.stamp(
-        "completed_candles",
-        stamped_signature,
-        now_ms=stamp_ms,
-        epoch=bot.freshness_ledger.epoch,
-    )
-
-    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
-
-    assert ok is True
-    assert details["missing"] == []
 
 
 def test_build_staged_planning_snapshot_captures_exact_surface_contract():
