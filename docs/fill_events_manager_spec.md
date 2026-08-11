@@ -254,13 +254,15 @@ python src/fill_events_manager.py \
 | Aspect | Singleton | Instance-per-Bot |
 |--------|-----------|------------------|
 | Cache coordination | Single cache dir, centralized | Separate cache per user |
-| Rate limiting | Internal coordination | Requires external coordination |
+| Rate limiting | Shared client state | Connector/client-owned |
 | Lifecycle | Complex global state | Tied to bot lifecycle |
 | Testing | Harder (global state) | Easier (isolated instances) |
 | Memory | Shared across bots | Slightly more per bot |
 | Corruption risk | Higher (concurrent writes) | Lower (isolated) |
 
-**Rationale:** Instance-per-bot aligns with passivbot's stateless design principles. Rate limiting is handled via shared temp file coordination (see 10.4).
+**Rationale:** Instance-per-bot aligns with passivbot's stateless design principles. Rate limiting
+stays with the connector and its exchange client, where every request and endpoint contract is
+visible (see 10.4).
 
 ### 10.2 Position Flip Handling
 
@@ -301,38 +303,20 @@ raw = [
 
 ### 10.4 Rate Limit Coordination
 
-**Decision:** Implement shared temp file coordination + staggered startup jitter.
+**Decision:** Keep rate-limit ownership at the exchange client and the connector code which issues
+the requests.
 
 **Approach:**
-1. **Temp file coordination:** A shared temp file logs recent API calls per exchange
-2. **Staggered startup:** Random jitter (0-30s) when starting virgin bots
+1. CCXT clients use their built-in rate limiter.
+2. Connectors add endpoint-specific spacing, bounded concurrency, and retry backoff where the
+   exchange contract requires them.
+3. A future cross-process coordinator is justified only if every relevant request is routed through
+   it and the shared limit key (IP, account, endpoint, or venue) is known.
 
-**Temp file structure:**
-```
-/tmp/passivbot_rate_limits/{exchange}.json
-```
-
-```json
-{
-  "calls": [
-    {"endpoint": "fetch_my_trades", "timestamp_ms": 1705400000000, "user": "account1"},
-    {"endpoint": "fetch_my_trades", "timestamp_ms": 1705400001000, "user": "account2"}
-  ],
-  "window_ms": 60000,
-  "limits": {
-    "fetch_my_trades": 120,
-    "fetch_order": 60
-  }
-}
-```
-
-**Coordination logic:**
-1. Before API call, read temp file and check current window usage
-2. If approaching limit, add jitter delay (100-5000ms)
-3. After API call, append entry to temp file
-4. Periodically prune entries older than window
-
-**Rationale:** Multiple virgin bots starting simultaneously on the same exchange is the high-risk scenario. Once initial cache is built, API pressure is minimal.
+**Rationale:** A temp-file coordinator was instantiated by every manager but was never called before
+or after any request. It therefore created filesystem state and an injection seam without providing
+rate-limit protection. Keeping policy at the actual request boundary makes the protection testable
+and avoids a second, disconnected model of exchange limits.
 
 ---
 
@@ -493,6 +477,7 @@ python -m pytest tests/test_fill_events*.py -v
 
 | Date | Change |
 |------|--------|
+| 2026-08-11 | Replaced the unintegrated temp-file rate-limit plan with connector/client ownership |
 | 2025-01-16 | Resolved open questions: singleton, position flip, raw field, rate limiting |
 | 2025-01-16 | Added sections 11-13: Cache self-healing, incremental flushing, dashboard enhancements |
 | 2025-01-16 | Updated `raw` field type from `Dict` to `List[Dict]` |
