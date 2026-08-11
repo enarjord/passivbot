@@ -1209,12 +1209,11 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
     _stamp_staged_account_and_candles(bot)
 
-    _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
+    await bot.calc_ideal_orders_orchestrator()
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
     assert rust_symbol["allow_missing_strategy_inputs"] is True
-    assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     rust_events = [
         event
@@ -3923,7 +3922,7 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     assert symbol in bot.active_symbols
 
     _stamp_staged_account_and_candles(bot)
-    _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
+    await bot.calc_ideal_orders_orchestrator()
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
@@ -3931,7 +3930,6 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     assert captured["input"]["peek_hints"]["expand_close_long"] == [0]
     assert captured["input"]["peek_hints"]["expand_grid_short"] == []
     assert captured["input"]["forager_hysteresis"]["score_hysteresis_pct"] == 0.0
-    assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
 
 
 def test_halted_hsl_runtime_forced_mode_refresh_emits_risk_event():
