@@ -2347,22 +2347,6 @@ class CandlestickManager:
         except Exception:
             return ""
 
-    def _legacy_shard_candidates(self, symbol: str, date_key: str, tf: str) -> List[str]:
-        if tf != "1m":
-            return []
-        ex = str(self.exchange_name or "").lower()
-        coin = self._legacy_coin_from_symbol(symbol)
-        sym_code = self._legacy_symbol_code_from_symbol(symbol)
-        out: List[str] = []
-
-        if coin:
-            out.append(os.path.join("historical_data", f"ohlcvs_{ex}", coin, f"{date_key}.npy"))
-        if ex == "binanceusdm" and sym_code:
-            out.append(os.path.join("historical_data", "ohlcvs_futures", sym_code, f"{date_key}.npy"))
-        if ex == "bybit" and sym_code:
-            out.append(os.path.join("historical_data", "ohlcvs_bybit", sym_code, f"{date_key}.npy"))
-        return out
-
     def _legacy_shard_dirs(self, symbol: str, tf: str) -> List[str]:
         if tf != "1m":
             return []
@@ -2715,43 +2699,6 @@ class CandlestickManager:
                 error_type=bounded_exception_type(e),
             )
             return None
-
-    def _save_range(
-        self,
-        symbol: str,
-        arr: np.ndarray,
-        *,
-        timeframe: Optional[str] = None,
-        tf: Optional[str] = None,
-    ) -> None:
-        """Persist fetched candles to daily shards by date_key."""
-        if arr.size == 0:
-            return
-        arr = np.sort(_ensure_dtype(arr), order="ts")
-        tf_norm = self._normalize_timeframe_arg(timeframe, tf)
-        current_key: Optional[str] = None
-        bucket = []
-        total = 0
-        for row in arr:
-            key = self._date_key(int(row["ts"]))
-            if current_key is None:
-                current_key = key
-            if key != current_key:
-                if bucket:
-                    self._save_shard(
-                        symbol,
-                        current_key,
-                        np.array(bucket, dtype=CANDLE_DTYPE),
-                        tf=tf_norm,
-                    )
-                    total += len(bucket)
-                bucket = []
-                current_key = key
-            bucket.append(tuple(row.tolist()))
-        if bucket and current_key is not None:
-            self._save_shard(symbol, current_key, np.array(bucket, dtype=CANDLE_DTYPE), tf=tf_norm)
-            total += len(bucket)
-            self._log("debug", "saved_range", symbol=symbol, rows=total)
 
     def _save_range_incremental(
         self,
@@ -3410,22 +3357,6 @@ class CandlestickManager:
             )
         return changed
 
-    def _save_known_gaps(self, symbol: str, gaps: List[Tuple[int, int]]) -> None:
-        """Save gaps from simple tuples (backward compatibility wrapper)."""
-        now_ms = self._now_ms()
-        enhanced = [
-            {
-                "start_ts": int(s),
-                "end_ts": int(e),
-                "retry_count": _GAP_MAX_RETRIES,  # Assume caller-provided gaps are persistent
-                "reason": GAP_REASON_AUTO,
-                "added_at": now_ms,
-                "last_retry_at": now_ms,
-            }
-            for s, e in gaps
-        ]
-        self._save_known_gaps_enhanced(symbol, enhanced)
-
     def _add_known_gap(
         self,
         symbol: str,
@@ -3600,47 +3531,6 @@ class CandlestickManager:
             increment_retry=False,
             retry_count=_GAP_MAX_RETRIES,
         )
-
-    def _defer_persistent_gap_retry(
-        self,
-        symbol: str,
-        start_ts: int,
-        end_ts: int,
-        *,
-        now_ms: Optional[int] = None,
-    ) -> bool:
-        """Restart the cooldown for persistent unresolved gaps after a failed proof.
-
-        Contextual KuCoin verification is a re-check of an already-persistent
-        gap, not the first attempt in a new ordinary retry sequence. Preserve
-        the persistent retry count and reason so an empty or one-sided response
-        cannot make every subsequent candle read issue another REST request.
-        """
-        now = self._now_ms() if now_ms is None else int(now_ms)
-        changed = False
-        gaps = self._get_known_gaps_enhanced(symbol)
-        for gap in gaps:
-            if (
-                int(gap["start_ts"]) <= int(end_ts)
-                and int(gap["end_ts"]) >= int(start_ts)
-                and int(gap.get("retry_count", 0)) >= _GAP_MAX_RETRIES
-                and str(gap.get("reason", GAP_REASON_AUTO))
-                in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
-            ):
-                gap["retry_count"] = _GAP_MAX_RETRIES
-                gap["last_retry_at"] = now
-                changed = True
-        if changed:
-            self._save_known_gaps_enhanced(symbol, gaps)
-            self._log(
-                "debug",
-                "persistent_gap_verification_deferred",
-                symbol=symbol,
-                start_ts=int(start_ts),
-                end_ts=int(end_ts),
-                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
-            )
-        return changed
 
     def _kucoin_contextual_retry_due(
         self,
@@ -5026,63 +4916,6 @@ class CandlestickManager:
 
         if changed and save:
             self._save_known_gaps_enhanced(symbol, new_gaps)
-
-    def _get_min_shard_ts(self, symbol: str) -> Optional[int]:
-        """Return earliest shard timestamp (ms) from index or disk, if available."""
-        try:
-            idx = self._ensure_symbol_index(symbol, tf="1m")
-            shards = idx.get("shards") or {}
-            if isinstance(shards, dict):
-                min_ts: Optional[int] = None
-                for shard_meta in shards.values():
-                    if not isinstance(shard_meta, dict):
-                        continue
-                    mi = shard_meta.get("min_ts")
-                    if mi is None:
-                        continue
-                    ts = int(mi)
-                    min_ts = ts if min_ts is None else min(min_ts, ts)
-                if min_ts is not None:
-                    return min_ts
-        except Exception:
-            pass
-
-        # Fallback: infer earliest shard from filenames on disk.
-        try:
-            shard_dir = self._symbol_dir(symbol, tf="1m")
-            if not os.path.isdir(shard_dir):
-                return None
-            day_keys = [f[:-4] for f in os.listdir(shard_dir) if f.endswith(".npy")]
-            if not day_keys:
-                return None
-            day_keys.sort()
-            start_ts, _ = self._date_range_of_key(day_keys[0])
-            return int(start_ts)
-        except Exception:
-            return None
-
-    def _get_inception_probe_meta(self, symbol: str) -> Tuple[int, int]:
-        """Return (last_probe_ms, last_probe_end_ts) for inception probing."""
-        idx = self._ensure_symbol_index(symbol)
-        meta = idx.get("meta", {})
-        try:
-            last_probe_ms = int(meta.get("inception_ts_probe_ms", 0) or 0)
-            last_probe_end_ts = int(meta.get("inception_ts_probe_end_ts", 0) or 0)
-            return last_probe_ms, last_probe_end_ts
-        except Exception:
-            return 0, 0
-
-    def _set_inception_probe_meta(
-        self, symbol: str, probe_ms: int, probe_end_ts: int, *, save: bool = True
-    ) -> None:
-        """Persist inception probe metadata to avoid repeated probes."""
-        idx = self._ensure_symbol_index(symbol)
-        meta = idx.setdefault("meta", {})
-        meta["inception_ts_probe_ms"] = int(probe_ms)
-        meta["inception_ts_probe_end_ts"] = int(probe_end_ts)
-        self._index[f"{symbol}::1m"] = idx
-        if save:
-            self._save_index(symbol)
 
     def _maybe_update_inception_ts(self, symbol: str, arr: np.ndarray, *, save: bool = True) -> None:
         """Update inception_ts if arr contains an earlier timestamp than known."""
