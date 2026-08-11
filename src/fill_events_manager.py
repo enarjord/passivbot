@@ -13,16 +13,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import errno
-import fcntl
 import inspect
 import json
 import logging
 import math
 import os
-import random
 import re
 import shutil
-import tempfile
 import time
 from collections import defaultdict, deque
 from copy import deepcopy
@@ -125,178 +122,6 @@ def _is_disk_full_error(exc: BaseException) -> bool:
     return exception_text_contains(
         exc, ("No space left on device",), case_sensitive=True
     )
-
-
-# ---------------------------------------------------------------------------
-# Rate Limit Coordination
-# ---------------------------------------------------------------------------
-
-# Default rate limits per exchange (calls per minute)
-_DEFAULT_RATE_LIMITS: Dict[str, Dict[str, int]] = {
-    "binance": {"fetch_my_trades": 1200, "fetch_income_history": 120, "default": 1200},
-    "bybit": {"fetch_my_trades": 120, "fetch_positions_history": 120, "default": 120},
-    "bitget": {"fill_history": 120, "fetch_order": 60, "default": 120},
-    "hyperliquid": {"fetch_my_trades": 120, "default": 120},
-    "weex": {"fetch_my_trades": 120, "fetch_order": 60, "default": 120},
-    "gateio": {"fetch_closed_orders": 120, "default": 120},
-    "kucoin": {
-        "fetch_my_trades": 120,
-        "fetch_positions_history": 120,
-        "fetch_order": 60,
-        "default": 120,
-    },
-    # OKX: /fills = 60 req/2s, /fills-history = 10 req/2s (conservative estimates)
-    "okx": {"fetch_my_trades": 1800, "fills_history": 300, "default": 300},
-}
-
-# Window for rate limit tracking (ms)
-_RATE_LIMIT_WINDOW_MS = 60_000
-
-# Default jitter range for staggered startup (seconds)
-_STARTUP_JITTER_MIN = 0.0
-_STARTUP_JITTER_MAX = 30.0
-
-
-class RateLimitCoordinator:
-    """Coordinates rate limiting across multiple bot instances via shared temp file.
-
-    Each exchange has a temp file that logs recent API calls. Instances check this
-    file before making API calls and add jitter if approaching rate limits.
-    """
-
-    def __init__(
-        self,
-        exchange: str,
-        user: str,
-        *,
-        temp_dir: Optional[Path] = None,
-        window_ms: int = _RATE_LIMIT_WINDOW_MS,
-        limits: Optional[Dict[str, int]] = None,
-    ) -> None:
-        self.exchange = exchange.lower()
-        self.user = user
-        self.window_ms = window_ms
-        self.limits = limits or _DEFAULT_RATE_LIMITS.get(self.exchange, {"default": 120})
-
-        if temp_dir is None:
-            temp_dir = Path(tempfile.gettempdir()) / "passivbot_rate_limits"
-        self.temp_dir = temp_dir
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.temp_file = self.temp_dir / f"{self.exchange}.json"
-
-    def _load_calls(self) -> List[Dict[str, object]]:
-        """Load recent API calls from temp file."""
-        if not self.temp_file.exists():
-            return []
-        try:
-            with self.temp_file.open("r") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                try:
-                    data = json.load(f)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                return data.get("calls", [])
-        except Exception as exc:
-            logger.debug("RateLimitCoordinator: failed to load %s: %s", self.temp_file, exc)
-            return []
-
-    def _save_calls(self, calls: List[Dict[str, object]]) -> None:
-        """Save API calls to temp file atomically."""
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-
-        # Prune old entries
-        cutoff = now_ms - self.window_ms
-        calls = [c for c in calls if c.get("timestamp_ms", 0) > cutoff]
-
-        data = {
-            "calls": calls,
-            "window_ms": self.window_ms,
-            "limits": self.limits,
-            "last_update": now_ms,
-        }
-
-        tmp_file = self.temp_file.with_suffix(".tmp")
-        try:
-            with tmp_file.open("w") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    json.dump(data, f)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            os.replace(tmp_file, self.temp_file)
-        except Exception as exc:
-            logger.debug("RateLimitCoordinator: failed to save %s: %s", self.temp_file, exc)
-
-    def get_current_usage(self, endpoint: str) -> int:
-        """Get current call count for an endpoint in the current window."""
-        calls = self._load_calls()
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        cutoff = now_ms - self.window_ms
-        return sum(
-            1 for c in calls if c.get("endpoint") == endpoint and c.get("timestamp_ms", 0) > cutoff
-        )
-
-    def get_limit(self, endpoint: str) -> int:
-        """Get rate limit for an endpoint."""
-        return self.limits.get(endpoint, self.limits.get("default", 120))
-
-    def record_call(self, endpoint: str) -> None:
-        """Record an API call."""
-        calls = self._load_calls()
-        calls.append(
-            {
-                "endpoint": endpoint,
-                "timestamp_ms": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
-                "user": self.user,
-            }
-        )
-        self._save_calls(calls)
-
-    async def wait_if_needed(self, endpoint: str) -> float:
-        """Check rate limit and wait if needed. Returns time waited (seconds)."""
-        current = self.get_current_usage(endpoint)
-        limit = self.get_limit(endpoint)
-
-        if current >= limit:
-            # At or over limit - wait for full window
-            wait_time = self.window_ms / 1000.0
-            logger.info(
-                "RateLimitCoordinator: %s:%s at limit (%d/%d), waiting %.1fs",
-                self.exchange,
-                endpoint,
-                current,
-                limit,
-                wait_time,
-            )
-            await asyncio.sleep(wait_time)
-            return wait_time
-        elif current >= limit * 0.8:
-            # Approaching limit - add jitter
-            jitter = random.uniform(0.1, 2.0)
-            logger.debug(
-                "RateLimitCoordinator: %s:%s approaching limit (%d/%d), jitter %.2fs",
-                self.exchange,
-                endpoint,
-                current,
-                limit,
-                jitter,
-            )
-            await asyncio.sleep(jitter)
-            return jitter
-
-        return 0.0
-
-    @staticmethod
-    async def startup_jitter(
-        min_seconds: float = _STARTUP_JITTER_MIN,
-        max_seconds: float = _STARTUP_JITTER_MAX,
-    ) -> float:
-        """Apply random jitter at startup to stagger multiple bot launches."""
-        jitter = random.uniform(min_seconds, max_seconds)
-        if jitter > 0:
-            logger.info("RateLimitCoordinator: startup jitter %.2fs", jitter)
-            await asyncio.sleep(jitter)
-        return jitter
 
 
 def _format_ms(ts: Optional[int]) -> str:
@@ -3665,7 +3490,6 @@ class FillEventsManager:
         user: str,
         fetcher: BaseFetcher,
         cache_path: Path,
-        rate_limit_coordinator: Optional[RateLimitCoordinator] = None,
         fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
         fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
         fee_conversion_max_age_ms: int = DEFAULT_FEE_CONVERSION_MAX_AGE_MS,
@@ -3675,7 +3499,6 @@ class FillEventsManager:
         self.user = user
         self.fetcher = fetcher
         self.cache = FillEventCache(cache_path)
-        self.rate_limiter = rate_limit_coordinator or RateLimitCoordinator(exchange, user)
         self.fee_pct_fallback = float(fee_pct_fallback)
         self.fee_pct_sanity_abs_max = float(fee_pct_sanity_abs_max)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
