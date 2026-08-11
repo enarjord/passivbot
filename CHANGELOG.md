@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Preserve the full configured exchange pool for combined optimizer and backtest suite datasets
+  when every selected coin happens to use the same venue, so single-coin multi-exchange suites no
+  longer reject valid unselected candidate venues as unavailable.
+- Normalize nested suite scenario override documents to leaf config paths while keeping dynamic
+  `coin_overrides` mappings atomic, preventing partial `live` or `bot` overrides from replacing the
+  complete section during optimizer evaluation.
 - Bound coin-mode HSL `always` restart reconstruction to its canonical fill-proven replay start.
   Older sparse fills still seed exact balance and position state, but discarded closed episodes no
   longer expand candle fetches, minute arrays, panic markers, or replay-event iteration;
