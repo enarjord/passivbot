@@ -37,17 +37,101 @@ def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _new_logical_array_hasher(array: np.ndarray):
+    hasher = hashlib.sha256()
+    hasher.update(str(array.dtype).encode("utf-8"))
+    hasher.update(b"\0")
+    hasher.update(json.dumps(list(array.shape), separators=(",", ":")).encode("utf-8"))
+    hasher.update(b"\0")
+    return hasher
+
+
 def hash_logical_array(array: Any) -> str:
     arr = np.ascontiguousarray(np.asarray(array))
-    hasher = hashlib.sha256()
-    hasher.update(str(arr.dtype).encode("utf-8"))
-    hasher.update(b"\0")
-    hasher.update(json.dumps(list(arr.shape), separators=(",", ":")).encode("utf-8"))
-    hasher.update(b"\0")
+    hasher = _new_logical_array_hasher(arr)
     # arr is C-contiguous, so its buffer is byte-identical to tobytes(order="C")
     # without materializing a full copy.
     hasher.update(arr.data)
     return hasher.hexdigest()
+
+
+class _NpyDataHashingWriter:
+    """Forward an NPY stream while hashing only its logical array payload."""
+
+    def __init__(self, destination, array: np.ndarray):
+        self.destination = destination
+        self.hasher = _new_logical_array_hasher(array)
+        self.expected_data_bytes = int(array.nbytes)
+        self.hashed_data_bytes = 0
+        self.header_bytes = bytearray()
+        self.data_offset: int | None = None
+
+    def write(self, payload: bytes) -> int:
+        written = self.destination.write(payload)
+        if written is None:
+            written = len(payload)
+        if int(written) != len(payload):
+            raise OSError(
+                f"short NPY artifact write: expected {len(payload)} bytes, wrote {written}"
+            )
+        self._hash_npy_stream_bytes(payload)
+        return int(written)
+
+    def _hash_npy_stream_bytes(self, payload: bytes) -> None:
+        if self.data_offset is not None and not self.header_bytes:
+            self.hasher.update(payload)
+            self.hashed_data_bytes += len(payload)
+            return
+
+        self.header_bytes.extend(payload)
+        if len(self.header_bytes) < 8:
+            return
+        if self.header_bytes[:6] != b"\x93NUMPY":
+            raise HlcvsManifestError("invalid NPY magic while hashing cache artifact")
+        major_version = int(self.header_bytes[6])
+        if major_version == 1:
+            length_field_end = 10
+            length_field_start = 8
+        elif major_version in {2, 3}:
+            length_field_end = 12
+            length_field_start = 8
+        else:
+            raise HlcvsManifestError(
+                f"unsupported NPY version while hashing cache artifact: {major_version}"
+            )
+        if len(self.header_bytes) < length_field_end:
+            return
+        header_length = int.from_bytes(
+            self.header_bytes[length_field_start:length_field_end], "little"
+        )
+        if self.data_offset is None:
+            self.data_offset = length_field_end + header_length
+        if len(self.header_bytes) < self.data_offset:
+            return
+        data = self.header_bytes[self.data_offset :]
+        if data:
+            self.hasher.update(data)
+            self.hashed_data_bytes += len(data)
+        self.header_bytes.clear()
+
+    def hexdigest(self) -> str:
+        if self.data_offset is None or self.header_bytes:
+            raise HlcvsManifestError("incomplete NPY header while hashing cache artifact")
+        if self.hashed_data_bytes != self.expected_data_bytes:
+            raise HlcvsManifestError(
+                "incomplete NPY data while hashing cache artifact: "
+                f"expected {self.expected_data_bytes} bytes, hashed {self.hashed_data_bytes}"
+            )
+        return self.hasher.hexdigest()
+
+
+def save_numpy_artifact_with_hash(destination, array: Any) -> str:
+    """Write one numeric NPY artifact and return its unchanged logical-array hash."""
+
+    arr = np.ascontiguousarray(np.asarray(array))
+    writer = _NpyDataHashingWriter(destination, arr)
+    np.save(writer, arr, allow_pickle=False)
+    return writer.hexdigest()
 
 
 def hash_json_value(value: Any) -> str:
@@ -63,11 +147,13 @@ def load_numpy_artifact(path: Path) -> np.ndarray:
     return np.load(path)
 
 
-def _array_file_entry(path: str, array: Any) -> dict[str, Any]:
+def _array_file_entry(
+    path: str, array: Any, *, sha256: str | None = None
+) -> dict[str, Any]:
     arr = np.asarray(array)
     return {
         "path": path,
-        "sha256": hash_logical_array(arr),
+        "sha256": hash_logical_array(arr) if sha256 is None else str(sha256),
         "shape": [int(x) for x in arr.shape],
         "dtype": str(arr.dtype),
     }
@@ -127,6 +213,7 @@ def build_hlcvs_manifest(
     timestamps: Any | None,
     warmup_minutes: int,
     compressed: bool,
+    precomputed_array_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if timestamps is None:
         raise HlcvsManifestError("HLCV manifests require timestamps artifact data")
@@ -135,11 +222,17 @@ def build_hlcvs_manifest(
     effective_end_ts = int(ts_arr[-1]) if ts_arr.size else None
 
     requested_end_date = format_end_date(require_config_value(config, "backtest.end_date"))
+    precomputed_array_hashes = precomputed_array_hashes or {}
     files = {
-        "hlcvs": _array_file_entry("hlcvs.npy.gz" if compressed else "hlcvs.npy", hlcvs),
+        "hlcvs": _array_file_entry(
+            "hlcvs.npy.gz" if compressed else "hlcvs.npy",
+            hlcvs,
+            sha256=precomputed_array_hashes.get("hlcvs"),
+        ),
         "btc_usd_prices": _array_file_entry(
             "btc_usd_prices.npy.gz" if compressed else "btc_usd_prices.npy",
             btc_usd_prices,
+            sha256=precomputed_array_hashes.get("btc_usd_prices"),
         ),
         "coins": _json_file_entry("coins.json", coins),
         "market_specific_settings": _json_file_entry("market_specific_settings.json", mss),
@@ -147,6 +240,7 @@ def build_hlcvs_manifest(
     files["timestamps"] = _array_file_entry(
         "timestamps.npy.gz" if compressed else "timestamps.npy",
         timestamps,
+        sha256=precomputed_array_hashes.get("timestamps"),
     )
     candidate_report = None
     if isinstance(mss, dict):

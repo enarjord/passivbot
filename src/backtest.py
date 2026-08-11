@@ -121,6 +121,7 @@ from hlcvs_manifest import (
     build_hlcvs_manifest,
     load_hlcvs_manifest,
     manifest_has_required_schema,
+    save_numpy_artifact_with_hash,
     verify_hlcvs_manifest,
     write_hlcvs_manifest,
 )
@@ -1790,22 +1791,25 @@ def _save_coins_hlcvs_artifacts_to_cache_dir(
 ) -> None:
     uncompressed_size = hlcvs.nbytes
     sts = utc_ms()
+    array_hashes: dict[str, str] = {}
     if is_compressed:
         fpath = cache_dir / "hlcvs.npy.gz"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
-            np.save(f, hlcvs)
+            array_hashes["hlcvs"] = save_numpy_artifact_with_hash(f, hlcvs)
         raise_if_backtest_cancel_requested("hlcvs cache artifact")
         if timestamps is not None:
             ts_fpath = cache_dir / "timestamps.npy.gz"
             logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
             with gzip.open(ts_fpath, "wb", compresslevel=1) as f:
-                np.save(f, timestamps)
+                array_hashes["timestamps"] = save_numpy_artifact_with_hash(f, timestamps)
             raise_if_backtest_cancel_requested("timestamps cache artifact")
         btc_fpath = cache_dir / "btc_usd_prices.npy.gz"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
         with gzip.open(btc_fpath, "wb", compresslevel=1) as f:
-            np.save(f, btc_usd_prices)
+            array_hashes["btc_usd_prices"] = save_numpy_artifact_with_hash(
+                f, btc_usd_prices
+            )
         raise_if_backtest_cancel_requested("btc cache artifact")
         compressed_size = (cache_dir / "hlcvs.npy.gz").stat().st_size
         btc_compressed_size = (cache_dir / "btc_usd_prices.npy.gz").stat().st_size
@@ -1817,16 +1821,21 @@ def _save_coins_hlcvs_artifacts_to_cache_dir(
     else:
         fpath = cache_dir / "hlcvs.npy"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
-        np.save(fpath, hlcvs)
+        with fpath.open("wb") as f:
+            array_hashes["hlcvs"] = save_numpy_artifact_with_hash(f, hlcvs)
         raise_if_backtest_cancel_requested("hlcvs cache artifact")
         if timestamps is not None:
             ts_fpath = cache_dir / "timestamps.npy"
             logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
-            np.save(ts_fpath, timestamps)
+            with ts_fpath.open("wb") as f:
+                array_hashes["timestamps"] = save_numpy_artifact_with_hash(f, timestamps)
             raise_if_backtest_cancel_requested("timestamps cache artifact")
         btc_fpath = cache_dir / "btc_usd_prices.npy"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
-        np.save(btc_fpath, btc_usd_prices)
+        with btc_fpath.open("wb") as f:
+            array_hashes["btc_usd_prices"] = save_numpy_artifact_with_hash(
+                f, btc_usd_prices
+            )
         raise_if_backtest_cancel_requested("btc cache artifact")
         line = ""
     logging.info(
@@ -1855,6 +1864,7 @@ def _save_coins_hlcvs_artifacts_to_cache_dir(
         timestamps=timestamps,
         warmup_minutes=warmup_minutes,
         compressed=is_compressed,
+        precomputed_array_hashes=array_hashes,
     )
     raise_if_backtest_cancel_requested("cache manifest write")
     write_hlcvs_manifest(cache_dir, manifest)
