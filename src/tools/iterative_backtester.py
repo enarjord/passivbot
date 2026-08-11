@@ -99,7 +99,7 @@ class MetricInfo:
 @dataclass
 class LimitInfo:
     metric: str
-    stat: str
+    reducer: str
     mode: str
     metric_key: str
     value: Optional[float]
@@ -736,7 +736,7 @@ class IterativeBacktestSession:
             limit_metrics.append(
                 LimitInfo(
                     metric=check["metric"],
-                    stat=check.get("stat", ""),
+                    reducer=check.get("reducer", ""),
                     mode=check["mode"],
                     metric_key=check["metric_key"],
                     value=val,
@@ -917,7 +917,7 @@ class IterativeBacktestSession:
         payload["limits"] = [
             {
                 "metric": info.metric,
-                "stat": info.stat,
+                "reducer": info.reducer,
                 "mode": info.mode,
                 "metric_key": info.metric_key,
                 "value": info.value,
@@ -1101,8 +1101,8 @@ class IterativeBacktestSession:
             rows: List[Tuple[int, List[str]]] = []
             for info in run.limit_metrics:
                 label = info.metric
-                if info.stat:
-                    label = f"{label} ({info.stat})"
+                if info.reducer:
+                    label = f"{label} ({info.reducer})"
                 constraint, delta, status = summarize_limit(info)
                 row = [
                     label,

@@ -169,7 +169,9 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         key = key.strip().lower()
         value = value.strip()
         if key in REDUCER_ALIASES:
-            entry["reducer"] = value
+            # Preserve the supplied alias until normalization so conflicting
+            # aliases are detected instead of silently overwriting each other.
+            entry[key] = value
         elif key == "scenario":
             entry["scenario"] = None if value.lower() == "null" else value
         elif key == "enabled":

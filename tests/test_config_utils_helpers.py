@@ -942,6 +942,13 @@ def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options()
     }
 
 
+def test_parse_limit_cli_entry_rejects_conflicting_reducer_aliases():
+    with pytest.raises(ValueError, match="conflicting reducer aliases"):
+        config_utils.parse_limit_cli_entry(
+            "drawdown_worst_strategy_eq<=0.7 stat=min reducer=max"
+        )
+
+
 def test_parse_limit_cli_entries_supports_json_object_strings():
     entries = config_utils.parse_limit_cli_entries(
         ['{"metric":"adg","penalize_if":"<","value":0.001,"stat":"mean"}']
