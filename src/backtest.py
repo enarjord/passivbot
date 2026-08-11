@@ -39,6 +39,7 @@ import pandas as pd
 import json
 import asyncio
 import numbers
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 from cli_utils import (
@@ -699,6 +700,9 @@ def _build_hlcvs_bundle(
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
+_HLCVS_VALIDATION_TARGET_CHUNK_BYTES = 64 * 1024 * 1024
+
+
 def _validate_hlcvs_valid_windows(
     hlcvs,
     timestamps,
@@ -707,6 +711,7 @@ def _validate_hlcvs_valid_windows(
     last_valid_indices,
     *,
     coin_indices: list[int] | None = None,
+    target_chunk_bytes: int = _HLCVS_VALIDATION_TARGET_CHUNK_BYTES,
 ) -> None:
     hlcvs_arr = np.asarray(hlcvs)
     if hlcvs_arr.ndim != 3 or hlcvs_arr.shape[2] < 4:
@@ -726,6 +731,8 @@ def _validate_hlcvs_valid_windows(
         raise ValueError(
             f"coin_indices length ({len(active_columns)}) does not match coins ({len(coins_order)})"
         )
+
+    valid_windows: list[tuple[int, int, int]] = []
     for payload_idx, coin in enumerate(coins_order):
         if payload_idx >= len(first_valid_indices) or payload_idx >= len(last_valid_indices):
             raise ValueError(
@@ -737,16 +744,53 @@ def _validate_hlcvs_valid_windows(
         start = int(first_valid_indices[payload_idx])
         end = int(last_valid_indices[payload_idx])
         if start > end:
+            valid_windows.append((col, 1, 0))
             continue
         start = max(0, start)
         end = min(n_rows - 1, end)
-        if start > end:
+        valid_windows.append((col, start, end))
+
+    row_bytes = max(1, int(n_cols * 4 * hlcvs_arr.dtype.itemsize))
+    chunk_rows = max(1, int(target_chunk_bytes) // row_bytes)
+    chunk_count = 0
+    first_bad_rows: list[int | None] = [None] * len(coins_order)
+    validation_t0 = time.perf_counter()
+    logging.info(
+        "[hlcvs] valid-window validation start rows=%d coins=%d bytes=%d chunk_rows=%d",
+        n_rows,
+        len(coins_order),
+        int(n_rows * n_cols * 4 * hlcvs_arr.dtype.itemsize),
+        chunk_rows,
+    )
+    for chunk_start in range(0, n_rows, chunk_rows):
+        chunk_end = min(n_rows, chunk_start + chunk_rows)
+        finite_by_row_coin = np.isfinite(
+            hlcvs_arr[chunk_start:chunk_end, :, :4]
+        ).all(axis=2)
+        chunk_count += 1
+        for payload_idx, (col, start, end) in enumerate(valid_windows):
+            if first_bad_rows[payload_idx] is not None or start > end:
+                continue
+            overlap_start = max(start, chunk_start)
+            overlap_end = min(end + 1, chunk_end)
+            if overlap_start >= overlap_end:
+                continue
+            finite = finite_by_row_coin[
+                overlap_start - chunk_start : overlap_end - chunk_start, col
+            ]
+            if finite.all():
+                continue
+            first_bad_rows[payload_idx] = overlap_start + int(
+                np.flatnonzero(~finite)[0]
+            )
+
+    for payload_idx, coin in enumerate(coins_order):
+        bad_row = first_bad_rows[payload_idx]
+        if bad_row is None:
             continue
-        window = hlcvs_arr[start : end + 1, col, :4]
-        if np.isfinite(window).all():
-            continue
-        bad_rel_row, bad_field = np.argwhere(~np.isfinite(window))[0]
-        bad_row = start + int(bad_rel_row)
+        col, start, end = valid_windows[payload_idx]
+        bad_fields = np.flatnonzero(~np.isfinite(hlcvs_arr[bad_row, col, :4]))
+        bad_field = int(bad_fields[0])
         bad_value = float(hlcvs_arr[bad_row, col, int(bad_field)])
         if timestamps_arr is not None and bad_row < len(timestamps_arr):
             ts_context = f" timestamp_ms={int(timestamps_arr[bad_row])}"
@@ -758,6 +802,18 @@ def _validate_hlcvs_valid_windows(
             f"k={bad_row}{ts_context} field={hlcv_fields[int(bad_field)]} value={bad_value} "
             f"valid_window={start}..{end}"
         )
+
+    validation_elapsed = time.perf_counter() - validation_t0
+    validated_bytes = int(n_rows * n_cols * 4 * hlcvs_arr.dtype.itemsize)
+    logging.info(
+        "[hlcvs] valid-window validation done rows=%d coins=%d chunks=%d elapsed_s=%.1f "
+        "throughput_mib_s=%.1f",
+        n_rows,
+        len(coins_order),
+        chunk_count,
+        validation_elapsed,
+        float(validated_bytes) / (1024.0**2) / max(validation_elapsed, 1e-9),
+    )
 
 
 def _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss) -> None:

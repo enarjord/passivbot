@@ -11,6 +11,8 @@ All notable user-facing changes will be documented in this file.
   Pareto/suite result artifacts remain readable without rewriting their historical payload keys.
 - Hash backtest cache arrays while writing their NPY artifacts, avoiding a second full-array read
   solely to build the cache manifest after multi-gigabyte cache publication.
+- Speed up multi-coin backtest HLCV validation with bounded time-major scans, and report frame
+  flush and valid-window validation timings separately during data preparation.
 - Preserve the full configured exchange pool for combined optimizer and backtest suite datasets
   when every selected coin happens to use the same venue, so single-coin multi-exchange suites no
   longer reject valid unselected candidate venues as unavailable.

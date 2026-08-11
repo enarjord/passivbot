@@ -529,9 +529,24 @@ def materialize_frames(
             float(hlcvs.nbytes) / (1024.0**2) / max(write_elapsed, 1e-9),
         )
         raise_if_backtest_cancel_requested("frame materializer close")
+        flush_t0 = time.monotonic()
+        logging.info(
+            "[materializer] frame flush start exchange=%s rows=%d coins=%d bytes=%d",
+            exchange,
+            n_steps,
+            len(coins),
+            int(hlcvs.nbytes),
+        )
         _close_memmap(hlcvs)
         _close_memmap(timestamps_mm)
         _close_memmap(btc_mm)
+        logging.info(
+            "[materializer] frame flush done exchange=%s rows=%d coins=%d elapsed_s=%.1f",
+            exchange,
+            n_steps,
+            len(coins),
+            time.monotonic() - flush_t0,
+        )
         hlcvs = None
         timestamps_mm = None
         btc_mm = None

@@ -747,6 +747,54 @@ def test_build_backtest_payload_reports_active_source_column_for_nonfinite_price
         )
 
 
+def test_hlcvs_valid_window_chunking_preserves_coin_first_error_order():
+    start_ts = 1609459200000
+    n_minutes = 12
+    coins = ["BTC", "ETH"]
+    hlcvs = np.ones((n_minutes, len(coins), 4), dtype=np.float64)
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    # The legacy validator traverses coins first, so BTC's later bad row must
+    # still win over ETH's earlier bad row after switching to time-major chunks.
+    hlcvs[10, 0, 3] = np.nan
+    hlcvs[1, 1, 0] = np.inf
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"non-finite HLCV value inside valid backtest window: "
+            r"coin=BTC payload_index=0 source_column=0 k=10 .* field=volume"
+        ),
+    ):
+        _validate_hlcvs_valid_windows(
+            hlcvs,
+            timestamps,
+            coins,
+            [0, 0],
+            [n_minutes - 1, n_minutes - 1],
+            target_chunk_bytes=2 * len(coins) * 4 * np.dtype(np.float64).itemsize,
+        )
+
+
+def test_hlcvs_valid_window_chunking_ignores_nonfinite_outside_each_coin_window():
+    n_minutes = 12
+    hlcvs = np.ones((n_minutes, 2, 4), dtype=np.float64)
+    hlcvs[:3, 0, :] = np.nan
+    hlcvs[9:, 0, :] = np.nan
+    hlcvs[:5, 1, :] = np.nan
+    hlcvs[11:, 1, :] = np.nan
+
+    _validate_hlcvs_valid_windows(
+        hlcvs,
+        None,
+        ["BTC", "ETH"],
+        [3, 5],
+        [8, 10],
+        target_chunk_bytes=2 * 2 * 4 * np.dtype(np.float64).itemsize,
+    )
+
+
 def test_build_backtest_payload_aggregation_recomputes_effective_start_ts_over_stale_mss():
     """Pin that `build_backtest_payload` recomputes `effective_start_timestamp_ms`
     from the post-aggregation timestamps even when the caller pre-set a stale
