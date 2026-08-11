@@ -60,6 +60,7 @@ _SCENARIO_KEYS = frozenset(
         "overrides",
     }
 )
+_ATOMIC_SCENARIO_OVERRIDE_ROOTS = frozenset({"coin_overrides"})
 
 # --------------------------------------------------------------------------- #
 # Data containers
@@ -690,6 +691,7 @@ def build_scenarios(
         overrides = raw.get("overrides")
         if overrides is not None and not isinstance(overrides, dict):
             raise ValueError(f"Scenario overrides for '{raw.get('label')}' must be a mapping")
+        overrides = _normalize_scenario_overrides(overrides)
         scenario_coins = (
             _normalize_coin_list(raw.get("coins")) if raw.get("coins") is not None else None
         )
@@ -707,7 +709,7 @@ def build_scenarios(
                 ignored_coins=scenario_ignored,
                 exchanges=exchanges_list,
                 coin_sources=coin_source_map,
-                overrides=deepcopy(overrides) if overrides else None,
+                overrides=overrides or None,
             )
         )
 
@@ -723,6 +725,36 @@ def build_scenarios(
 
     aggregate_cfg = deepcopy(suite_cfg.get("aggregate", {"default": "mean"}))
     return scenarios, aggregate_cfg
+
+
+def _normalize_scenario_overrides(overrides: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Flatten nested override documents while preserving atomic dynamic mappings."""
+    normalized: Dict[str, Any] = {}
+
+    def visit(mapping: Dict[str, Any], prefix: tuple[str, ...] = ()) -> None:
+        for raw_key, value in mapping.items():
+            if not isinstance(raw_key, str):
+                raise ValueError("Scenario override keys must be strings")
+            key = raw_key.strip()
+            if not key:
+                raise ValueError("Scenario override keys must not be empty")
+            path = (*prefix, key)
+            root = path[0].split(".", 1)[0]
+            if (
+                isinstance(value, dict)
+                and "." not in key
+                and root not in _ATOMIC_SCENARIO_OVERRIDE_ROOTS
+            ):
+                visit(value, path)
+                continue
+            dotted_path = ".".join(path)
+            if dotted_path in normalized:
+                raise ValueError(f"Scenario override path {dotted_path!r} is defined more than once")
+            normalized[dotted_path] = deepcopy(value)
+
+    if overrides:
+        visit(overrides)
+    return normalized
 
 
 def collect_suite_coin_sources(
@@ -876,12 +908,17 @@ async def prepare_master_datasets(
         cache_dir: str,
         btc_usd_prices: np.ndarray,
         timestamps: Optional[np.ndarray],
+        source_exchanges: Optional[Iterable[str]] = None,
     ) -> ExchangeDataset:
         coin_index = {coin: idx for idx, coin in enumerate(coins)}
         coin_exchange = {
             coin: str(mss.get(coin, {}).get("exchange", exchange_name)) for coin in coins
         }
-        available_exchanges = sorted(set(coin_exchange.values())) or [exchange_name]
+        available_exchanges = sorted(
+            {str(exchange) for exchange in source_exchanges}
+            if source_exchanges is not None
+            else set(coin_exchange.values())
+        ) or [exchange_name]
         timestamps_array = (
             None
             if timestamps is None
@@ -973,6 +1010,7 @@ async def prepare_master_datasets(
             cache_dir,
             btc_usd_prices,
             timestamps,
+            source_exchanges=require_config_value(combined_config, "backtest.exchanges"),
         )
         # Free original arrays after copying to SharedMemory (can save ~5GB+ RAM)
         del hlcvs, btc_usd_prices

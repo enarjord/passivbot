@@ -4521,6 +4521,62 @@ class TestEvaluator:
         assert mock_config["backtest"]["start_date"] == "2023-01-01"
         assert mock_config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
 
+    def test_suite_scenario_nested_overrides_preserve_candidate_config_sections(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+        from suite_runner import build_scenarios
+
+        candidate_config = get_template_config()
+        candidate_config["bot"]["long"]["risk"]["n_positions"] = 7
+        candidate_config["live"]["approved_coins"] = {"long": ["ETH"], "short": ["ETH"]}
+        candidate_config["live"]["ignored_coins"] = {"long": [], "short": []}
+        scenario = build_scenarios(
+            {
+                "scenarios": [
+                    {
+                        "label": "nested",
+                        "overrides": {
+                            "live": {"hedge_mode": True},
+                            "bot": {
+                                "short": {"risk": {"total_wallet_exposure_limit": 0.0}}
+                            },
+                        },
+                    }
+                ]
+            },
+            base_exchanges=["binance"],
+        )[0][0]
+        ctx_config = deepcopy(candidate_config)
+        ctx = ScenarioEvalContext(
+            label=scenario.label,
+            config=ctx_config,
+            exchanges=["binance"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            timestamps={"binance": None},
+            shared_hlcvs_np={"binance": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"binance": None},
+            overrides=scenario.overrides,
+        )
+        evaluator = SuiteEvaluator(
+            Evaluator({}, {}, {}, candidate_config),
+            [ctx],
+            {},
+        )
+
+        scenario_config = evaluator._build_scenario_candidate_config(candidate_config, ctx)
+
+        assert scenario_config["live"]["approved_coins"] == {
+            "long": ["ETH"],
+            "short": ["ETH"],
+        }
+        assert scenario_config["live"]["hedge_mode"] is True
+        assert scenario_config["bot"]["long"]["risk"]["n_positions"] == 7
+        assert scenario_config["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 0.0
+
 
 def _remove_nested_path(mapping, path):
     target = mapping

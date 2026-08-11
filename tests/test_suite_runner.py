@@ -80,6 +80,34 @@ def test_build_scenarios_handles_exchanges_and_coin_sources():
     assert scenario.coin_sources == {"BTC": "binance"}
 
 
+def test_build_scenarios_flattens_nested_overrides_but_keeps_coin_overrides_atomic():
+    scenarios, _ = build_scenarios(
+        {
+            "scenarios": [
+                {
+                    "label": "nested",
+                    "overrides": {
+                        "live": {"hedge_mode": True},
+                        "bot": {
+                            "short": {"risk": {"total_wallet_exposure_limit": 0.0}}
+                        },
+                        "coin_overrides": {
+                            "ETH": {"live": {"forced_mode_long": "normal"}}
+                        },
+                    },
+                }
+            ]
+        },
+        base_exchanges=["binance"],
+    )
+
+    assert scenarios[0].overrides == {
+        "live.hedge_mode": True,
+        "bot.short.risk.total_wallet_exposure_limit": 0.0,
+        "coin_overrides": {"ETH": {"live": {"forced_mode_long": "normal"}}},
+    }
+
+
 def test_build_scenarios_preserves_exact_coins_and_coin_sources():
     suite_cfg = {
         "scenarios": [
@@ -793,6 +821,59 @@ async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exch
         in rec.message
         for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_prepare_master_datasets_preserves_combined_source_exchanges(monkeypatch):
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+        assert exchange == "combined"
+        timestamps = np.array([0, 60_000], dtype=np.int64)
+        return (
+            ["ETH"],
+            np.ones((2, 1, 4), dtype=np.float64),
+            {"ETH": {"exchange": "binance"}, "__meta__": {}},
+            "",
+            "/tmp/combined",
+            np.ones(2, dtype=np.float64),
+            timestamps,
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "backtest",
+        SimpleNamespace(prepare_hlcvs_mss=fake_prepare_hlcvs_mss),
+    )
+    base_config = {
+        "backtest": {
+            "start_date": "1970-01-01T00:00:00",
+            "end_date": "1970-01-01T00:02:00",
+            "exchanges": ["binance", "bybit"],
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": ["ETH"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenarios = [
+        SuiteScenario(
+            label="base",
+            start_date=None,
+            end_date=None,
+            coins=None,
+            ignored_coins=None,
+            exchanges=["binance", "bybit"],
+        )
+    ]
+
+    datasets = await prepare_master_datasets(
+        base_config,
+        ["binance", "bybit"],
+        scenarios=scenarios,
+    )
+
+    assert datasets["combined"].coin_exchange == {"ETH": "binance"}
+    assert datasets["combined"].available_exchanges == ["binance", "bybit"]
 
 
 @pytest.mark.asyncio
