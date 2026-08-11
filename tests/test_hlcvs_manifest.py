@@ -1,3 +1,5 @@
+import gzip
+import io
 import json
 
 import numpy as np
@@ -5,8 +7,10 @@ import pytest
 
 from hlcvs_manifest import (
     HlcvsManifestError,
+    _NpyDataHashingWriter,
     build_hlcvs_manifest,
     hash_logical_array,
+    save_numpy_artifact_with_hash,
     verify_hlcvs_manifest,
     write_hlcvs_manifest,
 )
@@ -239,6 +243,80 @@ def test_hash_logical_array_matches_tobytes_reference():
     ]
     for arr in arrays:
         assert hash_logical_array(arr) == reference_hash(arr)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize(
+    "array",
+    [
+        np.arange(24, dtype=np.float64).reshape(2, 3, 4),
+        np.arange(24, dtype=np.float64).reshape(2, 3, 4)[:, :2, :],
+        np.asfortranarray(np.arange(6, dtype=np.float64).reshape(2, 3)),
+        np.array([1735689600000, 1735689660000], dtype=np.int64),
+        np.empty((0, 2, 4), dtype=np.float64),
+    ],
+)
+def test_save_numpy_artifact_with_hash_matches_logical_hash(tmp_path, compressed, array):
+    path = tmp_path / ("array.npy.gz" if compressed else "array.npy")
+    opener = gzip.open if compressed else open
+    with opener(path, "wb") as f:
+        digest = save_numpy_artifact_with_hash(f, array)
+
+    with opener(path, "rb") as f:
+        loaded = np.load(f)
+
+    np.testing.assert_array_equal(loaded, array)
+    assert digest == hash_logical_array(array)
+
+
+def test_npy_data_hashing_writer_handles_fragmented_header():
+    array = np.arange(24, dtype=np.float64).reshape(2, 3, 4)
+    encoded = io.BytesIO()
+    np.save(encoded, array, allow_pickle=False)
+
+    destination = io.BytesIO()
+    writer = _NpyDataHashingWriter(destination, array)
+    payload = encoded.getvalue()
+    for offset in range(0, len(payload), 3):
+        writer.write(payload[offset : offset + 3])
+
+    assert destination.getvalue() == payload
+    assert writer.hexdigest() == hash_logical_array(array)
+
+
+def test_build_hlcvs_manifest_uses_precomputed_array_hashes(monkeypatch):
+    coins = ["BTC"]
+    hlcvs = np.ones((2, 1, 4), dtype=np.float64)
+    timestamps = np.array([1735689600000, 1735689660000], dtype=np.int64)
+    btc_usd_prices = np.array([100.0, 101.0], dtype=np.float64)
+    mss = {"BTC": {"exchange": "binance"}, "__meta__": {}}
+    expected = {
+        "hlcvs": hash_logical_array(hlcvs),
+        "timestamps": hash_logical_array(timestamps),
+        "btc_usd_prices": hash_logical_array(btc_usd_prices),
+    }
+
+    def fail_if_rehashed(_array):
+        raise AssertionError("precomputed array hash must avoid a second array pass")
+
+    monkeypatch.setattr("hlcvs_manifest.hash_logical_array", fail_if_rehashed)
+    manifest = build_hlcvs_manifest(
+        config=_minimal_config(),
+        exchange="binance",
+        cache_hash="abc123",
+        coins=coins,
+        hlcvs=hlcvs,
+        mss=mss,
+        btc_usd_prices=btc_usd_prices,
+        timestamps=timestamps,
+        warmup_minutes=0,
+        compressed=False,
+        precomputed_array_hashes=expected,
+    )
+
+    assert manifest["files"]["hlcvs"]["sha256"] == expected["hlcvs"]
+    assert manifest["files"]["timestamps"]["sha256"] == expected["timestamps"]
+    assert manifest["files"]["btc_usd_prices"]["sha256"] == expected["btc_usd_prices"]
 
 
 def test_verify_hlcvs_manifest_returns_verified_arrays(tmp_path):
