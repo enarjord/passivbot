@@ -8219,35 +8219,13 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
 
 
-def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
+def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
     # Rust owns auto-unstuck emission from the realized-PnL cumsum facts. A
     # resting unstuck order must not add a Python-only suppression path; any
     # duplicate-order risk rides normal order reconciliation.
-    import passivbot as pb_mod
-
     bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    bot.balance_raw = 200.0
-    get_events = MagicMock(
-        return_value=[
-            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-        ]
-    )
-    bot._pnls_manager = _with_fill_coverage_api(
-        types.SimpleNamespace(
-            get_events=get_events,
-            cache=_SafeRiskCache(),
-            get_history_scope=lambda: "all",
-        )
-    )
-    bot.bot_value = lambda pside, key: {
-        "unstuck_loss_allowance_pct": 0.2 if pside == "long" else 0.0,
-        "total_wallet_exposure_limit": 0.5,
-    }.get(key, 0.0)
+    bot._pnls_manager = object()
     bot._unstuck_uses_realized_pnl = lambda: True
-    monkeypatch.setattr(
-        pb_mod.pbr, "calc_auto_unstuck_allowance", lambda *a: 77.0
-    )
     # An unstuck order is live on the exchange.
     bot.open_orders = {
         "BTC/USDT:USDT": [
@@ -8256,14 +8234,7 @@ def test_open_unstuck_order_does_not_gate_live_unstuck_emission(monkeypatch):
     }
     assert bot.has_open_unstuck_order() is True
 
-    out = bot._calc_unstuck_allowances()
-    assert out["long"] == pytest.approx(77.0)
-
-    # The emission input stays available while the order is open, without a
-    # second fill scan after the cumsum/allowance history was validated.
-    get_events.reset_mock()
     assert bot._auto_unstuck_configured_live() is True
-    get_events.assert_not_called()
 
 
 def _make_unstuck_custom_id() -> str:
@@ -8275,143 +8246,6 @@ def _make_unstuck_custom_id() -> str:
     return bot.format_custom_id_single(
         pb_mod.pbr.get_order_id_type_from_string("close_unstuck_long")
     )
-
-
-def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
-    import passivbot as pb_mod
-
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance = 100.0
-    bot.balance_raw = 200.0
-    bot._pnls_manager = _with_fill_coverage_api(
-        types.SimpleNamespace(
-            get_events=lambda: [
-                types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
-                types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
-            ],
-            cache=_SafeRiskCache(),
-            get_history_scope=lambda: "all",
-        )
-    )
-
-    def bot_value(pside, key):
-        if key == "unstuck_loss_allowance_pct":
-            return 0.2 if pside == "long" else 0.0
-        if key == "total_wallet_exposure_limit":
-            return 0.5
-        return 0.0
-
-    bot.bot_value = bot_value
-
-    calls = []
-
-    def fake_calc_auto_unstuck_allowance(
-        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
-    ):
-        calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
-        return 123.45
-
-    monkeypatch.setattr(
-        pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
-    )
-
-    out = bot._calc_unstuck_allowances()
-
-    assert out["long"] == pytest.approx(123.45)
-    assert out["short"] == pytest.approx(0.0)
-    assert len(calls) == 1
-    assert calls[0][0] == pytest.approx(200.0)  # raw balance
-    assert calls[0][2] == pytest.approx(9.0)
-    assert calls[0][3] == pytest.approx(4.5)
-
-
-def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
-    import passivbot as pb_mod
-
-    now_ms = 10 * 86_400_000
-    bot = Passivbot.__new__(Passivbot)
-    bot.balance_raw = 1000.0
-    bot.get_raw_balance = lambda: float(bot.balance_raw)
-    _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
-    bot._pnls_manager = _with_fill_coverage_api(
-        types.SimpleNamespace(
-            get_events=lambda start_ms=None, end_ms=None, symbol=None: [
-                ev
-                for ev in [
-                    types.SimpleNamespace(pnl=100.0, timestamp=now_ms - 3 * 86_400_000),
-                    types.SimpleNamespace(
-                        pnl=-80.0, timestamp=now_ms - 3 * 86_400_000 + 1
-                    ),
-                    types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
-                ]
-                if start_ms is None or ev.timestamp >= start_ms
-            ],
-            cache=_SafeRiskCache(),
-            get_history_scope=lambda: "all",
-        )
-    )
-
-    def bot_value(pside, key):
-        if key == "unstuck_loss_allowance_pct":
-            return 0.01 if pside == "long" else 0.0
-        if key == "total_wallet_exposure_limit":
-            return 1.0
-        return 0.0
-
-    bot.bot_value = bot_value
-
-    calls = []
-
-    def fake_calc_auto_unstuck_allowance(
-        balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last
-    ):
-        calls.append((balance, loss_allowance_pct, pnl_cumsum_max, pnl_cumsum_last))
-        return 10.0
-
-    monkeypatch.setattr(
-        pb_mod.pbr, "calc_auto_unstuck_allowance", fake_calc_auto_unstuck_allowance
-    )
-
-    out = bot._calc_unstuck_allowances()
-
-    assert out["long"] == pytest.approx(10.0)
-    assert len(calls) == 1
-    assert calls[0] == pytest.approx((1000.0, 0.01, 10.0, 10.0))
-
-
-def test_unstuck_allowance_blocks_degraded_synthetic_pnl():
-    bot = Passivbot.__new__(Passivbot)
-    bot._pnls_manager = types.SimpleNamespace(
-        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
-            types.SimpleNamespace(
-                pnl=0.0,
-                fee_paid=0.0,
-                timestamp=1_000,
-                pnl_status="complete",
-                pnl_source="synthetic_fill_reconstruction_degraded",
-                id="degraded-close",
-                symbol="BTC/USDT:USDT",
-                position_side="long",
-                pb_order_type="close_grid_long",
-            )
-        ],
-        cache=None,
-    )
-
-    def bot_value(pside, key):
-        if key == "unstuck_loss_allowance_pct":
-            return 0.01
-        if key == "total_wallet_exposure_limit":
-            return 1.0
-        return 0.0
-
-    bot.bot_value = bot_value
-
-    with pytest.raises(RuntimeError, match="degraded realized PnL"):
-        bot._calc_unstuck_allowances()
-
-
-
 
 
 

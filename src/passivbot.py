@@ -13616,49 +13616,6 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _calc_unstuck_allowances(self) -> dict[str, float]:
-        """Calculate unstuck allowances using FillEventsManager data.
-
-        Pure budget math from fill history; whether an unstuck order may be
-        emitted this cycle is a separate decision carried by the
-        auto_unstuck_allowed flag, which the Rust orchestrator consumes as
-        the sole emission gate.
-        """
-        if self._pnls_manager is None:
-            return {"long": 0.0, "short": 0.0}
-
-        start_ms = self._pnls_lookback_start_ms()
-        events = self._get_effective_pnl_events()
-        self._assert_pnl_history_safe_for_risk(
-            events,
-            context="unstuck allowance realized PnL",
-            start_ms=start_ms,
-        )
-        if not events:
-            return {"long": 0.0, "short": 0.0}
-
-        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
-        out = {}
-        balance_raw = self.get_raw_balance()
-        for pside in ["long", "short"]:
-            pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-            if pct > 0.0:
-                out[pside] = float(
-                    pbr.calc_auto_unstuck_allowance(
-                        balance_raw,
-                        pct
-                        * float(
-                            self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
-                        ),
-                        float(pnls_cumsum_max),
-                        float(pnls_cumsum_last),
-                    )
-                )
-            else:
-                out[pside] = 0.0
-        return out
-
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if getattr(self, "_pnls_manager", None) is None:
@@ -17008,10 +16965,6 @@ class Passivbot:
         }:
             return mode
         return self.PB_mode_stop[pside]
-
-    def _calc_unstuck_allowances_live(self) -> dict[str, float]:
-        """Calculate unstuck allowances using FillEventsManager."""
-        return self._calc_unstuck_allowances()
 
     def _auto_unstuck_configured_live(self) -> bool:
         """Whether configured Rust unstuck logic consumes validated PnL inputs."""

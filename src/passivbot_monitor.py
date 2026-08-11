@@ -1007,11 +1007,6 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
     # while an unstuck order is open. Disabled unstuck has no PnL-derived
     # allowance to report.
     unstuck_uses_realized_pnl = self._unstuck_uses_realized_pnl()
-    allowances_live = (
-        self._calc_unstuck_allowances_live()
-        if unstuck_uses_realized_pnl
-        else None
-    )
     out: dict[str, Any] = {
         "has_open_order": has_open,
         "open_orders": [],
@@ -1037,12 +1032,13 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             if unstuck_uses_realized_pnl
             else {"status": "unstuck_disabled"}
         )
+        allowance_raw = info.get("allowance")
         side_payload: dict[str, Any] = {
             "status": info.get("status"),
             "allowance_live": (
-                float(allowances_live.get(pside, 0.0) or 0.0)
-                if allowances_live is not None
-                else None
+                max(0.0, float(allowance_raw))
+                if allowance_raw is not None
+                else (0.0 if unstuck_uses_realized_pnl else None)
             ),
             "configured_loss_allowance_pct": float(
                 self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0

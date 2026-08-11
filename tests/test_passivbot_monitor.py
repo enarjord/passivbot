@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import numpy as np
 
@@ -6455,9 +6455,6 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
     bot.open_orders = {}
     bot.has_open_unstuck_order = lambda: False
     bot._unstuck_uses_realized_pnl = lambda: False
-    bot._calc_unstuck_allowances_live = MagicMock(
-        side_effect=AssertionError("must not read nonauthoritative PnL")
-    )
     bot._calc_unstuck_allowance_for_logging = MagicMock(
         side_effect=AssertionError("must not read nonauthoritative PnL")
     )
@@ -6469,12 +6466,40 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
 
     section = bot._build_monitor_unstuck_section()
 
-    bot._calc_unstuck_allowances_live.assert_not_called()
     bot._calc_unstuck_allowance_for_logging.assert_not_called()
     assert section["sides"]["long"]["status"] == "unstuck_disabled"
     assert section["sides"]["long"]["allowance_live"] is None
     assert section["sides"]["short"]["status"] == "unstuck_disabled"
     assert section["sides"]["short"]["allowance_live"] is None
+
+
+def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
+    import passivbot as pb_mod
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.open_orders = {}
+    bot.has_open_unstuck_order = lambda: False
+    bot._unstuck_uses_realized_pnl = lambda: True
+    bot._calc_unstuck_allowance_for_logging = MagicMock(
+        side_effect=[
+            {"status": "ok", "allowance": 12.5},
+            {"status": "ok", "allowance": -3.0},
+        ]
+    )
+    bot.bot_value = lambda pside, key: {
+        "unstuck_loss_allowance_pct": 0.01,
+        "unstuck_close_pct": 0.0,
+        "unstuck_threshold": 0.9,
+    }[key]
+
+    section = bot._build_monitor_unstuck_section()
+
+    assert bot._calc_unstuck_allowance_for_logging.call_args_list == [
+        call("long"),
+        call("short"),
+    ]
+    assert section["sides"]["long"]["allowance_live"] == pytest.approx(12.5)
+    assert section["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
@@ -6832,10 +6857,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 }
             return {"status": "disabled"}
 
-        def _calc_unstuck_allowances_live(self):
-            # Allowances are pure budget facts, real even with an open unstuck order.
-            return {"long": 1.0, "short": 0.0}
-
         async def build_forager_candidate_payload(
             self,
             pside,
@@ -6955,6 +6976,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["forager"]["long"]["ranking"]["top_ema_readiness"]["symbol"] == "ETH/USDT:USDT"
     assert snapshot["unstuck"]["has_open_order"] is True
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
+    assert snapshot["unstuck"]["sides"]["long"]["allowance_live"] == pytest.approx(0.0)
+    assert snapshot["unstuck"]["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
     assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_pcts"] == {
         "BTC/USDT:USDT": pytest.approx(0.005)
     }
