@@ -146,7 +146,6 @@ from utils import (
     symbol_to_coin,
     utc_ms,
     ts_to_date,
-    make_get_filepath,
     format_approved_ignored_coins,
     filter_markets,
     to_ccxt_exchange_id,
@@ -405,7 +404,6 @@ def order_market_diff(side: str, order_price: float, market_price: float) -> flo
 
 from pure_funcs import (
     numpyize,
-    denumpyize,
     filter_orders,
     multi_replace,
     shorten_custom_id,
@@ -4655,61 +4653,6 @@ class Passivbot:
             )
         return val if val > 0.0 else 0.0
 
-    def maybe_log_ema_debug(
-        self,
-        ema_bounds_long: Dict[str, Tuple[float, float]],
-        ema_bounds_short: Dict[str, Tuple[float, float]],
-        volatility_ema_1h: Dict[str, Dict[str, float]],
-    ) -> None:
-
-        ema_debug_logging_enabled = False
-
-        """Emit a throttled log of EMA inputs so toggling visibility stays simple."""
-        if not ema_debug_logging_enabled:
-            return
-        self._ema_debug_log_interval_ms = 30_000
-        self._last_ema_debug_log_ms = 0
-        now = utc_ms()
-        if (
-            now - getattr(self, "_last_ema_debug_log_ms", 0)
-            < self._ema_debug_log_interval_ms
-        ):
-            return
-        self._last_ema_debug_log_ms = now
-
-        def _safe_span(pside: str, key: str, symbol: str) -> Optional[int]:
-            try:
-                val = self.bp(pside, key, symbol)
-                return int(val) if val is not None else None
-            except Exception:
-                return None
-
-        logs: List[str] = []
-        for pside, bounds in ("long", ema_bounds_long), ("short", ema_bounds_short):
-            if not bounds:
-                continue
-            side_entries: List[str] = []
-            for symbol, (lower, upper) in sorted(bounds.items()):
-                span0 = _safe_span(pside, "ema_span_0", symbol)
-                span1 = _safe_span(pside, "ema_span_1", symbol)
-                grid_lr = (volatility_ema_1h or {}).get(pside, {}).get(symbol)
-                parts = [Passivbot._log_symbol(symbol)]
-                if span0 is not None or span1 is not None:
-                    parts.append(
-                        f"spans=({span0 if span0 is not None else '?'}"
-                        f", {span1 if span1 is not None else '?'})"
-                    )
-                parts.append(f"lower={lower:.6g}")
-                parts.append(f"upper={upper:.6g}")
-                if grid_lr is not None:
-                    parts.append(f"volatility_ema={grid_lr:.6g}")
-                side_entries.append(" ".join(parts))
-            if side_entries:
-                logs.append(f"{pside} -> " + "; ".join(side_entries))
-
-        if logs:
-            logging.info("EMA debug | " + " | ".join(logs))
-
     async def warmup_candles_staggered(
         self,
         *,
@@ -5920,16 +5863,6 @@ class Passivbot:
         # The shared resolver already caches maps with file-change detection.
         # A second bot-level result cache would hide newly ambiguous aliases.
         return coin_to_symbol(coin, self.exchange, quote=self.quote, verbose=verbose)
-
-    def order_to_order_tuple(self, order):
-        """Convert an order dictionary into a normalized tuple for comparisons."""
-        return (
-            order["symbol"],
-            order["side"],
-            order["position_side"],
-            round(float(order["qty"]), 12),
-            round(float(order["price"]), 12),
-        )
 
     def has_open_unstuck_order(self) -> bool:
         """Return True if an unstuck order is currently live on the exchange."""
@@ -19932,25 +19865,6 @@ class Passivbot:
         """Build a custom id embedding the order type marker and a UUID suffix."""
         token = type_token(order_type_id, with_marker=True)  # "0xABCD"
         return (token + uuid4().hex)[: self.custom_id_max_length]
-
-    def debug_dump_bot_state_to_disk(self):
-        """Persist internal state snapshots to disk for debugging purposes."""
-        if not hasattr(self, "tmp_debug_ts"):
-            self.tmp_debug_ts = 0
-            self.tmp_debug_cache = make_get_filepath(
-                f"caches/{self.exchange}/{self.user}_debug/"
-            )
-        if utc_ms() - self.tmp_debug_ts > 1000 * 60 * 3:
-            logging.info(f"debug dumping bot state to disk")
-            for k, v in vars(self).items():
-                try:
-                    json.dump(
-                        denumpyize(v),
-                        open(os.path.join(self.tmp_debug_cache, k + ".json"), "w"),
-                    )
-                except Exception as e:
-                    logging.error(f"debug failed to dump to disk {k} {e}")
-            self.tmp_debug_ts = utc_ms()
 
     # Legacy EMA maintenance (init_EMAs_single/update_EMAs) removed in favor of CandlestickManager
 
