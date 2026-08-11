@@ -136,7 +136,6 @@ from risk_limits import (
 )
 from logging_setup import (
     configure_logging,
-    get_last_log_activity_monotonic,
     resolve_live_log_file_settings,
     resolve_log_level,
 )
@@ -1670,27 +1669,8 @@ class Passivbot:
         self._health_summary_interval_ms = 15 * 60 * 1000  # 15 minutes
         self._last_loop_duration_ms = 0
 
-        raw_silence_watchdog = get_optional_config_value(
-            config, "logging.silence_watchdog_seconds", 60.0
-        )
-        try:
-            silence_watchdog_seconds = float(raw_silence_watchdog)
-        except Exception:
-            logging.warning(
-                "Unable to parse logging.silence_watchdog_seconds=%r; using fallback 60",
-                raw_silence_watchdog,
-            )
-            silence_watchdog_seconds = 60.0
-        if silence_watchdog_seconds < 0:
-            logging.warning(
-                "logging.silence_watchdog_seconds=%r is negative; disabling",
-                raw_silence_watchdog,
-            )
-            silence_watchdog_seconds = 0.0
-        self._log_silence_watchdog_seconds = float(silence_watchdog_seconds)
         self._log_silence_watchdog_phase = "boot"
         self._log_silence_watchdog_stage = "idle"
-        self._log_silence_watchdog_task: Optional[asyncio.Task] = None
         self._bot_ready = False
 
         # Unstuck logging throttle
@@ -1872,71 +1852,6 @@ class Passivbot:
             self._log_silence_watchdog_phase = str(phase)
         if stage is not None:
             self._log_silence_watchdog_stage = str(stage)
-
-    def _maybe_log_silence_watchdog(
-        self, *, now_monotonic: Optional[float] = None
-    ) -> bool:
-        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
-        if threshold <= 0.0:
-            return False
-        if now_monotonic is None:
-            now_monotonic = time.monotonic()
-        silent_for_s = max(
-            0.0, now_monotonic - float(get_last_log_activity_monotonic())
-        )
-        if silent_for_s < threshold:
-            return False
-        phase = str(
-            getattr(self, "_log_silence_watchdog_phase", "runtime") or "runtime"
-        )
-        stage = str(
-            getattr(self, "_log_silence_watchdog_stage", "unknown") or "unknown"
-        )
-        uptime_ms = max(0, utc_ms() - int(getattr(self, "_health_start_ms", utc_ms())))
-        loop_ms = int(getattr(self, "_last_loop_duration_ms", 0) or 0)
-        loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
-        logging.info(
-            "[health] silence watchdog: no logs for %.0fs | phase=%s | stage=%s | uptime=%s | loop=%s",
-            silent_for_s,
-            phase,
-            stage,
-            self._format_duration(uptime_ms),
-            loop_str,
-        )
-        return True
-
-    async def _run_log_silence_watchdog(self) -> None:
-        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
-        if threshold <= 0.0:
-            return
-        poll_seconds = min(5.0, max(1.0, threshold / 4.0))
-        while not self.stop_signal_received:
-            await asyncio.sleep(poll_seconds)
-            if self.stop_signal_received:
-                break
-            self._maybe_log_silence_watchdog()
-
-    def _start_log_silence_watchdog(self) -> None:
-        threshold = float(getattr(self, "_log_silence_watchdog_seconds", 0.0) or 0.0)
-        if threshold <= 0.0:
-            return
-        task = getattr(self, "_log_silence_watchdog_task", None)
-        if task is not None and not task.done():
-            return
-        self._log_silence_watchdog_task = asyncio.create_task(
-            self._run_log_silence_watchdog()
-        )
-
-    async def _stop_log_silence_watchdog(self) -> None:
-        task = getattr(self, "_log_silence_watchdog_task", None)
-        self._log_silence_watchdog_task = None
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
 
     def _pnls_lookback_start_ms(self) -> Optional[int]:
         config = getattr(self, "config", None)

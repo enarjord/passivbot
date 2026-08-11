@@ -5939,8 +5939,6 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
         _monitor_emit_stop = pb_mod.Passivbot._monitor_emit_stop
         _emit_live_event = staticmethod(lambda *args, **kwargs: None)
         _set_log_silence_watchdog_context = pb_mod.Passivbot._set_log_silence_watchdog_context
-        _start_log_silence_watchdog = pb_mod.Passivbot._start_log_silence_watchdog
-        _stop_log_silence_watchdog = pb_mod.Passivbot._stop_log_silence_watchdog
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
         _raise_if_shutdown_requested = pb_mod.Passivbot._raise_if_shutdown_requested
         _sleep_unless_shutdown = pb_mod.Passivbot._sleep_unless_shutdown
@@ -5964,10 +5962,8 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
             self.debug_mode = False
             self.stop_signal_received = False
             self.snapshot_flushes = []
-            self._log_silence_watchdog_seconds = 0.0
             self._log_silence_watchdog_phase = "startup"
             self._log_silence_watchdog_stage = "idle"
-            self._log_silence_watchdog_task = None
             self._bot_ready = False
             self.live_event_console_enabled = structured_console
             self._live_event_pipeline = object() if structured_console else None
@@ -6034,32 +6030,6 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
         == incident_events[1]["payload"]["incident_id"]
     )
     assert incident_events[1]["payload"]["traceback"]["frame_count"] >= 1
-
-
-def test_maybe_log_silence_watchdog_emits_phase_and_stage(monkeypatch, caplog):
-    import passivbot as pb_mod
-
-    class FakeBot:
-        _maybe_log_silence_watchdog = pb_mod.Passivbot._maybe_log_silence_watchdog
-        _format_duration = pb_mod.Passivbot._format_duration
-
-        def __init__(self):
-            self._log_silence_watchdog_seconds = 60.0
-            self._log_silence_watchdog_phase = "startup"
-            self._log_silence_watchdog_stage = "equity_hard_stop_initialize_from_history"
-            self._health_start_ms = 0
-            self._last_loop_duration_ms = 0
-
-    monkeypatch.setattr(pb_mod, "get_last_log_activity_monotonic", lambda: 0.0)
-    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 120_000)
-    caplog.set_level(logging.INFO)
-
-    bot = FakeBot()
-
-    assert bot._maybe_log_silence_watchdog(now_monotonic=61.0) is True
-    assert any("silence watchdog" in rec.message for rec in caplog.records)
-    assert any("phase=startup" in rec.message for rec in caplog.records)
-    assert any("stage=equity_hard_stop_initialize_from_history" in rec.message for rec in caplog.records)
 
 
 def test_log_new_fill_events_records_fill_history():
