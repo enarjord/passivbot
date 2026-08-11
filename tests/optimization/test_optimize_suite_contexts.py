@@ -117,7 +117,7 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    contexts, _aggregate_cfg = await optimize_suite.prepare_suite_contexts(
+    contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,
         shared_array_manager=_NoSharedArrayManager(),
@@ -207,7 +207,7 @@ async def test_prepare_suite_contexts_master_universe_keeps_base_and_scenario_co
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    contexts, _aggregate_cfg = await optimize_suite.prepare_suite_contexts(
+    contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,
         shared_array_manager=_NoSharedArrayManager(),
@@ -258,7 +258,7 @@ async def test_prepare_suite_contexts_expands_scenario_required_exchanges(monkey
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    contexts, _aggregate_cfg = await optimize_suite.prepare_suite_contexts(
+    contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,
         shared_array_manager=_NoSharedArrayManager(),

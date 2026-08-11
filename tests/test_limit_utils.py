@@ -1,6 +1,7 @@
 import pytest
 
 from limit_utils import expand_limit_checks, compute_limit_violation
+from config.limits import resolve_aggregate_mode, resolve_limit_stat
 from config.metrics import resolve_metric_value
 
 
@@ -126,27 +127,27 @@ def test_deprecated_limit_metric_alias_is_validated_after_canonicalization():
     assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
 
 
-def test_omitted_stat_uses_aggregate_default_instead_of_operator_direction():
+def test_omitted_reducer_uses_default_instead_of_operator_direction():
     entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001}
     checks = expand_limit_checks(
         [entry],
         {},
         penalty_weight=1000.0,
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
     )
-    assert checks[0]["stat"] == "mean"
+    assert checks[0]["reducer"] == "mean"
     assert checks[0]["metric_key"] == "adg_mean"
 
 
-def test_omitted_stat_uses_metric_specific_aggregate_override():
+def test_omitted_reducer_uses_metric_specific_override():
     entry = {"metric": "drawdown_worst_hsl", "penalize_if": "greater_than", "value": 0.8}
     checks = expand_limit_checks(
         [entry],
         {},
         penalty_weight=1000.0,
-        aggregate_cfg={"default": "mean", "drawdown_worst_hsl": "max"},
+        reducer_cfg={"default": "mean", "drawdown_worst_hsl": "max"},
     )
-    assert checks[0]["stat"] == "max"
+    assert checks[0]["reducer"] == "max"
     assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"
 
 
@@ -160,16 +161,27 @@ def test_metric_value_resolution_accepts_deprecated_stat_suffix_aliases():
     assert resolve_metric_value(metrics, "drawdown_worst_strategy_eq_max") == 0.42
 
 
-def test_explicit_stat_overrides_aggregate_config():
+def test_explicit_reducer_alias_overrides_reducer_config():
     entry = {"metric": "adg", "penalize_if": "less_than_or_equal", "value": 0.001, "stat": "min"}
     checks = expand_limit_checks(
         [entry],
         {},
         penalty_weight=1000.0,
-        aggregate_cfg={"default": "mean", "adg": "max"},
+        reducer_cfg={"default": "mean", "adg": "max"},
     )
-    assert checks[0]["stat"] == "min"
+    assert checks[0]["reducer"] == "min"
     assert checks[0]["metric_key"] == "adg_min"
+
+
+def test_legacy_reducer_helpers_accept_legacy_keyword_arguments():
+    assert resolve_aggregate_mode("adg", aggregate_cfg={"default": "max"}) == "max"
+    assert (
+        resolve_limit_stat(
+            {"metric": "adg", "stat": "min"},
+            aggregate_cfg={"default": "max"},
+        )
+        == "min"
+    )
 
 
 def test_named_scenario_limit_uses_scenario_mean():
@@ -183,11 +195,11 @@ def test_named_scenario_limit_uses_scenario_mean():
         [entry],
         {},
         penalty_weight=1000.0,
-        aggregate_cfg={"default": "max"},
+        reducer_cfg={"default": "max"},
     )
 
     assert checks[0]["scenario"] == "base"
-    assert checks[0]["stat"] == "mean"
+    assert checks[0]["reducer"] == "mean"
     assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_mean"
 
 
@@ -203,9 +215,9 @@ def test_explicit_null_scenario_uses_suite_stat():
         [entry],
         {},
         penalty_weight=1000.0,
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
     )
 
     assert checks[0]["scenario"] is None
-    assert checks[0]["stat"] == "max"
+    assert checks[0]["reducer"] == "max"
     assert checks[0]["metric_key"] == "drawdown_worst_strategy_eq_max"

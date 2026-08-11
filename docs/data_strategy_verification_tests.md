@@ -429,7 +429,7 @@ config = {
 config = {
     "backtest": {
         "exchanges": ["binance"],
-        "aggregate": {"default": "mean"},
+        "reducer": {"default": "mean"},
         "scenarios": [
             {"label": "a"},
             {"label": "b"}
@@ -444,7 +444,7 @@ config = {
 config = {
     "backtest": {
         "exchanges": ["binance"],
-        "aggregate": {"default": "min"},
+        "reducer": {"default": "min"},
         "scenarios": [
             {"label": "a"},
             {"label": "b"}
@@ -459,7 +459,7 @@ config = {
 config = {
     "backtest": {
         "exchanges": ["binance"],
-        "aggregate": {
+        "reducer": {
             "default": "mean",
             "mdg": "min",
             "sharpe_ratio": "median"
@@ -710,7 +710,7 @@ passivbot backtest config.json --scenarios nonexistent_label
 For each test case, verify:
 
 - [ ] Config loads without error (`load_config`, `format_config`)
-- [ ] Migration produces expected structure (check `backtest.scenarios`, `backtest.aggregate`)
+- [ ] Migration produces expected structure (check `backtest.scenarios`, `backtest.reducer`)
 - [ ] Legacy keys removed (`suite`, `combine_ohlcvs`)
 - [ ] `build_scenarios()` returns correct count and labels
 - [ ] Exchange inheritance works as expected

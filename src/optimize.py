@@ -92,6 +92,7 @@ from config.scoring import (
     resolve_objective_basis,
     to_engine_value,
 )
+from config.reducers import REDUCER_ALIASES, canonicalize_reducer_mapping
 from config.parse import load_raw_config as load_hjson_config
 from config.schema import get_template_config
 from warmup_utils import compute_backtest_warmup_minutes
@@ -170,7 +171,7 @@ from suite_runner import (
     extract_suite_config,
     filter_scenarios_by_label,
     load_suite_override_config,
-    aggregate_metrics,
+    reduce_metrics,
     build_scenarios,
     build_suite_metrics_payload,
 )
@@ -711,10 +712,14 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
 
 
 def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
-    old_bt = entry.get("backtest") or {}
-    new_bt = config.get("backtest") or {}
-    old_opt = entry.get("optimize") or {}
-    new_opt = config.get("optimize") or {}
+    old_bt = deepcopy(entry.get("backtest") or {})
+    new_bt = deepcopy(config.get("backtest") or {})
+    for section, path in ((old_bt, "resume.backtest"), (new_bt, "config.backtest")):
+        if any(alias in section for alias in REDUCER_ALIASES):
+            canonicalize_reducer_mapping(section, path=path)
+
+    old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
+    new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
     new_bot = config.get("bot", config) or {}
     old_live = entry.get("live") or {}
@@ -725,7 +730,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     old_bt_compare = _resume_subset(
         old_bt,
         {
-            "aggregate",
+            "reducer",
             "balance_sample_divider",
             "btc_collateral_cap",
             "btc_collateral_ltv_cap",
@@ -793,6 +798,17 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_live.get(key) != new_live.get(key):
             mismatches.append(f"  - live.{key}: changed")
     return mismatches
+
+
+def _canonicalize_resume_optimize(section: dict) -> dict:
+    normalized = deepcopy(section)
+    if "scoring" in normalized:
+        normalized["scoring"] = [
+            spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
+        ]
+    if "limits" in normalized:
+        normalized["limits"] = normalize_limit_entries(normalized["limits"])
+    return normalized
 
 
 def _resume_subset(section: dict, keys) -> dict:
@@ -1636,14 +1652,14 @@ class Evaluator:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
-    def build_limit_checks(self, aggregate_cfg: Dict[str, Any] | None = None):
+    def build_limit_checks(self, reducer_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
         self.limit_checks = expand_limit_checks(
             limits,
             self.scoring_weights,
             penalty_weight=1e6,
             objective_index_map=objective_index_map(self.scoring_specs),
-            aggregate_cfg=aggregate_cfg,
+            reducer_cfg=reducer_cfg,
         )
 
     def calc_fitness(
@@ -1684,7 +1700,7 @@ class Evaluator:
                 basis = (
                     f"scenario {scenario!r}"
                     if scenario is not None
-                    else f"suite stat {check['stat']!r}"
+                    else f"suite reducer {check['reducer']!r}"
                 )
                 raise ValueError(
                     "missing optimizer limit metric "
@@ -1762,11 +1778,11 @@ class SuiteEvaluator:
         self,
         base_evaluator: Evaluator,
         scenario_contexts: List[ScenarioEvalContext],
-        aggregate_cfg: Dict[str, Any],
+        reducer_cfg: Dict[str, Any],
     ) -> None:
         self.base = base_evaluator
         self.contexts = scenario_contexts
-        self.aggregate_cfg = aggregate_cfg
+        self.reducer_cfg = reducer_cfg
         objective_scenario = self.base.config["optimize"].get("objective_scenario")
         self.objective_scenario = (
             str(objective_scenario).strip() if objective_scenario is not None else None
@@ -1778,7 +1794,7 @@ class SuiteEvaluator:
             resolve_objective_basis(
                 spec,
                 default_scenario=self.objective_scenario,
-                aggregate_cfg=self.aggregate_cfg,
+                reducer_cfg=self.reducer_cfg,
             )
             for spec in self.base.scoring_specs
         ]
@@ -1789,7 +1805,7 @@ class SuiteEvaluator:
                     f"{basis.scenario!r}, which is not present in backtest.scenarios; "
                     f"available labels: {', '.join(labels)}"
                 )
-        self.base.build_limit_checks(self.aggregate_cfg)
+        self.base.build_limit_checks(self.reducer_cfg)
         for check in self.base.limit_checks:
             scenario = check.get("scenario")
             if scenario is not None and scenario not in labels:
@@ -2127,17 +2143,17 @@ class SuiteEvaluator:
             )
 
         phase_start = _profile_start(profile_enabled)
-        aggregate_summary = aggregate_metrics(scenario_results, self.aggregate_cfg)
-        _profile_add(timings, "aggregate_metrics_ms", phase_start)
+        reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
+        _profile_add(timings, "reduce_metrics_ms", phase_start)
         phase_start = _profile_start(profile_enabled)
-        suite_payload = build_suite_metrics_payload(scenario_results, aggregate_summary)
-        aggregate_stats = aggregate_summary.get("stats", {})
+        suite_payload = build_suite_metrics_payload(scenario_results, reduced_summary)
+        reduced_stats = reduced_summary.get("stats", {})
 
-        aggregate_stats_flat = flatten_metric_stats(aggregate_stats)
-        flat_stats = dict(aggregate_stats_flat)
+        reduced_stats_flat = flatten_metric_stats(reduced_stats)
+        flat_stats = dict(reduced_stats_flat)
         # Override _mean with correctly aggregated values so calc_fitness
-        # and limit defaults respect the aggregate config (e.g. "max" instead of "mean").
-        aggregated_values = aggregate_summary.get("aggregated", {})
+        # and limit defaults respect the reducer config (e.g. "max" instead of "mean").
+        aggregated_values = reduced_summary.get("aggregated", {})
         for metric, agg_value in aggregated_values.items():
             flat_stats[f"{metric}_mean"] = agg_value
         required_scenario_labels = {
@@ -2157,21 +2173,21 @@ class SuiteEvaluator:
         for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
             if basis.scenario is not None:
                 source_stats = scenario_stats_by_label[basis.scenario]
-                stat = "mean"
+                reducer = "mean"
             else:
-                source_stats = aggregate_stats_flat
-                stat = basis.aggregate or "mean"
-            value = resolve_metric_value(source_stats, f"{spec.metric}_{stat}")
+                source_stats = reduced_stats_flat
+                reducer = basis.reducer or "mean"
+            value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
             if value is None and spec.metric.endswith(("_usd", "_btc")):
                 value = resolve_metric_value(
                     source_stats,
-                    f"{spec.metric.rsplit('_', 1)[0]}_{stat}",
+                    f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
                 )
             if value is None:
                 basis_label = (
                     f"scenario {basis.scenario!r}"
                     if basis.scenario is not None
-                    else f"aggregate {stat!r}"
+                    else f"reducer {reducer!r}"
                 )
                 raise ValueError(
                     "missing optimizer scoring metric "
@@ -2211,14 +2227,14 @@ class SuiteEvaluator:
                 if key.startswith("rust_") and key != "rust_backtest_ms"
             )
             logging.info(
-                "[opt-profile] suite_eval total_ms=%.3f scenario_config_ms=%.3f runtime_compile_ms=%.3f payload_build_ms=%.3f rust_backtest_ms=%.3f combine_metrics_ms=%.3f aggregate_metrics_ms=%.3f fitness_payload_ms=%.3f scenarios=%d exchange_evals=%d rust_detail=%s",
+                "[opt-profile] suite_eval total_ms=%.3f scenario_config_ms=%.3f runtime_compile_ms=%.3f payload_build_ms=%.3f rust_backtest_ms=%.3f combine_metrics_ms=%.3f reduce_metrics_ms=%.3f fitness_payload_ms=%.3f scenarios=%d exchange_evals=%d rust_detail=%s",
                 profile_payload.get("total_ms", 0.0),
                 profile_payload.get("scenario_config_ms", 0.0),
                 profile_payload.get("runtime_compile_ms", 0.0),
                 profile_payload.get("payload_build_ms", 0.0),
                 profile_payload.get("rust_backtest_ms", 0.0),
                 profile_payload.get("combine_metrics_ms", 0.0),
-                profile_payload.get("aggregate_metrics_ms", 0.0),
+                profile_payload.get("reduce_metrics_ms", 0.0),
                 profile_payload.get("fitness_payload_ms", 0.0),
                 profile_payload["scenarios"],
                 profile_payload["exchange_evals"],
@@ -2843,18 +2859,18 @@ def preselect_starting_configs(
     *,
     filter_by_limits: bool,
     max_count: int | None,
-    aggregate_cfg: Mapping[str, Any] | None,
+    reducer_cfg: Mapping[str, Any] | None,
     scenario_labels: Sequence[str] | None = None,
 ) -> list[dict]:
     optimize_cfg = config.get("optimize")
     limits = optimize_cfg.get("limits", []) if isinstance(optimize_cfg, Mapping) else []
-    effective_aggregate_cfg = (
-        aggregate_cfg if isinstance(aggregate_cfg, Mapping) else {"default": "mean"}
+    effective_reducer_cfg = (
+        reducer_cfg if isinstance(reducer_cfg, Mapping) else {"default": "mean"}
     )
     selection = select_starting_config_artifacts(
         starting_configs_path,
         limits=limits,
-        aggregate_cfg=effective_aggregate_cfg,
+        reducer_cfg=effective_reducer_cfg,
         scenario_labels=scenario_labels,
         filter_by_limits=filter_by_limits,
         max_count=max_count,
@@ -2877,7 +2893,7 @@ def preselect_starting_configs(
 def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | None:
     if not suite_cfg.get("enabled"):
         return None
-    scenarios, _aggregate_cfg = build_scenarios(dict(suite_cfg))
+    scenarios, _reducer_cfg = build_scenarios(dict(suite_cfg))
     return [scenario.label for scenario in scenarios]
 
 
@@ -3080,7 +3096,7 @@ async def main():
             "Repeatable optimize limit override. Example: "
             "\"drawdown_worst > 0.35\" or "
             "\"drawdown_worst_strategy_eq <= 0.5 scenario=base\". "
-            "Aggregate limits may use stat=min|max|mean|std|median."
+            "Suite limits may use reducer=min|max|mean|std|median."
         ),
     )
     optimize_common_group.add_argument(
@@ -3175,8 +3191,8 @@ async def main():
             config,
             filter_by_limits=bool(args.filter_starting_configs),
             max_count=args.starting_configs_max,
-            aggregate_cfg=(
-                suite_cfg.get("aggregate") if suite_cfg.get("enabled") else None
+            reducer_cfg=(
+                suite_cfg.get("reducer") if suite_cfg.get("enabled") else None
             ),
             scenario_labels=active_suite_scenario_labels,
         )
@@ -3218,12 +3234,12 @@ async def main():
         msss = {}
         timestamps_dict = {}
         config["backtest"]["coins"] = {}
-        aggregate_cfg: Dict[str, Any] = {"default": "mean"}
+        reducer_cfg: Dict[str, Any] = {"default": "mean"}
         scenario_contexts: List[ScenarioEvalContext] = []
         suite_enabled = bool(suite_cfg.get("enabled"))
 
         if suite_enabled:
-            scenario_contexts, aggregate_cfg = await prepare_suite_contexts(
+            scenario_contexts, reducer_cfg = await prepare_suite_contexts(
                 data_config,
                 suite_cfg,
                 shared_array_manager=array_manager,
@@ -3390,7 +3406,7 @@ async def main():
         )
 
         if suite_enabled:
-            evaluator_for_pool = SuiteEvaluator(evaluator, scenario_contexts, aggregate_cfg)
+            evaluator_for_pool = SuiteEvaluator(evaluator, scenario_contexts, reducer_cfg)
         else:
             evaluator_for_pool = evaluator
 

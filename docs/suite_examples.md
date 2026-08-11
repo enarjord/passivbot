@@ -31,7 +31,7 @@ Suite configuration lives directly under `backtest`:
 {
   "backtest": {
     "suite_enabled": true,
-    "aggregate": {
+    "reducer": {
       "default": "mean"
     },
     "scenarios": [
@@ -60,7 +60,7 @@ Compare the same bot config against different exchanges:
 {
   "backtest": {
     "suite_enabled": true,
-    "aggregate": {"default": "mean"},
+    "reducer": {"default": "mean"},
     "exchanges": ["binance", "bybit", "gateio"],
     "scenarios": [
       {"label": "binance_only", "exchanges": ["binance"]},
@@ -82,7 +82,7 @@ Compare one config across different market regimes:
 {
   "backtest": {
     "suite_enabled": true,
-    "aggregate": {"default": "mean"},
+    "reducer": {"default": "mean"},
     "scenarios": [
       {"label": "bull_2021", "start_date": "2021-01-01", "end_date": "2021-12-31"},
       {"label": "bear_2022", "start_date": "2022-01-01", "end_date": "2022-12-31"},
@@ -102,7 +102,7 @@ Compare a large-cap basket against a smaller custom subset:
 {
   "backtest": {
     "suite_enabled": true,
-    "aggregate": {"default": "mean"},
+    "reducer": {"default": "mean"},
     "scenarios": [
       {
         "label": "large_caps",
@@ -125,7 +125,7 @@ Compare a base config against a small number of targeted runtime overrides:
 {
   "backtest": {
     "suite_enabled": true,
-    "aggregate": {"default": "mean"},
+    "reducer": {"default": "mean"},
     "scenarios": [
       {"label": "base"},
       {
@@ -163,14 +163,14 @@ This is often the cleanest workflow when:
 
 ## Aggregation Guidance
 
-`backtest.aggregate` controls how scenario metrics are combined in `suite_summary.json` and in
+`backtest.reducer` controls how scenario metrics are combined in `suite_summary.json` and in
 optimizer suite scoring.
 
 Good defaults:
 
 ```json
 {
-  "aggregate": {
+  "reducer": {
     "default": "mean",
     "drawdown_worst_strategy_eq": "max",
     "drawdown_worst_mean_1pct_strategy_eq": "max",
@@ -187,7 +187,7 @@ Interpretation:
 
 `optimize.objective_scenario` sets the default source for scoring objectives. Individual scoring
 entries may select a named `scenario`, set `scenario` explicitly to `null` to use suite
-aggregation, and optionally set an objective-only `aggregate` reducer. For example:
+reduction, and optionally set an objective-only `reducer`. For example:
 
 ```json
 {
@@ -205,7 +205,7 @@ aggregation, and optionally set an objective-only `aggregate` reducer. For examp
 }
 ```
 
-Here ADG uses `base`, while underwater percentage uses the configured suite aggregate.
+Here ADG uses `base`, while underwater percentage uses the configured suite reduction.
 
 Limits choose their basis independently. This example applies a tighter drawdown threshold to the
 base scenario and a looser worst-scenario threshold across the whole suite:
@@ -223,7 +223,7 @@ base scenario and a looser worst-scenario threshold across the whole suite:
       {
         "metric": "drawdown_worst_strategy_eq",
         "penalize_if": "greater_than",
-        "stat": "max",
+        "reducer": "max",
         "value": 0.7
       }
     ]

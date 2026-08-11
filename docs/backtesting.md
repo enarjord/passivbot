@@ -157,7 +157,7 @@ Suite mode evaluates multiple scenario slices in one invocation. Configuration u
 "backtest": {
   "suite_enabled": true,
   "scenarios": [...],
-  "aggregate": {"default": "mean"},
+  "reducer": {"default": "mean"},
   "exchanges": ["binance", "bybit"],
   ...
 }
@@ -180,7 +180,7 @@ Top-level suite keys (directly under `backtest`):
 
 - `suite_enabled`: master toggle for suite mode (overridable via `--suite [y/n]`)
 - `scenarios`: list of scenario dictionaries
-- `aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
+- `reducer`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
 
 During a suite run Passivbot prepares master OHLCV datasets only for the scenario
 windows that consume them. The combined dataset uses the union of combined scenarios;
@@ -191,7 +191,7 @@ are written to:
 backtests/suite_runs/<timestamp>/<scenario_label>/
 ```
 
-Every suite also receives a `suite_summary.json` containing per-scenario metrics and the aggregated statistics defined in `backtest.aggregate`.
+Every suite also receives a `suite_summary.json` containing per-scenario metrics and the aggregated statistics defined in `backtest.reducer`.
 Each scenario's entry exposes `metrics.stats[metric] = {mean,min,max,std}` so you can inspect exchange-combined performance without digging through `analysis.json` files.
 
 See [Suite Examples](suite_examples.md) for practical configurations including exchange
@@ -213,7 +213,7 @@ To compare performance across exchanges, define one scenario per exchange using 
 ```json
 "backtest": {
   "suite_enabled": true,
-  "aggregate": {"default": "mean"},
+  "reducer": {"default": "mean"},
   "exchanges": ["binance", "bybit", "gateio"],
   "scenarios": [
     {"label": "binance_only", "exchanges": ["binance"]},

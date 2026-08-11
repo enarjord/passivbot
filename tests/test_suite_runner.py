@@ -11,7 +11,7 @@ from suite_runner import (
     SuiteScenario,
     ScenarioResult,
     ExchangeDataset,
-    aggregate_metrics,
+    reduce_metrics,
     apply_scenario,
     build_scenarios,
     collect_suite_coin_sources,
@@ -49,7 +49,7 @@ def test_build_scenarios_basic():
         "scenarios": [{"label": "A"}],
         "exchanges": ["binance"],
     }
-    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
+    scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
     assert len(scenarios) == 1
     assert scenarios[0].label == "A"
     # Scenarios now inherit exchanges from suite_cfg or base_exchanges
@@ -57,7 +57,7 @@ def test_build_scenarios_basic():
 
 
 def test_build_scenarios_normalizes_label_whitespace():
-    scenarios, _aggregate_cfg = build_scenarios(
+    scenarios, _reducer_cfg = build_scenarios(
         {"scenarios": [{"label": " stress "}]}
     )
 
@@ -945,7 +945,7 @@ async def test_prepare_master_datasets_copies_materialized_arrays_directly_to_sh
     np.testing.assert_array_equal(datasets["binance"].btc_usd_prices, source_btc)
 
 
-def test_aggregate_metrics_computes_stats():
+def test_reduce_metrics_computes_stats():
     scenario_results = [
         ScenarioResult(
             scenario=SuiteScenario("a", None, None, None, None),
@@ -962,7 +962,7 @@ def test_aggregate_metrics_computes_stats():
             output_path=None,
         ),
     ]
-    summary = aggregate_metrics(scenario_results, {"default": "mean"})
+    summary = reduce_metrics(scenario_results, {"default": "mean"})
     assert summary["aggregated"]["metric"] == pytest.approx(2.0)
     assert summary["stats"]["metric"]["max"] == pytest.approx(3.0)
     assert summary["stats"]["metric"]["median"] == pytest.approx(2.0)

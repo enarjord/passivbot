@@ -102,7 +102,7 @@ def test_filters_with_effective_aggregate_then_compresses_with_anchors_farthest(
                 "value": 0.30,
             }
         ],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=True,
         max_count=2,
     )
@@ -122,7 +122,7 @@ def test_compression_without_filtering_uses_all_metric_bearing_candidates(
     result = select_starting_config_artifacts(
         str(sample_pareto_dir),
         limits=[],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=False,
         max_count=2,
     )
@@ -146,7 +146,7 @@ def test_metric_preselection_accepts_one_pareto_artifact_and_ignores_siblings(
     result = select_starting_config_artifacts(
         str(sample_pareto_dir / "middle.json"),
         limits=[],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=False,
         max_count=None,
     )
@@ -167,7 +167,7 @@ def test_filtering_resolves_auto_limit_direction_like_optimizer(
                 "value": 0.0015,
             }
         ],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=True,
         max_count=None,
     )
@@ -194,7 +194,7 @@ def test_filtering_rejects_unknown_auto_limit_metric(
                     "value": 0.0015,
                 }
             ],
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
             filter_by_limits=True,
             max_count=None,
         )
@@ -212,7 +212,7 @@ def test_inside_range_filter_preserves_boundary_candidates(
                 "range": [0.10, 0.25],
             }
         ],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=True,
         max_count=None,
     )
@@ -236,7 +236,7 @@ def test_filtering_normalizes_descending_range_bounds(
                 "range": [0.30, 0.10],
             }
         ],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=True,
         max_count=None,
     )
@@ -285,7 +285,7 @@ def test_filtering_recomputes_suite_aggregate_with_current_optimizer_default(
                 "value": 0.50,
             }
         ],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=True,
         max_count=None,
     )
@@ -331,7 +331,7 @@ def test_filtering_recomputes_aggregate_from_active_scenarios(tmp_path: Path):
                 "value": 0.50,
             }
         ],
-        aggregate_cfg={"default": "max"},
+        reducer_cfg={"default": "max"},
         scenario_labels=["base"],
         filter_by_limits=True,
         max_count=None,
@@ -380,7 +380,7 @@ def test_filtering_aggregates_metric_from_available_active_scenarios(
                 "value": 0.50,
             }
         ],
-        aggregate_cfg={"default": "max"},
+        reducer_cfg={"default": "max"},
         scenario_labels=["base", "stress"],
         filter_by_limits=True,
         max_count=None,
@@ -431,7 +431,7 @@ def test_filtering_rejects_artifact_missing_active_scenario_values(tmp_path: Pat
                     "value": 0.50,
                 }
             ],
-            aggregate_cfg={"default": "max"},
+            reducer_cfg={"default": "max"},
             scenario_labels=["stress"],
             filter_by_limits=True,
             max_count=None,
@@ -475,7 +475,7 @@ def test_filtering_rejects_suite_artifact_missing_effective_aggregate_stat(
                     "value": 0.50,
                 }
             ],
-            aggregate_cfg={"default": "max"},
+            reducer_cfg={"default": "max"},
             filter_by_limits=True,
             max_count=None,
         )
@@ -490,7 +490,7 @@ def test_metric_preselection_warns_that_artifacts_are_not_verified(
     select_starting_config_artifacts(
         str(sample_pareto_dir),
         limits=[],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=False,
         max_count=2,
     )
@@ -511,7 +511,7 @@ def test_metric_preselection_rejects_ordinary_seed_configs(sample_pareto_dir: Pa
         select_starting_config_artifacts(
             str(sample_pareto_dir),
             limits=[],
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
             filter_by_limits=False,
             max_count=2,
         )
@@ -531,7 +531,7 @@ def test_metric_preselection_rejects_directory_with_only_ordinary_configs(
         select_starting_config_artifacts(
             str(seeds_dir),
             limits=[],
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
             filter_by_limits=False,
             max_count=2,
         )
@@ -546,7 +546,7 @@ def test_metric_preselection_allows_pareto_compress_manifest(sample_pareto_dir: 
     result = select_starting_config_artifacts(
         str(sample_pareto_dir),
         limits=[],
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
         filter_by_limits=False,
         max_count=2,
     )
@@ -567,7 +567,7 @@ def test_metric_preselection_fails_when_all_candidates_are_filtered(
                     "value": 1.0,
                 }
             ],
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
             filter_by_limits=True,
             max_count=None,
         )
@@ -588,7 +588,7 @@ def test_metric_preselection_fails_when_limit_metric_is_missing(
                     "value": 1.0,
                 }
             ],
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
             filter_by_limits=True,
             max_count=None,
         )

@@ -1,6 +1,6 @@
 {
     "backtest": {
-        "aggregate": {"default": "mean"},
+        "reducer": {"default": "mean"},
         "balance_sample_divider": 60,
         "base_dir": "backtests",
         "btc_collateral_cap": 0.0,
@@ -304,7 +304,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.1.0",
+    "config_version": "v8.2.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -620,7 +620,7 @@
                 "enabled": true,
                 "metric": "drawdown_worst_strategy_eq",
                 "penalize_if": "greater_than",
-                "stat": "mean",
+                "reducer": "mean",
                 "value": 0.8
             },
             {

@@ -136,7 +136,7 @@ def test_sanitize_prepared_config_for_dump_removes_analysis_and_metadata():
     assert "coins" not in sanitized["backtest"]
 
 
-def test_dump_config_clean_preserves_backtest_aggregate_overrides(tmp_path):
+def test_dump_config_clean_migrates_backtest_aggregate_overrides_to_reducer(tmp_path):
     cfg_path = tmp_path / "in.json"
     out_path = tmp_path / "out.json"
     cfg_path.write_text(
@@ -170,28 +170,29 @@ def test_dump_config_clean_preserves_backtest_aggregate_overrides(tmp_path):
     dump_config(loaded, str(out_path), clean=True)
     dumped = json.loads(out_path.read_text())
 
-    assert dumped["backtest"]["aggregate"]["adg_pnl"] == "max"
-    assert dumped["backtest"]["aggregate"]["default"] == "mean"
-    assert "drawdown_worst_strategy_eq" not in dumped["backtest"]["aggregate"]
-    assert "position_held_days_max" not in dumped["backtest"]["aggregate"]
+    assert dumped["backtest"]["reducer"]["adg_pnl"] == "max"
+    assert dumped["backtest"]["reducer"]["default"] == "mean"
+    assert "aggregate" not in dumped["backtest"]
+    assert "drawdown_worst_strategy_eq" not in dumped["backtest"]["reducer"]
+    assert "position_held_days_max" not in dumped["backtest"]["reducer"]
 
 
-def test_clean_config_preserves_backtest_aggregate_overrides():
+def test_clean_config_preserves_backtest_reducer_overrides():
     config = {
-        "backtest": {"aggregate": {"adg_pnl": "max", "default": "mean"}},
+        "backtest": {"reducer": {"adg_pnl": "max", "default": "mean"}},
     }
 
     cleaned = clean_config(config)
 
-    assert cleaned["backtest"]["aggregate"]["adg_pnl"] == "max"
-    assert cleaned["backtest"]["aggregate"]["default"] == "mean"
-    assert "drawdown_worst_strategy_eq" not in cleaned["backtest"]["aggregate"]
-    assert "position_held_days_max" not in cleaned["backtest"]["aggregate"]
+    assert cleaned["backtest"]["reducer"]["adg_pnl"] == "max"
+    assert cleaned["backtest"]["reducer"]["default"] == "mean"
+    assert "drawdown_worst_strategy_eq" not in cleaned["backtest"]["reducer"]
+    assert "position_held_days_max" not in cleaned["backtest"]["reducer"]
 
 
-def test_clean_config_preserves_sparse_backtest_aggregate():
-    config = {"backtest": {"aggregate": {"default": "mean"}}}
+def test_clean_config_preserves_sparse_backtest_reducer():
+    config = {"backtest": {"reducer": {"default": "mean"}}}
 
     cleaned = clean_config(config)
 
-    assert cleaned["backtest"]["aggregate"] == {"default": "mean"}
+    assert cleaned["backtest"]["reducer"] == {"default": "mean"}

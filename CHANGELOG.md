@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Standardize suite reduction configuration on `reducer` across `backtest`, optimizer scoring,
+  limits, CLI parsing, examples, and serialized configs. The former `aggregate`, `stat`, and
+  `scenario_stat` spellings remain accepted as input aliases (plus legacy limit `field`),
+  same-valued aliases collapse to `reducer`, conflicting aliases fail validation, and existing
+  Pareto/suite result artifacts remain readable without rewriting their historical payload keys.
 - Preserve the full configured exchange pool for combined optimizer and backtest suite datasets
   when every selected coin happens to use the same venue, so single-coin multi-exchange suites no
   longer reject valid unselected candidate venues as unavailable.

@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import passivbot_rust as pbr
-from config.limits import resolve_aggregate_mode
+from config.limits import resolve_reducer_mode
 from config.metrics import canonicalize_metric_name, resolve_metric_value
 from config.scoring import extract_objective_specs
 from pure_funcs import calc_hash
@@ -35,8 +35,8 @@ class LimitMetricError(ValueError):
     pass
 
 
-def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
-    return resolve_aggregate_mode(metric, aggregate_cfg)
+def _resolve_reducer_mode(metric: str, reducer_cfg: Optional[Dict[str, str]]) -> str:
+    return resolve_reducer_mode(metric, reducer_cfg)
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,7 @@ def _format_available_limit_metrics(
 
 def _suite_metrics_to_stats(
     entry: Dict[str, Any],
-    aggregate_cfg: Optional[Dict[str, str]] = None,
+    reducer_cfg: Optional[Dict[str, str]] = None,
 ) -> Tuple[Dict[str, float], Dict[str, float]]:
     aggregated_values: Dict[str, float] = {}
     stats_flat: Dict[str, float] = {}
@@ -120,7 +120,7 @@ def _suite_metrics_to_stats(
                 stats_flat.update(flatten_metric_stats({metric: stats}))
             agg = payload.get("aggregated")
             if agg is None and stats:
-                mode = _resolve_aggregate_mode(metric, aggregate_cfg)
+                mode = _resolve_reducer_mode(metric, reducer_cfg)
                 agg = stats.get(mode, stats.get("mean"))
             if agg is not None:
                 aggregated_values[metric] = agg
@@ -128,9 +128,9 @@ def _suite_metrics_to_stats(
         aggregate = suite_metrics.get("aggregate") or {}
         agg_stats = aggregate.get("stats") or {}
         aggregated_values = aggregate.get("aggregated") or {}
-        if not aggregated_values and agg_stats and aggregate_cfg:
+        if not aggregated_values and agg_stats and reducer_cfg:
             for metric, metric_stats in agg_stats.items():
-                mode = _resolve_aggregate_mode(metric, aggregate_cfg)
+                mode = _resolve_reducer_mode(metric, reducer_cfg)
                 val = metric_stats.get(mode, metric_stats.get("mean"))
                 if val is not None:
                     aggregated_values[metric] = val
@@ -202,7 +202,7 @@ class ParetoStore:
                 spec.metric,
                 spec.goal,
                 spec.to_config().get("scenario", "<inherit>"),
-                spec.aggregate,
+                spec.reducer,
             )
             for spec in specs
         )
@@ -689,7 +689,8 @@ def main():
                 scoring_keys=objective_specs or entry.get("optimize", {}).get("scoring"),
             )
             objectives = dict(zip(extracted_keys, objective_values))
-            aggregate_cfg = entry.get("backtest", {}).get("aggregate")
+            backtest_cfg = entry.get("backtest", {})
+            reducer_cfg = backtest_cfg.get("reducer", backtest_cfg.get("aggregate"))
             stats_flat: Dict[str, float] = {}
             aggregated_values: Dict[str, float] = {}
             if "stats" in metrics_block:
@@ -697,7 +698,7 @@ def main():
             if "suite_metrics" in entry:
                 stats_flat_suite, aggregated_values_suite = _suite_metrics_to_stats(
                     entry,
-                    aggregate_cfg=aggregate_cfg,
+                    reducer_cfg=reducer_cfg,
                 )
                 stats_flat.update(stats_flat_suite)
                 aggregated_values.update(aggregated_values_suite)
