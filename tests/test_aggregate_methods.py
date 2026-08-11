@@ -17,11 +17,11 @@ import pytest
 from suite_runner import (
     SuiteScenario,
     ScenarioResult,
-    aggregate_metrics,
+    reduce_metrics,
     apply_scenario,
 )
 from pareto_store import (
-    _resolve_aggregate_mode,
+    _resolve_reducer_mode,
     _suite_metrics_to_stats,
 )
 from metrics_schema import flatten_metric_stats
@@ -33,18 +33,18 @@ from metrics_schema import flatten_metric_stats
 
 class TestResolveAggregateMode:
     def test_none_cfg_returns_mean(self):
-        assert _resolve_aggregate_mode("any_metric", None) == "mean"
+        assert _resolve_reducer_mode("any_metric", None) == "mean"
 
     def test_empty_cfg_returns_mean(self):
-        assert _resolve_aggregate_mode("any_metric", {}) == "mean"
+        assert _resolve_reducer_mode("any_metric", {}) == "mean"
 
     def test_default_applies_when_metric_absent(self):
         cfg = {"default": "median"}
-        assert _resolve_aggregate_mode("unknown_metric", cfg) == "median"
+        assert _resolve_reducer_mode("unknown_metric", cfg) == "median"
 
     def test_exact_match(self):
         cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        assert _resolve_aggregate_mode("high_exposure_hours_max_long", cfg) == "max"
+        assert _resolve_reducer_mode("high_exposure_hours_max_long", cfg) == "max"
 
     def test_base_name_fallback(self):
         """When the full metric isn't in cfg, rsplit('_', 1) base is tried."""
@@ -53,24 +53,24 @@ class TestResolveAggregateMode:
         # ... but only if the base is in the cfg.  Actually rsplit("_", 1) on
         # "peak_recovery_hours_pnl" gives ("peak_recovery_hours", "pnl"), so
         # this tests a direct match on the full name.
-        assert _resolve_aggregate_mode("peak_recovery_hours_pnl", cfg) == "max"
+        assert _resolve_reducer_mode("peak_recovery_hours_pnl", cfg) == "max"
 
     def test_base_name_fallback_with_suffix(self):
         cfg = {"default": "mean", "position_held_hours": "min"}
-        assert _resolve_aggregate_mode("position_held_hours_max", cfg) == "min"
+        assert _resolve_reducer_mode("position_held_hours_max", cfg) == "min"
 
     def test_default_mean_when_default_absent(self):
         cfg = {"peak_recovery_hours_pnl": "max"}
-        assert _resolve_aggregate_mode("unrelated_metric", cfg) == "mean"
+        assert _resolve_reducer_mode("unrelated_metric", cfg) == "mean"
 
 
 # ---------------------------------------------------------------------------
-# _suite_metrics_to_stats with aggregate_cfg
+# _suite_metrics_to_stats with reducer_cfg
 # ---------------------------------------------------------------------------
 
 
 class TestSuiteMetricsToStatsAggregate:
-    """Tests that _suite_metrics_to_stats uses aggregate_cfg when the
+    """Tests that _suite_metrics_to_stats uses reducer_cfg when the
     pre-computed 'aggregated' field is missing."""
 
     def _entry_with_metrics_format(self, aggregated_value=None):
@@ -108,26 +108,26 @@ class TestSuiteMetricsToStatsAggregate:
     def test_fallback_uses_aggregate_cfg_max(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
         cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        _, agg = _suite_metrics_to_stats(entry, aggregate_cfg=cfg)
+        _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
         assert agg["high_exposure_hours_max_long"] == 200.0  # max
 
     def test_fallback_uses_aggregate_cfg_min(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
         cfg = {"default": "mean", "high_exposure_hours_max_long": "min"}
-        _, agg = _suite_metrics_to_stats(entry, aggregate_cfg=cfg)
+        _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
         assert agg["high_exposure_hours_max_long"] == 50.0  # min
 
     def test_precomputed_takes_precedence_over_cfg(self):
         """When aggregated is present, cfg is irrelevant."""
         entry = self._entry_with_metrics_format(aggregated_value=999.0)
         cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        _, agg = _suite_metrics_to_stats(entry, aggregate_cfg=cfg)
+        _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
         assert agg["high_exposure_hours_max_long"] == 999.0
 
     def test_stats_flat_always_available(self):
         entry = self._entry_with_metrics_format(aggregated_value=None)
         cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        stats_flat, _ = _suite_metrics_to_stats(entry, aggregate_cfg=cfg)
+        stats_flat, _ = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
         assert stats_flat["high_exposure_hours_max_long_mean"] == 100.0
         assert stats_flat["high_exposure_hours_max_long_max"] == 200.0
 
@@ -150,7 +150,7 @@ class TestSuiteMetricsToStatsAggregate:
             }
         }
         cfg = {"default": "mean", "peak_recovery_hours_pnl": "max"}
-        _, agg = _suite_metrics_to_stats(entry, aggregate_cfg=cfg)
+        _, agg = _suite_metrics_to_stats(entry, reducer_cfg=cfg)
         assert agg["peak_recovery_hours_pnl"] == 500.0
 
 
@@ -178,26 +178,26 @@ class TestAggregateMetricsConfig:
 
     def test_default_mean(self):
         results = self._make_results("adg_pnl", [1.0, 3.0])
-        summary = aggregate_metrics(results, {"default": "mean"})
+        summary = reduce_metrics(results, {"default": "mean"})
         assert summary["aggregated"]["adg_pnl"] == pytest.approx(2.0)
 
     def test_explicit_max(self):
         results = self._make_results("high_exposure_hours_max_long", [100.0, 300.0])
         cfg = {"default": "mean", "high_exposure_hours_max_long": "max"}
-        summary = aggregate_metrics(results, cfg)
+        summary = reduce_metrics(results, cfg)
         assert summary["aggregated"]["high_exposure_hours_max_long"] == pytest.approx(300.0)
 
     def test_explicit_min(self):
         results = self._make_results("some_metric", [100.0, 300.0])
         cfg = {"default": "mean", "some_metric": "min"}
-        summary = aggregate_metrics(results, cfg)
+        summary = reduce_metrics(results, cfg)
         assert summary["aggregated"]["some_metric"] == pytest.approx(100.0)
 
     def test_base_name_fallback_in_aggregate_metrics(self):
         """aggregate_metrics also uses rsplit('_', 1) base lookup."""
         results = self._make_results("position_held_hours_max", [100.0, 400.0])
         cfg = {"default": "mean", "position_held_hours": "max"}
-        summary = aggregate_metrics(results, cfg)
+        summary = reduce_metrics(results, cfg)
         # "position_held_hours_max" base is "position_held_hours" which maps to "max"
         assert summary["aggregated"]["position_held_hours_max"] == pytest.approx(400.0)
 
@@ -370,7 +370,7 @@ class TestObjectivesNotDoubleCorrected:
             }
 
         return {
-            "backtest": {"aggregate": self.AGGREGATE_CFG},
+            "backtest": {"reducer": self.AGGREGATE_CFG},
             "optimize": {"scoring": scoring_keys},
             "metrics": {
                 "objectives": objectives,
@@ -391,11 +391,11 @@ class TestObjectivesNotDoubleCorrected:
         # Reproduce pareto_store.main() logic
         metrics_block = entry["metrics"]
         objectives = dict(metrics_block.get("objectives", metrics_block))
-        aggregate_cfg = entry.get("backtest", {}).get("aggregate")
+        reducer_cfg = entry.get("backtest", {}).get("reducer")
         if "suite_metrics" in entry:
             stats_flat_suite, aggregated_values = _suite_metrics_to_stats(
                 entry,
-                aggregate_cfg=aggregate_cfg,
+                reducer_cfg=reducer_cfg,
             )
         # main() does NOT modify objectives — verify they are unchanged
         assert objectives["w_0"] == pytest.approx(0.001)
@@ -409,10 +409,10 @@ class TestObjectivesNotDoubleCorrected:
         maxes = {"high_exposure_hours_max_long": 300.0}
         entry = self._make_pareto_entry(scoring, [300.0], means, maxes)
 
-        aggregate_cfg = entry.get("backtest", {}).get("aggregate")
+        reducer_cfg = entry.get("backtest", {}).get("reducer")
         _, aggregated_values = _suite_metrics_to_stats(
             entry,
-            aggregate_cfg=aggregate_cfg,
+            reducer_cfg=reducer_cfg,
         )
         # Limit filtering sees the correct max value (300), not the mean (150)
         assert aggregated_values["high_exposure_hours_max_long"] == 300.0

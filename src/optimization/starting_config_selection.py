@@ -61,7 +61,7 @@ def select_starting_config_artifacts(
     path: str,
     *,
     limits: Sequence[Mapping[str, Any]],
-    aggregate_cfg: Mapping[str, Any] | None,
+    reducer_cfg: Mapping[str, Any] | None,
     filter_by_limits: bool,
     max_count: int | None,
     scenario_labels: Sequence[str] | None = None,
@@ -89,7 +89,7 @@ def select_starting_config_artifacts(
         candidates, active_limits = filter_candidates_with_limits(
             candidates,
             limits,
-            aggregate_cfg=aggregate_cfg,
+            reducer_cfg=reducer_cfg,
             scenario_labels=scenario_labels,
             scoring_weights=default_scoring_weights(),
         )

@@ -14,7 +14,7 @@ import numpy as np
 from config.limits import (
     normalize_limit_entries,
     parse_limit_cli_entries,
-    resolve_aggregate_mode,
+    resolve_reducer_mode,
     resolve_limit_basis,
 )
 from config.metrics import resolve_metric_value
@@ -421,7 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _extract_suite_metrics(
     entry: Mapping[str, Any],
-    aggregate_cfg: Mapping[str, Any] | None = None,
+    reducer_cfg: Mapping[str, Any] | None = None,
     scenario_labels: Sequence[str] | None = None,
 ) -> tuple[Dict[str, float], Dict[str, float]]:
     aggregated_values: Dict[str, float] = {}
@@ -434,10 +434,12 @@ def _extract_suite_metrics(
         if scenario_labels is not None
         else None
     )
-    effective_aggregate_cfg = (
-        aggregate_cfg
-        if aggregate_cfg is not None
-        else entry.get("backtest", {}).get("aggregate")
+    effective_reducer_cfg = (
+        reducer_cfg
+        if reducer_cfg is not None
+        else entry.get("backtest", {}).get(
+            "reducer", entry.get("backtest", {}).get("aggregate")
+        )
         if isinstance(entry.get("backtest"), Mapping)
         else None
     )
@@ -488,13 +490,13 @@ def _extract_suite_metrics(
                 else:
                     stats = {}
                 aggregated = None
-            if aggregate_cfg is not None or selected_labels is not None:
+            if reducer_cfg is not None or selected_labels is not None:
                 aggregated = None
                 if isinstance(stats, Mapping) and stats:
-                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
                     aggregated = stats.get(mode)
             elif aggregated is None and isinstance(stats, Mapping):
-                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
                 aggregated = stats.get(mode, stats.get("mean"))
             if isinstance(aggregated, (int, float)) and math.isfinite(float(aggregated)):
                 aggregated_values[str(metric)] = float(aggregated)
@@ -511,12 +513,12 @@ def _extract_suite_metrics(
         if isinstance(stats, Mapping):
             stats_flat.update(flatten_metric_stats(dict(stats)))
         aggregated = aggregate.get("aggregated") or {}
-        if aggregate_cfg is not None:
+        if reducer_cfg is not None:
             if isinstance(stats, Mapping) and stats:
                 for metric, metric_stats in stats.items():
                     if not isinstance(metric_stats, Mapping):
                         continue
-                    mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                    mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
                     value = metric_stats.get(mode)
                     if isinstance(value, (int, float)) and math.isfinite(float(value)):
                         aggregated_values[str(metric)] = float(value)
@@ -528,7 +530,7 @@ def _extract_suite_metrics(
             for metric, metric_stats in stats.items():
                 if not isinstance(metric_stats, Mapping):
                     continue
-                mode = resolve_aggregate_mode(str(metric), effective_aggregate_cfg)
+                mode = resolve_reducer_mode(str(metric), effective_reducer_cfg)
                 value = metric_stats.get(mode, metric_stats.get("mean"))
                 if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     aggregated_values[str(metric)] = float(value)
@@ -924,7 +926,7 @@ def _normalize_reference_targets(
 def _resolve_limit_value(
     candidate: ParetoCandidate,
     entry: Mapping[str, Any],
-    aggregate_cfg: Mapping[str, Any] | None = None,
+    reducer_cfg: Mapping[str, Any] | None = None,
     scenario_labels: Sequence[str] | None = None,
 ) -> Optional[float]:
     metric = str(entry.get("metric", "")).strip()
@@ -932,7 +934,7 @@ def _resolve_limit_value(
         return None
     basis = resolve_limit_basis(
         dict(entry),
-        aggregate_cfg=dict(aggregate_cfg) if aggregate_cfg else None,
+        reducer_cfg=dict(reducer_cfg) if reducer_cfg else None,
     )
     if basis.scenario is not None:
         scenario_values = _scenario_metric_values(
@@ -949,7 +951,7 @@ def _resolve_limit_value(
         and "scenario" in entry
         and entry.get("scenario") is None
     )
-    applies_current_suite_aggregate = aggregate_cfg is not None and isinstance(
+    applies_current_suite_reducer = reducer_cfg is not None and isinstance(
         candidate.entry.get("suite_metrics"), Mapping
     )
     applies_current_scenario_set = scenario_labels is not None and isinstance(
@@ -958,34 +960,34 @@ def _resolve_limit_value(
     stats_flat = candidate.stats_flat
     aggregated_values = candidate.aggregated_values
     if explicit_suite_basis or (
-        (aggregate_cfg is not None or scenario_labels is not None)
+        (reducer_cfg is not None or scenario_labels is not None)
         and isinstance(candidate.entry.get("suite_metrics"), Mapping)
     ):
         stats_flat, aggregated_values = _extract_suite_metrics(
             candidate.entry,
-            aggregate_cfg=aggregate_cfg,
+            reducer_cfg=reducer_cfg,
             scenario_labels=scenario_labels,
         )
-    if candidate.scenario is not None and "stat" in entry and not explicit_suite_basis:
-        requested_stat = str(entry.get("stat", "")).strip().lower()
-        if requested_stat != "mean":
+    if candidate.scenario is not None and "reducer" in entry and not explicit_suite_basis:
+        requested_reducer = str(entry.get("reducer", "")).strip().lower()
+        if requested_reducer != "mean":
             raise ValueError(
                 f"Scenario {candidate.scenario!r} stores one mean value per metric; "
-                f"limit stat={requested_stat!r} is unavailable for {candidate.path.name}."
+                f"limit reducer={requested_reducer!r} is unavailable for {candidate.path.name}."
             )
-    stat = basis.stat
-    if "stat" not in entry:
+    reducer = basis.reducer
+    if "reducer" not in entry:
         value = resolve_metric_value(aggregated_values, metric)
         if isinstance(value, (int, float)) and math.isfinite(float(value)):
             return float(value)
-    key = f"{metric}_{stat}"
+    key = f"{metric}_{reducer}"
     value = resolve_metric_value(stats_flat, key)
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         return float(value)
     if (
-        "stat" not in entry
+        "reducer" not in entry
         and not explicit_suite_basis
-        and not applies_current_suite_aggregate
+        and not applies_current_suite_reducer
         and not applies_current_scenario_set
     ):
         fallback = _resolve_candidate_metric_value(candidate, metric)
@@ -1050,7 +1052,7 @@ def filter_candidates_with_limits(
     candidates: Sequence[ParetoCandidate],
     limits: Sequence[Mapping[str, Any]],
     *,
-    aggregate_cfg: Mapping[str, Any] | None = None,
+    reducer_cfg: Mapping[str, Any] | None = None,
     scenario_labels: Sequence[str] | None = None,
     scoring_weights: Mapping[str, float] | None = None,
 ) -> tuple[List[ParetoCandidate], List[Dict[str, Any]]]:
@@ -1071,7 +1073,7 @@ def filter_candidates_with_limits(
             value = _resolve_limit_value(
                 candidate,
                 entry,
-                aggregate_cfg,
+                reducer_cfg,
                 scenario_labels,
             )
             if value is None:

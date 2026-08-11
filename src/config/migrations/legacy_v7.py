@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Optional
 
 from config.schema import CONFIG_SCHEMA_VERSION, SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
+from config.reducers import REDUCER_ALIASES, reducer_mapping_from_aliases
 from config.transform_log import ConfigTransformTracker
 from utils import normalize_coins_source
 
@@ -92,17 +93,36 @@ def migrate_suite_to_scenarios(
     suite = backtest.pop("suite", None)
     if suite and isinstance(suite, dict):
         old_scenarios = suite.get("scenarios", [])
-        aggregate = suite.get("aggregate", {"default": "mean"})
+        suite_reducer, suite_reducer_present = reducer_mapping_from_aliases(
+            suite,
+            path="config.backtest.suite",
+        )
+        suite_reducer_source = next(
+            (alias for alias in REDUCER_ALIASES if alias in suite),
+            "aggregate",
+        )
+        if not suite_reducer_present:
+            suite_reducer = {"default": "mean"}
         include_base = suite.get("include_base_scenario", False)
         base_label = suite.get("base_label", "base")
         suite_enabled = suite.get("enabled", False)
         if suite_enabled or old_scenarios:
-            existing_aggregate = backtest.get("aggregate", {})
-            merged_aggregate = {**existing_aggregate, **aggregate}
-            backtest["aggregate"] = merged_aggregate
-            _log_config(verbose, logging.INFO, "migrated backtest.suite.aggregate -> backtest.aggregate")
+            existing_reducer, existing_reducer_present = reducer_mapping_from_aliases(
+                backtest,
+                path="config.backtest",
+            )
+            if existing_reducer_present:
+                for alias in REDUCER_ALIASES:
+                    backtest.pop(alias, None)
+            merged_reducer = {**(existing_reducer or {}), **(suite_reducer or {})}
+            backtest["reducer"] = merged_reducer
+            _log_config(verbose, logging.INFO, "migrated backtest.suite reducer -> backtest.reducer")
             if tracker is not None:
-                tracker.rename(["backtest", "suite", "aggregate"], ["backtest", "aggregate"], merged_aggregate)
+                tracker.rename(
+                    ["backtest", "suite", suite_reducer_source],
+                    ["backtest", "reducer"],
+                    merged_reducer,
+                )
             new_scenarios = list(old_scenarios)
             if include_base:
                 base_scenario = {"label": base_label}
@@ -121,9 +141,40 @@ def migrate_suite_to_scenarios(
         _log_config(verbose, logging.INFO, "removed backtest.combine_ohlcvs=%s (behavior now derived from scenario exchange count)", old_value)
         if tracker is not None:
             tracker.remove(["backtest", "combine_ohlcvs"], old_value)
-    backtest.setdefault("aggregate", {"default": "mean"})
+    if not any(key in backtest for key in REDUCER_ALIASES):
+        backtest["reducer"] = {"default": "mean"}
     backtest.setdefault("scenarios", [])
     backtest.setdefault("volume_normalization", True)
+
+
+def migrate_reducer_terminology(
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+) -> None:
+    backtest = result.setdefault("backtest", {})
+    mapping, present = reducer_mapping_from_aliases(backtest, path="config.backtest")
+    if not present:
+        backtest["reducer"] = {"default": "mean"}
+        if tracker is not None:
+            tracker.add(["backtest", "reducer"], backtest["reducer"])
+        return
+
+    source_keys = [key for key in REDUCER_ALIASES if key in backtest]
+    for key in source_keys:
+        backtest.pop(key, None)
+    backtest["reducer"] = mapping
+    if source_keys != ["reducer"]:
+        _log_config(
+            verbose,
+            logging.INFO,
+            "normalized backtest reducer alias(es) %s -> backtest.reducer",
+            ", ".join(source_keys),
+        )
+        if tracker is not None:
+            tracker.rename(
+                ["backtest", source_keys[0]],
+                ["backtest", "reducer"],
+                mapping,
+            )
 
 
 def migrate_btc_collateral_settings(

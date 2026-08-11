@@ -50,7 +50,7 @@ def expand_limit_checks(
     *,
     penalty_weight: float,
     objective_index_map: Optional[Dict[str, List[int]]] = None,
-    aggregate_cfg: Optional[Dict[str, Any]] = None,
+    reducer_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Transform normalized limit entries into executable checks.
@@ -83,7 +83,7 @@ def expand_limit_checks(
                 mode,
                 penalty_weight,
                 objective_index_map,
-                aggregate_cfg,
+                reducer_cfg,
             )
             if check:
                 checks.append(check)
@@ -94,7 +94,7 @@ def expand_limit_checks(
                 penalty_weight,
                 mode,
                 objective_index_map,
-                aggregate_cfg,
+                reducer_cfg,
             )
             if check:
                 checks.append(check)
@@ -105,7 +105,7 @@ def expand_limit_checks(
                 penalty_weight,
                 mode,
                 objective_index_map,
-                aggregate_cfg,
+                reducer_cfg,
             )
             if check:
                 checks.append(check)
@@ -196,21 +196,21 @@ def _build_single_bound_check(
     mode: str,
     penalty_weight: float,
     objective_index_map: Optional[Dict[str, List[int]]],
-    aggregate_cfg: Optional[Dict[str, Any]],
+    reducer_cfg: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     bound = entry.get("value")
     numeric_bound = _ensure_float(bound)
     if numeric_bound is None:
         return None
-    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{basis.stat}"
+    basis = resolve_limit_basis(entry, reducer_cfg=reducer_cfg)
+    metric_key = f"{metric}_{basis.reducer}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "bound": numeric_bound,
         "penalty_weight": penalty_weight,
-        "stat": basis.stat,
+        "reducer": basis.reducer,
         "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }
@@ -222,7 +222,7 @@ def _build_range_check(
     penalty_weight: float,
     mode: str,
     objective_index_map: Optional[Dict[str, List[int]]],
-    aggregate_cfg: Optional[Dict[str, Any]],
+    reducer_cfg: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     rng = entry.get("range")
     if not isinstance(rng, (list, tuple)) or len(rng) != 2:
@@ -233,15 +233,15 @@ def _build_range_check(
         return None
     if low > high:
         low, high = high, low
-    basis = resolve_limit_basis(entry, aggregate_cfg=aggregate_cfg)
-    metric_key = f"{metric}_{basis.stat}"
+    basis = resolve_limit_basis(entry, reducer_cfg=reducer_cfg)
+    metric_key = f"{metric}_{basis.reducer}"
     return {
         "metric": metric,
         "metric_key": metric_key,
         "mode": mode,
         "range": (low, high),
         "penalty_weight": penalty_weight,
-        "stat": basis.stat,
+        "reducer": basis.reducer,
         "scenario": basis.scenario,
         "objective_indexes": list(objective_index_map.get(metric, [])) if objective_index_map else [],
     }

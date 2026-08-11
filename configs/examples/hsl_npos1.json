@@ -1,6 +1,6 @@
 {
     "backtest": {
-        "aggregate": {
+        "reducer": {
             "default": "mean"
         },
         "balance_sample_divider": 60,
@@ -289,7 +289,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.1.0",
+    "config_version": "v8.2.0",
     "live": {
         "approved_coins": {
             "long": [

@@ -492,7 +492,7 @@ def test_scenario_projection_fails_when_scoring_metric_is_missing(
         project_candidates_to_scenario(candidates, specs, "bull")
 
 
-def test_scenario_limit_uses_scalar_and_rejects_non_mean_stat(
+def test_scenario_limit_uses_scalar_and_rejects_non_mean_reducer(
     scenario_pareto_dir: Path,
 ):
     _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
@@ -505,7 +505,7 @@ def test_scenario_limit_uses_scalar_and_rejects_non_mean_stat(
     )
     assert [candidate.path.stem for candidate in filtered] == ["a", "b"]
 
-    with pytest.raises(ValueError, match="stores one mean value.*stat='max'.*unavailable"):
+    with pytest.raises(ValueError, match="stores one mean value.*reducer='max'.*unavailable"):
         filter_candidates(
             projected,
             limits_payload=None,
@@ -617,7 +617,7 @@ def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
         "c_dominated",
         "d",
     ]
-    assert max_limits[0]["stat"] == "max"
+    assert max_limits[0]["reducer"] == "max"
 
 
 def test_run_from_args_scenario_json_reports_scope_and_uses_scenario_metrics(

@@ -24,7 +24,6 @@ from shared_arrays import attach_shared_array
 from suite_runner import (
     SuiteScenario,
     extract_suite_config,
-    aggregate_metrics,
     apply_scenario,
     build_scenarios,
     collect_suite_coin_sources,
@@ -77,7 +76,7 @@ async def prepare_suite_contexts(
     """Prepare datasets and configs for every optimizer suite scenario."""
 
     base_exchanges = require_config_value(config, "backtest.exchanges")
-    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+    scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
     needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
@@ -528,7 +527,7 @@ async def prepare_suite_contexts(
     if not contexts:
         raise ValueError("Suite configuration produced no runnable scenarios after filtering.")
 
-    return contexts, aggregate_cfg
+    return contexts, reducer_cfg
 
 
 def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[str, Any]:

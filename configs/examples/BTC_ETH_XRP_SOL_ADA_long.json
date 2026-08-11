@@ -1,6 +1,6 @@
 {
     "backtest": {
-        "aggregate": {
+        "reducer": {
             "default": "mean",
             "drawdown_worst_hsl": "max",
             "drawdown_worst_mean_1pct_hsl": "max",
@@ -250,7 +250,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.1.0",
+    "config_version": "v8.2.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -824,7 +824,7 @@
             {
                 "metric": "adg_pnl",
                 "penalize_if": "less_than",
-                "stat": "mean",
+                "reducer": "mean",
                 "value": 0.0009
             },
             {

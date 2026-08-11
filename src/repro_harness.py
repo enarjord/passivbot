@@ -181,7 +181,7 @@ async def run_optimizer_replay(config: Dict[str, Any]) -> Dict[str, Any]:
         "metrics_payload": metrics_payload or {},
         "selected_coins": selected,
         "coin_sources": source_map,
-        "aggregate_cfg": None,
+        "reducer_cfg": None,
     }
 
 

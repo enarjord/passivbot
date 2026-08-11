@@ -502,44 +502,44 @@ class TestAggregationVariations:
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "a"}, {"label": "b"}],
-            aggregate={"default": "mean"},
+            reducer={"default": "mean"},
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
 
-        _, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
+        _, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert aggregate_cfg["default"] == "mean"
+        assert reducer_cfg["default"] == "mean"
 
     def test_tc6_2_custom_aggregation_mode(self):
         """TC6.2: Custom aggregation mode."""
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "a"}, {"label": "b"}],
-            aggregate={"default": "min"},
+            reducer={"default": "min"},
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
 
-        _, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
+        _, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert aggregate_cfg["default"] == "min"
+        assert reducer_cfg["default"] == "min"
 
     def test_tc6_3_per_metric_aggregation(self):
         """TC6.3: Per-metric aggregation."""
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[{"label": "a"}, {"label": "b"}],
-            aggregate={"default": "mean", "mdg": "min", "sharpe_ratio": "median"},
+            reducer={"default": "mean", "mdg": "min", "sharpe_ratio": "median"},
         )
         formatted = format_config(deepcopy(cfg), verbose=False)
         suite_cfg = extract_suite_config(formatted, None)
 
-        _, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
+        _, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert aggregate_cfg["default"] == "mean"
-        assert aggregate_cfg["mdg"] == "min"
-        assert aggregate_cfg["sharpe_ratio"] == "median"
+        assert reducer_cfg["default"] == "mean"
+        assert reducer_cfg["mdg"] == "min"
+        assert reducer_cfg["sharpe_ratio"] == "median"
 
 
 # =============================================================================
@@ -561,13 +561,13 @@ class TestLegacyMigration:
         }
         # Remove new-style keys
         cfg["backtest"].pop("scenarios", None)
-        cfg["backtest"].pop("aggregate", None)
+        cfg["backtest"].pop("reducer", None)
 
         formatted = format_config(deepcopy(cfg), verbose=False)
 
         assert "suite" not in formatted["backtest"]
         assert formatted["backtest"]["scenarios"] == [{"label": "test"}]
-        assert formatted["backtest"]["aggregate"]["default"] == "mean"
+        assert formatted["backtest"]["reducer"]["default"] == "mean"
 
     def test_tc7_2_old_config_with_include_base_scenario_true(self):
         """TC7.2: Old config with include_base_scenario=true."""
@@ -580,7 +580,7 @@ class TestLegacyMigration:
             "scenarios": [{"label": "custom"}],
         }
         cfg["backtest"].pop("scenarios", None)
-        cfg["backtest"].pop("aggregate", None)
+        cfg["backtest"].pop("reducer", None)
 
         formatted = format_config(deepcopy(cfg), verbose=False)
 
@@ -599,7 +599,7 @@ class TestLegacyMigration:
             "scenarios": [{"label": "custom"}],
         }
         cfg["backtest"].pop("scenarios", None)
-        cfg["backtest"].pop("aggregate", None)
+        cfg["backtest"].pop("reducer", None)
 
         formatted = format_config(deepcopy(cfg), verbose=False)
 
@@ -618,7 +618,7 @@ class TestLegacyMigration:
             "scenarios": [],
         }
         cfg["backtest"].pop("scenarios", None)
-        cfg["backtest"].pop("aggregate", None)
+        cfg["backtest"].pop("reducer", None)
 
         formatted = format_config(deepcopy(cfg), verbose=False)
 
@@ -663,7 +663,7 @@ class TestLegacyMigration:
             ],
         }
         cfg["backtest"].pop("scenarios", None)
-        cfg["backtest"].pop("aggregate", None)
+        cfg["backtest"].pop("reducer", None)
 
         formatted = format_config(deepcopy(cfg), verbose=False)
 
@@ -673,8 +673,8 @@ class TestLegacyMigration:
         assert formatted["backtest"]["scenarios"][0]["label"] == "combined"
         assert formatted["backtest"]["scenarios"][1]["label"] == "binance"
         assert formatted["backtest"]["scenarios"][2]["label"] == "bybit"
-        assert formatted["backtest"]["aggregate"]["default"] == "mean"
-        assert formatted["backtest"]["aggregate"]["mdg"] == "min"
+        assert formatted["backtest"]["reducer"]["default"] == "mean"
+        assert formatted["backtest"]["reducer"]["mdg"] == "min"
 
 
 # =============================================================================
@@ -930,7 +930,7 @@ class TestScenarioFiltering:
         scenarios = [{"label": "base"}, {"coins": ["BTC"]}]
 
         filtered = filter_scenarios_by_label(scenarios, ["scenario_02"])
-        built, _aggregate_cfg = build_scenarios({"scenarios": filtered})
+        built, _reducer_cfg = build_scenarios({"scenarios": filtered})
 
         assert filtered == [{"label": "scenario_02", "coins": ["BTC"]}]
         assert [scenario.label for scenario in built] == ["scenario_02"]

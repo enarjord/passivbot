@@ -492,8 +492,8 @@ def _limits_to_exprs(limits_cfg: Any) -> List[str]:
         scenario = entry.get("scenario")
         if scenario is not None:
             metric = f"{scenario}__{metric}"
-        elif entry.get("stat") is not None:
-            metric = f"{metric}_{entry['stat']}"
+        elif entry.get("reducer") is not None:
+            metric = f"{metric}_{entry['reducer']}"
         metric = _encode_limit_key(str(metric))
         if mode == "greater_than":
             num = _ensure_float(entry.get("value"))

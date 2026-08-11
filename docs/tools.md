@@ -110,7 +110,7 @@ passivbot optimize configs/examples/suite_example.json \
   --filter-starting-configs \
   -l 'adg_strategy_eq>0.0' \
   -l 'strategy_eq_recovery_days_max<100' \
-  -l '{"metric":"strategy_eq_recovery_days_max","penalize_if":"greater_than","stat":"max","value":120}'
+  -l '{"metric":"strategy_eq_recovery_days_max","penalize_if":"greater_than","reducer":"max","value":120}'
 ```
 
 Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most

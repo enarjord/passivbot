@@ -514,7 +514,7 @@ class TestResolveCliLimitsOverride:
                 "metric": "adg_usd",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0008,
-                "stat": "mean",
+                "reducer": "mean",
             },
         ]
 
@@ -534,7 +534,7 @@ class TestResolveCliLimitsOverride:
                 "metric": "fills_gap_p99_hours",
                 "penalize_if": "greater_than_or_equal",
                 "value": 72.0,
-                "stat": "max",
+                "reducer": "max",
             }
         ]
 
@@ -696,7 +696,7 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
         config,
         filter_by_limits=True,
         max_count=None,
-        aggregate_cfg=config["backtest"]["aggregate"],
+        reducer_cfg=config["backtest"]["reducer"],
     )
 
     assert len(selected) == 1
@@ -706,9 +706,9 @@ def test_preselect_starting_configs_extracts_selected_pareto_configs(tmp_path):
     )
 
 
-def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
+def test_preselect_starting_configs_uses_effective_reducer_basis(tmp_path):
     config = get_template_config()
-    config["backtest"]["aggregate"] = {"default": "max"}
+    config["backtest"]["reducer"] = {"default": "max"}
     config["optimize"]["scoring"] = [
         {"metric": "adg_strategy_eq", "goal": "max"},
         {"metric": "drawdown_worst_strategy_eq", "goal": "min"},
@@ -763,7 +763,7 @@ def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
         config,
         filter_by_limits=True,
         max_count=None,
-        aggregate_cfg={"default": "mean"},
+        reducer_cfg={"default": "mean"},
     )
 
     assert len(selected) == 1
@@ -774,7 +774,7 @@ def test_preselect_starting_configs_uses_effective_aggregate_basis(tmp_path):
         config,
         filter_by_limits=True,
         max_count=None,
-        aggregate_cfg=None,
+        reducer_cfg=None,
     )
 
     assert len(selected_non_suite) == 1
@@ -3898,7 +3898,7 @@ class TestEvaluator:
                 "metric": "adg_strategy_pnl_rebased",
                 "penalize_if": "less_than_or_equal",
                 "value": 0.0,
-                "stat": "min",
+                "reducer": "min",
             },
             {
                 "metric": "drawdown_worst_hsl",
@@ -4651,6 +4651,37 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
     }
     config = deepcopy(entry)
     config["backtest"]["coins"] = {"binance": ["XMR"]}
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
+def test_resume_config_mismatches_treats_reducer_aliases_as_equivalent():
+    entry = _resume_validation_entry()
+    entry["backtest"]["aggregate"] = {"default": "max"}
+    entry["optimize"]["scoring"] = [
+        {
+            "metric": "adg_strategy_eq",
+            "goal": "max",
+            "scenario": None,
+            "aggregate": "max",
+        }
+    ]
+    entry["optimize"]["limits"] = [
+        {
+            "metric": "strategy_eq_recovery_days_max",
+            "penalize_if": "greater_than",
+            "stat": "max",
+            "value": 100,
+        }
+    ]
+    config = deepcopy(entry)
+    config["backtest"]["reducer"] = config["backtest"].pop("aggregate")
+    config["optimize"]["scoring"][0]["reducer"] = config["optimize"]["scoring"][0].pop(
+        "aggregate"
+    )
+    config["optimize"]["limits"][0]["reducer"] = config["optimize"]["limits"][0].pop(
+        "stat"
+    )
 
     assert optimize._resume_config_mismatches(entry, config) == []
 
