@@ -694,7 +694,7 @@ def test_normalize_limit_entries_supports_new_schema():
     normalized = config_utils.normalize_limit_entries(raw)
     assert len(normalized) == 4
     assert normalized[0]["metric"] == "adg_btc"
-    assert normalized[0]["stat"] == "mean"
+    assert normalized[0]["reducer"] == "mean"
     assert normalized[1]["metric"] == "loss_profit_ratio"
     assert normalized[2]["range"] == [1.5, 3.0]
     assert normalized[3]["penalize_if"] == "inside_range"
@@ -735,7 +735,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
             "metric": "drawdown_worst_strategy_eq",
             "penalize_if": "greater_than",
             "scenario": None,
-            "stat": "max",
+            "reducer": "max",
             "value": 0.7,
         },
     ]
@@ -751,7 +751,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
             "metric": "drawdown_worst_strategy_eq",
             "penalize_if": "greater_than",
             "scenario": None,
-            "stat": "max",
+            "reducer": "max",
             "value": 0.7,
         },
     ]
@@ -768,7 +768,7 @@ def test_normalize_limit_entries_supports_scenario_specific_limits():
                 "stat": "max",
                 "value": 0.5,
             },
-            "cannot set both a named scenario and stat",
+            "cannot set both a named scenario and reducer",
         ),
         (
             {
@@ -807,7 +807,7 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
         {
             "metric": "adg_pnl",
             "penalize_if": "less_than",
-            "stat": "mean",
+            "reducer": "mean",
             "value": 0,
             "enabled": False,
         },
@@ -902,7 +902,7 @@ def test_parse_limit_cli_entry_supports_range_and_extras():
         "metric": "loss_profit_ratio",
         "penalize_if": "outside_range",
         "range": [0.05, 0.7],
-        "stat": "mean",
+            "reducer": "mean",
         "enabled": False,
     }
 
@@ -938,8 +938,15 @@ def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options()
         "penalize_if": "greater_than",
         "value": 0.7,
         "scenario": None,
-        "stat": "max",
+        "reducer": "max",
     }
+
+
+def test_parse_limit_cli_entry_rejects_conflicting_reducer_aliases():
+    with pytest.raises(ValueError, match="conflicting reducer aliases"):
+        config_utils.parse_limit_cli_entry(
+            "drawdown_worst_strategy_eq<=0.7 stat=min reducer=max"
+        )
 
 
 def test_parse_limit_cli_entries_supports_json_object_strings():
@@ -952,7 +959,7 @@ def test_parse_limit_cli_entries_supports_json_object_strings():
             "metric": "adg_usd",
             "penalize_if": "less_than",
             "value": 0.001,
-            "stat": "mean",
+            "reducer": "mean",
         }
     ]
 
@@ -1584,12 +1591,14 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "Coin Selection:" in help_text
     assert "Date Range:" in help_text
     assert "Optimizer:" in help_text
+    assert "Suite:" in help_text
     _assert_help_option_aliases(help_text, "--symbols", "-s", "CSV_OR_PATH")
     _assert_help_option_aliases(help_text, "--population-size", "-ps", "INT")
     _assert_help_option_aliases(help_text, "--backend", "-ob", "BACKEND")
     assert "--limits JSON_OR_HJSON" in help_text
     _assert_help_option_aliases(help_text, "--limit", "-l", "SPEC")
     assert "--clear-limits" in help_text
+    assert "--reducer-default MODE" in help_text
     _assert_help_option_aliases(
         help_text, "--minimum-coin-age-days", "-mcad", "FLOAT"
     )
@@ -1717,7 +1726,7 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     _assert_help_option_aliases(
         help_text, "--pnls-max-lookback-days", "-pmld", "FLOAT|all"
     )
-    assert "--aggregate-default MODE" in help_text
+    assert "--reducer-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
 
 
@@ -1727,7 +1736,7 @@ def test_backtest_help_all_describes_high_value_overrides():
         _format_parser_help_with_config("backtest", config, help_all=True)
     )
 
-    assert "--aggregate-default MODE" in help_text
+    assert "--reducer-default MODE" in help_text
     assert "Allowed modes: mean, min, max, std, median" in help_text
     assert "Suite scenario definitions" in help_text
     assert "use --suite-config for complex scenario files" in help_text

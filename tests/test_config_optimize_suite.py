@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from config import load_prepared_config
 from config_utils import format_config, get_template_config
 from suite_runner import extract_suite_config
@@ -11,7 +13,7 @@ def test_optimize_suite_is_ignored_and_removed(caplog):
     base["_raw"] = deepcopy(base)
     # Use new flattened structure for backtest scenarios
     base["backtest"]["scenarios"] = [{"label": "s1", "start_date": "2022-01-01"}]
-    base["backtest"]["aggregate"] = {"default": "mean"}
+    base["backtest"]["reducer"] = {"default": "mean"}
     # Add optimize.suite which should be removed with a warning
     base["optimize"]["suite"] = {"enabled": True, "aggregate": {"default": "median"}}
 
@@ -25,14 +27,108 @@ def test_optimize_suite_is_ignored_and_removed(caplog):
     assert any("optimize.suite" in rec.message for rec in caplog.records)
 
 
-def test_suite_aggregate_default_preserved():
-    """Test that aggregate default setting is preserved in new flattened structure."""
+def test_suite_reducer_default_preserved():
+    """Test that the reducer default is preserved in the flattened structure."""
     base = get_template_config()
     base["_raw"] = deepcopy(base)
-    # Modify the default aggregate mode
-    base["backtest"]["aggregate"]["default"] = "median"
+    base["backtest"]["reducer"]["default"] = "median"
     formatted = format_config(deepcopy(base), verbose=False)
-    assert formatted["backtest"]["aggregate"]["default"] == "median"
+    assert formatted["backtest"]["reducer"]["default"] == "median"
+
+
+@pytest.mark.parametrize("alias", ["reducer", "aggregate", "stat", "scenario_stat"])
+def test_reducer_aliases_normalize_across_suite_scoring_and_limits(alias):
+    base = get_template_config()
+    base["_raw"] = deepcopy(base)
+    base["backtest"].pop("reducer", None)
+    base["backtest"][alias] = {"default": "max"}
+    base["optimize"]["scoring"] = [
+        {
+            "metric": "strategy_eq_recovery_days_max",
+            "goal": "min",
+            "scenario": None,
+            alias: "max",
+        }
+    ]
+    base["optimize"]["limits"] = [
+        {
+            "metric": "strategy_eq_recovery_days_max",
+            "penalize_if": "greater_than",
+            "scenario": None,
+            alias: "max",
+            "value": 100,
+        }
+    ]
+
+    formatted = format_config(deepcopy(base), verbose=False)
+
+    assert formatted["backtest"]["reducer"] == {"default": "max"}
+    assert formatted["optimize"]["scoring"][0]["reducer"] == "max"
+    assert formatted["optimize"]["limits"][0]["reducer"] == "max"
+    for legacy_alias in {"aggregate", "stat", "scenario_stat"}:
+        assert legacy_alias not in formatted["backtest"]
+        assert legacy_alias not in formatted["optimize"]["scoring"][0]
+        assert legacy_alias not in formatted["optimize"]["limits"][0]
+
+
+def test_same_valued_reducer_aliases_collapse_to_canonical_output():
+    base = get_template_config()
+    base["backtest"]["aggregate"] = {"default": "mean"}
+    base["optimize"]["scoring"] = [
+        {
+            "metric": "adg_strategy_eq",
+            "goal": "max",
+            "scenario": None,
+            "reducer": "mean",
+            "stat": "mean",
+        }
+    ]
+    base["optimize"]["limits"] = [
+        {
+            "metric": "strategy_eq_recovery_days_max",
+            "penalize_if": "greater_than",
+            "reducer": "max",
+            "scenario_stat": "max",
+            "value": 100,
+        }
+    ]
+
+    formatted = format_config(deepcopy(base), verbose=False)
+
+    assert formatted["backtest"]["reducer"] == {"default": "mean"}
+    assert formatted["optimize"]["scoring"][0]["reducer"] == "mean"
+    assert formatted["optimize"]["limits"][0]["reducer"] == "max"
+    assert "stat" not in formatted["optimize"]["scoring"][0]
+    assert "scenario_stat" not in formatted["optimize"]["limits"][0]
+
+
+@pytest.mark.parametrize("scope", ["backtest", "scoring", "limits"])
+def test_conflicting_reducer_aliases_fail_loudly(scope):
+    base = get_template_config()
+    if scope == "backtest":
+        base["backtest"]["aggregate"] = {"default": "max"}
+    elif scope == "scoring":
+        base["optimize"]["scoring"] = [
+            {
+                "metric": "adg_strategy_eq",
+                "goal": "max",
+                "reducer": "mean",
+                "stat": "max",
+            }
+        ]
+    else:
+        base["optimize"]["limits"] = [
+            {
+                "metric": "strategy_eq_recovery_days_max",
+                "penalize_if": "greater_than",
+                "reducer": "mean",
+                "scenario_stat": "max",
+                "value": 100,
+            }
+        ]
+
+    with pytest.raises(ValueError, match="conflicting reducer aliases"):
+        format_config(deepcopy(base), verbose=False)
 
 
 def test_optimizer_objective_scenario_is_preserved():
@@ -71,7 +167,8 @@ def test_optimizer_scoring_basis_round_trip_preserves_omitted_named_and_null_sce
 
     formatted = format_config(deepcopy(base), verbose=False)
 
-    assert formatted["optimize"]["scoring"] == base["optimize"]["scoring"]
+    assert formatted["optimize"]["scoring"][-1]["reducer"] == "max"
+    assert "aggregate" not in formatted["optimize"]["scoring"][-1]
 
 
 def test_optimizer_limit_basis_round_trip_preserves_named_and_null_scenarios():
@@ -95,15 +192,16 @@ def test_optimizer_limit_basis_round_trip_preserves_named_and_null_scenarios():
 
     formatted = format_config(deepcopy(base), verbose=False)
 
-    assert formatted["optimize"]["limits"] == base["optimize"]["limits"]
+    assert formatted["optimize"]["limits"][-1]["reducer"] == "max"
+    assert "stat" not in formatted["optimize"]["limits"][-1]
 
 
-def test_optimizer_preserves_explicit_hsl_aggregate_config():
-    """Optimizer must not inherit template metric-specific aggregate overrides."""
+def test_optimizer_preserves_explicit_hsl_reducer_config():
+    """Optimizer must not inherit template metric-specific reducer overrides."""
     cfg = load_prepared_config("configs/examples/hsl_npos1.json", verbose=False)
     suite_cfg = extract_suite_config(cfg, suite_override=None)
 
-    assert suite_cfg["aggregate"] == {"default": "mean"}
+    assert suite_cfg["reducer"] == {"default": "mean"}
 
 
 def test_legacy_suite_migration():
@@ -123,7 +221,7 @@ def test_legacy_suite_migration():
     }
     # Remove new-style keys to simulate old config
     base["backtest"].pop("scenarios", None)
-    base["backtest"].pop("aggregate", None)
+    base["backtest"].pop("reducer", None)
 
     formatted = format_config(deepcopy(base), verbose=True)
 
@@ -134,8 +232,9 @@ def test_legacy_suite_migration():
     assert formatted["backtest"]["scenarios"][0]["label"] == "combined"  # base scenario
     assert formatted["backtest"]["scenarios"][1]["label"] == "binance_only"
     assert formatted["backtest"]["scenarios"][2]["label"] == "bybit_only"
-    # aggregate should be at top level
-    assert formatted["backtest"]["aggregate"]["default"] == "median"
+    # reducer should be canonical at top level
+    assert formatted["backtest"]["reducer"]["default"] == "median"
+    assert "aggregate" not in formatted["backtest"]
 
 
 def test_legacy_combine_ohlcvs_removed():

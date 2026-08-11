@@ -21,7 +21,7 @@ from .tree_ops import add_missing_keys_recursively, remove_unused_keys_recursive
 Path = tuple[str, ...]
 
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
-    ("backtest", "aggregate"),
+    ("backtest", "reducer"),
     ("live", "startup_phase_budgets"),
 }
 BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (

@@ -25,6 +25,7 @@ from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
 from config.parse import load_raw_config
 from config.shared_bot import canonicalize_shared_bot_side
+from config.reducers import canonicalize_reducer_mapping, reducer_mapping_from_aliases
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from materialized_cache import release_materialized_payload
@@ -116,34 +117,40 @@ def extract_suite_config(
 
     New structure reads from:
     - backtest.scenarios (list of scenario dicts)
-    - backtest.aggregate (aggregation settings)
+    - backtest.reducer (scenario reduction settings)
     - backtest.exchanges (default exchanges for scenarios)
     - backtest.volume_normalization (bool, default True)
     - backtest.suite_enabled (bool, default False) - master switch for suite mode
 
     Args:
         base_config: Full config dict
-        suite_override: Optional override dict with scenarios/aggregate keys
+        suite_override: Optional override dict with scenarios/reducer keys
 
     Returns:
-        Dict with 'scenarios', 'aggregate', 'exchanges', 'volume_normalization', and 'enabled' keys
+        Dict with 'scenarios', 'reducer', 'exchanges', 'volume_normalization', and 'enabled' keys
     """
     backtest = base_config.get("backtest", {})
 
     # Build config from new flattened structure
+    reducer_cfg, reducer_present = reducer_mapping_from_aliases(
+        backtest,
+        path="config.backtest",
+    )
     cfg = {
         "scenarios": deepcopy(backtest.get("scenarios", [])),
-        "aggregate": deepcopy(backtest.get("aggregate", {"default": "mean"})),
+        "reducer": reducer_cfg if reducer_present else {"default": "mean"},
         "exchanges": deepcopy(backtest.get("exchanges", [])),
         "volume_normalization": backtest.get("volume_normalization", True),
     }
 
     # Apply overrides if provided
     if suite_override:
+        suite_override = deepcopy(suite_override)
+        canonicalize_reducer_mapping(suite_override, path="suite override")
         if "scenarios" in suite_override:
             cfg["scenarios"] = deepcopy(suite_override["scenarios"])
-        if "aggregate" in suite_override:
-            cfg["aggregate"] = deepcopy(suite_override["aggregate"])
+        if "reducer" in suite_override:
+            cfg["reducer"] = deepcopy(suite_override["reducer"])
         if "exchanges" in suite_override:
             cfg["exchanges"] = deepcopy(suite_override["exchanges"])
         if "volume_normalization" in suite_override:
@@ -166,7 +173,12 @@ def _suite_override_from_section(section: Dict[str, Any], *, source_label: str) 
         suite = section["suite"]
         if not isinstance(suite, dict):
             raise ValueError(f"Suite config {source_label} field 'suite' must be a mapping.")
-        return deepcopy(suite)
+        suite_override = deepcopy(suite)
+        canonicalize_reducer_mapping(
+            suite_override,
+            path=f"suite config {source_label}.suite",
+        )
+        return suite_override
     if "scenarios" not in section:
         raise ValueError(f"Suite config {source_label} must define scenarios.")
     scenarios = section["scenarios"]
@@ -175,8 +187,12 @@ def _suite_override_from_section(section: Dict[str, Any], *, source_label: str) 
     suite_override: Dict[str, Any] = {
         "scenarios": deepcopy(scenarios),
     }
-    if "aggregate" in section:
-        suite_override["aggregate"] = deepcopy(section["aggregate"])
+    reducer_cfg, reducer_present = reducer_mapping_from_aliases(
+        section,
+        path=f"suite config {source_label}",
+    )
+    if reducer_present:
+        suite_override["reducer"] = reducer_cfg
     for key in ("exchanges", "volume_normalization"):
         if key in section:
             suite_override[key] = deepcopy(section[key])
@@ -188,7 +204,7 @@ def load_suite_override_config(suite_config_path: str | Path) -> Dict[str, Any]:
     Load a suite override file without normalizing it as a full bot config.
 
     External suite files are intentionally partial: they may contain only
-    backtest.scenarios/backtest.aggregate or a legacy backtest.suite wrapper.
+    backtest.scenarios/backtest.reducer or a legacy backtest.suite wrapper.
     Full config flavor detection is therefore the wrong boundary here.
     """
 
@@ -652,11 +668,11 @@ def build_scenarios(
     - Multiple exchanges in scenario = best-per-coin combination
 
     Args:
-        suite_cfg: Suite configuration dict with 'scenarios' and 'aggregate'
+        suite_cfg: Suite configuration dict with 'scenarios' and 'reducer'
         base_exchanges: Default exchanges to inherit when scenario doesn't specify
 
     Returns:
-        Tuple of (scenarios list, aggregate config dict)
+        Tuple of (scenarios list, reducer config dict)
     """
     scenarios_cfg = suite_cfg.get("scenarios") or []
     if not scenarios_cfg:
@@ -723,8 +739,8 @@ def build_scenarios(
             + ", ".join(duplicate_labels)
         )
 
-    aggregate_cfg = deepcopy(suite_cfg.get("aggregate", {"default": "mean"}))
-    return scenarios, aggregate_cfg
+    reducer_cfg = deepcopy(suite_cfg.get("reducer", {"default": "mean"}))
+    return scenarios, reducer_cfg
 
 
 def _normalize_scenario_overrides(overrides: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1831,12 +1847,12 @@ def _recompute_index_metadata(
 
 
 # --------------------------------------------------------------------------- #
-# Aggregation
+# Scenario reduction
 # --------------------------------------------------------------------------- #
 
 
-def aggregate_metrics(
-    results: Sequence[ScenarioResult], aggregate_cfg: Dict[str, Any]
+def reduce_metrics(
+    results: Sequence[ScenarioResult], reducer_cfg: Dict[str, Any]
 ) -> Dict[str, Any]:
     if not results:
         return {"aggregated": {}, "stats": {}}
@@ -1850,9 +1866,9 @@ def aggregate_metrics(
             metrics_values.setdefault(metric, []).append(float(value))
 
     stats: Dict[str, Dict[str, float]] = {}
-    aggregates: Dict[str, float] = {}
-    aggregate_cfg = {canonicalize_metric_name(str(k)): v for k, v in aggregate_cfg.items()}
-    default_mode = str(aggregate_cfg.get("default", "mean")).lower()
+    reduced: Dict[str, float] = {}
+    reducer_cfg = {canonicalize_metric_name(str(k)): v for k, v in reducer_cfg.items()}
+    default_mode = str(reducer_cfg.get("default", "mean")).lower()
 
     for metric, values in metrics_values.items():
         if not values:
@@ -1865,24 +1881,24 @@ def aggregate_metrics(
             "std": float(np.std(arr)),
             "median": float(np.median(arr)),
         }
-        mode = aggregate_cfg.get(metric)
+        mode = reducer_cfg.get(metric)
         if mode is None and "_" in metric:
             base = metric.rsplit("_", 1)[0]
-            mode = aggregate_cfg.get(base)
+            mode = reducer_cfg.get(base)
         mode = str(mode or default_mode).lower()
         if mode == "mean":
-            aggregates[metric] = stats[metric]["mean"]
+            reduced[metric] = stats[metric]["mean"]
         elif mode == "max":
-            aggregates[metric] = stats[metric]["max"]
+            reduced[metric] = stats[metric]["max"]
         elif mode == "min":
-            aggregates[metric] = stats[metric]["min"]
+            reduced[metric] = stats[metric]["min"]
         elif mode == "std":
-            aggregates[metric] = stats[metric]["std"]
+            reduced[metric] = stats[metric]["std"]
         elif mode == "median":
-            aggregates[metric] = float(np.median(arr))
+            reduced[metric] = float(np.median(arr))
         else:
-            raise ValueError(f"Unsupported aggregation mode '{mode}' for metric '{metric}'.")
-    return {"aggregated": aggregates, "stats": stats}
+            raise ValueError(f"Unsupported reducer '{mode}' for metric '{metric}'.")
+    return {"aggregated": reduced, "stats": stats}
 
 
 def build_suite_metrics_payload(
@@ -1944,7 +1960,7 @@ async def run_backtest_suite_async(
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
 
-    scenarios, aggregate_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
+    scenarios, reducer_cfg = build_scenarios(suite_cfg, base_exchanges=base_exchanges)
 
     # Determine which individual exchange datasets are needed for single-exchange scenarios
     needed_individual = _determine_needed_individual_exchanges(scenarios, base_exchanges)
@@ -2085,8 +2101,8 @@ async def run_backtest_suite_async(
             len(result.metrics.get("stats", {})),
         )
 
-    aggregate_summary = aggregate_metrics(results, aggregate_cfg)
-    suite_metrics = build_suite_metrics_payload(results, aggregate_summary)
+    reduced_summary = reduce_metrics(results, reducer_cfg)
+    suite_metrics = build_suite_metrics_payload(results, reduced_summary)
     # Persist a lean, canonical payload: shared schema + elapsed per scenario.
     summary_payload = {
         "suite_id": suite_timestamp,
@@ -2108,7 +2124,7 @@ async def run_backtest_suite_async(
     return SuiteSummary(
         suite_id=suite_timestamp,
         scenarios=results,
-        aggregate=aggregate_summary,
+        aggregate=reduced_summary,
         output_dir=suite_dir,
         suite_metrics=suite_metrics,
     )

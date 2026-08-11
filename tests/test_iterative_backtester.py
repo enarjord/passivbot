@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,37 @@ def test_parse_override_value_supports_common_scalar_types():
     assert ib.parse_override_value('{"x": 1}') == {"x": 1}
     assert ib.parse_override_value("[1, 2]") == [1, 2]
     assert ib.parse_override_value("now") == "now"
+
+
+def test_limit_history_uses_canonical_reducer_key(tmp_path):
+    session = ib.IterativeBacktestSession(Path("config.json"), None, False)
+    session.session_dir = tmp_path
+    limit = ib.LimitInfo(
+        metric="drawdown_worst_strategy_eq",
+        reducer="max",
+        mode="greater_than",
+        metric_key="drawdown_worst_strategy_eq_max",
+        value=0.4,
+        bound=0.5,
+    )
+    run = ib.RunSummary(
+        index=1,
+        timestamp=1.0,
+        score_vector=(0.1,),
+        modifier=0.0,
+        combined_analysis={},
+        analyses_per_exchange={},
+        scoring_metrics={},
+        limit_metrics=[limit],
+        results_path=tmp_path / "results",
+        config_hash="hash",
+    )
+
+    session._append_history_log(run)
+
+    payload = json.loads((tmp_path / "history.jsonl").read_text())
+    assert payload["limits"][0]["reducer"] == "max"
+    assert "stat" not in payload["limits"][0]
 
 
 def test_apply_cli_overrides_updates_nested_config_paths():

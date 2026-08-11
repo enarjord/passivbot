@@ -657,7 +657,7 @@ def build_suite_payload(
         "backtest": {
             "suite_enabled": True,
             "scenarios": scenarios,
-            "aggregate": {"default": "mean"},
+            "reducer": {"default": "mean"},
         }
     }
 

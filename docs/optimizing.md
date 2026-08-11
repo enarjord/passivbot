@@ -399,7 +399,7 @@ Key fields (directly under `backtest`):
 
 - `backtest.suite_enabled`: master toggle for suite mode, can also be set with `--suite [y/n]`
 - `backtest.scenarios`: list of scenario dictionaries (same schema as backtest scenarios)
-- `backtest.aggregate`: default per-metric reducers for combining scenario results (default:
+- `backtest.reducer`: default per-metric reducers for combining scenario results (default:
   `{"default": "mean"}`)
 
 `optimize.objective_scenario` sets the default scoring basis. Set it to a unique scenario label
@@ -413,7 +413,7 @@ Each object-form `optimize.scoring` entry may override the default:
 ```json
 {
   "backtest": {
-    "aggregate": {"default": "mean"}
+    "reducer": {"default": "mean"}
   },
   "optimize": {
     "objective_scenario": "base",
@@ -428,7 +428,7 @@ Each object-form `optimize.scoring` entry may override the default:
         "metric": "strategy_eq_recovery_days_max",
         "goal": "min",
         "scenario": null,
-        "aggregate": "max"
+        "reducer": "max"
       }
     ]
   }
@@ -436,9 +436,9 @@ Each object-form `optimize.scoring` entry may override the default:
 ```
 
 An omitted `scenario` inherits `optimize.objective_scenario`, a named value selects that scenario,
-and explicit `null` selects suite aggregation. An aggregate objective without its own `aggregate`
-uses the metric-specific `backtest.aggregate` rule and then its `default`; an explicit `aggregate`
-may be `mean`, `min`, `max`, `std`, or `median`. A named scenario and `aggregate` are mutually
+and explicit `null` selects suite reduction. A reduced objective without its own `reducer`
+uses the metric-specific `backtest.reducer` rule and then its `default`; an explicit `reducer`
+may be `mean`, `min`, `max`, `std`, or `median`. A named scenario and `reducer` are mutually
 exclusive. This permits representative base-period performance objectives alongside mean or
 worst-case stress objectives while limits retain their independent suite-wide contract.
 Each metric may still appear only once in `optimize.scoring`; scoring the same metric from multiple
@@ -458,16 +458,16 @@ metric:
   {
     "metric": "drawdown_worst_strategy_eq",
     "penalize_if": "greater_than",
-    "stat": "max",
+    "reducer": "max",
     "value": 0.7
   }
 ]
 ```
 
 The first limit reads only `base`; the second reads the maximum across scenarios. Their violations
-are evaluated independently and their penalties accumulate. A named `scenario` and `stat` are
-mutually exclusive. An omitted or null `scenario` uses suite aggregation; with no explicit `stat`,
-the limit falls back through the metric-specific and default `backtest.aggregate` rules.
+are evaluated independently and their penalties accumulate. A named `scenario` and `reducer` are
+mutually exclusive. An omitted or null `scenario` uses suite aggregation; with no explicit `reducer`,
+the limit falls back through the metric-specific and default `backtest.reducer` rules.
 
 Suite mode is opt-in. The default schema/example config does not enable it automatically.
 
@@ -475,8 +475,15 @@ During evaluation the optimizer records:
 
 - Per-scenario combined metrics (the same mean/min/max/std set produced by standalone
   backtests). These are exposed on each individual as `<label>__{metric}`.
-- Aggregated metrics computed with the `backtest.aggregate` rules (default `mean`).
-  These values feed `optimize.limits` and aggregate-based `optimize.scoring` entries.
+- Aggregated metrics computed with the `backtest.reducer` rules (default `mean`).
+  These values feed `optimize.limits` and suite-reduced `optimize.scoring` entries.
+
+`reducer` is canonical across suite configuration, scoring entries, limits, CLI entries, and
+serialized configs. For backward compatibility, the input aliases `aggregate`, `stat`, and
+`scenario_stat` are accepted at the same schema positions (`field` is additionally accepted for
+legacy limits). Same-valued aliases collapse to `reducer`; conflicting aliases fail validation.
+Historical Pareto artifact payloads keep their existing `suite_metrics.aggregate`, `aggregated`,
+and `stats` keys and remain readable.
 
 See [Suite Examples](suite_examples.md) for practical scenario configurations including exchange
 comparisons, date range testing, and parameter sensitivity analysis.
@@ -611,11 +618,11 @@ objects. Each object describes when to penalize a result:
 - `value`: numeric threshold for `<`/`>` limits.
 - `range`: `[low, high]` for the range-based operators.
 - Optional `scenario`: select one named suite scenario. Omitted or explicit `null` uses suite
-  aggregation. Named scenarios cannot be combined with `stat`.
-- Optional `stat`: for suite aggregation, override the statistic to compare against (`min`, `max`,
+  aggregation. Named scenarios cannot be combined with `reducer`.
+- Optional `reducer`: for suite aggregation, override the statistic to compare against (`min`, `max`,
   `mean`, `std`, or `median`).
-  Without `stat`, Passivbot resolves the metric through `backtest.aggregate`: first a
-  metric-specific aggregate rule, then `backtest.aggregate.default`, then `mean`.
+  Without `reducer`, Passivbot resolves the metric through `backtest.reducer`: first a
+  metric-specific reducer rule, then `backtest.reducer.default`, then `mean`.
 
 Example:
 
@@ -630,11 +637,11 @@ Example:
   {
     "metric": "drawdown_worst_strategy_eq",
     "penalize_if": "greater_than",
-    "stat": "max",
+    "reducer": "max",
     "value": 0.7
   },
   {"metric": "loss_profit_ratio", "penalize_if": "outside_range", "range": [0.05, 0.7]},
-  {"metric": "adg", "penalize_if": "<", "value": 0.0008, "stat": "mean"}
+  {"metric": "adg", "penalize_if": "<", "value": 0.0008, "reducer": "mean"}
 ]
 ```
 
@@ -656,7 +663,7 @@ passivbot optimize \
   --limit 'drawdown_worst_strategy_eq <= 0.5 scenario=base' \
   --limit 'backtest_completion_ratio>=1.0' \
   --limit 'loss_profit_ratio outside_range [0.05,0.7]' \
-  --limit 'adg > 0.0008 stat=mean'
+  --limit 'adg > 0.0008 reducer=mean'
 ```
 
 You can also combine both forms. `--limits` loads a whole list first, and each `--limit`

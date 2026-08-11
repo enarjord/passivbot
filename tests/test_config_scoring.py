@@ -103,7 +103,7 @@ def test_strategy_eq_recovery_max_resolves_legacy_peak_metric_value():
     assert resolve_metric_value(metrics, "strategy_eq_recovery_days_max_mean") == 9.0
 
 
-def test_scoring_basis_preserves_inherit_named_and_explicit_aggregate_scenarios():
+def test_scoring_basis_preserves_inherit_named_and_explicit_reducer_scenarios():
     specs, _ = normalize_scoring_entries(
         [
             {"metric": "adg_strategy_eq", "goal": "max"},
@@ -135,12 +135,12 @@ def test_scoring_basis_preserves_inherit_named_and_explicit_aggregate_scenarios(
         "metric": "strategy_eq_recovery_days_max",
         "goal": "min",
         "scenario": None,
-        "aggregate": "max",
+        "reducer": "max",
     }
 
 
 def test_scoring_basis_resolves_omitted_and_null_scenario_in_both_default_directions():
-    aggregate_cfg = {
+    reducer_cfg = {
         "default": "mean",
         "strategy_eq_recovery_days_max": "max",
     }
@@ -168,45 +168,50 @@ def test_scoring_basis_resolves_omitted_and_null_scenario_in_both_default_direct
     assert resolve_objective_basis(
         specs[0],
         default_scenario="base",
-        aggregate_cfg=aggregate_cfg,
+        reducer_cfg=reducer_cfg,
     ).scenario == "base"
     underwater_basis = resolve_objective_basis(
         specs[1],
         default_scenario="base",
-        aggregate_cfg=aggregate_cfg,
+        reducer_cfg=reducer_cfg,
     )
     assert underwater_basis.scenario is None
-    assert underwater_basis.aggregate == "mean"
+    assert underwater_basis.reducer == "mean"
     recovery_basis = resolve_objective_basis(
         specs[2],
         default_scenario="base",
-        aggregate_cfg=aggregate_cfg,
+        reducer_cfg=reducer_cfg,
     )
     assert recovery_basis.scenario is None
-    assert recovery_basis.aggregate == "max"
+    assert recovery_basis.reducer == "max"
 
-    inherited_aggregate = resolve_objective_basis(
+    inherited_reducer = resolve_objective_basis(
         specs[0],
         default_scenario=None,
-        aggregate_cfg=aggregate_cfg,
+        reducer_cfg=reducer_cfg,
     )
-    assert inherited_aggregate.scenario is None
-    assert inherited_aggregate.aggregate == "mean"
+    assert inherited_reducer.scenario is None
+    assert inherited_reducer.reducer == "mean"
     named_override = resolve_objective_basis(
         specs[3],
         default_scenario=None,
-        aggregate_cfg=aggregate_cfg,
+        reducer_cfg=reducer_cfg,
     )
     assert named_override.scenario == "stress"
-    assert named_override.aggregate is None
+    assert named_override.reducer is None
 
 
 @pytest.mark.parametrize(
     ("entry", "match"),
     [
         (
-            {"metric": "adg_strategy_eq", "goal": "max", "stat": "mean"},
-            "unknown field",
+            {
+                "metric": "adg_strategy_eq",
+                "goal": "max",
+                "aggregate": "mean",
+                "stat": "max",
+            },
+            "conflicting reducer aliases",
         ),
         (
             {
@@ -232,7 +237,7 @@ def test_scoring_basis_rejects_ambiguous_or_unknown_fields(entry, match):
         normalize_scoring_entries([entry])
 
 
-def test_scoring_aggregate_override_requires_effective_aggregate_scenario():
+def test_scoring_reducer_override_requires_effective_suite_scenario():
     specs, _ = normalize_scoring_entries(
         [{"metric": "adg_strategy_eq", "goal": "max", "aggregate": "max"}]
     )
@@ -241,5 +246,5 @@ def test_scoring_aggregate_override_requires_effective_aggregate_scenario():
         resolve_objective_basis(
             specs[0],
             default_scenario="base",
-            aggregate_cfg={"default": "mean"},
+            reducer_cfg={"default": "mean"},
         )

@@ -9,16 +9,18 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import hjson
 
 from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name
-
-
-SUPPORTED_AGGREGATE_MODES = {"min", "max", "mean", "std", "median"}
-SUPPORTED_LIMIT_STATS = SUPPORTED_AGGREGATE_MODES
+from .reducers import (
+    LIMIT_REDUCER_ALIASES,
+    REDUCER_ALIASES,
+    SUPPORTED_REDUCERS,
+    reducer_from_aliases,
+)
 
 
 @dataclass(frozen=True)
 class LimitBasis:
     scenario: Optional[str]
-    stat: str
+    reducer: str
 
 
 def parse_limits_string(limits_str: Union[str, dict]) -> dict:
@@ -166,8 +168,10 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         key, value = token.split("=", 1)
         key = key.strip().lower()
         value = value.strip()
-        if key == "stat":
-            entry["stat"] = value
+        if key in REDUCER_ALIASES:
+            # Preserve the supplied alias until normalization so conflicting
+            # aliases are detected instead of silently overwriting each other.
+            entry[key] = value
         elif key == "scenario":
             entry["scenario"] = None if value.lower() == "null" else value
         elif key == "enabled":
@@ -175,7 +179,7 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         else:
             raise ValueError(
                 f"Unsupported CLI --limit option {key!r}; supported extras are "
-                "scenario=..., stat=..., and enabled=..."
+                "scenario=..., reducer=..., and enabled=..."
             )
 
     return _normalize_limit_entry_preserve_extras(entry)
@@ -298,13 +302,11 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
         penalize_if = "greater_than"
     else:
         penalize_if = _normalize_penalize_if(raw_penalize_if)
-    stat = payload.get("stat") or payload.get("field")
-    normalized_stat: Optional[str] = None
-    if stat is not None:
-        stat = str(stat).strip().lower()
-        if stat not in SUPPORTED_LIMIT_STATS:
-            raise ValueError(f"Unsupported stat '{stat}' for limit on {metric}.")
-        normalized_stat = stat
+    reducer, reducer_present = reducer_from_aliases(
+        payload,
+        path=f"limit on {metric}",
+        aliases=LIMIT_REDUCER_ALIASES,
+    )
     scenario_present = "scenario" in payload
     scenario = payload.get("scenario")
     if scenario is not None:
@@ -317,13 +319,13 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
             raise ValueError(
                 f"Limit scenario for {metric} must be a non-empty scenario label or null."
             )
-    if scenario is not None and normalized_stat is not None:
+    if scenario is not None and reducer is not None:
         raise ValueError(
-            f"Limit on {metric} cannot set both a named scenario and stat."
+            f"Limit on {metric} cannot set both a named scenario and reducer."
         )
     result: Dict[str, Any] = {"metric": metric, "penalize_if": penalize_if}
-    if normalized_stat:
-        result["stat"] = normalized_stat
+    if reducer_present and reducer is not None:
+        result["reducer"] = reducer
     if scenario_present:
         result["scenario"] = scenario
     if penalize_if in {
@@ -387,6 +389,8 @@ def _normalize_limit_entry_preserve_extras(entry: Any) -> Dict[str, Any]:
     if not isinstance(entry, dict):
         return normalized
     for key, value in entry.items():
+        if key in LIMIT_REDUCER_ALIASES:
+            continue
         if key not in normalized:
             normalized[key] = deepcopy(value)
     return normalized
@@ -394,6 +398,8 @@ def _normalize_limit_entry_preserve_extras(entry: Any) -> Dict[str, Any]:
 
 def _is_canonical_limit_entry(entry: Any) -> bool:
     if not isinstance(entry, dict):
+        return False
+    if any(alias in entry for alias in LIMIT_REDUCER_ALIASES if alias != "reducer"):
         return False
     try:
         normalized = _normalize_limit_entry(entry)
@@ -466,46 +472,44 @@ def normalize_limit_entries(
     return normalized
 
 
-def resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, Any]]) -> str:
-    if not aggregate_cfg:
+def resolve_reducer_mode(metric: str, reducer_cfg: Optional[Dict[str, Any]]) -> str:
+    if not reducer_cfg:
         return "mean"
     metric = canonical_metric_name(metric)
-    normalized_aggregate_cfg = {
-        canonical_metric_name(str(key)): value for key, value in aggregate_cfg.items()
+    normalized_reducer_cfg = {
+        canonical_metric_name(str(key)): value for key, value in reducer_cfg.items()
     }
-    mode = normalized_aggregate_cfg.get(metric)
+    mode = normalized_reducer_cfg.get(metric)
     if mode is None and "_" in metric:
         base = metric.rsplit("_", 1)[0]
-        mode = normalized_aggregate_cfg.get(base)
-    resolved = str(mode or normalized_aggregate_cfg.get("default", "mean")).strip().lower()
-    if resolved not in SUPPORTED_LIMIT_STATS:
+        mode = normalized_reducer_cfg.get(base)
+    resolved = str(mode or normalized_reducer_cfg.get("default", "mean")).strip().lower()
+    if resolved not in SUPPORTED_REDUCERS:
         raise ValueError(
-            f"Unsupported aggregate mode '{resolved}' for metric '{metric}'. "
-            f"Expected one of {sorted(SUPPORTED_LIMIT_STATS)}."
+            f"Unsupported reducer '{resolved}' for metric '{metric}'. "
+            f"Expected one of {sorted(SUPPORTED_REDUCERS)}."
         )
     return resolved
 
 
-def resolve_limit_stat(
+def resolve_limit_reducer(
     entry: Dict[str, Any],
-    aggregate_cfg: Optional[Dict[str, Any]] = None,
+    reducer_cfg: Optional[Dict[str, Any]] = None,
 ) -> str:
     metric = canonical_metric_name(str(entry.get("metric", "") or ""))
-    explicit_stat = entry.get("stat")
-    if explicit_stat is not None:
-        resolved = str(explicit_stat).strip().lower()
-        if resolved not in SUPPORTED_LIMIT_STATS:
-            raise ValueError(
-                f"Unsupported stat '{resolved}' for limit on {metric}. "
-                f"Expected one of {sorted(SUPPORTED_LIMIT_STATS)}."
-            )
-        return resolved
-    return resolve_aggregate_mode(metric, aggregate_cfg)
+    reducer, present = reducer_from_aliases(
+        entry,
+        path=f"limit on {metric}",
+        aliases=LIMIT_REDUCER_ALIASES,
+    )
+    if present and reducer is not None:
+        return reducer
+    return resolve_reducer_mode(metric, reducer_cfg)
 
 
 def resolve_limit_basis(
     entry: Dict[str, Any],
-    aggregate_cfg: Optional[Dict[str, Any]] = None,
+    reducer_cfg: Optional[Dict[str, Any]] = None,
 ) -> LimitBasis:
     metric = canonical_metric_name(str(entry.get("metric", "") or ""))
     scenario = entry.get("scenario")
@@ -514,15 +518,36 @@ def resolve_limit_basis(
             raise ValueError(
                 f"Limit scenario for {metric} must be a non-empty scenario label or null."
             )
-        if entry.get("stat") is not None:
+        reducer, _present = reducer_from_aliases(
+            entry,
+            path=f"limit on {metric}",
+            aliases=LIMIT_REDUCER_ALIASES,
+        )
+        if reducer is not None:
             raise ValueError(
-                f"Limit on {metric} cannot set both a named scenario and stat."
+                f"Limit on {metric} cannot set both a named scenario and reducer."
             )
-        return LimitBasis(scenario=scenario.strip(), stat="mean")
+        return LimitBasis(scenario=scenario.strip(), reducer="mean")
     return LimitBasis(
         scenario=None,
-        stat=resolve_limit_stat(entry, aggregate_cfg=aggregate_cfg),
+        reducer=resolve_limit_reducer(entry, reducer_cfg=reducer_cfg),
     )
+
+
+# Compatibility call boundaries for out-of-tree tooling. Config output is always canonical
+# `reducer`, and repository code uses the canonical functions above.
+def resolve_aggregate_mode(
+    metric: str,
+    aggregate_cfg: Optional[Dict[str, Any]],
+) -> str:
+    return resolve_reducer_mode(metric, aggregate_cfg)
+
+
+def resolve_limit_stat(
+    entry: Dict[str, Any],
+    aggregate_cfg: Optional[Dict[str, Any]] = None,
+) -> str:
+    return resolve_limit_reducer(entry, reducer_cfg=aggregate_cfg)
 
 
 def _resolve_optimize_limits_for_load(
@@ -540,13 +565,13 @@ def _resolve_optimize_limits_for_load(
         try:
             return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
         except Exception as exc:
-            raise ValueError("optimize.limits malformed or unsupported") from exc
+            raise ValueError(f"optimize.limits malformed or unsupported: {exc}") from exc
 
     if isinstance(raw_optimize_limits, (str, dict)):
         try:
             return normalize_limit_entries(raw_optimize_limits), "normalized_legacy"
         except Exception as exc:
-            raise ValueError("optimize.limits malformed or unsupported") from exc
+            raise ValueError(f"optimize.limits malformed or unsupported: {exc}") from exc
 
     raise ValueError(
         f"optimize.limits malformed or unsupported: {type(raw_optimize_limits).__name__}"
