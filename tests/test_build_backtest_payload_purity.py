@@ -795,6 +795,57 @@ def test_hlcvs_valid_window_chunking_ignores_nonfinite_outside_each_coin_window(
     )
 
 
+def test_hlcvs_valid_window_chunking_scans_only_active_rows_and_columns(monkeypatch):
+    n_minutes = 10
+    hlcvs = np.empty((n_minutes, 4, 4), dtype=np.float64)
+    for col in range(4):
+        hlcvs[:, col, :] = float(col)
+    observed_chunks = []
+    original_isfinite = np.isfinite
+
+    def recording_isfinite(values):
+        arr = np.asarray(values)
+        observed_chunks.append((arr.shape, tuple(np.unique(arr[:, :, 0]))))
+        return original_isfinite(values)
+
+    monkeypatch.setattr(np, "isfinite", recording_isfinite)
+    _validate_hlcvs_valid_windows(
+        hlcvs,
+        None,
+        ["BTC", "EMPTY", "SOL"],
+        [2, n_minutes, 4],
+        [4, n_minutes - 1, 6],
+        coin_indices=[0, 1, 3],
+        target_chunk_bytes=1024,
+    )
+
+    # BTC covers rows 2..4 and SOL covers 4..6. The sweep therefore scans
+    # BTC alone, both columns for their one-row overlap, and SOL alone. The
+    # empty symbol, unused column 2, and rows outside the union are untouched.
+    assert observed_chunks == [
+        ((2, 1, 4), (0.0,)),
+        ((1, 2, 4), (0.0, 3.0)),
+        ((2, 1, 4), (3.0,)),
+    ]
+
+
+def test_hlcvs_valid_window_chunking_skips_scan_when_all_windows_are_empty(monkeypatch):
+    n_minutes = 10
+    hlcvs = np.full((n_minutes, 2, 4), np.nan, dtype=np.float64)
+
+    def fail_if_scanned(_values):
+        raise AssertionError("empty valid windows must not scan the HLCV payload")
+
+    monkeypatch.setattr(np, "isfinite", fail_if_scanned)
+    _validate_hlcvs_valid_windows(
+        hlcvs,
+        None,
+        ["BTC", "ETH"],
+        [n_minutes, n_minutes],
+        [n_minutes - 1, n_minutes - 1],
+    )
+
+
 def test_build_backtest_payload_aggregation_recomputes_effective_start_ts_over_stale_mss():
     """Pin that `build_backtest_payload` recomputes `effective_start_timestamp_ms`
     from the post-aggregation timestamps even when the caller pre-set a stale
