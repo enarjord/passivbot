@@ -4297,6 +4297,66 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
     assert authoritative_ema != pytest.approx(provisional)
 
 
+@pytest.mark.asyncio
+async def test_refreshed_forager_metrics_bridge_bounded_internal_gap(
+    monkeypatch, tmp_path
+):
+    now = 11 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: now / 1000.0)
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="kucoinfutures",
+        cache_dir=str(tmp_path / "caches"),
+        provisional_internal_gap_tolerance_minutes=10,
+    )
+    cm._now_ms_callback = lambda: now
+    symbol = "SPARSE/USDT:USDT"
+    start = 8 * ONE_MIN_MS
+    missing = 9 * ONE_MIN_MS
+    end = 10 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [
+            (start, 100.0, 101.0, 99.0, 100.0, 1.0),
+            (end, 120.0, 121.0, 119.0, 120.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._add_known_gap(
+        symbol,
+        missing,
+        missing,
+        reason=GAP_REASON_FETCH_FAILED,
+    )
+    spans = {"qv": [3.0], "log_range": [3.0]}
+
+    strict = await cm.get_latest_ema_metric_spans(
+        symbol,
+        spans,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=False,
+    )
+    assert math.isnan(strict["qv"][3.0])
+    assert math.isnan(strict["log_range"][3.0])
+
+    refreshed = await cm.get_latest_ema_metric_spans(
+        symbol,
+        spans,
+        allow_remote_fetch=False,
+        allow_provisional_internal_gaps=True,
+    )
+    expected_qv = cm._ema(np.asarray([100.0, 0.0, 120.0]), 3.0)
+    expected_log_range = cm._ema(
+        np.log(np.asarray([101.0 / 99.0, 1.0, 121.0 / 119.0])),
+        3.0,
+    )
+    assert refreshed["qv"][3.0] == pytest.approx(expected_qv)
+    assert refreshed["log_range"][3.0] == pytest.approx(expected_log_range)
+    assert np.array_equal(
+        cm._cache[symbol]["ts"],
+        np.asarray([start, end], dtype=np.int64),
+    )
+
+
 def test_synthetic_timestamp_retention_uses_replay_clock(monkeypatch, tmp_path):
     wall_now = 10_000 * ONE_MIN_MS
     replay_now = 100 * ONE_MIN_MS

@@ -114,15 +114,15 @@ impl ForagerSelectionConfig {
     }
 
     fn volume_required(&self) -> Result<bool, ForagerSelectionError> {
-        Ok(self.volume_drop()? > 0.0 || self.weights.volume != 0.0)
+        Ok(self.require_forager && (self.volume_drop()? > 0.0 || self.weights.volume != 0.0))
     }
 
     fn volatility_required(&self) -> bool {
-        self.weights.volatility != 0.0
+        self.require_forager && self.weights.volatility != 0.0
     }
 
     fn ema_readiness_required(&self) -> bool {
-        self.weights.ema_readiness != 0.0
+        self.require_forager && self.weights.ema_readiness != 0.0
     }
 
     fn score_hysteresis(&self) -> Result<f64, ForagerSelectionError> {
@@ -860,6 +860,27 @@ mod tests {
             ..default_config()
         };
         assert_eq!(select_coins(&features, &cfg), vec![0, 2]);
+    }
+
+    #[test]
+    fn non_forager_candidate_selection_does_not_require_ranking_inputs() {
+        let mut enabled = make_candidate(0, f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+        enabled.ema_lower = f64::NAN;
+        enabled.ema_upper = f64::NAN;
+        enabled.entry_initial_ema_dist = f64::NAN;
+        let mut disabled = make_candidate(1, f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+        disabled.enabled = false;
+        let cfg = ForagerSelectionConfig {
+            require_forager: false,
+            ..default_forager_config(ForagerPositionSide::Long)
+        };
+
+        let selection =
+            select_forager_candidates_with_diagnostics(&[enabled, disabled], &cfg).unwrap();
+
+        assert_eq!(selection.selected_indices, vec![0]);
+        assert!(selection.scored.is_empty());
+        assert!(selection.hysteresis_events.is_empty());
     }
 
     #[test]

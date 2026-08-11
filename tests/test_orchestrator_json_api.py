@@ -3407,6 +3407,45 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert selection["top_scores"][0]["selected"] is True
 
 
+def test_single_eligible_coin_does_not_require_forager_feature_bundle():
+    import passivbot_rust as pbr
+
+    side_params = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.0,
+        "filter_volume_drop_pct": 0.5,
+        "filter_volume_ema_span_1m": 10.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+    )
+    symbol["forager_m1"] = {
+        "close": [],
+        "volume": [],
+        "log_range": [],
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=side_params),
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+
+    assert out["orders"]
+    assert {order["symbol_idx"] for order in out["orders"]} == {0}
+    selection = next(
+        item
+        for item in out["diagnostics"]["forager_selections"]
+        if item["pside"] == "long"
+    )
+    assert selection["selected_symbol_indices"] == [0]
+    assert selection["top_scores"] == []
+
+
 def test_live_authorized_missing_forager_feature_scopes_only_candidate_side():
     import passivbot_rust as pbr
 

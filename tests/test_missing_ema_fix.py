@@ -1805,8 +1805,8 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
-    assert bot.qv_provisional_flags == [False]
-    assert bot.lr_provisional_flags == [("1m", False)]
+    assert bot.qv_provisional_flags == [True]
+    assert bot.lr_provisional_flags == [("1m", True)]
     assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
@@ -2475,9 +2475,14 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
         _cm,
         _symbol,
         spans_by_metric,
-        **_kwargs,
+        **kwargs,
     ):
-        batch_requests.append(dict(spans_by_metric))
+        batch_requests.append(
+            (
+                dict(spans_by_metric),
+                kwargs.get("allow_provisional_internal_gaps"),
+            )
+        )
         raise RuntimeError("widest EMA window unavailable")
 
     original_close = bot.cm.get_latest_ema_close
@@ -2511,11 +2516,12 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
     )
     assert m1_volume_emas[symbol][10.0] == pytest.approx(250000.0)
     assert m1_log_range_emas[symbol][10.0] == pytest.approx(0.0015)
-    assert {next(iter(request)) for request in batch_requests} >= {
+    assert {next(iter(request)) for request, _allow_provisional in batch_requests} >= {
         "close",
         "qv",
         "log_range",
     }
+    assert all(allow_provisional is True for _request, allow_provisional in batch_requests)
 
 
 @pytest.mark.asyncio

@@ -2243,9 +2243,10 @@ mod core {
                     field: "forager_score_weights",
                     symbol_idx: None,
                 })?;
-        let volume_required = cfg.volume_drop_pct > 0.0 || normalized_weights.volume != 0.0;
-        let volatility_required = normalized_weights.volatility != 0.0;
-        let ema_readiness_required = normalized_weights.ema_readiness != 0.0;
+        let volume_required =
+            cfg.require_forager && (cfg.volume_drop_pct > 0.0 || normalized_weights.volume != 0.0);
+        let volatility_required = cfg.require_forager && normalized_weights.volatility != 0.0;
+        let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
@@ -3322,7 +3323,7 @@ mod core {
                         .long
                         .forager_score_weights
                         .clone(),
-                    require_forager: true,
+                    require_forager: enp_long < eligible_long,
                     position_side: ForagerPositionSide::Long,
                     score_hysteresis_pct: input
                         .forager_hysteresis
@@ -3408,7 +3409,7 @@ mod core {
                         .short
                         .forager_score_weights
                         .clone(),
-                    require_forager: true,
+                    require_forager: enp_short < eligible_short,
                     position_side: ForagerPositionSide::Short,
                     score_hysteresis_pct: input
                         .forager_hysteresis
@@ -5199,6 +5200,48 @@ mod core {
             assert!((block.effective_limit - 1.5).abs() < 1e-12);
             assert!((block.projected_initial_cost - 1.4732627616).abs() < 1e-9);
             assert!((block.effective_min_cost - 10.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn single_eligible_coin_skips_forager_feature_requirements() {
+            let mut symbol = make_basic_symbol(0);
+            symbol.forager_m1 = Some(EmaTimeframeBundle::default());
+
+            let mut global = make_basic_global();
+            global.global_bot_params.long.n_positions = 1;
+            global.global_bot_params.long.total_wallet_exposure_limit = 1.0;
+            global.global_bot_params.long.forager_volume_drop_pct = 0.5;
+            global.global_bot_params.long.forager_score_weights =
+                crate::types::ForagerScoreWeights {
+                    volume: 1.0,
+                    ema_readiness: 1.0,
+                    volatility: 1.0,
+                };
+            global.global_bot_params.short.n_positions = 0;
+            global.global_bot_params.short.total_wallet_exposure_limit = 0.0;
+
+            let input = OrchestratorInput {
+                timestamp_ms: 0,
+                balance: 1_000.0,
+                balance_raw: 1_000.0,
+                global,
+                symbols: vec![symbol],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            assert!(out.orders.iter().any(|order| {
+                order.symbol_idx == 0 && order.pside == PositionSide::Long && order.qty > 0.0
+            }));
+            let selection = out
+                .diagnostics
+                .forager_selections
+                .iter()
+                .find(|selection| selection.pside == PositionSide::Long)
+                .unwrap();
+            assert_eq!(selection.selected_symbol_indices, vec![0]);
+            assert!(selection.top_scores.is_empty());
         }
 
         #[test]

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Skip forager ranking and its feature requirements when each side's eligible universe already
+  fits its configured position slots. Freshly fetched forager candidates may also bridge bounded,
+  later-bracketed internal candle gaps under `live.max_active_candle_tail_gap_minutes`; cache-only
+  stale candidates remain strict.
 - Standardize suite reduction configuration on `reducer` across `backtest`, optimizer scoring,
   limits, CLI parsing, examples, and serialized configs. The former `aggregate`, `stat`, and
   `scenario_stat` spellings remain accepted as input aliases (plus legacy limit `field`),

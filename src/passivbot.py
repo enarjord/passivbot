@@ -18066,9 +18066,13 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
-                    # Quote volume is consumed only by forager ranking today.
-                    # Unknown internal gaps must not become invented zero volume.
-                    allow_provisional_internal_gaps=False,
+                    # Freshly fetched candidates may bridge later-bounded gaps
+                    # within the configured tolerance. Cache-only candidates
+                    # remain strict because an unknown stale tail is not
+                    # continuity evidence.
+                    allow_provisional_internal_gaps=(
+                        symbol not in cache_only_symbols
+                    ),
                 )
             )
 
@@ -18089,9 +18093,11 @@ class Passivbot:
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
-                    # Ranking is stricter than active strategy volatility and
-                    # owns a policy-separated EMA cache entry.
-                    allow_provisional_internal_gaps=False,
+                    # Match quote-volume continuity policy: only refreshed
+                    # candidates may bridge bounded internal gaps.
+                    allow_provisional_internal_gaps=(
+                        symbol not in cache_only_symbols
+                    ),
                 )
             )
 
@@ -18128,7 +18134,6 @@ class Passivbot:
             if metric_key is None:
                 return None
             timeframe = "1h" if ema_type == "h1_log_range" else "1m"
-            strict = ema_type in {"m1_volume", "forager_m1_log_range"}
             values = await method(
                 symbol,
                 {metric_key: [float(span) for span in spans]},
@@ -18140,7 +18145,7 @@ class Passivbot:
                 timeframe=timeframe,
                 allow_remote_fetch=symbol not in cache_only_symbols,
                 allow_provisional_internal_gaps=(
-                    False if strict else symbol not in cache_only_symbols
+                    symbol not in cache_only_symbols
                 ),
             )
             metric_values = values.get(metric_key, {})
