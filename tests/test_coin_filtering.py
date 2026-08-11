@@ -113,9 +113,6 @@ class CoinFilterHarness(Passivbot):
     def live_value(self, key):
         return self._live_flags.get(key, False)
 
-    async def calc_volumes(self, _pside, symbols):
-        return {sym: self._volumes[sym] for sym in symbols}
-
     async def calc_volumes_and_log_ranges(
         self, _pside, symbols, max_age_ms=None, max_network_fetches=None
     ):
