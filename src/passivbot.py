@@ -17102,30 +17102,16 @@ class Passivbot:
                 or ema_type not in {"m1_volume", "forager_m1_log_range"}
             ):
                 return
-            primary_spans = set(primary_spans) & set(
-                forager_provisional_primary_spans.get((symbol, ema_type), set())
-            )
-            if not primary_spans:
-                return
-            getter = getattr(
-                self.cm, "get_ema_provisional_internal_gap_context", None
-            )
-            if not callable(getter):
-                return
             metric_key = "qv" if ema_type == "m1_volume" else "log_range"
             diagnostic_metric = (
                 "quote_volume" if ema_type == "m1_volume" else "log_range"
             )
-            contexts = []
-            for span in sorted(primary_spans):
-                context = getter(symbol, metric_key, span, timeframe="1m")
-                if context:
-                    contexts.append((float(span), dict(context)))
             key = (symbol, diagnostic_metric)
             previous_count = int(
                 self._orchestrator_forager_gap_fallback_counts.get(key, 0) or 0
             )
-            if not contexts:
+
+            def record_recovery() -> None:
                 if previous_count > 0:
                     self._orchestrator_forager_gap_fallback_counts[key] = 0
                     logging.info(
@@ -17135,6 +17121,25 @@ class Passivbot:
                         diagnostic_metric,
                         previous_count,
                     )
+
+            provisional_spans = set(primary_spans) & set(
+                forager_provisional_primary_spans.get((symbol, ema_type), set())
+            )
+            if not provisional_spans:
+                record_recovery()
+                return
+            getter = getattr(
+                self.cm, "get_ema_provisional_internal_gap_context", None
+            )
+            if not callable(getter):
+                return
+            contexts = []
+            for span in sorted(provisional_spans):
+                context = getter(symbol, metric_key, span, timeframe="1m")
+                if context:
+                    contexts.append((float(span), dict(context)))
+            if not contexts:
+                record_recovery()
                 return
             consecutive_uses = previous_count + 1
             self._orchestrator_forager_gap_fallback_counts[key] = consecutive_uses

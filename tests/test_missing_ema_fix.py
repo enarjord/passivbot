@@ -1732,6 +1732,7 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
     }
     current_context = {"value": context}
     refresh = {"value": 100}
+    authoritative = {"value": False}
     bot.cm.get_last_refresh_ms = lambda _symbol: refresh["value"]
 
     async def quote_volume(
@@ -1742,6 +1743,8 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
         allow_provisional_internal_gaps=None,
     ):
         if not allow_provisional_internal_gaps:
+            if authoritative["value"]:
+                return 250000.0
             refresh["value"] += 1
             return float("nan")
         return 250000.0
@@ -1755,6 +1758,8 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
         allow_provisional_internal_gaps=None,
     ):
         if not allow_provisional_internal_gaps:
+            if authoritative["value"]:
+                return 0.0015
             refresh["value"] += 1
             return float("nan")
         return 0.0015
@@ -1791,7 +1796,7 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
     )
     assert any("consecutive_uses=2" in record.message for record in fallback_logs)
 
-    current_context["value"] = None
+    authoritative["value"] = True
     caplog.clear()
     with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
