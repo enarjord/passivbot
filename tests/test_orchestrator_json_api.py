@@ -3402,9 +3402,109 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
     selection = out["diagnostics"]["forager_selections"][0]
     assert selection["pside"] == "long"
+    assert selection["ranking_required"] is True
     assert selection["selected_symbol_indices"] == [1]
     assert selection["top_scores"][0]["symbol_idx"] == 1
     assert selection["top_scores"][0]["selected"] is True
+
+
+def test_single_eligible_coin_does_not_require_forager_feature_bundle():
+    import passivbot_rust as pbr
+
+    side_params = {
+        "n_positions": 1,
+        "total_wallet_exposure_limit": 1.0,
+        "filter_volume_drop_pct": 0.5,
+        "filter_volume_ema_span_1m": 10.0,
+    }
+    symbol = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+    )
+    symbol["forager_m1"] = {
+        "close": [],
+        "volume": [],
+        "log_range": [],
+    }
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=side_params),
+        symbols=[symbol],
+    )
+
+    out = compute(pbr, inp)
+
+    assert out["orders"]
+    assert {order["symbol_idx"] for order in out["orders"]} == {0}
+    selection = next(
+        item
+        for item in out["diagnostics"]["forager_selections"]
+        if item["pside"] == "long"
+    )
+    assert selection["selected_symbol_indices"] == [0]
+    assert selection["ranking_required"] is False
+    assert selection["top_scores"] == []
+
+
+def test_forager_ranks_remaining_candidates_after_ineligible_position_consumes_slot():
+    import passivbot_rust as pbr
+
+    side_params = {
+        "n_positions": 2,
+        "total_wallet_exposure_limit": 1.0,
+        "filter_volume_drop_pct": 0.5,
+        "filter_volatility_drop_pct": 0.0,
+        "filter_volume_ema_span_1m": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
+    }
+    held_ineligible = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        tradable=False,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_bp=side_params,
+    )
+    lower_ranked = make_symbol(
+        1,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+        emas=ema_bundle(m1_volume=[[10.0, 10.0]]),
+    )
+    higher_ranked = make_symbol(
+        2,
+        bid=100.0,
+        ask=100.0,
+        long_bp=side_params,
+        emas=ema_bundle(m1_volume=[[10.0, 20.0]]),
+    )
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=side_params),
+        symbols=[held_ineligible, lower_ranked, higher_ranked],
+    )
+
+    out = compute(pbr, inp)
+
+    selection = next(
+        item
+        for item in out["diagnostics"]["forager_selections"]
+        if item["pside"] == "long"
+    )
+    assert selection["slots_to_fill"] == 1
+    assert selection["selected_symbol_indices"] == [2]
+    assert not any(
+        order["symbol_idx"] == 1 and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
+    assert any(
+        order["symbol_idx"] == 2 and order["order_type"].startswith("entry_")
+        for order in out["orders"]
+    )
 
 
 def test_live_authorized_missing_forager_feature_scopes_only_candidate_side():

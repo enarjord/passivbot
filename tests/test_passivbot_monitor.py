@@ -6499,6 +6499,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             self._forager_rank_feature_unavailable_by_side = {
                 "long": {"ETH/USDT:USDT"}
             }
+            self._forager_ranking_required_by_side = {"long": True, "short": False}
             self._orchestrator_trailing_unavailable_symbols = {"BTC/USDT:USDT"}
             self._orchestrator_trailing_unavailable_reasons = {
                 "BTC/USDT:USDT": ["position_fill_confirmation_pending"]
@@ -6815,6 +6816,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "rankable": True,
         "rankability_reasons": [],
         "ranking_feature_unavailable_psides": [],
+        "conditional_ranking_feature_unavailable_psides": [],
+        "ranking_required_psides": ["long"],
         "ema_unavailable_reasons": [],
     }
     assert snapshot["market"]["ETH/USDT:USDT"]["forager"] == {
@@ -6822,6 +6825,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "rankable": False,
         "rankability_reasons": ["ranking_features_unavailable"],
         "ranking_feature_unavailable_psides": ["long"],
+        "conditional_ranking_feature_unavailable_psides": [],
+        "ranking_required_psides": ["long"],
         "ema_unavailable_reasons": [],
     }
     assert snapshot["market"]["BTC/USDT:USDT"]["c_mult"] == pytest.approx(1.0)
@@ -6920,6 +6925,70 @@ def test_monitor_forager_candidates_use_live_age_eligibility():
 
     assert market[old_symbol]["forager"]["candidate_psides"] == ["long"]
     assert "forager" not in market[young_symbol]
+
+
+def test_monitor_forager_ranking_gap_blocks_only_when_rust_required_ranking():
+    import passivbot as pb_mod
+
+    symbol = "HYPE/USDT:USDT"
+
+    class FakeBot:
+        _build_monitor_market_section = pb_mod.Passivbot._build_monitor_market_section
+
+        def __init__(self):
+            self.active_symbols = []
+            self.positions = {}
+            self.open_orders = {}
+            self.trailing_prices = {}
+            self.effective_min_cost = {}
+            self.approved_coins = {"long": {symbol}, "short": set()}
+            self.ignored_coins = {"long": set(), "short": set()}
+            self.approved_coins_minus_ignored_coins = {
+                "long": {symbol},
+                "short": set(),
+            }
+            self.markets_dict = {symbol: {"active": True}}
+            self._orchestrator_ema_bundle_completed = True
+            self._orchestrator_ema_bundle_symbols = {symbol}
+            self._forager_rank_feature_unavailable_by_side = {
+                "long": {symbol},
+                "short": set(),
+            }
+            self._forager_ranking_required_by_side = {
+                "long": False,
+                "short": False,
+            }
+
+        def is_forager_mode(self, pside):
+            return pside == "long"
+
+        def is_approved(self, pside, candidate):
+            return pside == "long" and candidate == symbol
+
+        def effective_min_cost_is_low_enough(self, pside, candidate):
+            return pside == "long" and candidate == symbol
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+    bot = FakeBot()
+    conditional = bot._build_monitor_market_section()[symbol]["forager"]
+
+    assert conditional["rankable"] is True
+    assert conditional["ranking_feature_unavailable_psides"] == []
+    assert conditional["conditional_ranking_feature_unavailable_psides"] == [
+        "long"
+    ]
+    assert conditional["ranking_required_psides"] == []
+
+    bot._forager_ranking_required_by_side["long"] = True
+    blocking = bot._build_monitor_market_section()[symbol]["forager"]
+
+    assert blocking["rankable"] is False
+    assert blocking["rankability_reasons"] == ["ranking_features_unavailable"]
+    assert blocking["ranking_feature_unavailable_psides"] == ["long"]
+    assert blocking["conditional_ranking_feature_unavailable_psides"] == []
+    assert blocking["ranking_required_psides"] == ["long"]
 
 
 def test_monitor_forager_candidates_use_live_min_cost_eligibility():

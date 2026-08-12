@@ -13920,6 +13920,7 @@ class Passivbot:
         """Emit throttled Rust-owned forager score and hysteresis diagnostics."""
         diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
         selections = diagnostics.get("forager_selections", [])
+        self._forager_ranking_required_by_side = {"long": False, "short": False}
         if not isinstance(selections, list) or not selections:
             return
         if not hasattr(self, "_forager_selection_log_state"):
@@ -13992,6 +13993,10 @@ class Passivbot:
             if not isinstance(selection, dict):
                 continue
             pside = str(selection.get("pside") or "unknown")
+            if pside in self._forager_ranking_required_by_side:
+                self._forager_ranking_required_by_side[pside] = bool(
+                    selection.get("ranking_required", False)
+                )
             top_scores = [
                 item
                 for item in selection.get("top_scores", [])
@@ -14183,7 +14188,6 @@ class Passivbot:
                 )
                 state["debug_key"] = debug_key
                 state["debug_last_ms"] = now_ms
-
     # Legacy init_fill_events, update_fill_events, etc. removed - using FillEventsManager
 
     @staticmethod
@@ -17019,6 +17023,8 @@ class Passivbot:
             self._orchestrator_close_ema_fallback_counts = {}
         if not hasattr(self, "_orchestrator_ema_issue_last_log_ms"):
             self._orchestrator_ema_issue_last_log_ms = {}
+        if not hasattr(self, "_orchestrator_forager_gap_fallback_counts"):
+            self._orchestrator_forager_gap_fallback_counts = {}
         m1_max_age_by_symbol = {s: 60_000 for s in symbols}
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
         cache_only_symbols: set[str] = set()
@@ -17030,6 +17036,32 @@ class Passivbot:
         optional_ema_drops: dict[tuple[str, str, str], list[tuple[str, float]]] = {}
         close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
         close_ema_fallbacks: dict[str, list[tuple[float, int, int, str, str]]] = {}
+        refresh_baseline_by_symbol: dict[str, int] = {}
+        forager_provisional_primary_spans: dict[
+            tuple[str, str], set[float]
+        ] = {}
+        refresh_getter = getattr(self.cm, "get_last_refresh_ms", None)
+
+        def last_refresh_ms(symbol: str) -> int:
+            if not callable(refresh_getter):
+                return 0
+            try:
+                return int(refresh_getter(symbol) or 0)
+            except Exception as exc:
+                logging.debug(
+                    "[forager] failed to read candle refresh provenance | "
+                    "symbol=%s error_type=%s",
+                    symbol,
+                    type(exc).__name__,
+                )
+                return 0
+
+        for symbol in symbols:
+            refresh_baseline_by_symbol[symbol] = last_refresh_ms(symbol)
+
+        def refreshed_during_bundle(symbol: str) -> bool:
+            current = last_refresh_ms(symbol)
+            return current > int(refresh_baseline_by_symbol.get(symbol, 0))
 
         def log_ema_issue(
             key: tuple,
@@ -17056,6 +17088,89 @@ class Passivbot:
         ) -> None:
             optional_ema_drops.setdefault((ema_type, reason_code, error_type), []).append(
                 (symbol, span)
+            )
+
+        def record_forager_gap_fallback_diagnostics(
+            symbol: str,
+            ema_type: str,
+            primary_spans: set[float],
+        ) -> None:
+            if (
+                not primary_spans
+                or symbol in cache_only_symbols
+                or not bool(is_forager_mode())
+                or ema_type not in {"m1_volume", "forager_m1_log_range"}
+            ):
+                return
+            metric_key = "qv" if ema_type == "m1_volume" else "log_range"
+            diagnostic_metric = (
+                "quote_volume" if ema_type == "m1_volume" else "log_range"
+            )
+            key = (symbol, diagnostic_metric)
+            previous_count = int(
+                self._orchestrator_forager_gap_fallback_counts.get(key, 0) or 0
+            )
+
+            def record_recovery() -> None:
+                if previous_count > 0:
+                    self._orchestrator_forager_gap_fallback_counts[key] = 0
+                    logging.info(
+                        "[ema] forager ranking provisional internal-gap fallback recovered "
+                        "%s metric=%s after_consecutive_uses=%d source=authoritative_candles",
+                        Passivbot._log_symbol(symbol),
+                        diagnostic_metric,
+                        previous_count,
+                    )
+
+            provisional_spans = set(primary_spans) & set(
+                forager_provisional_primary_spans.get((symbol, ema_type), set())
+            )
+            if not provisional_spans:
+                record_recovery()
+                return
+            getter = getattr(
+                self.cm, "get_ema_provisional_internal_gap_context", None
+            )
+            if not callable(getter):
+                return
+            contexts = []
+            for span in sorted(provisional_spans):
+                context = getter(symbol, metric_key, span, timeframe="1m")
+                if context:
+                    contexts.append((float(span), dict(context)))
+            if not contexts:
+                record_recovery()
+                return
+            consecutive_uses = previous_count + 1
+            self._orchestrator_forager_gap_fallback_counts[key] = consecutive_uses
+            gap_count = max(int(ctx.get("gap_count", 0) or 0) for _span, ctx in contexts)
+            gap_candles = max(
+                int(ctx.get("gap_candles", 0) or 0) for _span, ctx in contexts
+            )
+            max_gap_candles = max(
+                int(ctx.get("max_gap_candles", 0) or 0)
+                for _span, ctx in contexts
+            )
+            oldest_gap_age_ms = max(
+                int(ctx.get("oldest_gap_age_ms", 0) or 0)
+                for _span, ctx in contexts
+            )
+            log_ema_issue(
+                ("forager_provisional_internal_gap", symbol, diagnostic_metric),
+                logging.WARNING,
+                "[ema] forager ranking provisional internal-gap fallback %s "
+                "metric=%s spans=%s reason=later_bounded_internal_gap "
+                "source=synthetic_zero_volume_continuity gap_count=%d "
+                "gap_candles=%d max_gap_candles=%d age_ms=%d consecutive_uses=%d",
+                Passivbot._log_symbol(symbol),
+                diagnostic_metric,
+                ",".join(f"{span:.8g}" for span, _ctx in contexts),
+                gap_count,
+                gap_candles,
+                max_gap_candles,
+                oldest_gap_age_ms,
+                consecutive_uses,
+                interval_ms=15 * 60 * 1000,
             )
 
         def ema_error_type(exc: Exception) -> str:
@@ -17617,6 +17732,7 @@ class Passivbot:
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
+            primary_spans: set[float] = set()
             if not spans:
                 return out
             metric_key = {
@@ -17680,6 +17796,7 @@ class Passivbot:
                     )
                 if math.isfinite(val):
                     out[span] = val
+                    primary_spans.add(span)
                 else:
                     if metric_key is not None:
                         fallback = cached_fallbacks.get(span)
@@ -17696,6 +17813,9 @@ class Passivbot:
                     record_optional_ema_drop(
                         ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
+            record_forager_gap_fallback_diagnostics(
+                symbol, ema_type, primary_spans
+            )
             return out
 
         async def fetch_required_map(
@@ -18060,17 +18180,40 @@ class Passivbot:
             )
 
         async def ema_qv(symbol: str, span: float) -> float:
-            return float(
-                await self.cm.get_latest_ema_quote_volume(
-                    symbol,
-                    span=span,
-                    max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
-                    allow_remote_fetch=symbol not in cache_only_symbols,
-                    # Quote volume is consumed only by forager ranking today.
-                    # Unknown internal gaps must not become invented zero volume.
-                    allow_provisional_internal_gaps=False,
+            async def read(allow_provisional: bool) -> float:
+                return float(
+                    await self.cm.get_latest_ema_quote_volume(
+                        symbol,
+                        span=span,
+                        max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                        allow_remote_fetch=symbol not in cache_only_symbols,
+                        allow_provisional_internal_gaps=allow_provisional,
+                    )
                 )
-            )
+
+            try:
+                value = await read(False)
+            except Exception:
+                if symbol in cache_only_symbols or not refreshed_during_bundle(symbol):
+                    raise
+                value = await read(True)
+                if math.isfinite(value):
+                    forager_provisional_primary_spans.setdefault(
+                        (symbol, "m1_volume"), set()
+                    ).add(float(span))
+                return value
+            if (
+                math.isfinite(value)
+                or symbol in cache_only_symbols
+                or not refreshed_during_bundle(symbol)
+            ):
+                return value
+            value = await read(True)
+            if math.isfinite(value):
+                forager_provisional_primary_spans.setdefault(
+                    (symbol, "m1_volume"), set()
+                ).add(float(span))
+            return value
 
         async def ema_lr_1m(symbol: str, span: float) -> float:
             return float(
@@ -18083,17 +18226,40 @@ class Passivbot:
             )
 
         async def ema_forager_lr_1m(symbol: str, span: float) -> float:
-            return float(
-                await self.cm.get_latest_ema_log_range(
-                    symbol,
-                    span=span,
-                    max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
-                    allow_remote_fetch=symbol not in cache_only_symbols,
-                    # Ranking is stricter than active strategy volatility and
-                    # owns a policy-separated EMA cache entry.
-                    allow_provisional_internal_gaps=False,
+            async def read(allow_provisional: bool) -> float:
+                return float(
+                    await self.cm.get_latest_ema_log_range(
+                        symbol,
+                        span=span,
+                        max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                        allow_remote_fetch=symbol not in cache_only_symbols,
+                        allow_provisional_internal_gaps=allow_provisional,
+                    )
                 )
-            )
+
+            try:
+                value = await read(False)
+            except Exception:
+                if symbol in cache_only_symbols or not refreshed_during_bundle(symbol):
+                    raise
+                value = await read(True)
+                if math.isfinite(value):
+                    forager_provisional_primary_spans.setdefault(
+                        (symbol, "forager_m1_log_range"), set()
+                    ).add(float(span))
+                return value
+            if (
+                math.isfinite(value)
+                or symbol in cache_only_symbols
+                or not refreshed_during_bundle(symbol)
+            ):
+                return value
+            value = await read(True)
+            if math.isfinite(value):
+                forager_provisional_primary_spans.setdefault(
+                    (symbol, "forager_m1_log_range"), set()
+                ).add(float(span))
+            return value
 
         async def ema_lr_1h(symbol: str, span: float) -> float:
             return float(
@@ -18128,10 +18294,11 @@ class Passivbot:
             if metric_key is None:
                 return None
             timeframe = "1h" if ema_type == "h1_log_range" else "1m"
-            strict = ema_type in {"m1_volume", "forager_m1_log_range"}
-            values = await method(
-                symbol,
-                {metric_key: [float(span) for span in spans]},
+            ranking_ema_type = ema_type in {
+                "m1_volume",
+                "forager_m1_log_range",
+            }
+            call_kwargs = dict(
                 max_age_ms=(
                     h1_max_age_by_symbol.get(symbol, 600_000)
                     if timeframe == "1h"
@@ -18139,11 +18306,45 @@ class Passivbot:
                 ),
                 timeframe=timeframe,
                 allow_remote_fetch=symbol not in cache_only_symbols,
+            )
+            values = await method(
+                symbol,
+                {metric_key: [float(span) for span in spans]},
+                **call_kwargs,
                 allow_provisional_internal_gaps=(
-                    False if strict else symbol not in cache_only_symbols
+                    symbol not in cache_only_symbols and not ranking_ema_type
                 ),
             )
-            metric_values = values.get(metric_key, {})
+            metric_values = dict(values.get(metric_key, {}))
+            missing_spans = {
+                float(span)
+                for span in spans
+                if float(span) not in metric_values
+                or not math.isfinite(
+                    float(metric_values.get(float(span), float("nan")))
+                )
+            }
+            if (
+                ranking_ema_type
+                and missing_spans
+                and symbol not in cache_only_symbols
+                and refreshed_during_bundle(symbol)
+            ):
+                retry_values = await method(
+                    symbol,
+                    {metric_key: [float(span) for span in spans]},
+                    **call_kwargs,
+                    allow_provisional_internal_gaps=True,
+                )
+                retry_metric_values = retry_values.get(metric_key, {})
+                for span in missing_spans:
+                    retry_value = retry_metric_values.get(span)
+                    if retry_value is None or not math.isfinite(float(retry_value)):
+                        continue
+                    metric_values[span] = retry_value
+                    forager_provisional_primary_spans.setdefault(
+                        (symbol, ema_type), set()
+                    ).add(span)
             return {
                 float(span): float(value)
                 for span, value in metric_values.items()
@@ -18544,31 +18745,29 @@ class Passivbot:
                     f"volume_spans={','.join(f'{span:.8g}' for span in missing_required_volume)} "
                     f"log_range_spans={','.join(f'{span:.8g}' for span in missing_required_forager_lr1m)}"
                 )
-                if not required_ema_can_mark_nontradable(sym):
-                    log_ema_issue(
-                        ("required_forager_missing_active", sym),
-                        logging.WARNING,
-                        "[ema] missing required forager EMA %s %s action=raise | %s",
-                        Passivbot._log_symbol(sym),
-                        detail,
-                        ema_candle_health_context(sym),
-                        interval_ms=15 * 60 * 1000,
-                    )
-                    raise RuntimeError(
-                        f"[ema] missing required forager EMA for active/normal symbol {sym}: {detail}"
-                    )
-                mark_ema_unavailable(sym, reason)
+                # Ranking inputs are side- and selection-scope data. Keep the
+                # symbol tradable and let Rust decide whether the remaining
+                # candidate set actually requires ranking. If it does, the
+                # explicit missing-input flag makes only that candidate/side
+                # unavailable instead of disabling the whole symbol.
+                self._orchestrator_allow_missing_strategy_inputs_symbols.add(sym)
                 log_ema_issue(
                     ("required_forager_missing", sym),
-                    logging.DEBUG,
-                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=mark_nontradable_until_fresh | %s",
+                    (
+                        logging.DEBUG
+                        if required_ema_can_mark_nontradable(sym)
+                        else logging.WARNING
+                    ),
+                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=scope_forager_selection_in_rust | %s",
                     Passivbot._log_symbol(sym),
                     ",".join(f"{span:.8g}" for span in missing_required_volume),
                     ",".join(f"{span:.8g}" for span in missing_required_forager_lr1m),
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
-            if sym in cache_only_symbols:
+            if sym in cache_only_symbols and not (
+                missing_required_volume or missing_required_forager_lr1m
+            ):
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
                 missing_lr1m = [
                     span for span in m1_lr_spans if span not in forager_lr1m
@@ -18760,10 +18959,29 @@ class Passivbot:
                 "; ".join(examples),
                 interval_ms=15 * 60 * 1000,
             )
+        alerting_optional_ema_drops: dict[
+            tuple[str, str, str], list[tuple[str, float]]
+        ] = {}
+        for key, items in optional_ema_drops.items():
+            ema_type, _reason_code, _error_type = key
+            conditional_spans = (
+                required_forager_volume_spans
+                if ema_type == "m1_volume"
+                else required_forager_m1_lr_spans
+                if ema_type == "forager_m1_log_range"
+                else set()
+            )
+            alerting_items = [
+                (symbol, span)
+                for symbol, span in items
+                if float(span) not in conditional_spans
+            ]
+            if alerting_items:
+                alerting_optional_ema_drops[key] = alerting_items
         ema_unavailable_event_emitted = bool(
             Passivbot._emit_ema_unavailable_event(
                 self,
-                optional_ema_drops=optional_ema_drops,
+                optional_ema_drops=alerting_optional_ema_drops,
                 candidate_ema_unavailable_details=candidate_ema_unavailable_details,
                 ema_unavailable_reasons=ema_unavailable_reasons,
             )
@@ -18807,7 +19025,7 @@ class Passivbot:
             log_ema_issue(
                 ("required_ema_unavailable_summary",),
                 logging.WARNING,
-                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
+                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=scope_unavailable_inputs | %s",
                 len(all_symbols),
                 len(candidate_ema_unavailable_details),
                 "; ".join(parts[:4]),
@@ -18886,7 +19104,9 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         candidate_reason_names = {
             reason
-            for reason in ema_unavailable_reasons
+            for reason in (
+                set(ema_unavailable_reasons) | set(candidate_ema_unavailable_details)
+            )
             if reason
             in {
                 "cache_only_fetch_failed",
@@ -18922,12 +19142,9 @@ class Passivbot:
             cancellation_psides_by_symbol[str(symbol)] = (
                 dynamic_forager_managed_entry_psides(symbol)
             )
-        ranking_reason_symbols = {
-            str(symbol)
-            for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items()
-            if str(reason).startswith("missing_required_forager_")
-            for symbol in reason_symbols
-        }
+        ranking_reason_symbols = set().union(
+            *(set(symbols) for symbols in rank_feature_unavailable_by_side.values())
+        )
         for pside, unavailable_symbols in rank_feature_unavailable_by_side.items():
             for symbol in ranking_reason_symbols & set(unavailable_symbols):
                 if pside in dynamic_forager_managed_entry_psides(symbol):
