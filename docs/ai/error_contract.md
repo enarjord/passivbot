@@ -86,7 +86,8 @@ projected rows must be discarded after that read so delayed authoritative highs 
 them immediately. Freshly fetched forager ranking quote-volume and log-range inputs may bridge a
 later-bounded internal gap when its complete length is within
 `live.max_active_candle_tail_gap_minutes`; cache-only candidates retain their narrower
-carry-forward contract.
+carry-forward contract. Each refreshed-symbol ranking metric records warning-visible gap count,
+age, source, and consecutive-use diagnostics, followed by an authoritative-recovery diagnostic.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
@@ -105,6 +106,9 @@ tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
 unavailable for new entries. Do not silently rank only the subset that happened to refresh first.
+Ranking-feature absence must remain scoped to forager selection: when the exact remaining eligible
+candidate count fits the remaining slots, Rust may select those candidates without ranking and
+must not let Python turn that unused input absence into symbol-wide non-tradability.
 
 Approved and ignored coin state is an entry-eligibility input. Stale or unreadable eligibility
 blocks affected initial entries but not protective management. With `auto_gs=true`, removal of a

@@ -2222,6 +2222,59 @@ mod core {
         }
     }
 
+    fn count_enabled_forager_candidates(
+        symbols: &[SymbolInput],
+        pside: PositionSide,
+        strategy_kind: StrategyKind,
+        hedge_mode: bool,
+        filter_enabled: bool,
+        balance: f64,
+        runtime_budgets: &[RuntimeBudgetState],
+        active_flags: Option<&[bool]>,
+        derived_cache: &mut [CachedSideDerived],
+    ) -> Result<usize, OrchestratorError> {
+        let mut enabled_count = 0usize;
+        for s in symbols {
+            let side = match pside {
+                PositionSide::Long => &s.long,
+                PositionSide::Short => &s.short,
+            };
+            let strategy_params = cached_strategy_params_for_symbol_side(
+                derived_cache,
+                s.symbol_idx,
+                strategy_kind,
+                match pside {
+                    PositionSide::Long => StrategySide::Long,
+                    PositionSide::Short => StrategySide::Short,
+                },
+                side,
+            )?;
+            let already_active = active_flags
+                .and_then(|flags| flags.get(s.symbol_idx))
+                .copied()
+                .unwrap_or(false);
+            let can_open_initial =
+                should_generate_entries(effective_mode(side.mode, false), false, true);
+            let min_cost_ok = effective_min_cost_is_low_enough(
+                balance,
+                filter_enabled,
+                s.effective_min_cost,
+                &side.bot_params,
+                &runtime_budgets[s.symbol_idx],
+                strategy_initial_qty_pct(&strategy_params),
+            );
+            if symbol_side_eligible(s, pside)
+                && !already_active
+                && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
+                && can_open_initial
+                && min_cost_ok
+            {
+                enabled_count += 1;
+            }
+        }
+        Ok(enabled_count)
+    }
+
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
@@ -3314,8 +3367,20 @@ mod core {
                 }
             }
             if actives_long_count < enp_long {
+                let slots_to_fill = enp_long.saturating_sub(actives_long_count);
+                let remaining_candidate_count = count_enabled_forager_candidates(
+                    &input.symbols,
+                    PositionSide::Long,
+                    input.global.strategy_kind,
+                    input.global.hedge_mode,
+                    input.global.filter_by_min_effective_cost,
+                    input.balance,
+                    &workspace.runtime_budget_long,
+                    Some(actives_long),
+                    &mut workspace.derived_long,
+                )?;
                 let cfg = ForagerSelectionConfig {
-                    slots_to_fill: enp_long.saturating_sub(actives_long_count),
+                    slots_to_fill,
                     volume_drop_pct: input.global.global_bot_params.long.forager_volume_drop_pct,
                     weights: input
                         .global
@@ -3323,7 +3388,7 @@ mod core {
                         .long
                         .forager_score_weights
                         .clone(),
-                    require_forager: enp_long < eligible_long,
+                    require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Long,
                     score_hysteresis_pct: input
                         .forager_hysteresis
@@ -3400,8 +3465,20 @@ mod core {
                 }
             }
             if actives_short_count < enp_short {
+                let slots_to_fill = enp_short.saturating_sub(actives_short_count);
+                let remaining_candidate_count = count_enabled_forager_candidates(
+                    &input.symbols,
+                    PositionSide::Short,
+                    input.global.strategy_kind,
+                    input.global.hedge_mode,
+                    input.global.filter_by_min_effective_cost,
+                    input.balance,
+                    &workspace.runtime_budget_short,
+                    Some(actives_short),
+                    &mut workspace.derived_short,
+                )?;
                 let cfg = ForagerSelectionConfig {
-                    slots_to_fill: enp_short.saturating_sub(actives_short_count),
+                    slots_to_fill,
                     volume_drop_pct: input.global.global_bot_params.short.forager_volume_drop_pct,
                     weights: input
                         .global
@@ -3409,7 +3486,7 @@ mod core {
                         .short
                         .forager_score_weights
                         .clone(),
-                    require_forager: enp_short < eligible_short,
+                    require_forager: remaining_candidate_count > slots_to_fill,
                     position_side: ForagerPositionSide::Short,
                     score_hysteresis_pct: input
                         .forager_hysteresis

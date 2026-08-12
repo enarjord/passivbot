@@ -103,7 +103,8 @@
    forager ranking metrics may bridge bounded internal gaps, while cache-only candidate reads
    remain strict. Synthetic replacement tracking follows the
    manager's live/replay clock so delayed authoritative rows invalidate provisional replay EMAs
-   deterministically.
+   deterministically. Runtime provenance is retained per symbol, metric, span, and EMA window so
+   live orchestration can report gap count, age, synthetic source, consecutive uses, and recovery.
    The live orchestrator requests forager quote-volume and log-range with bounded internal-gap
    continuity only for refreshed symbols; cache-only stale candidates cannot invent zero-volume
    or zero-range observations.

@@ -17019,6 +17019,8 @@ class Passivbot:
             self._orchestrator_close_ema_fallback_counts = {}
         if not hasattr(self, "_orchestrator_ema_issue_last_log_ms"):
             self._orchestrator_ema_issue_last_log_ms = {}
+        if not hasattr(self, "_orchestrator_forager_gap_fallback_counts"):
+            self._orchestrator_forager_gap_fallback_counts = {}
         m1_max_age_by_symbol = {s: 60_000 for s in symbols}
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
         cache_only_symbols: set[str] = set()
@@ -17056,6 +17058,79 @@ class Passivbot:
         ) -> None:
             optional_ema_drops.setdefault((ema_type, reason_code, error_type), []).append(
                 (symbol, span)
+            )
+
+        def record_forager_gap_fallback_diagnostics(
+            symbol: str,
+            ema_type: str,
+            primary_spans: set[float],
+        ) -> None:
+            if (
+                not primary_spans
+                or symbol in cache_only_symbols
+                or not bool(is_forager_mode())
+                or ema_type not in {"m1_volume", "forager_m1_log_range"}
+            ):
+                return
+            getter = getattr(
+                self.cm, "get_ema_provisional_internal_gap_context", None
+            )
+            if not callable(getter):
+                return
+            metric_key = "qv" if ema_type == "m1_volume" else "log_range"
+            diagnostic_metric = (
+                "quote_volume" if ema_type == "m1_volume" else "log_range"
+            )
+            contexts = []
+            for span in sorted(primary_spans):
+                context = getter(symbol, metric_key, span, timeframe="1m")
+                if context:
+                    contexts.append((float(span), dict(context)))
+            key = (symbol, diagnostic_metric)
+            previous_count = int(
+                self._orchestrator_forager_gap_fallback_counts.get(key, 0) or 0
+            )
+            if not contexts:
+                if previous_count > 0:
+                    self._orchestrator_forager_gap_fallback_counts[key] = 0
+                    logging.info(
+                        "[ema] forager ranking provisional internal-gap fallback recovered "
+                        "%s metric=%s after_consecutive_uses=%d source=authoritative_candles",
+                        Passivbot._log_symbol(symbol),
+                        diagnostic_metric,
+                        previous_count,
+                    )
+                return
+            consecutive_uses = previous_count + 1
+            self._orchestrator_forager_gap_fallback_counts[key] = consecutive_uses
+            gap_count = max(int(ctx.get("gap_count", 0) or 0) for _span, ctx in contexts)
+            gap_candles = max(
+                int(ctx.get("gap_candles", 0) or 0) for _span, ctx in contexts
+            )
+            max_gap_candles = max(
+                int(ctx.get("max_gap_candles", 0) or 0)
+                for _span, ctx in contexts
+            )
+            oldest_gap_age_ms = max(
+                int(ctx.get("oldest_gap_age_ms", 0) or 0)
+                for _span, ctx in contexts
+            )
+            log_ema_issue(
+                ("forager_provisional_internal_gap", symbol, diagnostic_metric),
+                logging.WARNING,
+                "[ema] forager ranking provisional internal-gap fallback %s "
+                "metric=%s spans=%s reason=later_bounded_internal_gap "
+                "source=synthetic_zero_volume_continuity gap_count=%d "
+                "gap_candles=%d max_gap_candles=%d age_ms=%d consecutive_uses=%d",
+                Passivbot._log_symbol(symbol),
+                diagnostic_metric,
+                ",".join(f"{span:.8g}" for span, _ctx in contexts),
+                gap_count,
+                gap_candles,
+                max_gap_candles,
+                oldest_gap_age_ms,
+                consecutive_uses,
+                interval_ms=15 * 60 * 1000,
             )
 
         def ema_error_type(exc: Exception) -> str:
@@ -17617,6 +17692,7 @@ class Passivbot:
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
+            primary_spans: set[float] = set()
             if not spans:
                 return out
             metric_key = {
@@ -17680,6 +17756,7 @@ class Passivbot:
                     )
                 if math.isfinite(val):
                     out[span] = val
+                    primary_spans.add(span)
                 else:
                     if metric_key is not None:
                         fallback = cached_fallbacks.get(span)
@@ -17696,6 +17773,9 @@ class Passivbot:
                     record_optional_ema_drop(
                         ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
+            record_forager_gap_fallback_diagnostics(
+                symbol, ema_type, primary_spans
+            )
             return out
 
         async def fetch_required_map(
@@ -18549,31 +18629,51 @@ class Passivbot:
                     f"volume_spans={','.join(f'{span:.8g}' for span in missing_required_volume)} "
                     f"log_range_spans={','.join(f'{span:.8g}' for span in missing_required_forager_lr1m)}"
                 )
-                if not required_ema_can_mark_nontradable(sym):
-                    log_ema_issue(
-                        ("required_forager_missing_active", sym),
-                        logging.WARNING,
-                        "[ema] missing required forager EMA %s %s action=raise | %s",
-                        Passivbot._log_symbol(sym),
-                        detail,
-                        ema_candle_health_context(sym),
-                        interval_ms=15 * 60 * 1000,
+                # Ranking inputs are side- and selection-scope data. Keep the
+                # symbol tradable and let Rust decide whether the remaining
+                # candidate set actually requires ranking. If it does, the
+                # explicit missing-input flag makes only that candidate/side
+                # unavailable instead of disabling the whole symbol.
+                self._orchestrator_allow_missing_strategy_inputs_symbols.add(sym)
+                candidate_ema_unavailable_details.setdefault(reason, []).append(
+                    (
+                        sym,
+                        "MissingForagerRankingEma",
+                        tuple(
+                            sorted(
+                                ({"m1_volume"} if missing_required_volume else set())
+                                | (
+                                    {"forager_m1_log_range"}
+                                    if missing_required_forager_lr1m
+                                    else set()
+                                )
+                            )
+                        ),
+                        tuple(
+                            sorted(
+                                set(missing_required_volume)
+                                | set(missing_required_forager_lr1m)
+                            )
+                        ),
                     )
-                    raise RuntimeError(
-                        f"[ema] missing required forager EMA for active/normal symbol {sym}: {detail}"
-                    )
-                mark_ema_unavailable(sym, reason)
+                )
                 log_ema_issue(
                     ("required_forager_missing", sym),
-                    logging.DEBUG,
-                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=mark_nontradable_until_fresh | %s",
+                    (
+                        logging.DEBUG
+                        if required_ema_can_mark_nontradable(sym)
+                        else logging.WARNING
+                    ),
+                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=scope_forager_selection_in_rust | %s",
                     Passivbot._log_symbol(sym),
                     ",".join(f"{span:.8g}" for span in missing_required_volume),
                     ",".join(f"{span:.8g}" for span in missing_required_forager_lr1m),
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
-            if sym in cache_only_symbols:
+            if sym in cache_only_symbols and not (
+                missing_required_volume or missing_required_forager_lr1m
+            ):
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
                 missing_lr1m = [
                     span for span in m1_lr_spans if span not in forager_lr1m
@@ -18812,7 +18912,7 @@ class Passivbot:
             log_ema_issue(
                 ("required_ema_unavailable_summary",),
                 logging.WARNING,
-                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
+                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=scope_unavailable_inputs | %s",
                 len(all_symbols),
                 len(candidate_ema_unavailable_details),
                 "; ".join(parts[:4]),
@@ -18891,7 +18991,9 @@ class Passivbot:
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         candidate_reason_names = {
             reason
-            for reason in ema_unavailable_reasons
+            for reason in (
+                set(ema_unavailable_reasons) | set(candidate_ema_unavailable_details)
+            )
             if reason
             in {
                 "cache_only_fetch_failed",
@@ -18929,9 +19031,9 @@ class Passivbot:
             )
         ranking_reason_symbols = {
             str(symbol)
-            for reason, reason_symbols in self._orchestrator_ema_unavailable_reasons.items()
+            for reason, items in candidate_ema_unavailable_details.items()
             if str(reason).startswith("missing_required_forager_")
-            for symbol in reason_symbols
+            for symbol, _error_type, _ema_types, _spans in items
         }
         for pside, unavailable_symbols in rank_feature_unavailable_by_side.items():
             for symbol in ranking_reason_symbols & set(unavailable_symbols):

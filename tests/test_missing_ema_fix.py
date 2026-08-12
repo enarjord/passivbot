@@ -954,12 +954,9 @@ async def test_disabled_opposite_side_does_not_block_flat_forager_degradation():
         {"long": {symbol: None}, "short": {symbol: None}},
     )
 
-    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
-    assert bot._orchestrator_ema_unavailable_reasons == {
-        "missing_required_forager_volume+missing_required_forager_log_range": {
-            symbol
-        }
-    }
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_unavailable_reasons == {}
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
     assert bot._orchestrator_ema_entry_cancellation_order_keys == {
         (symbol, "long", "exchange_id", "ondo-forager-entry")
     }
@@ -1066,9 +1063,7 @@ async def test_forager_ranking_ema_degradation_authorizes_resting_entry_cancel()
         bot, [symbol], mode_overrides
     )
 
-    assert bot._orchestrator_ema_unavailable_reasons == {
-        "missing_required_forager_volume": {symbol}
-    }
+    assert bot._orchestrator_ema_unavailable_reasons == {}
     assert bot._orchestrator_ema_entry_cancellation_order_keys == {
         (
             symbol,
@@ -1150,11 +1145,8 @@ async def test_forager_ranking_degradation_authorizes_only_affected_side():
         symbol: {"long", "short"}
     }
 
-    # Rust's symbol-level tradable=false result may move both sides to manual
-    # even though only the long ranking feature was missing. Preserve dynamic
-    # eligibility independently of cancellation scope: the remaining short
-    # entry must not turn the next identical gap into an account-fatal error,
-    # and it must not become cancellable.
+    # Preserve dynamic eligibility independently of cancellation scope: the
+    # remaining short entry must not become cancellable.
     bot.PB_modes = {
         "long": {symbol: "manual"},
         "short": {symbol: "manual"},
@@ -1169,9 +1161,7 @@ async def test_forager_ranking_degradation_authorizes_only_affected_side():
         [symbol],
         {"long": {symbol: None}, "short": {symbol: None}},
     )
-    assert bot._orchestrator_ema_unavailable_reasons == {
-        "missing_required_forager_volume": {symbol}
-    }
+    assert bot._orchestrator_ema_unavailable_reasons == {}
     assert bot._orchestrator_ema_entry_cancellation_order_keys == set()
     assert bot._orchestrator_dynamic_forager_eligibility_psides_by_symbol == {
         symbol: {"long", "short"}
@@ -1583,7 +1573,7 @@ def _enable_forager_required_ranking(bot):
 
 
 @pytest.mark.asyncio
-async def test_explicit_normal_missing_required_forager_features_fails_loudly():
+async def test_explicit_normal_missing_required_forager_features_are_scoped_to_rust():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -1603,13 +1593,82 @@ async def test_explicit_normal_missing_required_forager_features_fails_loudly():
     _enable_forager_required_ranking(bot)
     mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
 
-    with pytest.raises(
-        RuntimeError,
-        match=r"missing required forager EMA for active/normal symbol HYPE/USDT:USDT",
-    ):
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert result[0][symbol]
+    assert result[1][symbol] == {}
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
+
+
+@pytest.mark.asyncio
+async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    context = {
+        "gap_count": 1,
+        "gap_candles": 2,
+        "max_gap_candles": 2,
+        "oldest_gap_age_ms": 180_000,
+    }
+    current_context = {"value": context}
+    bot.cm.get_ema_provisional_internal_gap_context = (
+        lambda _symbol, _metric, _span, **_kwargs: current_context["value"]
+    )
+
+    with caplog.at_level(logging.DEBUG):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-            bot, [symbol], mode_overrides
+            bot, [symbol], bot.PB_modes
         )
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    assert bot._orchestrator_forager_gap_fallback_counts == {
+        (symbol, "quote_volume"): 2,
+        (symbol, "log_range"): 2,
+    }
+    fallback_logs = [
+        record
+        for record in caplog.records
+        if "forager ranking provisional internal-gap fallback" in record.message
+        and "recovered" not in record.message
+    ]
+    assert fallback_logs
+    assert any(record.levelno == logging.WARNING for record in fallback_logs)
+    assert any(
+        "source=synthetic_zero_volume_continuity" in record.message
+        for record in fallback_logs
+    )
+    assert any("consecutive_uses=2" in record.message for record in fallback_logs)
+
+    current_context["value"] = None
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    assert bot._orchestrator_forager_gap_fallback_counts == {
+        (symbol, "quote_volume"): 0,
+        (symbol, "log_range"): 0,
+    }
+    recoveries = [
+        record.message
+        for record in caplog.records
+        if "provisional internal-gap fallback recovered" in record.message
+    ]
+    assert len(recoveries) == 2
+    assert all("after_consecutive_uses=2" in message for message in recoveries)
 
 
 @pytest.mark.asyncio
@@ -1859,7 +1918,8 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     assert m1_log_range_emas[symbol] == {}
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
-    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
     assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
     assert not any(
         "missing required forager EMA HYPE" in record.message
@@ -1874,13 +1934,9 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     ]
     assert len(unavailable_events) == 1
     event_data = unavailable_events[0]["data"]
-    assert event_data["candidate_unavailable"]["count"] == 0
-    assert event_data["unavailable"]["sample"] == [symbol]
-    assert any(
-        group["reason"] == "missing_required_forager_volume+missing_required_forager_log_range"
-        and group["symbols"]["sample"] == [symbol]
-        for group in event_data["unavailable_reasons"]
-    )
+    assert event_data["candidate_unavailable"]["count"] == 1
+    assert event_data["candidate_unavailable"]["sample"] == [symbol]
+    assert event_data["unavailable"]["count"] == 0
 
 
 @pytest.mark.asyncio
