@@ -1601,7 +1601,117 @@ async def test_explicit_normal_missing_required_forager_features_are_scoped_to_r
     assert result[1][symbol] == {}
     assert bot._orchestrator_ema_unavailable_symbols == set()
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
-    assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": {symbol},
+    }
+
+
+@pytest.mark.asyncio
+async def test_forager_internal_gap_retry_requires_actual_refresh_provenance():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    bot.cm.get_last_refresh_ms = lambda _symbol: 100
+
+    async def quote_volume(
+        _symbol,
+        span,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        bot.qv_provisional_flags.append(allow_provisional_internal_gaps)
+        return 250000.0 if allow_provisional_internal_gaps else float("nan")
+
+    async def log_range(
+        _symbol,
+        span,
+        tf=None,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        bot.lr_provisional_flags.append((tf or "1m", allow_provisional_internal_gaps))
+        return 0.0015 if allow_provisional_internal_gaps else float("nan")
+
+    bot.cm.get_latest_ema_quote_volume = quote_volume
+    bot.cm.get_latest_ema_log_range = log_range
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert result[1][symbol] == {}
+    assert bot._orchestrator_forager_m1_log_range_emas[symbol] == {}
+    assert bot.qv_provisional_flags == [False]
+    assert [flag for _tf, flag in bot.lr_provisional_flags if flag is not None] == [
+        False
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forager_internal_gap_retry_follows_successful_bundle_refresh():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    refresh = {"value": 100}
+    bot.cm.get_last_refresh_ms = lambda _symbol: refresh["value"]
+
+    async def quote_volume(
+        _symbol,
+        span,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        bot.qv_provisional_flags.append(allow_provisional_internal_gaps)
+        if not allow_provisional_internal_gaps:
+            refresh["value"] += 1
+            return float("nan")
+        return 250000.0
+
+    async def log_range(
+        _symbol,
+        span,
+        tf=None,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        bot.lr_provisional_flags.append((tf or "1m", allow_provisional_internal_gaps))
+        if not allow_provisional_internal_gaps:
+            refresh["value"] += 1
+            return float("nan")
+        return 0.0015
+
+    bot.cm.get_latest_ema_quote_volume = quote_volume
+    bot.cm.get_latest_ema_log_range = log_range
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], bot.PB_modes
+    )
+
+    assert result[1][symbol][10.0] == pytest.approx(250000.0)
+    assert bot._orchestrator_forager_m1_log_range_emas[symbol][10.0] == pytest.approx(
+        0.0015
+    )
+    assert bot.qv_provisional_flags == [False, True]
+    assert [flag for _tf, flag in bot.lr_provisional_flags if flag is not None] == [
+        False,
+        True,
+    ]
 
 
 @pytest.mark.asyncio
@@ -1621,6 +1731,36 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
         "oldest_gap_age_ms": 180_000,
     }
     current_context = {"value": context}
+    refresh = {"value": 100}
+    bot.cm.get_last_refresh_ms = lambda _symbol: refresh["value"]
+
+    async def quote_volume(
+        _symbol,
+        span,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        if not allow_provisional_internal_gaps:
+            refresh["value"] += 1
+            return float("nan")
+        return 250000.0
+
+    async def log_range(
+        _symbol,
+        span,
+        tf=None,
+        max_age_ms=60_000,
+        allow_remote_fetch=True,
+        allow_provisional_internal_gaps=None,
+    ):
+        if not allow_provisional_internal_gaps:
+            refresh["value"] += 1
+            return float("nan")
+        return 0.0015
+
+    bot.cm.get_latest_ema_quote_volume = quote_volume
+    bot.cm.get_latest_ema_log_range = log_range
     bot.cm.get_ema_provisional_internal_gap_context = (
         lambda _symbol, _metric, _span, **_kwargs: current_context["value"]
     )
@@ -1864,13 +2004,13 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
-    assert bot.qv_provisional_flags == [True]
-    assert bot.lr_provisional_flags == [("1m", True)]
+    assert bot.qv_provisional_flags == [False]
+    assert bot.lr_provisional_flags == [("1m", False)]
     assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
 @pytest.mark.asyncio
-async def test_candidate_only_missing_required_forager_features_marks_unavailable(caplog):
+async def test_candidate_only_missing_required_forager_features_stays_conditional(caplog):
     try:
         import passivbot as pb_mod
         from live.event_bus import EventTypes
@@ -1889,8 +2029,9 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
         lr1m_mode="nan",
     )
     bot.PB_modes = {"long": {}, "short": {}}
-    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
-    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    now_ms = int(time.time() * 1000)
+    bot.cm.get_last_refresh_ms = lambda _symbol: now_ms
+    bot.cm.get_last_final_ts = lambda _symbol: now_ms
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
     _enable_forager_required_ranking(bot)
     events = []
@@ -1920,7 +2061,11 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == set()
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {symbol}
-    assert bot._orchestrator_candidate_ema_unavailable_symbols == {symbol}
+    assert bot._orchestrator_candidate_ema_unavailable_symbols == set()
+    assert bot._forager_rank_feature_unavailable_by_side == {
+        "long": {symbol},
+        "short": {symbol},
+    }
     assert not any(
         "missing required forager EMA HYPE" in record.message
         and "action=mark_nontradable_until_fresh" in record.message
@@ -1933,9 +2078,9 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
         if event_type == EventTypes.EMA_UNAVAILABLE
     ]
     assert len(unavailable_events) == 1
+    assert unavailable_events[0]["level"] == "debug"
     event_data = unavailable_events[0]["data"]
-    assert event_data["candidate_unavailable"]["count"] == 1
-    assert event_data["candidate_unavailable"]["sample"] == [symbol]
+    assert event_data["candidate_unavailable"]["count"] == 0
     assert event_data["unavailable"]["count"] == 0
 
 
@@ -2577,7 +2722,12 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
         "qv",
         "log_range",
     }
-    assert all(allow_provisional is True for _request, allow_provisional in batch_requests)
+    request_flags = [
+        (next(iter(request)), allow_provisional)
+        for request, allow_provisional in batch_requests
+    ]
+    assert ("close", True) in request_flags
+    assert ("qv", False) in request_flags
 
 
 @pytest.mark.asyncio

@@ -3402,6 +3402,7 @@ def test_forager_respects_n_positions_selects_one_coin():
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
     selection = out["diagnostics"]["forager_selections"][0]
     assert selection["pside"] == "long"
+    assert selection["ranking_required"] is True
     assert selection["selected_symbol_indices"] == [1]
     assert selection["top_scores"][0]["symbol_idx"] == 1
     assert selection["top_scores"][0]["selected"] is True
@@ -3443,6 +3444,7 @@ def test_single_eligible_coin_does_not_require_forager_feature_bundle():
         if item["pside"] == "long"
     )
     assert selection["selected_symbol_indices"] == [0]
+    assert selection["ranking_required"] is False
     assert selection["top_scores"] == []
 
 

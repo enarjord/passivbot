@@ -3350,6 +3350,7 @@ async def test_orchestrator_passes_trailing_unavailability_to_rust_per_side(monk
                     {
                         "pside": "long",
                         "slots_to_fill": 1,
+                        "ranking_required": True,
                         "score_hysteresis_pct": 0.1,
                         "selected_symbol_indices": ["0"],
                         "incumbent_symbol_indices": [],

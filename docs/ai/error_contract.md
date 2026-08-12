@@ -83,9 +83,10 @@ flat zero-volume rows for active strategy inputs while authoritative overlap rep
 Trailing-extrema reconstruction may use the same projection only for a still-open tail after dense
 post-fill coverage; it must not bridge a missing reset boundary or internal minute, and the
 projected rows must be discarded after that read so delayed authoritative highs and lows replace
-them immediately. Freshly fetched forager ranking quote-volume and log-range inputs may bridge a
-later-bounded internal gap when its complete length is within
-`live.max_active_candle_tail_gap_minutes`; cache-only candidates retain their narrower
+them immediately. Forager ranking quote-volume and log-range inputs may bridge a later-bounded
+internal gap only after the current planning bundle records a successful authoritative refresh for
+that symbol; remote fetch permission alone is not refresh provenance. The complete gap length must
+be within `live.max_active_candle_tail_gap_minutes`; cache-only candidates retain their narrower
 carry-forward contract. Each refreshed-symbol ranking metric records warning-visible gap count,
 age, source, and consecutive-use diagnostics, followed by an authoritative-recovery diagnostic.
 
@@ -96,8 +97,9 @@ symbol-scoped requirements are fresh, even if unrelated strategy surfaces are un
 
 Flat-symbol forager candidates may remain rankable within
 `live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
-projection. Freshly fetched quote-volume and log-range ranking inputs may use flat zero-volume
-continuity for later-bounded internal gaps within `live.max_active_candle_tail_gap_minutes`.
+projection. Quote-volume and log-range ranking inputs may use flat zero-volume continuity for
+later-bounded internal gaps within `live.max_active_candle_tail_gap_minutes` only after an
+authoritative refresh advances during the current planning bundle.
 Cache-only ranking inputs instead carry forward their latest known EMA with age/source metadata;
 they do not receive invented zero tails.
 When the forager setting is unset, its budget-derived acceptable age must not be shorter than
@@ -108,7 +110,9 @@ Candidates with no prior feature basis, non-finite carried values, or excessive 
 unavailable for new entries. Do not silently rank only the subset that happened to refresh first.
 Ranking-feature absence must remain scoped to forager selection: when the exact remaining eligible
 candidate count fits the remaining slots, Rust may select those candidates without ranking and
-must not let Python turn that unused input absence into symbol-wide non-tradability.
+must not let Python turn that unused input absence into symbol-wide non-tradability or a current
+ranking-unavailable alert. Diagnostics may retain the gap as conditional until Rust reports that
+ranking was required for that side.
 
 Approved and ignored coin state is an entry-eligibility input. Stale or unreadable eligibility
 blocks affected initial entries but not protective management. With `auto_gs=true`, removal of a

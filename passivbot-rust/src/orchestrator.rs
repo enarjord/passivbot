@@ -223,6 +223,7 @@ mod core {
     pub struct ForagerSelectionDiagnostic {
         pub pside: PositionSide,
         pub slots_to_fill: usize,
+        pub ranking_required: bool,
         pub score_hysteresis_pct: f64,
         pub selected_symbol_indices: Vec<usize>,
         pub incumbent_symbol_indices: Vec<usize>,
@@ -1043,6 +1044,7 @@ mod core {
             .push(ForagerSelectionDiagnostic {
                 pside,
                 slots_to_fill: cfg.slots_to_fill,
+                ranking_required: cfg.require_forager,
                 score_hysteresis_pct: cfg.score_hysteresis_pct,
                 selected_symbol_indices: result.selected_indices.clone(),
                 incumbent_symbol_indices,
@@ -5318,6 +5320,7 @@ mod core {
                 .find(|selection| selection.pside == PositionSide::Long)
                 .unwrap();
             assert_eq!(selection.selected_symbol_indices, vec![0]);
+            assert!(!selection.ranking_required);
             assert!(selection.top_scores.is_empty());
         }
 

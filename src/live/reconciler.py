@@ -2745,6 +2745,10 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator {context} has invalid slots_to_fill"
             )
+        if not isinstance(selection.get("ranking_required"), bool):
+            raise FatalBotException(
+                f"Rust orchestrator {context} has invalid ranking_required"
+            )
         validate_diagnostic_finite_fields(selection, ("score_hysteresis_pct",), context)
         for field in ("selected_symbol_indices", "incumbent_symbol_indices"):
             validate_diagnostic_symbol_idx_list(
