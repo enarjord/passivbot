@@ -2224,7 +2224,7 @@ mod core {
         }
     }
 
-    fn count_enabled_forager_candidates(
+    fn collect_enabled_forager_candidate_indices_into(
         symbols: &[SymbolInput],
         pside: PositionSide,
         strategy_kind: StrategyKind,
@@ -2234,8 +2234,11 @@ mod core {
         runtime_budgets: &[RuntimeBudgetState],
         active_flags: Option<&[bool]>,
         derived_cache: &mut [CachedSideDerived],
-    ) -> Result<usize, OrchestratorError> {
-        let mut enabled_count = 0usize;
+        out: &mut Vec<usize>,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) -> Result<(), OrchestratorError> {
+        out.clear();
+        out.reserve(symbols.len());
         for s in symbols {
             let side = match pside {
                 PositionSide::Long => &s.long,
@@ -2265,27 +2268,34 @@ mod core {
                 &runtime_budgets[s.symbol_idx],
                 strategy_initial_qty_pct(&strategy_params),
             );
-            if symbol_side_eligible(s, pside)
+            let eligible_without_min_cost = symbol_side_eligible(s, pside)
                 && !already_active
                 && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
-                && can_open_initial
-                && min_cost_ok
-            {
-                enabled_count += 1;
+                && can_open_initial;
+            if eligible_without_min_cost && min_cost_ok {
+                out.push(s.symbol_idx);
+            } else if eligible_without_min_cost {
+                maybe_record_min_effective_cost_block(
+                    diagnostics,
+                    s.symbol_idx,
+                    pside,
+                    balance,
+                    s.effective_min_cost,
+                    filter_enabled,
+                    &side.bot_params,
+                    &runtime_budgets[s.symbol_idx],
+                    strategy_initial_qty_pct(&strategy_params),
+                );
             }
         }
-        Ok(enabled_count)
+        Ok(())
     }
 
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
+        candidate_indices: &[usize],
         pside: PositionSide,
         strategy_kind: StrategyKind,
-        hedge_mode: bool,
-        filter_enabled: bool,
-        balance: f64,
-        runtime_budgets: &[RuntimeBudgetState],
-        active_flags: Option<&[bool]>,
         cfg: &ForagerSelectionConfig,
         derived_cache: &mut [CachedSideDerived],
         out: &mut Vec<ForagerCandidate>,
@@ -2303,8 +2313,9 @@ mod core {
         let volatility_required = cfg.require_forager && normalized_weights.volatility != 0.0;
         let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
-        out.reserve(symbols.len());
-        for s in symbols {
+        out.reserve(candidate_indices.len());
+        for &symbol_idx in candidate_indices {
+            let s = &symbols[symbol_idx];
             let forager_m1 = s.forager_m1.as_ref().unwrap_or(&s.emas.m1);
             let side = match pside {
                 PositionSide::Long => &s.long,
@@ -2320,50 +2331,6 @@ mod core {
                 },
                 side,
             )?;
-            // For selection of coins to occupy available slots for initial entries:
-            // - We rank across all coins (including those with positions), matching legacy.
-            // - We exclude modes which categorically block initial entries when `psize == 0.0`.
-            let mode_no_pos = effective_mode(side.mode, false);
-            let can_open_initial = should_generate_entries(mode_no_pos, false, true);
-            let already_active = active_flags
-                .and_then(|flags| flags.get(s.symbol_idx))
-                .copied()
-                .unwrap_or(false);
-            let min_cost_ok = effective_min_cost_is_low_enough(
-                balance,
-                filter_enabled,
-                s.effective_min_cost,
-                &side.bot_params,
-                &runtime_budgets[s.symbol_idx],
-                strategy_initial_qty_pct(&strategy_params),
-            );
-            let enabled = symbol_side_eligible(s, pside)
-                && !already_active
-                && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
-                && can_open_initial
-                && min_cost_ok;
-            if !enabled {
-                if symbol_side_eligible(s, pside)
-                    && !already_active
-                    && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
-                    && can_open_initial
-                    && !min_cost_ok
-                {
-                    maybe_record_min_effective_cost_block(
-                        diagnostics,
-                        s.symbol_idx,
-                        pside,
-                        balance,
-                        s.effective_min_cost,
-                        filter_enabled,
-                        &side.bot_params,
-                        &runtime_budgets[s.symbol_idx],
-                        strategy_initial_qty_pct(&strategy_params),
-                    );
-                }
-                out.push(unavailable_forager_candidate(s.symbol_idx));
-                continue;
-            }
             let volume_score = if volume_required {
                 let value = match ema_lookup(
                     &forager_m1.volume,
@@ -2454,7 +2421,7 @@ mod core {
             };
             out.push(ForagerCandidate {
                 index: s.symbol_idx,
-                enabled,
+                enabled: true,
                 volume_score,
                 volatility_score,
                 bid,
@@ -2899,6 +2866,7 @@ mod core {
         per_short: Vec<Option<PerSymbolOrders>>,
         forced_long: Vec<usize>,
         forced_short: Vec<usize>,
+        eligible_forager_indices: Vec<usize>,
         features: Vec<ForagerCandidate>,
         gate_positions_long: Vec<GateEntriesPosition>,
         gate_positions_short: Vec<GateEntriesPosition>,
@@ -3370,7 +3338,7 @@ mod core {
             }
             if actives_long_count < enp_long {
                 let slots_to_fill = enp_long.saturating_sub(actives_long_count);
-                let remaining_candidate_count = count_enabled_forager_candidates(
+                collect_enabled_forager_candidate_indices_into(
                     &input.symbols,
                     PositionSide::Long,
                     input.global.strategy_kind,
@@ -3380,7 +3348,10 @@ mod core {
                     &workspace.runtime_budget_long,
                     Some(actives_long),
                     &mut workspace.derived_long,
+                    &mut workspace.eligible_forager_indices,
+                    &mut diagnostics,
                 )?;
+                let remaining_candidate_count = workspace.eligible_forager_indices.len();
                 let cfg = ForagerSelectionConfig {
                     slots_to_fill,
                     volume_drop_pct: input.global.global_bot_params.long.forager_volume_drop_pct,
@@ -3405,13 +3376,9 @@ mod core {
                 };
                 build_forager_candidates_into(
                     &input.symbols,
+                    &workspace.eligible_forager_indices,
                     PositionSide::Long,
                     input.global.strategy_kind,
-                    input.global.hedge_mode,
-                    input.global.filter_by_min_effective_cost,
-                    input.balance,
-                    &workspace.runtime_budget_long,
-                    Some(actives_long),
                     &cfg,
                     &mut workspace.derived_long,
                     &mut workspace.features,
@@ -3468,7 +3435,7 @@ mod core {
             }
             if actives_short_count < enp_short {
                 let slots_to_fill = enp_short.saturating_sub(actives_short_count);
-                let remaining_candidate_count = count_enabled_forager_candidates(
+                collect_enabled_forager_candidate_indices_into(
                     &input.symbols,
                     PositionSide::Short,
                     input.global.strategy_kind,
@@ -3478,7 +3445,10 @@ mod core {
                     &workspace.runtime_budget_short,
                     Some(actives_short),
                     &mut workspace.derived_short,
+                    &mut workspace.eligible_forager_indices,
+                    &mut diagnostics,
                 )?;
+                let remaining_candidate_count = workspace.eligible_forager_indices.len();
                 let cfg = ForagerSelectionConfig {
                     slots_to_fill,
                     volume_drop_pct: input.global.global_bot_params.short.forager_volume_drop_pct,
@@ -3503,13 +3473,9 @@ mod core {
                 };
                 build_forager_candidates_into(
                     &input.symbols,
+                    &workspace.eligible_forager_indices,
                     PositionSide::Short,
                     input.global.strategy_kind,
-                    input.global.hedge_mode,
-                    input.global.filter_by_min_effective_cost,
-                    input.balance,
-                    &workspace.runtime_budget_short,
-                    Some(actives_short),
                     &cfg,
                     &mut workspace.derived_short,
                     &mut workspace.features,
