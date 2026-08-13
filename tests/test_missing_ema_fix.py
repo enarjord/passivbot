@@ -1659,6 +1659,63 @@ async def test_current_forager_ranking_uses_bounded_internal_gap_policy_directly
 
 
 @pytest.mark.asyncio
+async def test_forager_gap_consumption_logs_only_activation_and_recovery(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    bot = _BundleReproBot(symbol, close_mode="value")
+    _enable_forager_required_ranking(bot)
+    usage = {"value": True}
+    bot.cm.ema_spans_use_provisional_internal_gap = (
+        lambda _symbol, _spans, **_kwargs: usage["value"]
+    )
+
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    activation_logs = [
+        record.message
+        for record in caplog.records
+        if "forager ranking input using bounded internal-gap continuity"
+        in record.message
+    ]
+    assert len(activation_logs) == 2
+    assert all(
+        "source=synthetic_zero_volume_continuity" in msg
+        for msg in activation_logs
+    )
+    assert bot._orchestrator_forager_provisional_gap_inputs_active == {
+        (symbol, "quote_volume"),
+        (symbol, "log_range"),
+    }
+
+    usage["value"] = False
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    recovery_logs = [
+        record.message
+        for record in caplog.records
+        if "forager ranking input resumed authoritative candles"
+        in record.message
+    ]
+    assert len(recovery_logs) == 2
+    assert bot._orchestrator_forager_provisional_gap_inputs_active == set()
+    assert not hasattr(bot, "_orchestrator_forager_gap_fallback_counts")
+
+
+@pytest.mark.asyncio
 async def test_active_forager_required_features_use_bounded_cached_carry_forward():
     try:
         import passivbot as pb_mod

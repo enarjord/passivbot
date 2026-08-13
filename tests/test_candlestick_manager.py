@@ -4351,9 +4351,26 @@ async def test_forager_metrics_bridge_bounded_internal_gap_without_persistence(
     )
     assert refreshed["qv"][3.0] == pytest.approx(expected_qv)
     assert refreshed["log_range"][3.0] == pytest.approx(expected_log_range)
+    assert cm.ema_spans_use_provisional_internal_gap(
+        symbol, [3.0], timeframe="1m"
+    )
     assert np.array_equal(
         cm._cache[symbol]["ts"],
         np.asarray([start, end], dtype=np.int64),
+    )
+
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [(missing, 110.0, 110.0, 110.0, 110.0, 2.0)],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now,
+    )
+    assert not cm.ema_spans_use_provisional_internal_gap(
+        symbol, [3.0], timeframe="1m"
     )
 
 

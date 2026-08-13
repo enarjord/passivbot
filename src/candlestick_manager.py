@@ -9439,6 +9439,58 @@ class CandlestickManager:
             tf=tf,
         )
 
+    def ema_spans_use_provisional_internal_gap(
+        self,
+        symbol: str,
+        spans: Iterable[float],
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> bool:
+        """Whether current EMA windows use bounded unresolved-gap continuity.
+
+        This derives consumption from canonical gap and candle state on demand;
+        it does not retain per-span fallback provenance.
+        """
+        period_ms = _tf_to_ms(timeframe if timeframe is not None else tf)
+        tolerance_ms = int(
+            self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
+        )
+        if period_ms != ONE_MIN_MS or tolerance_ms <= 0:
+            return False
+        normalized_spans = {
+            float(span)
+            for span in spans
+            if math.isfinite(float(span)) and float(span) > 0.0
+        }
+        if not normalized_spans:
+            return False
+        end_ts = (
+            (int(self._now_ms()) // int(period_ms)) * int(period_ms)
+            - int(period_ms)
+        )
+        start_ts = int(
+            end_ts
+            - period_ms
+            * (max(1, int(math.ceil(max(normalized_spans)))) - 1)
+        )
+        last_final_ts = int(self.get_last_final_ts(symbol) or 0)
+        cached = self._cache.get(symbol)
+        if isinstance(cached, np.ndarray) and cached.size > 0:
+            last_final_ts = max(
+                last_final_ts,
+                int(np.max(np.asarray(cached["ts"], dtype=np.int64))),
+            )
+        for gap_start, gap_end in self._unverified_uncovered_gap_ranges(
+            symbol,
+            start_ts,
+            end_ts,
+        ):
+            gap_width_ms = int(gap_end) - int(gap_start) + ONE_MIN_MS
+            if gap_width_ms <= tolerance_ms and int(gap_end) < last_final_ts:
+                return True
+        return False
+
     async def get_latest_ema_close(
         self,
         symbol: str,

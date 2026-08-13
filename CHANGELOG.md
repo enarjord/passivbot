@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   slots. Python now scopes missing ranking-only inputs to Rust selection instead of making the
   whole symbol non-tradable. Current remote-enabled forager candidates may also bridge bounded,
   later-bracketed internal candle gaps under `live.max_active_candle_tail_gap_minutes` without
-  depending on refresh timing inside one planning pass; cache-only stale candidates remain strict.
+  depending on refresh timing inside one planning pass; compact transition diagnostics identify
+  ranking-input continuity use and authoritative recovery, while cache-only candidates remain strict.
 - Standardize suite reduction configuration on `reducer` across `backtest`, optimizer scoring,
   limits, CLI parsing, examples, and serialized configs. The former `aggregate`, `stat`, and
   `scenario_stat` spellings remain accepted as input aliases (plus legacy limit `field`),

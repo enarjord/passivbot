@@ -104,8 +104,9 @@
    candidate reads remain strict. This is approximate ranking continuity, not evidence that the
    missing rows were fetched. Synthetic replacement tracking follows the manager's live/replay
    clock so delayed authoritative rows invalidate provisional replay EMAs deterministically.
-   Existing known-gap and refresh diagnostics expose repair state without a second per-span
-   provenance state machine.
+   Existing known-gap and refresh diagnostics expose repair state. Live orchestration derives
+   ranking-input consumption from canonical gap state and emits activation/recovery transitions
+   per symbol and metric without a second per-span provenance state machine or use counter.
    Open-ended tails use the separate bounded projection policy below.
    Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each

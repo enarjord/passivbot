@@ -89,7 +89,9 @@ candidates may bridge a later-bounded internal gap when the complete gap length 
 policy, not proof that the missing rows were fetched. The rows remain unresolved and retryable,
 are never persisted, and are replaced by delayed authoritative candles. Cache-only candidates
 remain strict across unresolved internal gaps. Existing known-gap and refresh diagnostics expose
-the underlying repair state; no parallel per-metric fallback state is required.
+the underlying repair state. A compact per-symbol/metric transition diagnostic additionally marks
+when ranking-input calculation consumes bounded continuity and later resumes from authoritative
+candles; it does not retain per-span contexts or consecutive-use counters.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
