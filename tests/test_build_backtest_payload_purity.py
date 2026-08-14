@@ -119,6 +119,8 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
 
     assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit"] == 0.0
     assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
+    assert payload.bot_params_list[coin4_idx]["long"]["entry_eligible"] is False
+    assert payload.bot_params_list[coin4_idx]["short"]["entry_eligible"] is True
 
 
 def test_market_settings_overrides_match_exact_and_alias_keys(tmp_path, monkeypatch):

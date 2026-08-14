@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
+  approved only for long cannot open short entries, and a coin approved only for short cannot
+  open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
+  behavior after Rust derives runtime exposure budgets.
 - Skip forager ranking and its feature requirements when each side's exact remaining candidate
   universe fits its remaining position slots, including when ineligible held positions consume
   slots. Python now scopes missing ranking-only inputs to Rust selection instead of making the

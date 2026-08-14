@@ -570,6 +570,13 @@ pub struct BotParams {
     pub forager_score_weights: ForagerScoreWeights,
     #[serde(default)]
     pub is_forced_active: bool,
+    /// Whether this symbol+position-side may open new positions.
+    ///
+    /// Backtests set this from side-specific approved-coins membership.  Live
+    /// callers retain their existing mode-based eligibility contract through
+    /// the default value.
+    #[serde(default = "default_true")]
+    pub entry_eligible: bool,
     #[serde(default)]
     pub ema_span_0: f64,
     #[serde(default)]
@@ -649,6 +656,7 @@ impl Default for BotParams {
             forager_volume_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
+            entry_eligible: true,
             ema_span_0: 0.0,
             ema_span_1: 0.0,
             hsl_enabled: default_hsl_enabled(),

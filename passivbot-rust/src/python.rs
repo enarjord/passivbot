@@ -2496,6 +2496,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             .transpose()?
             .unwrap_or_default(),
         is_forced_active: extract_optional_bool(dict, "is_forced_active", false)?,
+        entry_eligible: extract_optional_bool(dict, "entry_eligible", true)?,
         ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
         ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled,
