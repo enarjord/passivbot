@@ -1284,13 +1284,15 @@ impl<'a> Backtest<'a> {
         writer.write_record(&record);
     }
 
-    fn forced_normal_mode(&self, idx: usize, pside: usize) -> Option<orchestrator::TradingMode> {
+    fn configured_mode(&self, idx: usize, pside: usize) -> Option<orchestrator::TradingMode> {
         let side = match pside {
             LONG => &self.bot_params[idx].long,
             SHORT => &self.bot_params[idx].short,
             _ => return None,
         };
-        if side.is_forced_active {
+        if !side.entry_eligible {
+            Some(orchestrator::TradingMode::GracefulStop)
+        } else if side.is_forced_active {
             Some(orchestrator::TradingMode::Normal)
         } else {
             None
@@ -1377,9 +1379,9 @@ impl<'a> Backtest<'a> {
                 let pos_short = self.positions.short[idx];
 
                 let mut mode_long: Option<orchestrator::TradingMode> =
-                    self.forced_normal_mode(idx, LONG);
+                    self.configured_mode(idx, LONG);
                 let mut mode_short: Option<orchestrator::TradingMode> =
-                    self.forced_normal_mode(idx, SHORT);
+                    self.configured_mode(idx, SHORT);
 
                 if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                     if k >= delist_timestamp {
@@ -1672,10 +1674,9 @@ impl<'a> Backtest<'a> {
             sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
 
             let valid_now = self.coin_is_valid_at(idx, k);
-            let mut mode_long: Option<orchestrator::TradingMode> =
-                self.forced_normal_mode(idx, LONG);
+            let mut mode_long: Option<orchestrator::TradingMode> = self.configured_mode(idx, LONG);
             let mut mode_short: Option<orchestrator::TradingMode> =
-                self.forced_normal_mode(idx, SHORT);
+                self.configured_mode(idx, SHORT);
 
             if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                 if k >= delist_timestamp {
@@ -2159,11 +2160,11 @@ impl<'a> Backtest<'a> {
             trading_enabled: TradingEnabled {
                 long: bot_params
                     .iter()
-                    .any(|bp| bp.long.wallet_exposure_limit != 0.0)
+                    .any(|bp| bp.long.entry_eligible && bp.long.wallet_exposure_limit != 0.0)
                     && bot_params_master.long.n_positions > 0,
                 short: bot_params
                     .iter()
-                    .any(|bp| bp.short.wallet_exposure_limit != 0.0)
+                    .any(|bp| bp.short.entry_eligible && bp.short.wallet_exposure_limit != 0.0)
                     && bot_params_master.short.n_positions > 0,
             },
             trailing_enabled,
@@ -2425,12 +2426,18 @@ impl<'a> Backtest<'a> {
         let eligible_long: Vec<usize> = eligible
             .iter()
             .copied()
-            .filter(|&idx| self.bot_params_original[idx].long.wallet_exposure_limit != 0.0)
+            .filter(|&idx| {
+                self.bot_params_original[idx].long.entry_eligible
+                    && self.bot_params_original[idx].long.wallet_exposure_limit != 0.0
+            })
             .collect();
         let eligible_short: Vec<usize> = eligible
             .iter()
             .copied()
-            .filter(|&idx| self.bot_params_original[idx].short.wallet_exposure_limit != 0.0)
+            .filter(|&idx| {
+                self.bot_params_original[idx].short.entry_eligible
+                    && self.bot_params_original[idx].short.wallet_exposure_limit != 0.0
+            })
             .collect();
 
         let tradable_long_now = eligible_long.len();
@@ -10730,6 +10737,7 @@ mod tests {
         bp_pair.short.ema_span_1 = 20.0;
 
         let mut short_only = bp_pair.clone();
+        short_only.long.entry_eligible = false;
         short_only.long.n_positions = 0;
         short_only.long.total_wallet_exposure_limit = 0.0;
         short_only.long.wallet_exposure_limit = 0.0;
@@ -10792,6 +10800,12 @@ mod tests {
             bt.runtime_budget[3].long.effective_wallet_exposure_limit,
             0.0
         );
+        let input = bt.build_orchestrator_input_iter(0, None, None, 0..4);
+        assert_eq!(
+            input.symbols[3].long.mode,
+            Some(orchestrator::TradingMode::GracefulStop)
+        );
+        assert_eq!(input.symbols[3].short.mode, None);
     }
 
     #[test]
