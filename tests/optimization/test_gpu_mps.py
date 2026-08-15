@@ -425,3 +425,55 @@ def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
     # Rust finalization rounds the cap to the nearest quantity step. Flooring
     # this to 2.403 was enough to change a later close/reentry decision.
     assert output["psize"].item() == pytest.approx(2.404, abs=1.0e-6)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_touch_close_uses_nearest_tick():
+    """Match Rust finalization when an off-tick market touch controls a close."""
+
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 9
+    close = np.array(
+        [100.0, 100.0, 100.004, 100.004, 100.004, 100.004, 100.004, 100.004, 100.0]
+    )
+    high = np.array(
+        [100.0, 100.0, 100.004, 100.005, 100.005, 100.005, 100.005, 100.005, 100.0]
+    )
+    low = np.array(
+        [100.0, 100.0, 99.0, 100.003, 100.003, 100.003, 100.003, 100.003, 100.0]
+    )
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[7] = 0.5  # Prevent another entry in this fixture.
+    row[16] = 0.0  # Use the current touch after the close trail retraces.
+    row[20] = 0.000001
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # The 100.004 touch rounds to 100.00 and fills at the next 100.005 high.
+    # Directionally rounding the touch up to 100.01 would leave the position open.
+    assert output["psize"].item() == 0.0

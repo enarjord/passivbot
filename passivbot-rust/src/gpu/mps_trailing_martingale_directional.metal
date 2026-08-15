@@ -132,6 +132,10 @@ inline int directional_ticks(float price, float step, bool up) {
               : int(floor(price / step + 1.0e-6f));
 }
 
+inline int nearest_ticks(float price, float step) {
+    return int(floor(price / step + 0.5f));
+}
+
 inline int touch_clamp(int target, int touch, bool up) {
     return up ? max(target, touch) : min(target, touch);
 }
@@ -298,10 +302,11 @@ inline void generate_orders(
             );
         }
     }
-    int close_touch = directional_ticks(price_now, price_step, close_up);
-    int cticks = touch_clamp(
-        directional_ticks(close_target, price_step, close_up), close_touch, close_up
-    );
+    int target_ticks = directional_ticks(close_target, price_step, close_up);
+    float rounded_target = float(target_ticks) * price_step;
+    bool touch_controls = (trailing_close && ct <= 0.0f) || (close_up
+        ? price_now > rounded_target : price_now < rounded_target);
+    int cticks = touch_controls ? nearest_ticks(price_now, price_step) : target_ticks;
     float close_price = float(cticks) * price_step;
     float pct = trailing_close ? s.close_qty_pct
         : (s.close_threshold_we == 0.0f ? 1.0f : s.close_qty_pct);

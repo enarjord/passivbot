@@ -103,6 +103,8 @@ The supported slice is intentionally narrow:
 - one exchange and one coin, using one-minute candles
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled
+- trailing-martingale entry and close `retracement_base_pct` optimizer bounds strictly above zero;
+  zero or negative values select recursive grid ladders that this screening slice does not model
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode disabled
@@ -113,8 +115,9 @@ The supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Multi-coin, suites, HSL, auto-unstuck,
-and forager-dependent selection are not silently approximated by this release.
+Unsupported combinations fail before optimization begins. Recursive trailing-martingale grid
+modes, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not silently
+approximated by this release.
 
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,

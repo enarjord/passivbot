@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from config.schema import get_template_config
+from optimization.bounds import Bound
 from optimization.backends.gpu_backend import (
     _canonical_candidate_values,
     _canonical_vector_hash,
@@ -29,6 +30,7 @@ from optimization.backends.gpu_backend import (
     _validate_pinned_scope_bounds,
     _validate_seed_side_match,
     _validate_scope,
+    _validate_trailing_martingale_mode_bounds,
     TRAILING_MARTINGALE_BOUND_MAP,
 )
 
@@ -196,6 +198,20 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         for side in ("long", "short")
         for suffix in expected_suffixes
     }
+
+
+def test_trailing_martingale_gpu_rejects_recursive_grid_mode_bounds():
+    bounds = {
+        f"{side}_{mode}_retracement_base_pct": Bound(0.0001, 0.01, 0.0001)
+        for side in ("long", "short")
+        for mode in ("entry", "close")
+    }
+
+    _validate_trailing_martingale_mode_bounds(bounds, {"long", "short"})
+    bounds["short_close_retracement_base_pct"] = Bound(0.0, 0.01, 0.0001)
+
+    with pytest.raises(ValueError, match="recursive grid ladders"):
+        _validate_trailing_martingale_mode_bounds(bounds, {"long", "short"})
 
 
 def test_cpu_backend_registry_import_does_not_import_torch():

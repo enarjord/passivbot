@@ -105,6 +105,23 @@ GPU_STRATEGY_BOUND_MAPS = {
 }
 
 
+def _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides) -> None:
+    """Reject recursive grid modes until the proxy models their full ladders."""
+
+    for side in enabled_sides:
+        for mode in ("entry", "close"):
+            key = f"{side}_{mode}_retracement_base_pct"
+            bound = bound_by_key[key]
+            if float(bound.low) <= 0.0:
+                raise ValueError(
+                    "GPU trailing_martingale requires "
+                    f"bot.{side}.strategy.trailing_martingale.{mode}."
+                    "retracement_base_pct bounds to stay strictly positive; "
+                    "zero or negative values select recursive grid ladders that "
+                    "the screening proxy does not model"
+                )
+
+
 def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
 
@@ -989,6 +1006,8 @@ def run_backend(
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
     }
+    if strategy_kind == "trailing_martingale":
+        _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
     _validate_directional_search_space(
