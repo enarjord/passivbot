@@ -61,13 +61,16 @@ minimize or maximize the metric.
 
 ### Backend Selection
 
-Passivbot supports two optimizer backends:
+Passivbot supports three optimizer backends:
 
 - `optimize.backend: deap`
   - Uses the existing DEAP evolutionary backend.
 - `optimize.backend: pymoo`
   - Uses pymoo. This is now the default optimizer backend.
   - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
+- `optimize.backend: gpu`
+  - Uses an Apple Metal screening proxy and exact Rust validation. This backend is experimental and
+    deliberately limited to the scope documented below.
 
 Example:
 
@@ -81,6 +84,89 @@ Example:
   }
 }
 ```
+
+### Apple MPS GPU Backend (Experimental)
+
+The GPU backend is an additive research backend for Apple Silicon. Install the normal optimizer
+dependencies plus its optional PyTorch runtime:
+
+```bash
+python3 -m pip install -e ".[full,gpu-mps]"
+```
+
+Select it with `--backend gpu` or `optimize.backend: "gpu"`. Normal live operation, backtesting,
+and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
+
+The first supported slice is intentionally narrow:
+
+- Apple Silicon with `torch.backends.mps.is_available()`
+- one exchange and one coin, using one-minute candles
+- `strategy_kind: ema_anchor`, long-only
+- suite mode disabled
+- HSL and auto-unstuck disabled
+
+Unsupported combinations fail before optimization begins. Short-only, long+short,
+trailing-martingale, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not
+silently approximated by this foundation release.
+
+Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
+`adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
+`sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,
+`position_held_days_max`, `strategy_eq_underwater_pct_mean`, `drawdown_worst_strategy_eq`,
+`drawdown_worst_mean_1pct_strategy_eq`, `fills_gap_longest_days`, `fills_gap_p95_hours`, and
+`backtest_completion_ratio`. Other proxy metrics are rejected before a run starts.
+
+The backend is hybrid rather than a replacement backtester:
+
+1. pymoo NSGA-II proposes large normalized candidate batches.
+2. A custom Metal kernel screens every candidate against candle data resident on MPS.
+3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
+4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
+5. A rolling Spearman rank gate stops the run if broad proxy/exact agreement falls below
+   `drift_halt` after sufficient evidence.
+
+`optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
+are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
+scheduling is managed by Metal.
+
+GPU-specific settings live under `optimize.gpu`:
+
+```json
+{
+  "optimize": {
+    "backend": "gpu",
+    "gpu": {
+      "batch_size": 4096,
+      "checkpoint_interval_seconds": 5.0,
+      "drift_halt": 0.6,
+      "drift_min_samples": 32,
+      "drift_probes": 4,
+      "drift_window": 128,
+      "exact_workers": 0,
+      "max_pending_exact": 0,
+      "population_size": 4096,
+      "validate_per_generation": 8
+    }
+  }
+}
+```
+
+- `population_size` is the NSGA-II proxy population.
+- `batch_size` caps candidates per MPS dispatch.
+- `validate_per_generation` caps exact candidates selected from each proxy generation.
+- `drift_probes` reserves part of that validation budget for candidates away from the proxy front.
+- `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank-safety gate. At
+  least eight broad probes are required before low correlation can halt a run.
+- `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
+- `max_pending_exact: 0` defaults to twice the exact-worker count.
+- `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
+  result batches are checkpointed immediately, and a final checkpoint is always written on
+  successful completion.
+
+The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
+remain the only stored optimization results. Credit: the Torch metric-reduction work was adapted
+from RustyCZ's Passivbot GPU branch at commit `7c529bc73`; the MPS Metal integration and hybrid
+validation gates are specific to this implementation.
 
 ### Pymoo Configuration
 
@@ -511,7 +597,7 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 
 ## Optimization Process
 
-- Uses a multi-objective evolutionary backend (`deap` or `pymoo`)
+- Uses a multi-objective evolutionary backend (`deap`, `pymoo`, or experimental `gpu`)
 - `pymoo` defaults to NSGA-III for many-objective runs, with NSGA-II still available explicitly
 - Backtests across historical OHLCV data
 - Uses multiprocessing with shared memory for reduced RAM load

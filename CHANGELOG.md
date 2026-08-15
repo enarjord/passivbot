@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
+  long-only EMA-anchor searches. Large Metal-screened NSGA-II populations feed selected candidates
+  into the unchanged exact Rust backtester; only exact results reach the Pareto store, and rolling
+  broad-probe rank checks halt on proxy drift. Unsupported strategies, sides, suites, multi-coin,
+  HSL, and auto-unstuck scopes fail closed. Existing CPU bot, backtest, and optimizer paths do not
+  import or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
