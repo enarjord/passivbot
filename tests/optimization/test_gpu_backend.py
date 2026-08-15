@@ -12,6 +12,7 @@ from config.schema import get_template_config
 from optimization.backends.gpu_backend import (
     _DriftMonitor,
     _ObjectiveScale,
+    _update_novelty_stall,
     _spearman,
     _resolve_options,
     _restore_gpu_result_run_contract,
@@ -36,6 +37,10 @@ def _long_only_ema_config():
     config["bot"]["short"]["risk"]["n_positions"] = 0
     config["bot"]["long"]["hsl"]["enabled"] = False
     config["bot"]["long"]["unstuck"]["enabled"] = False
+    config["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = False
+    config["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] = False
+    config["bot"]["long"]["risk"]["total_exposure_entry_gate_enabled"] = True
+    config["bot"]["long"]["risk"]["we_excess_allowance_pct"] = 0.0
     config["backtest"]["suite_enabled"] = False
     return config
 
@@ -119,6 +124,54 @@ def test_single_scenario_metric_surface_supports_all_reducers():
             ),
             "unstuck",
         ),
+        (
+            lambda config: config["backtest"].__setitem__(
+                "btc_collateral_cap", 0.5
+            ),
+            "btc_collateral_cap",
+        ),
+        (
+            lambda config: config.__setitem__(
+                "coin_overrides", {"BTC": {"bot.long.risk.n_positions": 2}}
+            ),
+            "coin_overrides",
+        ),
+        (
+            lambda config: config["optimize"]["fixed_runtime_overrides"].__setitem__(
+                "bot.long.unstuck.enabled", True
+            ),
+            "fixed_runtime_overrides",
+        ),
+        (
+            lambda config: config["live"].__setitem__(
+                "max_realized_loss_pct", 0.1
+            ),
+            "max_realized_loss_pct",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "position_exposure_enforcer_enabled", True
+            ),
+            "position_exposure_enforcer_enabled",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "total_exposure_enforcer_enabled", True
+            ),
+            "total_exposure_enforcer_enabled",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "we_excess_allowance_pct", 0.1
+            ),
+            "we_excess_allowance_pct",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "total_exposure_entry_gate_enabled", False
+            ),
+            "total_exposure_entry_gate_enabled",
+        ),
     ],
 )
 def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
@@ -157,9 +210,44 @@ def test_validation_selection_includes_front_and_broad_probes():
 
     selected = _select_validation_indices(objectives, scores, total=5, probes=2)
 
-    assert len(selected) == 5
-    assert sum(is_probe for _index, is_probe in selected) == 2
-    assert len({index for index, _is_probe in selected}) == 5
+    chosen = selected[:5]
+    assert len(chosen) == 5
+    assert sum(is_probe for _index, is_probe in chosen) == 1
+    assert all(index == 6 for index, is_probe in chosen if is_probe)
+    assert len({index for index, _is_probe in selected}) == len(objectives)
+
+
+def test_validation_selection_prefers_feasible_candidates():
+    objectives = np.array(
+        [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0], [3.0, 3.0], [4.0, 4.0]]
+    )
+    scores = objectives.mean(axis=1)
+    violations = np.array([2.0, 0.0, -1.0, 3.0, 0.0])
+
+    selected = _select_validation_indices(
+        objectives, scores, violations, total=3, probes=1
+    )
+
+    assert {index for index, _probe in selected[:3]} == {1, 2, 4}
+
+
+def test_validation_broad_probes_exclude_the_entire_proxy_front():
+    objectives = np.array(
+        [
+            [0.0, 4.0],
+            [1.0, 3.0],
+            [2.0, 2.0],
+            [3.0, 1.0],
+            [4.0, 0.0],
+            [8.0, 8.0],
+            [9.0, 9.0],
+        ]
+    )
+    scores = objectives.mean(axis=1)
+
+    selected = _select_validation_indices(objectives, scores, total=5, probes=2)
+
+    assert {index for index, is_probe in selected[:5] if is_probe} == {5, 6}
 
 
 def test_drift_monitor_needs_broad_probe_evidence_before_halting():
@@ -199,6 +287,37 @@ def test_drift_monitor_halts_when_proxy_cannot_rank_broad_probes():
     assert np.isnan(status["rho"])
     assert np.isnan(status["probe_rho"])
     assert status["halt_reason"]
+
+
+def test_drift_monitor_probe_failure_cannot_be_masked_by_high_aggregate_rho():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 128,
+            "drift_min_samples": 32,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(56):
+        monitor.add(index, index, probe=False)
+    for index in range(56, 64):
+        monitor.add(index, 119 - index, probe=True)
+
+    status = monitor.evaluate()
+
+    assert status["rho"] > 0.6
+    assert status["probe_rho"] == pytest.approx(-1.0)
+    assert status["halt_reason"]
+
+
+def test_novelty_stall_terminates_and_resets_on_progress():
+    stall = 0
+    for _ in range(7):
+        stall = _update_novelty_stall(stall, submitted=0, pending=0)
+    with pytest.raises(RuntimeError, match="search space appears exhausted"):
+        _update_novelty_stall(stall, submitted=0, pending=0)
+
+    assert _update_novelty_stall(stall, submitted=1, pending=0) == 0
+    assert _update_novelty_stall(stall, submitted=0, pending=1) == 0
 
 
 def test_spearman_uses_average_ranks_for_ties():

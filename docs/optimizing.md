@@ -102,8 +102,11 @@ The first supported slice is intentionally narrow:
 - Apple Silicon with `torch.backends.mps.is_available()`
 - one exchange and one coin, using one-minute candles
 - `strategy_kind: ema_anchor`, long-only
+- `bot.long.risk.n_positions` pinned to `1`
 - suite mode disabled
 - HSL and auto-unstuck disabled
+- BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
+  runtime overrides disabled
 
 Unsupported combinations fail before optimization begins. Short-only, long+short,
 trailing-martingale, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not
@@ -119,11 +122,12 @@ Proxy scoring and limits are likewise fail-closed. This slice supports `adg_stra
 The backend is hybrid rather than a replacement backtester:
 
 1. pymoo NSGA-II proposes large normalized candidate batches.
-2. A custom Metal kernel screens every candidate against candle data resident on MPS.
+2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
+   MPS; Python only prepares buffers and dispatches the program.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
-5. A rolling Spearman rank gate stops the run if broad proxy/exact agreement falls below
-   `drift_halt` after sufficient evidence.
+5. A rolling Spearman rank gate independently stops the run if broad proxy/exact probe agreement
+   falls below `drift_halt` after sufficient evidence, even when aggregate agreement remains high.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
@@ -164,9 +168,10 @@ GPU-specific settings live under `optimize.gpu`:
   successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
-remain the only stored optimization results. Credit: the Torch metric-reduction work was adapted
-from RustyCZ's Passivbot GPU branch at commit `7c529bc73`; the MPS Metal integration and hybrid
-validation gates are specific to this implementation.
+remain the only stored optimization results. The screening source is owned and exported by the
+Rust extension; it does not replace or modify the exact Rust backtester. Credit: the Torch
+metric-reduction work was adapted from RustyCZ's Passivbot GPU branch at commit `7c529bc73`; the
+MPS Metal integration and hybrid validation gates are specific to this implementation.
 
 ### Pymoo Configuration
 

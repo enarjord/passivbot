@@ -6,6 +6,7 @@ mod constants;
 mod dynamic;
 mod entries;
 mod equity_hard_stop_loss;
+mod gpu;
 mod orchestrator;
 mod python;
 mod risk;
@@ -32,6 +33,11 @@ fn runtime_build_info(py: Python<'_>) -> PyResult<PyObject> {
     Ok(info.into())
 }
 
+#[pyfunction]
+fn mps_ema_anchor_source_py() -> &'static str {
+    gpu::mps_ema_anchor_source()
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -39,6 +45,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EquityHardStopRollingPeakPy>()?;
     m.add_class::<EquityHardStopRuntimePy>()?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
+    m.add_function(wrap_pyfunction!(mps_ema_anchor_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

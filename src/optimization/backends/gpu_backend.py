@@ -36,6 +36,8 @@ GPU_DEFAULTS = {
     "max_pending_exact": 0,
 }
 
+MAX_NOVELTY_STALL_GENERATIONS = 8
+
 EMA_BOUND_MAP = {
     "long_base_qty_pct": "base_qty_pct",
     "long_ema_span_0": "ema_span_0",
@@ -171,6 +173,26 @@ def _gpu_side_enabled(config: dict, side: str) -> bool:
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
+    if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
+        raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
+    if config.get("coin_overrides"):
+        raise ValueError("GPU foundation does not support coin_overrides")
+    fixed_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
+    inert_hsl_policy_overrides = {
+        "bot.long.hsl.restart_after_red_policy",
+        "bot.short.hsl.restart_after_red_policy",
+    }
+    unsupported_overrides = sorted(set(fixed_overrides) - inert_hsl_policy_overrides)
+    if unsupported_overrides:
+        raise ValueError(
+            "GPU foundation does not support optimize.fixed_runtime_overrides for "
+            f"{unsupported_overrides}; apply the values directly to the config"
+        )
+    if float(config.get("live", {}).get("max_realized_loss_pct", 1.0)) != 1.0:
+        raise ValueError(
+            "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
+            "screening proxy does not model the realized-loss gate"
+        )
     exchanges = list(getattr(evaluator, "exchanges", []))
     if len(exchanges) != 1:
         raise ValueError(
@@ -198,6 +220,26 @@ def _validate_scope(config: dict, evaluator) -> str:
         raise ValueError("GPU foundation requires bot.long.hsl.enabled=false")
     if bool(long_config.get("unstuck", {}).get("enabled")):
         raise ValueError("GPU foundation requires bot.long.unstuck.enabled=false")
+    risk = long_config.get("risk", {})
+    if bool(risk.get("position_exposure_enforcer_enabled")):
+        raise ValueError(
+            "GPU foundation requires "
+            "bot.long.risk.position_exposure_enforcer_enabled=false"
+        )
+    if bool(risk.get("total_exposure_enforcer_enabled")):
+        raise ValueError(
+            "GPU foundation requires "
+            "bot.long.risk.total_exposure_enforcer_enabled=false"
+        )
+    if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
+        raise ValueError(
+            "GPU foundation requires bot.long.risk.we_excess_allowance_pct=0.0"
+        )
+    if not bool(risk.get("total_exposure_entry_gate_enabled", True)):
+        raise ValueError(
+            "GPU foundation requires "
+            "bot.long.risk.total_exposure_entry_gate_enabled=true"
+        )
     return exchange
 
 
@@ -289,20 +331,23 @@ class _DriftMonitor:
         result["rho"] = _spearman(proxy, exact)
         result["probe_rho"] = _spearman(proxy[probes], exact[probes])
         result["front_rho"] = _spearman(proxy[~probes], exact[~probes])
-        if np.isfinite(result["rho"]) and result["rho"] >= self.halt:
-            return result
         detail = (
             f"rho={result['rho']:.3f}, probe_rho={result['probe_rho']:.3f}, "
             f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
             f"probes={result['probes']}"
         )
-        if result["probes"] < self.MIN_PROBES:
+        if result["probes"] >= self.MIN_PROBES and (
+            not np.isfinite(result["probe_rho"])
+            or result["probe_rho"] < self.halt
+        ):
+            result["halt_reason"] = (
+                f"GPU proxy/exact broad-probe rank drift exceeded safety threshold ({detail})"
+            )
+        elif np.isfinite(result["rho"]) and result["rho"] >= self.halt:
+            return result
+        elif result["probes"] < self.MIN_PROBES:
             result["warn_reason"] = (
                 f"GPU drift below threshold without enough broad probes ({detail})"
-            )
-        elif not np.isfinite(result["probe_rho"]) or result["probe_rho"] < self.halt:
-            result["halt_reason"] = (
-                f"GPU proxy/exact rank drift exceeded safety threshold ({detail})"
             )
         else:
             result["warn_reason"] = (
@@ -334,32 +379,101 @@ def _normalized_farthest_indices(values: np.ndarray, count: int) -> list[int]:
 def _select_validation_indices(
     objectives: np.ndarray,
     scores: np.ndarray,
+    violations: np.ndarray | None = None,
     *,
     total: int,
     probes: int,
 ) -> list[tuple[int, bool]]:
     from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
-    front = np.asarray(
-        NonDominatedSorting().do(objectives, only_non_dominated_front=True),
+    objectives = np.asarray(objectives, dtype=np.float64)
+    scores = np.asarray(scores, dtype=np.float64)
+    if violations is None:
+        violations = np.zeros(len(objectives), dtype=np.float64)
+    else:
+        violations = np.asarray(violations, dtype=np.float64)
+    if len(objectives) != len(scores) or len(objectives) != len(violations):
+        raise ValueError("GPU validation objectives, scores and violations must align")
+    if total <= 0 or len(objectives) == 0:
+        return []
+
+    feasible = np.flatnonzero(np.isfinite(violations) & (violations <= 0.0))
+    primary = feasible if len(feasible) else np.arange(len(objectives), dtype=np.int64)
+    feasible_ids = set(map(int, feasible))
+    primary_ids = set(map(int, primary))
+    front_local = np.asarray(
+        NonDominatedSorting().do(
+            objectives[primary], only_non_dominated_front=True
+        ),
         dtype=np.int64,
     )
+    front = primary[front_local]
+    front_ids = {int(index) for index in front}
     front_count = max(0, total - probes)
-    front_local = _normalized_farthest_indices(objectives[front], front_count)
-    selected = [(int(front[index]), False) for index in front_local]
+    elite_local = _normalized_farthest_indices(objectives[front], front_count)
+    selected = [(int(front[index]), False) for index in elite_local]
     selected_ids = {index for index, _probe in selected}
 
-    eligible = np.asarray(
-        [index for index in np.argsort(scores) if int(index) not in selected_ids],
+    broad_pool = np.asarray(
+        [
+            int(index)
+            for index in np.argsort(scores)
+            if int(index) in primary_ids and int(index) not in front_ids
+        ],
         dtype=np.int64,
     )
-    if probes > 0 and len(eligible):
-        positions = np.linspace(0.20, 0.90, num=probes)
-        for position in np.unique(
-            np.round(positions * (len(eligible) - 1)).astype(int)
-        ):
-            selected.append((int(eligible[position]), True))
-    return selected[:total]
+    probe_count = min(max(0, probes), max(0, total - len(selected)), len(broad_pool))
+    if probe_count:
+        positions = np.round(
+            np.linspace(0, len(broad_pool) - 1, num=probe_count)
+        ).astype(int)
+        for position in positions:
+            index = int(broad_pool[position])
+            if index not in selected_ids:
+                selected.append((index, True))
+                selected_ids.add(index)
+
+    preferred_order = sorted(
+        map(int, primary), key=lambda index: (float(violations[index]), float(scores[index]))
+    )
+    for index in preferred_order:
+        if len(selected) >= total:
+            break
+        if index not in selected_ids:
+            selected.append((index, index not in front_ids))
+            selected_ids.add(index)
+
+    # Return a complete preference order. The caller may skip candidates whose
+    # quantized exact vectors were already evaluated and continue down this
+    # list until it fills the generation's exact-validation quota.
+    fallback_order = sorted(
+        range(len(objectives)),
+        key=lambda index: (
+            0 if index in feasible_ids else 1,
+            float(violations[index]) if np.isfinite(violations[index]) else float("inf"),
+            float(scores[index]),
+        ),
+    )
+    for index in fallback_order:
+        if index not in selected_ids:
+            selected.append((index, index not in front_ids and index in feasible_ids))
+            selected_ids.add(index)
+    return selected
+
+
+def _update_novelty_stall(
+    previous: int, *, submitted: int, pending: int
+) -> int:
+    if submitted > 0 or pending > 0:
+        return 0
+    current = previous + 1
+    if current >= MAX_NOVELTY_STALL_GENERATIONS:
+        raise RuntimeError(
+            "GPU optimizer produced no novel exact candidates for "
+            f"{MAX_NOVELTY_STALL_GENERATIONS} consecutive generations; "
+            "the quantized search space appears exhausted before the exact budget"
+        )
+    return current
 
 
 def _checkpoint_signature(active, scoring) -> str:
@@ -490,6 +604,23 @@ def run_backend(
             "clear live.approved_coins.short or pin short exposure/positions off"
         )
 
+    long_n_positions_bound = bound_by_key.get("long_n_positions")
+    if long_n_positions_bound is None:
+        long_n_positions_values = (
+            base_by_key.get("long_n_positions", 0.0),
+            base_by_key.get("long_n_positions", 0.0),
+        )
+    else:
+        long_n_positions_values = (
+            float(long_n_positions_bound.low),
+            float(long_n_positions_bound.high),
+        )
+    if long_n_positions_values != (1.0, 1.0):
+        raise ValueError(
+            "GPU foundation requires long_n_positions to remain pinned at 1; "
+            f"got bounds {long_n_positions_values}"
+        )
+
     for index, (bound_key, _path) in enumerate(key_paths):
         if bounds[index].high <= bounds[index].low:
             continue
@@ -504,11 +635,6 @@ def run_backend(
             # either the exact Rust backtest or the proxy.
             continue
         if bound_key == "long_n_positions":
-            if bounds[index].low <= 0.0:
-                raise ValueError(
-                    "GPU foundation requires long_n_positions to remain positive; "
-                    "raise its lower bound or use the CPU optimizer"
-                )
             continue
         if bound_key not in EMA_BOUND_MAP:
             raise ValueError(
@@ -715,6 +841,7 @@ def run_backend(
     submitted_hashes: set[str] = set()
     start_time = time.time()
     proxy_evaluations = 0
+    novelty_stall_generations = 0
     last_warning = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = exact_done
@@ -843,10 +970,14 @@ def run_backend(
             selections = _select_validation_indices(
                 proxy_objectives,
                 proxy_scores,
+                proxy_violations,
                 total=validation_count,
                 probes=probe_count,
             )
+            submitted_this_generation = 0
             for index, is_probe in selections:
+                if submitted_this_generation >= validation_count:
+                    break
                 vector = full_vector(rows[index])
                 digest = vector_hash(vector)
                 if digest in completed_hashes or digest in submitted_hashes:
@@ -861,6 +992,13 @@ def run_backend(
                     digest,
                 )
                 submitted_hashes.add(digest)
+                submitted_this_generation += 1
+
+            novelty_stall_generations = _update_novelty_stall(
+                novelty_stall_generations,
+                submitted=submitted_this_generation,
+                pending=len(pending),
+            )
 
             if generation == 1 or generation % 10 == 0:
                 elapsed = time.time() - start_time

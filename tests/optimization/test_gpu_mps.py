@@ -12,6 +12,11 @@ from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 def test_mps_ema_anchor_shader_smoke():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_ema_anchor_source_py()
+    assert "kernel void passivbot_ema_anchor" in source
+
     count = 512
     phase = np.linspace(0.0, 10.0 * np.pi, count)
     close = 100.0 + np.sin(phase) * 5.0

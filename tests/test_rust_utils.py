@@ -355,6 +355,21 @@ def test_source_fingerprint_changes_when_tracked_source_changes(tmp_path: Path):
     assert first != second
 
 
+def test_source_fingerprint_tracks_rust_owned_metal_assets(tmp_path: Path):
+    rust_root = tmp_path / "passivbot-rust"
+    gpu_dir = rust_root / "src" / "gpu"
+    gpu_dir.mkdir(parents=True)
+    (rust_root / "Cargo.toml").write_text("[package]\nname='test'\n")
+    shader = gpu_dir / "screen.metal"
+    shader.write_text("kernel void first() {}\n")
+
+    first = source_fingerprint(rust_root)
+    shader.write_text("kernel void second() {}\n")
+    second = source_fingerprint(rust_root)
+
+    assert first != second
+
+
 def test_extension_needs_rebuild_when_source_stamp_missing_or_mismatched(tmp_path: Path):
     compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
     compiled.write_text("binary")
