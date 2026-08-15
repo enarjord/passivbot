@@ -25,6 +25,25 @@ EMA_ANCHOR_PARAM_KEYS = (
 )
 
 
+def gpu_side_enabled(config: dict, side: str) -> bool:
+    """Match Rust/backtest global side eligibility, including approved coins."""
+
+    risk = config.get("bot", {}).get(side, {}).get("risk", {})
+    total_exposure = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
+    n_positions_raw = float(risk.get("n_positions", 0) or 0)
+    if (
+        not math.isfinite(total_exposure)
+        or not math.isfinite(n_positions_raw)
+        or total_exposure <= 0.0
+        or int(round(n_positions_raw)) <= 0
+    ):
+        return False
+    approved = config.get("live", {}).get("approved_coins", {})
+    if isinstance(approved, dict):
+        return bool(approved.get(side, []))
+    return True
+
+
 @dataclass(frozen=True)
 class ProxyMarket:
     qty_step: float

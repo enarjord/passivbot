@@ -10,6 +10,7 @@ from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
     build_mps_data,
+    gpu_side_enabled,
 )
 
 
@@ -31,13 +32,6 @@ CORE_OUTPUT_KEYS = {
     "last_eq_ts",
     "liq_step",
 }
-
-
-def _side_enabled(bot_params: dict) -> bool:
-    return (
-        bool(bot_params.get("entry_eligible", True))
-        and float(bot_params.get("wallet_exposure_limit", 0.0) or 0.0) != 0.0
-    )
 
 
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
@@ -122,8 +116,7 @@ class MpsEmaAnchorProxy:
         long_bot = payload.bot_params_list[0]["long"]
         short_bot = payload.bot_params_list[0]["short"]
         self.enabled = {
-            "long": _side_enabled(long_bot),
-            "short": _side_enabled(short_bot),
+            side: gpu_side_enabled(config, side) for side in ("long", "short")
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")

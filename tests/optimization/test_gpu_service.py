@@ -1,6 +1,6 @@
 import pytest
 
-from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS
+from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS, gpu_side_enabled
 from optimization.gpu.service import MpsEmaAnchorProxy, _require_complete_valid_tail
 
 
@@ -26,3 +26,20 @@ def test_directional_parameter_matrix_keeps_side_values_separate():
     offset_index = EMA_ANCHOR_PARAM_KEYS.index("offset")
     assert matrix[0, offset_index] == 0.125
     assert matrix[0, len(EMA_ANCHOR_PARAM_KEYS) + offset_index] == 0.25
+
+
+def test_gpu_side_enablement_uses_config_risk_not_per_coin_sentinel():
+    config = {
+        "bot": {
+            "long": {
+                "risk": {"total_wallet_exposure_limit": 1.0, "n_positions": 1}
+            },
+            "short": {
+                "risk": {"total_wallet_exposure_limit": 0.0, "n_positions": 0}
+            },
+        },
+        "live": {"approved_coins": {"long": ["BTC"], "short": ["BTC"]}},
+    }
+
+    assert gpu_side_enabled(config, "long")
+    assert not gpu_side_enabled(config, "short")

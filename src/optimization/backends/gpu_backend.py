@@ -18,6 +18,7 @@ import numpy as np
 from optimization.backend_shared import load_starting_individuals
 from optimization.bounds import enforce_bounds
 from optimization.callback import build_pymoo_record_entry
+from optimization.gpu.model import gpu_side_enabled
 from optimization.problem import (
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
@@ -241,18 +242,6 @@ def _resolve_options(config: dict) -> dict:
     return options
 
 
-def _gpu_side_enabled(config: dict, side: str) -> bool:
-    risk = config.get("bot", {}).get(side, {}).get("risk", {})
-    total_exposure = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
-    n_positions = int(round(float(risk.get("n_positions", 0) or 0)))
-    if total_exposure <= 0.0 or n_positions <= 0:
-        return False
-    approved = config.get("live", {}).get("approved_coins", {})
-    if isinstance(approved, dict):
-        return bool(approved.get(side, []))
-    return True
-
-
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
@@ -304,7 +293,7 @@ def _validate_scope(config: dict, evaluator) -> str:
             "GPU foundation supports strategy_kind=ema_anchor only; "
             f"got {strategy_kind!r}"
         )
-    enabled_sides = [side for side in ("long", "short") if _gpu_side_enabled(config, side)]
+    enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
     for side in enabled_sides:
@@ -746,6 +735,18 @@ def _validate_directional_search_space(
             )
 
 
+def _validate_seed_side_match(config_enabled_sides, seed_enabled_sides) -> None:
+    config_enabled_sides = set(config_enabled_sides)
+    seed_enabled_sides = set(seed_enabled_sides)
+    if config_enabled_sides != seed_enabled_sides:
+        raise ValueError(
+            "GPU foundation does not allow optimizer bounds to activate or disable "
+            "a side relative to the input config; "
+            f"config={sorted(config_enabled_sides)}, "
+            f"bounds_clamped_seed={sorted(seed_enabled_sides)}"
+        )
+
+
 def _constraint_classification_mismatch(proxy_violation: float, exact_payload: dict) -> bool:
     if "G" not in exact_payload:
         return False
@@ -910,6 +911,10 @@ def run_backend(
         )
 
     enabled_sides = {side for side in ("long", "short") if vector_side_enabled(side)}
+    config_enabled_sides = {
+        side for side in ("long", "short") if gpu_side_enabled(config, side)
+    }
+    _validate_seed_side_match(config_enabled_sides, enabled_sides)
     if not enabled_sides:
         raise ValueError(
             "GPU bounds would disable both sides for exact validation; "

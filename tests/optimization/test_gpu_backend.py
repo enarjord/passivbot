@@ -27,6 +27,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _validate_directional_search_space,
     _validate_pinned_scope_bounds,
+    _validate_seed_side_match,
     _validate_scope,
 )
 
@@ -638,6 +639,17 @@ def test_gpu_directional_search_space_rejects_disabled_approved_side_activation(
             {"long": ["BTC"], "short": ["BTC"]},
             {"long"},
         )
+
+
+def test_gpu_rejects_optimizer_bounds_that_change_config_side_enablement():
+    _validate_seed_side_match({"long"}, {"long"})
+
+    with pytest.raises(ValueError, match="activate or disable"):
+        _validate_seed_side_match({"long"}, {"long", "short"})
+
+    with pytest.raises(ValueError, match="activate or disable"):
+        _validate_seed_side_match({"long", "short"}, {"long"})
+
 
 def test_constraint_classification_drift_detects_feasibility_disagreement():
     assert _constraint_classification_mismatch(0.0, {"G": np.array([0.1])})
