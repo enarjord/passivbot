@@ -64,6 +64,13 @@ def test_gpu_options_are_additive_and_validate_ranges():
     with pytest.raises(ValueError, match="drift_min_samples"):
         _resolve_options(config)
 
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["drift_window"] = 7
+    config["optimize"]["gpu"]["drift_min_samples"] = 7
+    config["optimize"]["gpu"]["drift_probes"] = 1
+    with pytest.raises(ValueError, match="at least 8"):
+        _resolve_options(config)
+
 
 def test_cpu_backend_registry_import_does_not_import_torch():
     script = (

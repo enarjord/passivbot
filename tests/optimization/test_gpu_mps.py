@@ -4,8 +4,42 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from optimization.gpu.model import ProxyMarket, ProxyRun, build_mps_data
+from optimization.gpu.model import (
+    ProxyMarket,
+    ProxyRun,
+    _build_hourly_log_range,
+    build_mps_data,
+)
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
+
+
+def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
+    timestamps = 3_540_000 + np.arange(62, dtype=np.int64) * 60_000
+    high = np.full(62, 105.0)
+    low = np.full(62, 95.0)
+    high[0] = 110.0
+    low[0] = 90.0
+    high[30] = 106.0
+    low[30] = 94.0
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        guard_ts_ms=int(timestamps[0]),
+        first_ts_ms=int(timestamps[0]),
+        interval_ms=60_000,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=len(timestamps) - 1,
+    )
+
+    hour_log_range, hour_valid = _build_hourly_log_range(
+        high, low, timestamps, run
+    )
+
+    assert not hour_valid[1]
+    assert hour_valid[61]
+    assert hour_log_range[61] == pytest.approx(np.log(106.0 / 94.0))
 
 
 @pytest.mark.skipif(
@@ -19,6 +53,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "psize * price_now * c_mult / balance" in source
     assert "fabs(adj) * cp * c_mult /" not in source
     assert "fabs(eq) * ep * c_mult /" not in source
+    assert "floor(value / step + 0.5f) * step" in source
+    assert "rint(value / step)" not in source
 
     count = 512
     phase = np.linspace(0.0, 10.0 * np.pi, count)

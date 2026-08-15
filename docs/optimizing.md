@@ -166,7 +166,8 @@ GPU-specific settings live under `optimize.gpu`:
   A generation fails closed if its complete feasible proxy front leaves too few independent
   off-front candidates for the requested probe count.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank-safety gate. At
-  least eight broad probes are required before low correlation can halt a run.
+  least eight broad probes are required before low correlation can halt a run, so `drift_window`
+  must be at least eight whenever `drift_probes` is nonzero.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact

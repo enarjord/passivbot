@@ -10,7 +10,7 @@ inline float safe_div(float a, float b) {
 }
 
 inline float round_step(float value, float step) {
-    return rint(value / step) * step;
+    return floor(value / step + 0.5f) * step;
 }
 
 inline float ceil_step(float value, float step) {

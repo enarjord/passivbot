@@ -37,6 +37,8 @@ GPU_DEFAULTS = {
     "max_pending_exact": 0,
 }
 
+MIN_DRIFT_PROBES = 8
+
 MAX_NOVELTY_STALL_GENERATIONS = 8
 
 EMA_BOUND_MAP = {
@@ -160,6 +162,14 @@ def _resolve_options(config: dict) -> dict:
         raise ValueError(
             "optimize.gpu.drift_min_samples must be less than or equal to "
             "optimize.gpu.drift_window"
+        )
+    if (
+        int(options["drift_probes"]) > 0
+        and int(options["drift_window"]) < MIN_DRIFT_PROBES
+    ):
+        raise ValueError(
+            "optimize.gpu.drift_window must be at least "
+            f"{MIN_DRIFT_PROBES} when optimize.gpu.drift_probes is enabled"
         )
     return options
 
@@ -317,7 +327,7 @@ class _ObjectiveScale:
 
 
 class _DriftMonitor:
-    MIN_PROBES = 8
+    MIN_PROBES = MIN_DRIFT_PROBES
 
     def __init__(self, options: dict):
         self.window = int(options["drift_window"])

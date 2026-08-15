@@ -48,6 +48,45 @@ class ProxyRun:
     last_valid_idx: int
 
 
+def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
+    n = len(timestamps)
+    derived_timestamps = (
+        int(timestamps[0]) + np.arange(n, dtype=np.int64) * run.interval_ms
+    )
+    hour_idx = derived_timestamps // 3_600_000
+    boundary = np.zeros(n, dtype=bool)
+    boundary[1:] = hour_idx[1:] > hour_idx[:-1]
+    hour_log_range = np.zeros(n, dtype=np.float32)
+    hour_valid = np.zeros(n, dtype=bool)
+    last_boundary = 0
+    last_hour_boundary_ms = (int(timestamps[0]) // 3_600_000) * 3_600_000
+    first_valid = max(0, run.first_valid_idx)
+    latest = None
+    for k in range(1, n):
+        if not boundary[k]:
+            continue
+        current_ts = int(derived_timestamps[k])
+        window_start_ms = max(int(timestamps[0]), last_hour_boundary_ms)
+        if current_ts > window_start_ms + run.interval_ms:
+            start = max(last_boundary, first_valid)
+            end = min(k - 1, run.last_valid_idx)
+            if end >= start:
+                h_segment = high[start : end + 1]
+                l_segment = low[start : end + 1]
+                finite = np.isfinite(h_segment) & np.isfinite(l_segment)
+                if finite.any():
+                    highest = h_segment[finite].max()
+                    lowest = l_segment[finite].min()
+                    if highest > 0.0 and lowest > 0.0:
+                        latest = math.log(highest / lowest)
+        if latest is not None:
+            hour_log_range[k] = latest
+            hour_valid[k] = True
+        last_boundary = k
+        last_hour_boundary_ms = (current_ts // 3_600_000) * 3_600_000
+    return hour_log_range, hour_valid
+
+
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
@@ -80,32 +119,10 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         log_range = np.log(high / low)
     log_range = np.where(np.isfinite(log_range), log_range, 0.0).astype(np.float32)
 
-    hour_idx = timestamps // 3_600_000
-    boundary = np.zeros(n, dtype=bool)
-    boundary[1:] = hour_idx[1:] > hour_idx[:-1]
-    hour_log_range = np.zeros(n, dtype=np.float32)
-    hour_valid = np.zeros(n, dtype=bool)
-    last_boundary = 0
     first_valid = max(0, run.first_valid_idx)
-    latest = None
-    for k in range(1, n):
-        if not boundary[k]:
-            continue
-        start = max(last_boundary, first_valid)
-        end = min(k - 1, run.last_valid_idx)
-        if end >= start:
-            h_segment = high[start : end + 1]
-            l_segment = low[start : end + 1]
-            finite = np.isfinite(h_segment) & np.isfinite(l_segment)
-            if finite.any():
-                highest = h_segment[finite].max()
-                lowest = l_segment[finite].min()
-                if highest > 0.0 and lowest > 0.0:
-                    latest = math.log(highest / lowest)
-        if latest is not None:
-            hour_log_range[k] = latest
-            hour_valid[k] = True
-        last_boundary = k
+    hour_log_range, hour_valid = _build_hourly_log_range(
+        high, low, timestamps, run
+    )
 
     day_idx = ((timestamps // 86_400_000) - (timestamps[0] // 86_400_000)).astype(
         np.int32

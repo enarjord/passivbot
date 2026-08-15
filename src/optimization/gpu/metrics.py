@@ -57,9 +57,15 @@ def _pct_change(values, active):
 def _masked_median(values, mask):
     if values.shape[1] == 0:
         return torch.zeros(values.shape[0], dtype=values.dtype, device=values.device)
-    filled = torch.where(mask, values, torch.full_like(values, float("nan")))
-    medians = torch.nanmedian(filled, dim=1).values
-    return torch.where(mask.any(dim=1), medians, torch.zeros_like(medians))
+    counts = mask.sum(dim=1)
+    filled = torch.where(mask, values, torch.full_like(values, float("inf")))
+    ordered = torch.sort(filled, dim=1).values
+    lower_index = ((counts - 1).clamp(min=0) // 2).unsqueeze(1)
+    upper_index = (counts // 2).unsqueeze(1)
+    lower = ordered.gather(1, lower_index).squeeze(1)
+    upper = ordered.gather(1, upper_index).squeeze(1)
+    medians = (lower + upper) / 2.0
+    return torch.where(counts > 0, medians, torch.zeros_like(medians))
 
 
 def _smoothed_adg(day_eq, active):
@@ -251,7 +257,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     requested_start = float(run.guard_ts_ms)
     first_timestamp = data["ts0"]
     candle_count = int(data["n"])
-    requested_end = float(first_timestamp + (candle_count - 1) * run.interval_ms)
+    requested_end = float(first_timestamp + candle_count * run.interval_ms)
     covered_end = torch.minimum(
         torch.full_like(last_eq_ts, requested_end),
         last_eq_ts + float(max(1, run.interval_ms // 60_000) * 60_000),
