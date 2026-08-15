@@ -500,6 +500,18 @@ def get_template_config():
                     "pareto_max_size": 1000,
                     "population_size": None,
                     "seed": None,
+                    "gpu": {
+                        "batch_size": 4096,
+                        "checkpoint_interval_seconds": 5.0,
+                        "drift_halt": 0.6,
+                        "drift_min_samples": 32,
+                        "drift_probes": 4,
+                        "drift_window": 128,
+                        "exact_workers": 0,
+                        "max_pending_exact": 0,
+                        "population_size": 4096,
+                        "validate_per_generation": 8
+                    },
                     "pymoo": {
                         "algorithm": "auto",
                         "algorithms": {

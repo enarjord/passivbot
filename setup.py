@@ -58,6 +58,9 @@ setup(
     extras_require={
         "full": FULL_REQUIREMENTS,
         "dev": FULL_REQUIREMENTS + DEV_REQUIREMENTS,
+        "gpu-mps": [
+            "torch>=2.13,<2.14; platform_system == 'Darwin' and platform_machine == 'arm64'",
+        ],
     },
     setup_requires=["setuptools-rust>=1.9.0", "wheel"],
     entry_points={"console_scripts": ["passivbot=passivbot_cli.main:console_main"]},

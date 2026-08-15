@@ -777,6 +777,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "offspring_multiplier",
             "objective_scenario",
             "population_size",
+            "gpu",
             "pymoo",
             "round_to_n_significant_digits",
             "scoring",

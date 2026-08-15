@@ -264,7 +264,10 @@ def _tracked_source_files(root: Path = Path("passivbot-rust")) -> list[Path]:
             tracked_files.append(file_path)
     src_root = root / "src"
     if src_root.exists():
-        tracked_files.extend(path for path in src_root.rglob("*.rs") if path.exists())
+        for pattern in ("*.rs", "*.metal"):
+            tracked_files.extend(
+                path for path in src_root.rglob(pattern) if path.exists()
+            )
     return sorted(set(tracked_files))
 
 
