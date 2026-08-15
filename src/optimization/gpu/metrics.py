@@ -263,7 +263,16 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         last_eq_ts + float(max(1, run.interval_ms // 60_000) * 60_000),
     )
     requested_span = max(requested_end - requested_start, 1.0)
-    completion = ((covered_end - requested_start) / requested_span).clamp(0.0, 1.0)
+    has_equity = (
+        torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts >= first_eq_ts)
+    )
+    completion = torch.where(
+        has_equity,
+        ((covered_end - requested_start) / requested_span).clamp(0.0, 1.0),
+        torch.zeros_like(last_eq_ts),
+    )
 
     objectives = {
         "adg_strategy_eq": adg,

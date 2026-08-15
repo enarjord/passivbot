@@ -175,14 +175,21 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.drift_min_samples must be less than or equal to "
             "optimize.gpu.drift_window"
         )
-    if (
-        int(options["drift_probes"]) > 0
-        and int(options["drift_window"]) < MIN_DRIFT_PROBES
-    ):
-        raise ValueError(
-            "optimize.gpu.drift_window must be at least "
-            f"{MIN_DRIFT_PROBES} when optimize.gpu.drift_probes is enabled"
+    if int(options["drift_probes"]) > 0:
+        required_probe_window = max(
+            MIN_DRIFT_PROBES,
+            math.ceil(
+                MIN_DRIFT_PROBES
+                * int(options["validate_per_generation"])
+                / int(options["drift_probes"])
+            ),
         )
+        if int(options["drift_window"]) < required_probe_window:
+            raise ValueError(
+                "optimize.gpu.drift_window must be at least "
+                f"{required_probe_window} to retain {MIN_DRIFT_PROBES} broad probes "
+                "at the configured validate_per_generation/drift_probes ratio"
+            )
     return options
 
 

@@ -142,3 +142,35 @@ def test_completion_uses_rust_exclusive_requested_end():
     )
 
     assert metrics["backtest_completion_ratio"].item() == pytest.approx(2.0 / 3.0)
+
+
+def test_completion_is_zero_when_no_equity_sample_exists():
+    day_end = torch.tensor([[0.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": torch.full_like(day_end, float("inf")),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "max_dd": torch.zeros(1, dtype=torch.float64),
+        "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
+        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
+        "last_high_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "first_eq_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "last_eq_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+    }
+    run = SimpleNamespace(guard_ts_ms=0, interval_ms=60_000)
+
+    metrics = compute_objectives(
+        out,
+        run,
+        {"ts0": 0.0, "n": 3},
+        needed={"backtest_completion_ratio"},
+    )
+
+    assert metrics["backtest_completion_ratio"].item() == 0.0
