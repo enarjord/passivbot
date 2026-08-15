@@ -29,6 +29,7 @@ from optimization.backends.gpu_backend import (
     _validate_pinned_scope_bounds,
     _validate_seed_side_match,
     _validate_scope,
+    TRAILING_MARTINGALE_BOUND_MAP,
 )
 
 
@@ -72,6 +73,14 @@ def _directional_ema_config(*, long_enabled: bool, short_enabled: bool):
         config["bot"][side]["risk"]["total_exposure_enforcer_enabled"] = False
         config["bot"][side]["risk"]["total_exposure_entry_gate_enabled"] = True
         config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.0
+    return config
+
+
+def _directional_tm_config(*, long_enabled: bool, short_enabled: bool):
+    config = _directional_ema_config(
+        long_enabled=long_enabled, short_enabled=short_enabled
+    )
+    config["live"]["strategy_kind"] = "trailing_martingale"
     return config
 
 
@@ -153,6 +162,42 @@ def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
     assert type(algorithm.eliminate_duplicates).__name__ == "NoDuplicateElimination"
 
 
+def test_trailing_martingale_bound_map_covers_both_directional_shapes():
+    expected_suffixes = {
+        "ema_span_0",
+        "ema_span_1",
+        "volatility_ema_span_1h",
+        "volatility_ema_span_1m",
+        "entry_double_down_factor",
+        "entry_initial_ema_dist",
+        "entry_initial_qty_pct",
+        "entry_threshold_base_pct",
+        "entry_threshold_we_weight",
+        "entry_threshold_volatility_1h_weight",
+        "entry_threshold_volatility_1m_weight",
+        "entry_retracement_base_pct",
+        "entry_retracement_we_weight",
+        "entry_retracement_volatility_1h_weight",
+        "entry_retracement_volatility_1m_weight",
+        "close_qty_pct",
+        "close_threshold_base_pct",
+        "close_threshold_we_weight",
+        "close_threshold_volatility_1h_weight",
+        "close_threshold_volatility_1m_weight",
+        "close_retracement_base_pct",
+        "close_retracement_volatility_1h_weight",
+        "close_retracement_volatility_1m_weight",
+        "risk_entry_cooldown_minutes",
+        "total_wallet_exposure_limit",
+    }
+
+    assert set(TRAILING_MARTINGALE_BOUND_MAP) == {
+        f"{side}_{suffix}"
+        for side in ("long", "short")
+        for suffix in expected_suffixes
+    }
+
+
 def test_cpu_backend_registry_import_does_not_import_torch():
     script = (
         "import json, sys; import optimization.backends; "
@@ -221,9 +266,9 @@ def test_single_scenario_metric_surface_supports_all_reducers():
         ),
         (
             lambda config: config["live"].__setitem__(
-                "strategy_kind", "trailing_martingale"
+                "strategy_kind", "trailing_grid_v7"
             ),
-            "ema_anchor",
+            "trailing_martingale",
         ),
         (
             lambda config: config["bot"]["long"]["hsl"].__setitem__("enabled", True),
@@ -305,6 +350,20 @@ def test_gpu_foundation_accepts_each_directional_ema_mode(
     long_enabled, short_enabled
 ):
     config = _directional_ema_config(
+        long_enabled=long_enabled, short_enabled=short_enabled
+    )
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_gpu_foundation_accepts_each_directional_trailing_martingale_mode(
+    long_enabled, short_enabled
+):
+    config = _directional_tm_config(
         long_enabled=long_enabled, short_enabled=short_enabled
     )
 

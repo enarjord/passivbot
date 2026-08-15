@@ -6,10 +6,11 @@ import os
 import numpy as np
 
 from optimization.gpu.model import (
-    EMA_ANCHOR_PARAM_KEYS,
+    GPU_STRATEGY_PARAM_KEYS,
     ProxyMarket,
     ProxyRun,
     build_mps_data,
+    flatten_trailing_martingale_params,
     gpu_side_enabled,
 )
 
@@ -43,8 +44,8 @@ def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None
         )
 
 
-class MpsEmaAnchorProxy:
-    """Batched single-coin directional EMA-anchor screening proxy."""
+class MpsSingleCoinProxy:
+    """Batched directional screening proxy for supported single-coin strategies."""
 
     def __init__(
         self,
@@ -74,7 +75,10 @@ class MpsEmaAnchorProxy:
 
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import compute_objectives
-        from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
+        from optimization.gpu.mps_kernel import (
+            MpsEmaAnchorRunner,
+            MpsTrailingMartingaleRunner,
+        )
 
         self._torch = torch
         self._compute_objectives = compute_objectives
@@ -88,6 +92,15 @@ class MpsEmaAnchorProxy:
             "yes",
             "y",
         }
+        self.strategy_kind = str(
+            config.get("live", {}).get("strategy_kind", "")
+        ).strip().lower()
+        if self.strategy_kind not in GPU_STRATEGY_PARAM_KEYS:
+            raise ValueError(
+                "MPS single-coin proxy supports ema_anchor or "
+                f"trailing_martingale, got {self.strategy_kind!r}"
+            )
+        self.param_keys = GPU_STRATEGY_PARAM_KEYS[self.strategy_kind]
 
         payload = build_backtest_payload(
             np.ascontiguousarray(hlcvs),
@@ -130,16 +143,20 @@ class MpsEmaAnchorProxy:
                 raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
             strategy = dict(payload.strategy_params_list[0][side])
             risk = config["bot"][side]["risk"]
-            strategy["entry_cooldown_minutes"] = float(
-                risk.get("entry_cooldown_minutes", 0.0) or 0.0
-            )
-            strategy["total_wallet_exposure_limit"] = float(
-                risk["total_wallet_exposure_limit"]
-            )
-            missing = [key for key in EMA_ANCHOR_PARAM_KEYS if key not in strategy]
+            if self.strategy_kind == "trailing_martingale":
+                strategy = flatten_trailing_martingale_params(strategy, risk)
+            else:
+                strategy["entry_cooldown_minutes"] = float(
+                    risk.get("entry_cooldown_minutes", 0.0) or 0.0
+                )
+                strategy["total_wallet_exposure_limit"] = float(
+                    risk["total_wallet_exposure_limit"]
+                )
+            missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(
-                    f"GPU EMA payload for {side} is missing parameters: {missing}"
+                    f"GPU {self.strategy_kind} payload for {side} is missing "
+                    f"parameters: {missing}"
                 )
             self.base_params[side] = strategy
 
@@ -180,7 +197,12 @@ class MpsEmaAnchorProxy:
         close = hlcvs[:, 0, 2].astype(np.float64)
         self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
-        self.runner = MpsEmaAnchorRunner(
+        runner_cls = (
+            MpsTrailingMartingaleRunner
+            if self.strategy_kind == "trailing_martingale"
+            else MpsEmaAnchorRunner
+        )
+        self.runner = runner_cls(
             self.market,
             self.run,
             self.data,
@@ -202,7 +224,7 @@ class MpsEmaAnchorProxy:
                         if key.startswith(f"{side}_")
                     }
                 )
-                row.extend(float(merged[key]) for key in EMA_ANCHOR_PARAM_KEYS)
+                row.extend(float(merged[key]) for key in self.param_keys)
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
 
@@ -246,3 +268,7 @@ class MpsEmaAnchorProxy:
                 for index in range(len(chunk))
             )
         return results
+
+
+# Compatibility name retained for downstream imports from the EMA foundation PR.
+MpsEmaAnchorProxy = MpsSingleCoinProxy

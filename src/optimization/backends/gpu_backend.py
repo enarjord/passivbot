@@ -65,6 +65,45 @@ EMA_BOUND_MAP = {
     for bound_suffix, parameter in _EMA_SIDE_BOUND_SUFFIXES.items()
 }
 
+_TM_SIDE_BOUND_SUFFIXES = {
+    "ema_span_0": "ema_span_0",
+    "ema_span_1": "ema_span_1",
+    "volatility_ema_span_1h": "volatility_ema_span_1h",
+    "volatility_ema_span_1m": "volatility_ema_span_1m",
+    "entry_double_down_factor": "entry_double_down_factor",
+    "entry_initial_ema_dist": "entry_initial_ema_dist",
+    "entry_initial_qty_pct": "entry_initial_qty_pct",
+    "entry_threshold_base_pct": "entry_threshold_base_pct",
+    "entry_threshold_we_weight": "entry_threshold_we_weight",
+    "entry_threshold_volatility_1h_weight": "entry_threshold_volatility_1h_weight",
+    "entry_threshold_volatility_1m_weight": "entry_threshold_volatility_1m_weight",
+    "entry_retracement_base_pct": "entry_retracement_base_pct",
+    "entry_retracement_we_weight": "entry_retracement_we_weight",
+    "entry_retracement_volatility_1h_weight": "entry_retracement_volatility_1h_weight",
+    "entry_retracement_volatility_1m_weight": "entry_retracement_volatility_1m_weight",
+    "close_qty_pct": "close_qty_pct",
+    "close_threshold_base_pct": "close_threshold_base_pct",
+    "close_threshold_we_weight": "close_threshold_we_weight",
+    "close_threshold_volatility_1h_weight": "close_threshold_volatility_1h_weight",
+    "close_threshold_volatility_1m_weight": "close_threshold_volatility_1m_weight",
+    "close_retracement_base_pct": "close_retracement_base_pct",
+    "close_retracement_volatility_1h_weight": "close_retracement_volatility_1h_weight",
+    "close_retracement_volatility_1m_weight": "close_retracement_volatility_1m_weight",
+    "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "total_wallet_exposure_limit": "total_wallet_exposure_limit",
+}
+
+TRAILING_MARTINGALE_BOUND_MAP = {
+    f"{side}_{bound_suffix}": f"{side}_{parameter}"
+    for side in ("long", "short")
+    for bound_suffix, parameter in _TM_SIDE_BOUND_SUFFIXES.items()
+}
+
+GPU_STRATEGY_BOUND_MAPS = {
+    "ema_anchor": EMA_BOUND_MAP,
+    "trailing_martingale": TRAILING_MARTINGALE_BOUND_MAP,
+}
+
 
 def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
@@ -287,10 +326,13 @@ def _validate_scope(config: dict, evaluator) -> str:
             "GPU foundation supports exactly one coin; "
             f"prepared {int(hlcvs.shape[1])}"
         )
-    strategy_kind = str(config.get("live", {}).get("strategy_kind", "")).lower()
-    if "ema_anchor" not in strategy_kind:
+    strategy_kind = (
+        str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+    )
+    if strategy_kind not in GPU_STRATEGY_BOUND_MAPS:
         raise ValueError(
-            "GPU foundation supports strategy_kind=ema_anchor only; "
+            "GPU foundation supports strategy_kind=ema_anchor or "
+            "trailing_martingale only; "
             f"got {strategy_kind!r}"
         )
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
@@ -652,7 +694,7 @@ def _canonical_vector_hash(vector, bounds, sig_digits: int) -> str:
 
 
 def _build_proxy_parameter_dicts(base_vector, mapped, active, active_values) -> list[dict]:
-    """Include canonical pinned and active EMA values in every proxy candidate."""
+    """Include canonical pinned and active strategy values in each proxy candidate."""
 
     base_parameters = {
         name: float(base_vector[index]) for name, (index, _bound) in mapped.items()
@@ -854,7 +896,7 @@ def run_backend(
     from config.metrics import canonicalize_metric_name
     from config.scoring import extract_objective_specs
     from optimization.gpu.metrics import SUPPORTED_METRICS
-    from optimization.gpu.service import MpsEmaAnchorProxy
+    from optimization.gpu.service import MpsSingleCoinProxy
 
     exchange = _validate_scope(config, evaluator)
     options = _resolve_options(config)
@@ -880,14 +922,19 @@ def run_backend(
         )
     base_vector = [float(value) for value in template_vectors[0]]
 
+    strategy_kind = str(config["live"]["strategy_kind"]).strip().lower()
+    bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
+
     mapped_all = {
-        EMA_BOUND_MAP[bound_key]: (index, bounds[index])
+        bound_map[bound_key]: (index, bounds[index])
         for index, (bound_key, _path) in enumerate(key_paths)
-        if bound_key in EMA_BOUND_MAP
+        if bound_key in bound_map
     }
-    missing = sorted(set(EMA_BOUND_MAP.values()) - set(mapped_all))
+    missing = sorted(set(bound_map.values()) - set(mapped_all))
     if missing:
-        raise ValueError(f"GPU backend could not locate EMA bounds for {missing}")
+        raise ValueError(
+            f"GPU backend could not locate {strategy_kind} bounds for {missing}"
+        )
     approved = config.get("live", {}).get("approved_coins", {})
 
     def side_approved(side: str) -> bool:
@@ -931,7 +978,9 @@ def run_backend(
         if bound.high > bound.low
     ]
     if not active:
-        raise ValueError("GPU backend found no free EMA-anchor dimensions")
+        raise ValueError(
+            f"GPU backend found no free {strategy_kind} dimensions"
+        )
 
     bound_by_key = {
         bound_key: bounds[index] for index, (bound_key, _path) in enumerate(key_paths)
@@ -966,7 +1015,7 @@ def run_backend(
             continue
         if bound_key in {f"{side}_n_positions" for side in enabled_sides}:
             continue
-        if bound_key not in EMA_BOUND_MAP:
+        if bound_key not in bound_map:
             raise ValueError(
                 "GPU foundation cannot optimize active bound "
                 f"{bound_key!r}; pin it or use the CPU optimizer"
@@ -986,7 +1035,7 @@ def run_backend(
             "use supported metrics or the CPU optimizer"
         )
 
-    proxy = MpsEmaAnchorProxy(
+    proxy = MpsSingleCoinProxy(
         config=config,
         hlcvs=evaluator.shared_hlcvs_np[exchange],
         mss=evaluator.msss[exchange],

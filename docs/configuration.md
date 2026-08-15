@@ -661,8 +661,9 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **pareto_max_size**: Maximum number of Pareto-optimal configs kept on disk under `optimize_results/.../pareto/`. Members are pruned by crowding (least diverse removed first, while per-objective extremes are preserved), not by age. Default is `1000`.
 - **population_size**: Size of population for genetic optimization algorithm. With the default `pymoo` backend, `null` means auto: NSGA-II resolves to `250`, while NSGA-III resolves to a default population budget of `500` and chooses the finest auto reference-direction grid that fits inside that budget. Set an explicit integer to change the NSGA-III per-generation evaluation budget and auto reference-direction coarseness.
 - **backend**: Optimizer backend. Default is `pymoo`. Supported values are `deap`, `pymoo`, and
-  experimental `gpu`. The GPU backend currently supports Apple MPS, single-coin EMA-anchor
-  long-only runs; see `docs/optimizing.md` for its fail-closed scope and `optimize.gpu` settings.
+  experimental `gpu`. The GPU backend currently supports Apple MPS, single-coin EMA-anchor and
+  trailing-martingale runs in long-only, short-only, and long+short modes; see
+  `docs/optimizing.md` for its fail-closed scope and `optimize.gpu` settings.
   With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer
   objectives and `nsga3` for `4+`.
 - **round_to_n_significant_digits**: Quantization precision used when hashing configs, deduplicating candidates, and writing optimizer artifacts. Lower values collapse near-identical candidates more aggressively; higher values preserve more distinct variants.

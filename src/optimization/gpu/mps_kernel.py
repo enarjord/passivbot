@@ -11,6 +11,7 @@ from optimization.gpu.model import (
     GAP_BINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_PARAM_KEYS,
 )
 
 
@@ -25,6 +26,17 @@ def _shader_library():
     import passivbot_rust
 
     return torch.mps.compile_shader(passivbot_rust.mps_ema_anchor_source_py())
+
+
+@lru_cache(maxsize=1)
+def _trailing_martingale_shader_library():
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py()
+    )
 
 
 class MpsEmaAnchorRunner:
@@ -186,6 +198,108 @@ class MpsEmaAnchorRunner:
             "kernel_seconds": finished - dispatched,
         }
         active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
+
+        def timestamp_column(index: int):
+            values = scalars[:, index]
+            return torch.where(
+                values >= 0.0, values, torch.full_like(values, float("nan"))
+            )
+
+        return {
+            "day_end_eq": daily[:, :, 0],
+            "day_min_eq": torch.where(
+                active_days,
+                daily[:, :, 1],
+                torch.full_like(daily[:, :, 1], float("inf")),
+            ),
+            "day_max_dd": daily[:, :, 2],
+            "day_volume": daily[:, :, 3],
+            "day_has_fill": daily[:, :, 4] > 0.0,
+            "max_dd": scalars[:, 0],
+            "held_max_ms": scalars[:, 1],
+            "gap_hist": gaps,
+            "gap_max_ms": scalars[:, 2],
+            "first_fill_ts": timestamp_column(3),
+            "last_fill_ts": timestamp_column(4),
+            "recovery_max_ms": scalars[:, 5],
+            "last_high_ts": timestamp_column(6),
+            "first_eq_ts": timestamp_column(7),
+            "last_eq_ts": timestamp_column(8),
+            "liq_step": scalars[:, 9].to(torch.int64),
+            "balance": scalars[:, 10],
+            "psize": scalars[:, 11],
+            "pprice": scalars[:, 12],
+            "alive": scalars[:, 13] > 0.0,
+            "short_psize": scalars[:, 15],
+            "short_pprice": scalars[:, 16],
+        }
+
+
+class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
+    """Persistent single-coin trailing-martingale runner on Apple MPS."""
+
+    def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        expected = len(TRAILING_MARTINGALE_PARAM_KEYS) * 2
+        if params.ndim != 2 or params.shape[1] != expected:
+            got = params.shape[1] if params.ndim == 2 else params.shape
+            raise ValueError(
+                "expected directional trailing-martingale parameter matrix with "
+                f"{expected} columns, got {got}"
+            )
+        return np.ascontiguousarray(params, dtype=np.float32)
+
+    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+        started = time.perf_counter()
+        matrix = self._pack_params(params)
+        packed = time.perf_counter()
+        params_mps = torch.as_tensor(matrix, device="mps")
+        batch_size = int(matrix.shape[0])
+        daily, scalars, gaps = self._output_buffers(batch_size)
+        sizes_key = (batch_size, int(matrix.shape[1]))
+        if sizes_key not in self._sizes:
+            self._sizes[sizes_key] = torch.tensor(
+                [
+                    batch_size,
+                    self.n,
+                    self.n_days,
+                    matrix.shape[1],
+                    self.run_config.first_valid_idx,
+                ],
+                dtype=torch.int32,
+                device="mps",
+            )
+        prepared = time.perf_counter()
+        library = _trailing_martingale_shader_library()
+        compiled = time.perf_counter()
+        if profile:
+            torch.mps.synchronize()
+            dispatched = time.perf_counter()
+        else:
+            dispatched = compiled
+        library.passivbot_trailing_martingale(
+            self.bars,
+            self.flags,
+            params_mps,
+            self.settings,
+            self._sizes[sizes_key],
+            daily,
+            scalars,
+            gaps,
+            threads=(batch_size, 1, 1),
+        )
+        if profile:
+            torch.mps.synchronize()
+        finished = time.perf_counter()
+        self.last_profile = {
+            "cpu_pack_seconds": packed - started,
+            "upload_and_zero_seconds": prepared - packed,
+            "compile_seconds": compiled - prepared,
+            "pre_dispatch_sync_seconds": dispatched - compiled,
+            "kernel_seconds": finished - dispatched,
+        }
+        active_days = torch.isfinite(daily[:, :, 1]) & (
+            daily[:, :, 1] < float("inf")
+        )
 
         def timestamp_column(index: int):
             values = scalars[:, index]

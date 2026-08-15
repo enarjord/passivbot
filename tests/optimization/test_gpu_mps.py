@@ -245,3 +245,183 @@ def test_mps_short_only_opens_short_position():
 
     assert output["psize"].item() == 0.0
     assert output["short_psize"].item() > 0.0
+
+
+def _tm_row(*, initial_ema_dist=0.01, gate_initial=1.0, gate_reentry=1.0):
+    return [
+        2.0,  # ema_span_0
+        3.0,  # ema_span_1
+        2.0,  # volatility_ema_span_1h
+        2.0,  # volatility_ema_span_1m
+        1.0,  # entry_double_down_factor
+        initial_ema_dist,
+        0.1,  # entry_initial_qty_pct
+        0.01,  # entry_threshold_base_pct
+        0.0,  # entry_threshold_we_weight
+        0.0,  # entry_threshold_volatility_1h_weight
+        0.0,  # entry_threshold_volatility_1m_weight
+        0.001,  # entry_retracement_base_pct
+        0.0,  # entry_retracement_we_weight
+        0.0,  # entry_retracement_volatility_1h_weight
+        0.0,  # entry_retracement_volatility_1m_weight
+        1.0,  # close_qty_pct
+        0.01,  # close_threshold_base_pct
+        0.0,  # close_threshold_we_weight
+        0.0,  # close_threshold_volatility_1h_weight
+        0.0,  # close_threshold_volatility_1m_weight
+        0.001,  # close_retracement_base_pct
+        0.0,  # close_retracement_volatility_1h_weight
+        0.0,  # close_retracement_volatility_1m_weight
+        0.0,  # entry_cooldown_minutes
+        1.0,  # total_wallet_exposure_limit
+        gate_initial,
+        gate_reentry,
+    ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
+    long_enabled, short_enabled
+):
+    import passivbot_rust
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    source = passivbot_rust.mps_trailing_martingale_source_py()
+    assert "kernel void passivbot_trailing_martingale" in source
+    assert "constant int SIDE_PARAMS = 27" in source
+    assert "min_since_open" in source
+    assert "max_since_min" in source
+    assert "max_since_open" in source
+    assert "min_since_max" in source
+    assert "s.entry_retracement_base > 0.0f" in source
+    assert "s.close_retracement_base > 0.0f" in source
+
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 102.0, 103.0, 102.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 98.0, 97.0, 98.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row()
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=long_enabled,
+        short_enabled=short_enabled,
+        hedge_mode=True,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["day_has_fill"].sum().item() > 0
+    assert (output["psize"].item() > 0.0) is long_enabled
+    assert (output["short_psize"].item() > 0.0) is short_enabled
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_one_way_arbitrates_initial_entry():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row()
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=False,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() > 0.0
+    assert output["short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
+    """Guard the one-quantity divergence that can split a later trailing path."""
+
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.array([100.0, 100.0, 100.0, 99.0, 100.0, 100.0, 100.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[6] = 2.0  # Oversize the initial order so the exposure cap crops it.
+    row[7] = 0.5  # Keep any subsequent reentry far below the fixture market.
+    row[16] = 0.5  # Keep the close above the fixture market.
+    row[20] = 0.0
+    row[24] = 0.24036  # Exact cap quantity is 2.4036 at price 100.
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Rust finalization rounds the cap to the nearest quantity step. Flooring
+    # this to 2.403 was enough to change a later close/reentry decision.
+    assert output["psize"].item() == pytest.approx(2.404, abs=1.0e-6)

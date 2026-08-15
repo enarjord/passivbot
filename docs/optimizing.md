@@ -97,13 +97,14 @@ python3 -m pip install -e ".[full,gpu-mps]"
 Select it with `--backend gpu` or `optimize.backend: "gpu"`. Normal live operation, backtesting,
 and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 
-The first supported slice is intentionally narrow:
+The supported slice is intentionally narrow:
 
 - Apple Silicon with `torch.backends.mps.is_available()`
 - one exchange and one coin, using one-minute candles
-- `strategy_kind: ema_anchor`, with long-only, short-only, or long+short enabled
+- `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
+  long+short enabled
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
-- hedge mode and one-way mode; one-way flat-side arbitration matches the Rust EMA-band rule
+- hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode disabled
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
@@ -112,8 +113,8 @@ The first supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Trailing-martingale, multi-coin, suites,
-HSL, auto-unstuck, and forager-dependent selection are not silently approximated by this release.
+Unsupported combinations fail before optimization begins. Multi-coin, suites, HSL, auto-unstuck,
+and forager-dependent selection are not silently approximated by this release.
 
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
@@ -127,8 +128,9 @@ The backend is hybrid rather than a replacement backtester:
 
 1. pymoo NSGA-II proposes large normalized candidate batches.
 2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
-   MPS; Python only prepares buffers and dispatches the program. Directional runs use separate
-   long/short EMA and position state with one shared balance and the exact Rust fill ordering.
+   MPS; Python only prepares buffers and dispatches the program. EMA-anchor and
+   trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
+   trailing, and position state with one shared balance and the exact Rust fill ordering.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. A rolling Spearman rank gate independently stops the run if broad proxy/exact probe agreement

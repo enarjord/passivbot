@@ -5,9 +5,15 @@
 //! dispatches this source through the optional Apple MPS backend.
 
 pub const MPS_EMA_ANCHOR_SOURCE: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
+pub const MPS_TRAILING_MARTINGALE_SOURCE: &str =
+    include_str!("gpu/mps_trailing_martingale_directional.metal");
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE
+}
+
+pub fn mps_trailing_martingale_source() -> &'static str {
+    MPS_TRAILING_MARTINGALE_SOURCE
 }
 
 #[cfg(test)]
@@ -22,5 +28,18 @@ mod tests {
         assert!(source.contains("constant int SCALAR_COLS = 18"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
+    }
+
+    #[test]
+    fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
+        let source = mps_trailing_martingale_source();
+        assert!(source.contains("kernel void passivbot_trailing_martingale"));
+        assert!(source.contains("constant int SIDE_PARAMS = 27"));
+        assert!(source.contains("min_since_open"));
+        assert!(source.contains("max_since_min"));
+        assert!(source.contains("max_since_open"));
+        assert!(source.contains("min_since_max"));
+        assert!(source.contains("if (we_if <= s.twel * 1.01f) return qty"));
+        assert!(source.contains("s.twel * balance - cost"));
     }
 }
