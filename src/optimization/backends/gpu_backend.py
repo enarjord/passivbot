@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from optimization.backend_shared import load_starting_individuals
 from optimization.bounds import enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.problem import (
@@ -63,6 +64,7 @@ PINNED_SCOPE_BOUND_VALUES = {
     "long_risk_position_exposure_enforcer_enabled": 0.0,
     "long_risk_total_exposure_enforcer_enabled": 0.0,
     "long_risk_total_exposure_entry_gate_enabled": 1.0,
+    "long_risk_total_exposure_enforcer_threshold": 1.0,
     "long_risk_we_excess_allowance_pct": 0.0,
 }
 
@@ -504,6 +506,49 @@ def _select_validation_indices(
     return selected
 
 
+def _select_novel_validations(
+    selections,
+    *,
+    total: int,
+    probes: int,
+    candidate_for_index,
+    digest_for_candidate,
+    completed_hashes,
+    submitted_hashes,
+):
+    novel = []
+    seen = set()
+    novel_probe_count = 0
+    for index, is_probe in selections:
+        candidate = candidate_for_index(index)
+        digest = digest_for_candidate(candidate)
+        if digest in completed_hashes or digest in submitted_hashes or digest in seen:
+            continue
+        seen.add(digest)
+        item = (index, bool(is_probe), candidate, digest)
+        novel.append(item)
+        novel_probe_count += int(bool(is_probe))
+        if len(novel) >= total and novel_probe_count >= probes:
+            break
+
+    probe_items = [item for item in novel if item[1]]
+    if len(probe_items) < probes:
+        raise RuntimeError(
+            "GPU validation cannot replace duplicate broad probes with novel "
+            "candidates outside the complete feasible proxy Pareto front: "
+            f"requested {probes}, available {len(probe_items)}"
+        )
+    chosen = probe_items[:probes]
+    chosen_digests = {item[3] for item in chosen}
+    for item in novel:
+        if len(chosen) >= total:
+            break
+        if item[3] not in chosen_digests:
+            chosen.append(item)
+            chosen_digests.add(item[3])
+    return chosen
+
+
 def _update_novelty_stall(
     previous: int, *, submitted: int, pending: int
 ) -> int:
@@ -662,8 +707,6 @@ def run_backend(
 ) -> dict[str, Any]:
     del duplicate_counter
     del constraint_fitness_cls
-    del iter_starting_configs
-    del configs_to_individuals_streaming
     del record_individual_result
     del run_evolution
 
@@ -878,18 +921,19 @@ def run_backend(
     rng = np.random.default_rng(seed)
     sampling = rng.random((population_size, len(active)))
     sampling[0] = normalize_vector(base_vector)
-    if starting_configs_path:
-        starting_configs = get_starting_configs(starting_configs_path)
-        starting_vectors = configs_to_individuals(
-            starting_configs,
-            bounds,
-            sig_digits,
-            optimization_shape=shape,
-        )
-        for index, vector in enumerate(
-            starting_vectors[: population_size - 1], start=1
-        ):
-            sampling[index] = normalize_vector(vector)
+    starting_vectors = load_starting_individuals(
+        starting_configs_path=starting_configs_path,
+        population_size=population_size,
+        get_starting_configs=get_starting_configs,
+        configs_to_individuals=configs_to_individuals,
+        iter_starting_configs=iter_starting_configs,
+        configs_to_individuals_streaming=configs_to_individuals_streaming,
+        optimization_shape=shape,
+        bounds=bounds,
+        sig_digits=sig_digits,
+    )
+    for index, vector in enumerate(starting_vectors[: population_size - 1], start=1):
+        sampling[index] = normalize_vector(vector)
 
     problem = Problem(
         n_var=len(active),
@@ -1150,14 +1194,17 @@ def run_backend(
                 total=validation_count,
                 probes=probe_count,
             )
+            novel_selections = _select_novel_validations(
+                selections,
+                total=validation_count,
+                probes=probe_count,
+                candidate_for_index=lambda index: full_vector(rows[index]),
+                digest_for_candidate=vector_hash,
+                completed_hashes=completed_hashes,
+                submitted_hashes=submitted_hashes,
+            )
             submitted_this_generation = 0
-            for index, is_probe in selections:
-                if submitted_this_generation >= validation_count:
-                    break
-                vector = full_vector(rows[index])
-                digest = vector_hash(vector)
-                if digest in completed_hashes or digest in submitted_hashes:
-                    continue
+            for index, is_probe, vector, digest in novel_selections:
                 result = pool.apply_async(
                     _evaluate_pymoo_worker_from_globals, (vector,)
                 )

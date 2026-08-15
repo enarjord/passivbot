@@ -22,6 +22,7 @@ from optimization.backends.gpu_backend import (
     _resolve_options,
     _restore_gpu_result_run_contract,
     _single_scenario_metric_surface,
+    _select_novel_validations,
     _select_validation_indices,
     _validate_pinned_scope_bounds,
     _validate_scope,
@@ -291,6 +292,37 @@ def test_validation_broad_probes_exclude_the_entire_proxy_front():
     assert {index for index, is_probe in selected[:5] if is_probe} == {5, 6}
 
 
+def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
+    selections = [(0, False), (1, True), (2, False), (3, True)]
+
+    chosen = _select_novel_validations(
+        selections,
+        total=2,
+        probes=1,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes={"hash-1"},
+        submitted_hashes=set(),
+    )
+
+    assert len(chosen) == 2
+    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 1
+    assert chosen[0][0] == 3
+
+
+def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
+    with pytest.raises(RuntimeError, match="replace duplicate broad probes"):
+        _select_novel_validations(
+            [(0, False), (1, True)],
+            total=2,
+            probes=1,
+            candidate_for_index=lambda index: [index],
+            digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+            completed_hashes={"hash-1"},
+            submitted_hashes=set(),
+        )
+
+
 def test_drift_monitor_needs_broad_probe_evidence_before_halting():
     options = {
         "drift_window": 64,
@@ -425,6 +457,12 @@ def test_gpu_rejects_pinned_unsupported_risk_behavior():
         _validate_pinned_scope_bounds(
             {"long_risk_we_excess_allowance_pct": Bound(0.2, 0.2, None)},
             {"long_risk_we_excess_allowance_pct": 0.2},
+        )
+
+    with pytest.raises(ValueError, match="total_exposure_enforcer_threshold"):
+        _validate_pinned_scope_bounds(
+            {"long_risk_total_exposure_enforcer_threshold": Bound(0.8, 0.8, None)},
+            {"long_risk_total_exposure_enforcer_threshold": 0.8},
         )
 
 

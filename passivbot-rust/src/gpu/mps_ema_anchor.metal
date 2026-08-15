@@ -24,9 +24,15 @@ inline float floor_step(float value, float step) {
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {
-    float by_cost = ceil(min_cost / fmax(price, 1.0e-12f) / c_mult / qty_step - 1.0e-6f)
-        * qty_step;
-    return fmax(min_qty, by_cost);
+    float raw_min = fmax(min_qty, min_cost / fmax(price, 1.0e-12f) / c_mult);
+    float raw_steps = raw_min / qty_step;
+    float nearest_count = floor(raw_steps + 0.5f);
+    float nearest = nearest_count * qty_step;
+    float representation_tolerance = 1.1920928955078125e-7f
+        * fmax(fabs(raw_min), fabs(nearest)) * 4.0f;
+    bool aligned = nearest_count > 0.0f && fabs(raw_steps - nearest_count) <= 1.0e-8f
+        && (nearest >= raw_min || raw_min - nearest <= representation_tolerance);
+    return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
 }
 
 inline void passivbot_single_coin_impl(
@@ -122,7 +128,6 @@ inline void passivbot_single_coin_impl(
     float pos_open_k = -1.0f;
     float held_max_min = 0.0f;
     float last_fill_k = -1.0f;
-    int fill_count = 0;
     float first_fill_k = -1.0f;
     float gap_max_min = 0.0f;
     float last_high_k = -1.0f;
@@ -214,7 +219,6 @@ inline void passivbot_single_coin_impl(
 
         bool any_fill = fill_close || fill_entry;
         if (any_fill) {
-            fill_count += (fill_close ? 1 : 0) + (fill_entry ? 1 : 0);
             day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
@@ -241,6 +245,8 @@ inline void passivbot_single_coin_impl(
         float price_now = close;
         float current_we = psize > 0.0f && balance > 0.0f
             ? psize * price_now * c_mult / balance : 0.0f;
+        float current_cost_we = psize > 0.0f && balance > 0.0f
+            ? psize * pprice * c_mult / balance : 0.0f;
 
         if (gen) {
             float mult = fmax(1.0f + vol1h * w1h + vol1m * w1m, 1.0f);
@@ -264,7 +270,7 @@ inline void passivbot_single_coin_impl(
                 / fmax(balance, 1.0e-9f) >= cap;
             float capped = floor_step(headroom, qty_step);
             if (over) e_qty = capped > 0.0f && capped + 1.0e-6f >= min_q ? capped : 0.0f;
-            if (current_we >= cap || cooldown || bid_price <= 0.0f || balance <= 0.0f
+            if (current_cost_we >= cap || cooldown || bid_price <= 0.0f || balance <= 0.0f
                 || base_qty_pct <= 0.0f) e_qty = 0.0f;
             entry_ticks = bid_ticks;
             entry_qty = e_qty;
@@ -334,7 +340,6 @@ inline void passivbot_single_coin_impl(
     scalars[so + 12] = pprice;
     scalars[so + 13] = alive ? 1.0f : 0.0f;
     scalars[so + 14] = psize > 0.0f ? 1.0f : 0.0f;
-    scalars[so + 15] = float(fill_count);
 }
 
 kernel void passivbot_ema_anchor(

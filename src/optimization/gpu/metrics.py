@@ -139,28 +139,30 @@ def _weighted_adg(
     active,
     first_eq_ts,
     last_eq_ts,
-    last_fill_ts,
-    fill_count,
     first_timestamp,
     interval_ms,
 ):
     """Match Rust's minute-sliced weighted ADG using compact daily outputs."""
 
+    finite_timestamps = torch.isfinite(first_eq_ts) & torch.isfinite(last_eq_ts)
+    sample_span = torch.where(
+        finite_timestamps,
+        (last_eq_ts - first_eq_ts) / float(interval_ms),
+        torch.zeros_like(first_eq_ts),
+    )
+    sample_count = (
+        torch.floor(sample_span + 0.5)
+        .to(torch.long)
+        .add(1)
+        .clamp(min=1)
+    )
     eligible = (
-        (fill_count > 1)
-        & torch.isfinite(first_eq_ts)
-        & torch.isfinite(last_eq_ts)
+        finite_timestamps & (sample_count >= 2)
     )
     total = torch.where(
         eligible,
         _smoothed_adg(day_eq, active),
         torch.zeros(day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device),
-    )
-    sample_count = (
-        torch.floor((last_eq_ts - first_eq_ts) / float(interval_ms) + 0.5)
-        .to(torch.long)
-        .add(1)
-        .clamp(min=1)
     )
     first_day = int(first_timestamp) // 86_400_000
     day_ids = torch.arange(day_eq.shape[1], device=day_eq.device) + first_day
@@ -176,11 +178,8 @@ def _weighted_adg(
             torch.long
         )
         subset = active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
-        has_fill = eligible & torch.isfinite(last_fill_ts) & (
-            last_fill_ts >= subset_start_ts
-        )
         total += torch.where(
-            has_fill, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
+            eligible, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
         )
     return total / 10.0
 
@@ -205,8 +204,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         active,
         out["first_eq_ts"],
         out["last_eq_ts"],
-        out["last_fill_ts"],
-        out["fill_count"],
         data["ts0"],
         run.interval_ms,
     )

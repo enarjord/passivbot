@@ -49,8 +49,6 @@ def test_weighted_adg_keeps_short_active_subsets_nonempty():
         active,
         torch.tensor([0.0]),
         torch.tensor([172_740_000.0]),
-        torch.tensor([172_740_000.0]),
-        torch.tensor([2]),
         0,
         60_000,
     ).item() == pytest.approx(0.0)
@@ -66,8 +64,6 @@ def test_weighted_adg_slices_minutes_before_daily_reduction():
         active,
         torch.tensor([0.0]),
         torch.tensor([last_ts]),
-        torch.tensor([last_ts]),
-        torch.tensor([2]),
         0,
         60_000,
     )
@@ -96,7 +92,6 @@ def test_objectives_include_final_active_calendar_day():
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "fill_count": torch.zeros(1, dtype=torch.int64),
         "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
         "last_high_ts": torch.tensor([120_000.0], dtype=torch.float64),
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
@@ -131,7 +126,6 @@ def test_completion_uses_rust_exclusive_requested_end():
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
-        "fill_count": torch.zeros(1, dtype=torch.int64),
         "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
         "last_high_ts": torch.tensor([60_000.0], dtype=torch.float64),
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),

@@ -24,7 +24,6 @@ CORE_OUTPUT_KEYS = {
     "gap_hist",
     "gap_max_ms",
     "first_fill_ts",
-    "fill_count",
     "last_fill_ts",
     "recovery_max_ms",
     "last_high_ts",

@@ -50,6 +50,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
+    assert "constant int SCALAR_COLS = 15" in source
     assert "psize * price_now * c_mult / balance" in source
     assert "fabs(adj) * cp * c_mult /" not in source
     assert "fabs(eq) * ep * c_mult /" not in source
@@ -58,6 +59,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "int(ceil(price_now / price_step - 1.0e-6f))" in source
     assert "int(floor(price_now / price_step + 1.0e-6f))" in source
     assert "float dd = fmax((run_peak - eqf)" in source
+    assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
+    assert "if (current_cost_we >= cap" in source
     assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
         "float dd = fmax((run_peak - eqf)"
     )
@@ -88,16 +91,26 @@ def test_mps_ema_anchor_shader_smoke():
         last_valid_idx=count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    parameters = np.array(
-        [[0.1, 10.0, 30.0, 1.5, 0.01, 0.0, 0.0, 0.0, 60.0, 60.0, 0.0, 1.0]],
-        dtype=np.float64,
-    )
+    row = [
+        0.1,
+        10.0,
+        30.0,
+        1.5,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+    ]
+    parameters = np.array([row, row], dtype=np.float64)
 
     output = MpsEmaAnchorRunner(market, run, data).run(parameters)
     torch.mps.synchronize()
 
     assert output["balance"].device.type == "mps"
-    assert output["balance"].shape == (1,)
+    assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
-    assert output["fill_count"].item() >= 2
     assert output["day_has_fill"].sum().item() > 0
