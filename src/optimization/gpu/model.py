@@ -24,6 +24,101 @@ EMA_ANCHOR_PARAM_KEYS = (
     "total_wallet_exposure_limit",
 )
 
+TRAILING_MARTINGALE_PARAM_KEYS = (
+    "ema_span_0",
+    "ema_span_1",
+    "volatility_ema_span_1h",
+    "volatility_ema_span_1m",
+    "entry_double_down_factor",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_threshold_base_pct",
+    "entry_threshold_we_weight",
+    "entry_threshold_volatility_1h_weight",
+    "entry_threshold_volatility_1m_weight",
+    "entry_retracement_base_pct",
+    "entry_retracement_we_weight",
+    "entry_retracement_volatility_1h_weight",
+    "entry_retracement_volatility_1m_weight",
+    "close_qty_pct",
+    "close_threshold_base_pct",
+    "close_threshold_we_weight",
+    "close_threshold_volatility_1h_weight",
+    "close_threshold_volatility_1m_weight",
+    "close_retracement_base_pct",
+    "close_retracement_volatility_1h_weight",
+    "close_retracement_volatility_1m_weight",
+    "entry_cooldown_minutes",
+    "total_wallet_exposure_limit",
+    "gate_initial",
+    "gate_reentry",
+)
+
+GPU_STRATEGY_PARAM_KEYS = {
+    "ema_anchor": EMA_ANCHOR_PARAM_KEYS,
+    "trailing_martingale": TRAILING_MARTINGALE_PARAM_KEYS,
+}
+
+
+def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
+    """Flatten Rust's nested TM payload into the Metal row contract."""
+
+    entry = strategy.get("entry", {})
+    close = strategy.get("close", {})
+    mode = str(entry.get("ema_gate_mode", "all")).strip().lower()
+    if mode not in {"disabled", "all", "initial", "reentry"}:
+        raise ValueError(f"unsupported trailing_martingale entry.ema_gate_mode={mode!r}")
+    flattened = {
+        "ema_span_0": strategy.get("ema_span_0"),
+        "ema_span_1": strategy.get("ema_span_1"),
+        "volatility_ema_span_1h": strategy.get("volatility_ema_span_1h"),
+        "volatility_ema_span_1m": strategy.get("volatility_ema_span_1m"),
+        "entry_cooldown_minutes": float(
+            risk.get("entry_cooldown_minutes", 0.0) or 0.0
+        ),
+        "total_wallet_exposure_limit": float(
+            risk["total_wallet_exposure_limit"]
+        ),
+        "gate_initial": float(mode in {"all", "initial"}),
+        "gate_reentry": float(mode in {"all", "reentry"}),
+    }
+    for prefix, values, keys in (
+        (
+            "entry",
+            entry,
+            (
+                "double_down_factor",
+                "initial_ema_dist",
+                "initial_qty_pct",
+                "threshold_base_pct",
+                "threshold_we_weight",
+                "threshold_volatility_1h_weight",
+                "threshold_volatility_1m_weight",
+                "retracement_base_pct",
+                "retracement_we_weight",
+                "retracement_volatility_1h_weight",
+                "retracement_volatility_1m_weight",
+            ),
+        ),
+        (
+            "close",
+            close,
+            (
+                "qty_pct",
+                "threshold_base_pct",
+                "threshold_we_weight",
+                "threshold_volatility_1h_weight",
+                "threshold_volatility_1m_weight",
+                "retracement_base_pct",
+                "retracement_volatility_1h_weight",
+                "retracement_volatility_1m_weight",
+            ),
+        ),
+    ):
+        for key in keys:
+            flattened[f"{prefix}_{key}"] = values.get(key)
+    return {key: flattened[key] for key in TRAILING_MARTINGALE_PARAM_KEYS}
+
 
 def gpu_side_enabled(config: dict, side: str) -> bool:
     """Match Rust/backtest global side eligibility, including approved coins."""

@@ -5,12 +5,13 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
-  EMA-anchor searches in long-only, short-only, and long+short modes. Large NSGA-II populations
-  run through a Rust-owned Metal screening program and feed feasible, diverse candidates into the
-  unchanged exact Rust backtester; only exact results reach the Pareto store, and independent
-  broad-probe rank checks halt on proxy drift. Dual-side screening preserves separate EMA/position
-  state, a shared balance, Rust fill ordering, and hedge/one-way initial-side semantics. Unsupported
-  strategies, suites, multi-coin, HSL, auto-unstuck, collateral,
+  EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
+  Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and
+  feed feasible, diverse candidates into the unchanged exact Rust backtester; only exact results
+  reach the Pareto store, and independent broad-probe rank checks halt on proxy drift. Dual-side
+  screening preserves separate indicator/trailing/position state, a shared balance, Rust fill
+  ordering, and hedge/one-way initial-side semantics. Recursive trailing-martingale grid modes,
+  other strategies, suites, multi-coin, HSL, auto-unstuck, collateral,
   minimum-effective-cost filtering, market-order execution, incomplete candle tails, non-inert
   fixed runtime overrides, and unmodeled risk gates fail closed. Proxy/exact optimizer-limit
   feasibility disagreement also halts immediately. Existing CPU bot, backtest, and optimizer paths
