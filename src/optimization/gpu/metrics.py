@@ -98,17 +98,31 @@ def _sharpe_sortino(changes, mask, adg):
         mask, changes - adg.unsqueeze(1), torch.zeros_like(changes)
     )
     standard_deviation = torch.sqrt((difference * difference).sum(dim=1) / count)
-    sharpe = adg / standard_deviation.clamp(min=1e-12)
+    sharpe_denominator = torch.where(
+        standard_deviation != 0.0,
+        standard_deviation,
+        torch.ones_like(standard_deviation),
+    )
+    sharpe = torch.where(
+        standard_deviation != 0.0,
+        adg / sharpe_denominator,
+        torch.zeros_like(adg),
+    )
     downside = mask & (changes < 0)
     downside_count = downside.sum(dim=1).to(changes.dtype)
     downside_deviation = torch.sqrt(
         torch.where(downside, changes * changes, torch.zeros_like(changes)).sum(dim=1)
         / downside_count.clamp(min=1)
     )
+    sortino_denominator = torch.where(
+        downside_deviation != 0.0,
+        downside_deviation,
+        torch.ones_like(downside_deviation),
+    )
     sortino = torch.where(
-        downside_count > 0,
-        adg / downside_deviation.clamp(min=1e-12),
-        adg / 1e-12,
+        downside_deviation != 0.0,
+        adg / sortino_denominator,
+        torch.zeros_like(adg),
     )
     return sharpe, sortino
 
@@ -168,23 +182,12 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
 
-    # Rust excludes a non-liquidated incomplete terminal day from daily-return
-    # statistics. Preserve liquidated terminal days because they are complete.
-    complete = active.clone()
-    _, day_count = complete.shape
-    indices = torch.arange(day_count, device=complete.device).unsqueeze(0)
-    last_index = (
-        torch.where(active, indices, torch.full_like(indices, -1)).max(dim=1).values
-    )
-    drop_last = ~(out["liq_step"] >= 0)
-    complete &= ~((indices == last_index.unsqueeze(1)) & drop_last.unsqueeze(1))
-
-    adg = _smoothed_adg(day_end_eq, complete)
-    daily_changes, change_mask = _pct_change(day_end_eq, complete)
+    adg = _smoothed_adg(day_end_eq, active)
+    daily_changes, change_mask = _pct_change(day_end_eq, active)
     mdg = _masked_median(daily_changes, change_mask)
-    daily_min_changes, min_change_mask = _pct_change(day_min_eq, complete)
+    daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
-    adg_w = _weighted_adg(day_end_eq, complete)
+    adg_w = _weighted_adg(day_end_eq, active)
 
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
         dim=1

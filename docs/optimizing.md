@@ -107,6 +107,8 @@ The first supported slice is intentionally narrow:
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
   runtime overrides disabled
+- `backtest.filter_by_min_effective_cost: false`
+- no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Short-only, long+short,
 trailing-martingale, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not
@@ -159,6 +161,8 @@ GPU-specific settings live under `optimize.gpu`:
 - `batch_size` caps candidates per MPS dispatch.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves part of that validation budget for candidates away from the proxy front.
+  A generation fails closed if its complete feasible proxy front leaves too few independent
+  off-front candidates for the requested probe count.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank-safety gate. At
   least eight broad probes are required before low correlation can halt a run.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.

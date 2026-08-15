@@ -10,8 +10,11 @@ import pytest
 
 from config.schema import get_template_config
 from optimization.backends.gpu_backend import (
+    _canonical_candidate_values,
+    _canonical_vector_hash,
     _DriftMonitor,
     _ObjectiveScale,
+    _recover_completed_hashes,
     _update_novelty_stall,
     _spearman,
     _resolve_options,
@@ -108,6 +111,12 @@ def test_single_scenario_metric_surface_supports_all_reducers():
     ("mutate", "message"),
     [
         (lambda config: config["backtest"].__setitem__("suite_enabled", True), "suite"),
+        (
+            lambda config: config["backtest"].__setitem__(
+                "filter_by_min_effective_cost", True
+            ),
+            "filter_by_min_effective_cost",
+        ),
         (
             lambda config: config["live"].__setitem__(
                 "strategy_kind", "trailing_martingale"
@@ -208,13 +217,23 @@ def test_validation_selection_includes_front_and_broad_probes():
     )
     scores = objectives.mean(axis=1)
 
-    selected = _select_validation_indices(objectives, scores, total=5, probes=2)
+    selected = _select_validation_indices(objectives, scores, total=5, probes=1)
 
     chosen = selected[:5]
     assert len(chosen) == 5
     assert sum(is_probe for _index, is_probe in chosen) == 1
     assert all(index == 6 for index, is_probe in chosen if is_probe)
     assert len({index for index, _is_probe in selected}) == len(objectives)
+
+
+def test_validation_selection_fails_without_requested_off_front_evidence():
+    objectives = np.array(
+        [[0.0, 3.0], [1.0, 2.0], [2.0, 1.0], [3.0, 0.0]]
+    )
+    scores = objectives.mean(axis=1)
+
+    with pytest.raises(RuntimeError, match="independent broad-probe evidence"):
+        _select_validation_indices(objectives, scores, total=3, probes=1)
 
 
 def test_validation_selection_prefers_feasible_candidates():
@@ -335,3 +354,52 @@ def test_objective_scale_scores_proxy_and_exact_in_same_coordinates():
     scores = scale.score(np.array([[1.0, 100.0], [3.0, 300.0]]))
 
     assert scores[0] < scores[1]
+
+
+def test_gpu_candidates_use_exact_significant_digit_quantization():
+    from optimization.bounds import Bound
+
+    values = _canonical_candidate_values(
+        np.array([[0.123456789, 0.61]]),
+        np.array([0.0, 0.0]),
+        np.array([1.0, 10.0]),
+        [Bound(0.0, 1.0, None), Bound(0.0, 10.0, 0.5)],
+        3,
+    )
+
+    assert values.tolist() == [[0.123, 6.0]]
+
+
+def test_gpu_candidate_hash_uses_exact_significant_digit_quantization():
+    from optimization.bounds import Bound
+
+    bounds = [Bound(0.0, 1.0, None)]
+
+    assert _canonical_vector_hash([0.1234], bounds, 3) == _canonical_vector_hash(
+        [0.12349], bounds, 3
+    )
+
+
+def test_resume_recovers_hashes_for_results_ahead_of_checkpoint():
+    entries = [{"id": 0}, {"id": 1}, {"id": 2}, {"id": 3}]
+
+    recovered = _recover_completed_hashes(
+        entries,
+        start_index=2,
+        stop_index=4,
+        vector_from_entry=lambda entry: [float(entry["id"])],
+        hash_vector=lambda vector: f"hash-{vector[0]}",
+    )
+
+    assert recovered == {"hash-2.0", "hash-3.0"}
+
+
+def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
+    with pytest.raises(RuntimeError, match="expected 2, recovered 1"):
+        _recover_completed_hashes(
+            [{"id": 0}, {"id": 1}, {"id": 2}],
+            start_index=2,
+            stop_index=4,
+            vector_from_entry=lambda entry: [float(entry["id"])],
+            hash_vector=lambda vector: f"hash-{vector[0]}",
+        )

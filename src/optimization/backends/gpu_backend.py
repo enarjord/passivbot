@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from optimization.bounds import enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.problem import (
     PymooAsyncRecordingRunner,
@@ -173,6 +174,11 @@ def _gpu_side_enabled(config: dict, side: str) -> bool:
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
+    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
+        raise ValueError(
+            "GPU foundation requires backtest.filter_by_min_effective_cost=false "
+            "because the screening proxy promotes entries to exchange minimum size"
+        )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
     if config.get("coin_overrides"):
@@ -422,7 +428,14 @@ def _select_validation_indices(
         ],
         dtype=np.int64,
     )
-    probe_count = min(max(0, probes), max(0, total - len(selected)), len(broad_pool))
+    requested_probes = min(max(0, probes), max(0, total - len(selected)))
+    if len(broad_pool) < requested_probes:
+        raise RuntimeError(
+            "GPU validation cannot provide the requested independent broad-probe "
+            f"evidence: requested {requested_probes}, available {len(broad_pool)} "
+            "outside the complete feasible proxy Pareto front"
+        )
+    probe_count = requested_probes
     if probe_count:
         positions = np.round(
             np.linspace(0, len(broad_pool) - 1, num=probe_count)
@@ -498,6 +511,57 @@ def _save_checkpoint(path: str | None, state: dict) -> None:
         os.replace(temporary, path)
     except Exception as exc:
         raise RuntimeError(f"Failed to save GPU optimizer checkpoint: {path}") from exc
+
+
+def _canonical_candidate_values(
+    rows: np.ndarray,
+    low: np.ndarray,
+    span: np.ndarray,
+    bounds,
+    sig_digits: int,
+) -> np.ndarray:
+    """Map normalized genes through the exact optimizer quantization contract."""
+
+    values = np.asarray(low, dtype=np.float64) + np.clip(rows, 0.0, 1.0) * np.asarray(
+        span, dtype=np.float64
+    )
+    return np.asarray(
+        [enforce_bounds(row, bounds, sig_digits) for row in values],
+        dtype=np.float64,
+    )
+
+
+def _canonical_vector_hash(vector, bounds, sig_digits: int) -> str:
+    canonical = enforce_bounds(vector, bounds, sig_digits)
+    return hashlib.sha256(json.dumps(canonical).encode()).hexdigest()
+
+
+def _recover_completed_hashes(
+    entries,
+    *,
+    start_index: int,
+    stop_index: int,
+    vector_from_entry,
+    hash_vector,
+) -> set[str]:
+    """Recover candidate identities durably recorded after a stale checkpoint."""
+
+    recovered: set[str] = set()
+    consumed = 0
+    for index, entry in enumerate(entries):
+        if index < start_index:
+            continue
+        if index >= stop_index:
+            break
+        recovered.add(hash_vector(vector_from_entry(entry)))
+        consumed += 1
+    expected = max(0, stop_index - start_index)
+    if consumed != expected:
+        raise RuntimeError(
+            "GPU resume could not reconstruct all durable candidate hashes: "
+            f"expected {expected}, recovered {consumed}"
+        )
+    return recovered
 
 
 def run_backend(
@@ -700,15 +764,12 @@ def run_backend(
         [bound.high for _name, _index, bound in active], dtype=np.float64
     )
     active_span = active_high - active_low
+    active_bounds = [bound for _name, _index, bound in active]
 
     def normalized_to_values(rows: np.ndarray) -> np.ndarray:
-        values = active_low + np.clip(rows, 0.0, 1.0) * active_span
-        for column, (_name, _index, bound) in enumerate(active):
-            if bound.is_stepped:
-                values[:, column] = [
-                    bound.quantize(value) for value in values[:, column]
-                ]
-        return values
+        return _canonical_candidate_values(
+            rows, active_low, active_span, active_bounds, sig_digits
+        )
 
     def parameter_dicts(rows: np.ndarray) -> list[dict]:
         values = normalized_to_values(rows)
@@ -734,8 +795,7 @@ def run_backend(
         return np.clip((values - active_low) / active_span, 0.0, 1.0)
 
     def vector_hash(vector) -> str:
-        rounded = [round(float(value), 12) for value in vector]
-        return hashlib.sha256(json.dumps(rounded).encode()).hexdigest()
+        return _canonical_vector_hash(vector, bounds, sig_digits)
 
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.core.problem import Problem
@@ -799,10 +859,44 @@ def run_backend(
         drift_monitor.pairs.extend(checkpoint.get("drift_pairs", []))
         persisted_halt_reason = checkpoint.get("halt_reason")
         recorded_exact = int(getattr(getattr(recorder, "store", None), "n_iters", 0))
-        if recorded_exact != exact_done:
+        if recorded_exact < exact_done:
+            raise RuntimeError(
+                "GPU checkpoint is ahead of durable all_results.bin state: "
+                f"checkpoint={exact_done}, durable={recorded_exact}"
+            )
+        if recorded_exact > exact_done:
+            from opt_utils import load_results
+
+            results_file = getattr(getattr(recorder, "results_file", None), "name", None)
+            if not results_file:
+                raise RuntimeError(
+                    "GPU resume cannot recover durable candidate hashes without "
+                    "all_results.bin"
+                )
+
+            def vector_from_entry(entry):
+                vectors = configs_to_individuals(
+                    [entry], bounds, sig_digits, optimization_shape=shape
+                )
+                if len(vectors) != 1:
+                    raise RuntimeError(
+                        "GPU resume could not reconstruct a unique vector from a "
+                        "durable result"
+                    )
+                return vectors[0]
+
+            completed_hashes.update(
+                _recover_completed_hashes(
+                    load_results(results_file),
+                    start_index=exact_done,
+                    stop_index=recorded_exact,
+                    vector_from_entry=vector_from_entry,
+                    hash_vector=vector_hash,
+                )
+            )
             logging.warning(
                 "GPU checkpoint records %d exact evaluations but all_results.bin "
-                "records %d; using the durable result count",
+                "records %d; recovered the missing durable candidate hashes",
                 exact_done,
                 recorded_exact,
             )

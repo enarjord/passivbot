@@ -1,0 +1,54 @@
+from types import SimpleNamespace
+
+import pytest
+
+
+torch = pytest.importorskip("torch")
+
+from optimization.gpu.metrics import _sharpe_sortino, _smoothed_adg, compute_objectives
+
+
+def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
+    changes = torch.tensor([[0.1, 0.1]], dtype=torch.float64)
+    mask = torch.tensor([[True, True]])
+    adg = torch.tensor([0.1], dtype=torch.float64)
+
+    sharpe, sortino = _sharpe_sortino(changes, mask, adg)
+
+    assert sharpe.item() == 0.0
+    assert sortino.item() == 0.0
+
+
+def test_objectives_include_final_active_calendar_day():
+    day_end = torch.tensor([[100.0, 100.0, 121.0]], dtype=torch.float64)
+    active = torch.tensor([[True, True, True]])
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end),
+        "max_dd": torch.zeros(1, dtype=torch.float64),
+        "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
+        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
+        "last_high_ts": torch.tensor([120_000.0], dtype=torch.float64),
+        "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
+        "last_eq_ts": torch.tensor([120_000.0], dtype=torch.float64),
+        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+    }
+    run = SimpleNamespace(guard_ts_ms=0, interval_ms=60_000)
+
+    metrics = compute_objectives(
+        out,
+        run,
+        {"ts0": 0.0, "n": 3},
+        needed={"adg_strategy_eq"},
+    )
+
+    expected = _smoothed_adg(day_end, active).item()
+    assert metrics["adg_strategy_eq"].item() == pytest.approx(expected)
+    assert metrics["adg_strategy_eq"].item() > 0.0

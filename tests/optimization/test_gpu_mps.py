@@ -16,6 +16,9 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
+    assert "psize * price_now * c_mult / balance" in source
+    assert "fabs(adj) * cp * c_mult /" not in source
+    assert "fabs(eq) * ep * c_mult /" not in source
 
     count = 512
     phase = np.linspace(0.0, 10.0 * np.pi, count)

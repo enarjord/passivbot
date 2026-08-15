@@ -9,8 +9,9 @@ All notable user-facing changes will be documented in this file.
   program and feed feasible, diverse candidates into the unchanged exact Rust backtester; only
   exact results reach the Pareto store, and independent broad-probe rank checks halt on proxy
   drift. Unsupported strategies, sides, suites, multi-coin, HSL, auto-unstuck, collateral,
-  non-inert fixed runtime overrides, and unmodeled risk gates fail closed. Existing CPU bot,
-  backtest, and optimizer paths do not import or require the optional PyTorch dependency.
+  minimum-effective-cost filtering, incomplete candle tails, non-inert fixed runtime overrides,
+  and unmodeled risk gates fail closed. Existing CPU bot, backtest, and optimizer paths do not
+  import or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable

@@ -40,6 +40,15 @@ def _side_enabled(bot_params: dict) -> bool:
     )
 
 
+def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
+    if int(last_valid_idx) != int(candle_count) - 1:
+        raise ValueError(
+            "GPU foundation requires the final prepared candle to be valid because "
+            "the exact Rust backtest force-realizes open positions at its valid tail; "
+            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
 class MpsEmaAnchorProxy:
     """Batched single-coin, long-only EMA-anchor screening proxy."""
 
@@ -106,6 +115,9 @@ class MpsEmaAnchorProxy:
             raise ValueError(
                 "GPU foundation currently supports one-minute candles only"
             )
+        _require_complete_valid_tail(
+            int(backtest_params["last_valid_indices"][0]), len(hlcvs)
+        )
 
         long_bot = payload.bot_params_list[0]["long"]
         short_bot = payload.bot_params_list[0]["short"]
