@@ -6,6 +6,7 @@ import functools
 import hashlib
 import json
 import logging
+import math
 import multiprocessing
 import os
 import pickle
@@ -54,6 +55,15 @@ EMA_BOUND_MAP = {
     "long_offset_volatility_ema_span_1m": "offset_volatility_ema_span_1m",
     "long_risk_entry_cooldown_minutes": "entry_cooldown_minutes",
     "long_total_wallet_exposure_limit": "total_wallet_exposure_limit",
+}
+
+PINNED_SCOPE_BOUND_VALUES = {
+    "long_hsl_enabled": 0.0,
+    "long_unstuck_enabled": 0.0,
+    "long_risk_position_exposure_enforcer_enabled": 0.0,
+    "long_risk_total_exposure_enforcer_enabled": 0.0,
+    "long_risk_total_exposure_entry_gate_enabled": 1.0,
+    "long_risk_we_excess_allowance_pct": 0.0,
 }
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
@@ -575,6 +585,21 @@ def _build_proxy_parameter_dicts(base_vector, mapped, active, active_values) -> 
     return result
 
 
+def _validate_pinned_scope_bounds(bound_by_key, base_by_key) -> None:
+    for key, expected in PINNED_SCOPE_BOUND_VALUES.items():
+        bound = bound_by_key.get(key)
+        values = (
+            (float(bound.low), float(bound.high))
+            if bound is not None
+            else (float(base_by_key.get(key, expected)),) * 2
+        )
+        if any(not math.isclose(value, expected, abs_tol=1.0e-12) for value in values):
+            raise ValueError(
+                "GPU foundation requires "
+                f"{key} to remain pinned at {expected}; got bounds {values}"
+            )
+
+
 def _constraint_classification_mismatch(proxy_violation: float, exact_payload: dict) -> bool:
     if "G" not in exact_payload:
         return False
@@ -694,6 +719,7 @@ def run_backend(
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
     }
+    _validate_pinned_scope_bounds(bound_by_key, base_by_key)
     approved = config.get("live", {}).get("approved_coins", {})
 
     def side_approved(side: str) -> bool:

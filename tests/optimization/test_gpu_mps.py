@@ -55,6 +55,12 @@ def test_mps_ema_anchor_shader_smoke():
     assert "fabs(eq) * ep * c_mult /" not in source
     assert "floor(value / step + 0.5f) * step" in source
     assert "rint(value / step)" not in source
+    assert "int(ceil(price_now / price_step - 1.0e-6f))" in source
+    assert "int(floor(price_now / price_step + 1.0e-6f))" in source
+    assert "float dd = fmax((run_peak - eqf)" in source
+    assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
+        "float dd = fmax((run_peak - eqf)"
+    )
 
     count = 512
     phase = np.linspace(0.0, 10.0 * np.pi, count)
@@ -93,4 +99,5 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].device.type == "mps"
     assert output["balance"].shape == (1,)
     assert torch.isfinite(output["balance"]).all()
+    assert output["fill_count"].item() >= 2
     assert output["day_has_fill"].sum().item() > 0

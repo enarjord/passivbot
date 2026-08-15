@@ -119,8 +119,9 @@ Proxy scoring and limits are likewise fail-closed. This slice supports `adg_stra
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
 `sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,
 `position_held_days_max`, `strategy_eq_underwater_pct_mean`, `drawdown_worst_strategy_eq`,
-`drawdown_worst_mean_1pct_strategy_eq`, `fills_gap_longest_days`, `fills_gap_p95_hours`, and
-`backtest_completion_ratio`. Other proxy metrics are rejected before a run starts.
+`drawdown_worst_mean_1pct_strategy_eq`, `fills_gap_longest_days`, and
+`backtest_completion_ratio`. Metrics such as `fills_gap_p95_hours` that require exact per-fill
+interpolation are rejected before a run starts.
 
 The backend is hybrid rather than a replacement backtester:
 

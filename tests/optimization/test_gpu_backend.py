@@ -23,6 +23,7 @@ from optimization.backends.gpu_backend import (
     _restore_gpu_result_run_contract,
     _single_scenario_metric_surface,
     _select_validation_indices,
+    _validate_pinned_scope_bounds,
     _validate_scope,
 )
 
@@ -415,6 +416,16 @@ def test_proxy_parameters_include_canonical_pinned_ema_values():
     )
 
     assert parameters == [{"base_qty_pct": 0.25, "offset": 0.75}]
+
+
+def test_gpu_rejects_pinned_unsupported_risk_behavior():
+    from optimization.bounds import Bound
+
+    with pytest.raises(ValueError, match="we_excess_allowance_pct"):
+        _validate_pinned_scope_bounds(
+            {"long_risk_we_excess_allowance_pct": Bound(0.2, 0.2, None)},
+            {"long_risk_we_excess_allowance_pct": 0.2},
+        )
 
 
 def test_constraint_classification_drift_detects_feasibility_disagreement():

@@ -122,6 +122,7 @@ inline void passivbot_single_coin_impl(
     float pos_open_k = -1.0f;
     float held_max_min = 0.0f;
     float last_fill_k = -1.0f;
+    int fill_count = 0;
     float first_fill_k = -1.0f;
     float gap_max_min = 0.0f;
     float last_high_k = -1.0f;
@@ -213,6 +214,7 @@ inline void passivbot_single_coin_impl(
 
         bool any_fill = fill_close || fill_entry;
         if (any_fill) {
+            fill_count += (fill_close ? 1 : 0) + (fill_entry ? 1 : 0);
             day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
@@ -247,7 +249,7 @@ inline void passivbot_single_coin_impl(
                 ? current_we / fmax(twel, 1.0e-12f) : 0.0f;
             float inv_shift = swer * psize_weight;
             int bid_ticks = min(int(floor(lower * (1.0f - eff_off - inv_shift) / price_step + 1.0e-6f)),
-                                int(round(price_now / price_step)));
+                                int(floor(price_now / price_step + 1.0e-6f)));
             float bid_price = float(bid_ticks) * price_step;
             float min_q = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
             float base_q = fmax(min_q, round_step(
@@ -268,7 +270,7 @@ inline void passivbot_single_coin_impl(
             entry_qty = e_qty;
 
             int ask_ticks = max(int(ceil(upper * (1.0f + eff_off - inv_shift) / price_step - 1.0e-6f)),
-                                int(round(price_now / price_step)));
+                                int(ceil(price_now / price_step - 1.0e-6f)));
             float ask_price = float(ask_ticks) * price_step;
             float min_cq = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
             float clip = fmin(psize, fmax(min_cq, round_step(
@@ -285,15 +287,15 @@ inline void passivbot_single_coin_impl(
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
-            if (equity > run_peak) {
-                if (last_high_k >= 0.0f) recovery_max_min = fmax(recovery_max_min, float(k) - last_high_k);
-                last_high_k = float(k);
-                run_peak = equity;
-            }
-            float dd = fmax((run_peak - equity) / fmax(fabs(run_peak), 1.0e-12f), 0.0f);
-            max_dd = fmax(max_dd, dd);
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
+            if (eqf > run_peak) {
+                if (last_high_k >= 0.0f) recovery_max_min = fmax(recovery_max_min, float(k) - last_high_k);
+                last_high_k = float(k);
+                run_peak = eqf;
+            }
+            float dd = fmax((run_peak - eqf) / fmax(fabs(run_peak), 1.0e-12f), 0.0f);
+            max_dd = fmax(max_dd, dd);
             day_end = eqf;
             day_min = fmin(day_min, eqf);
             day_dd = fmax(day_dd, dd);
@@ -332,6 +334,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 12] = pprice;
     scalars[so + 13] = alive ? 1.0f : 0.0f;
     scalars[so + 14] = psize > 0.0f ? 1.0f : 0.0f;
+    scalars[so + 15] = float(fill_count);
 }
 
 kernel void passivbot_ema_anchor(

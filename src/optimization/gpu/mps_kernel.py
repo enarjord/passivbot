@@ -15,7 +15,7 @@ from optimization.gpu.model import (
 
 
 MPS_DAILY_COLS = 5
-MPS_SCALAR_COLS = 15
+MPS_SCALAR_COLS = 16
 
 
 @lru_cache(maxsize=1)
@@ -196,6 +196,7 @@ class MpsEmaAnchorRunner:
             "gap_max_ms": scalars[:, 2],
             "first_fill_ts": timestamp_column(3),
             "last_fill_ts": timestamp_column(4),
+            "fill_count": scalars[:, 15].to(torch.int64),
             "recovery_max_ms": scalars[:, 5],
             "last_high_ts": timestamp_column(6),
             "first_eq_ts": timestamp_column(7),

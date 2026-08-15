@@ -6,6 +6,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from optimization.gpu.metrics import (
+    SUPPORTED_METRICS,
     _masked_median,
     _sharpe_sortino,
     _smoothed_adg,
@@ -43,7 +44,41 @@ def test_weighted_adg_keeps_short_active_subsets_nonempty():
     day_eq = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
     active = torch.tensor([[True, True]])
 
-    assert _weighted_adg(day_eq, active).item() == pytest.approx(0.0)
+    assert _weighted_adg(
+        day_eq,
+        active,
+        torch.tensor([0.0]),
+        torch.tensor([172_740_000.0]),
+        torch.tensor([172_740_000.0]),
+        torch.tensor([2]),
+        0,
+        60_000,
+    ).item() == pytest.approx(0.0)
+
+
+def test_weighted_adg_slices_minutes_before_daily_reduction():
+    day_eq = torch.tensor([[100.0, 100.0, 100.0, 121.0]], dtype=torch.float64)
+    active = torch.tensor([[True, True, True, True]])
+    last_ts = float((4 * 1440 - 1) * 60_000)
+
+    actual = _weighted_adg(
+        day_eq,
+        active,
+        torch.tensor([0.0]),
+        torch.tensor([last_ts]),
+        torch.tensor([last_ts]),
+        torch.tensor([2]),
+        0,
+        60_000,
+    )
+
+    full = _smoothed_adg(day_eq, active)
+    last_two = _smoothed_adg(day_eq, torch.tensor([[False, False, True, True]]))
+    assert actual.item() == pytest.approx(((full + 2.0 * last_two) / 10.0).item())
+
+
+def test_interpolated_fill_gap_percentile_fails_closed_for_gpu_proxy():
+    assert "fills_gap_p95_hours" not in SUPPORTED_METRICS
 
 
 def test_objectives_include_final_active_calendar_day():
@@ -61,6 +96,7 @@ def test_objectives_include_final_active_calendar_day():
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "fill_count": torch.zeros(1, dtype=torch.int64),
         "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
         "last_high_ts": torch.tensor([120_000.0], dtype=torch.float64),
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
@@ -95,6 +131,7 @@ def test_completion_uses_rust_exclusive_requested_end():
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "fill_count": torch.zeros(1, dtype=torch.int64),
         "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
         "last_high_ts": torch.tensor([60_000.0], dtype=torch.float64),
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),

@@ -7,12 +7,7 @@ metrics validated for this foundation and integrated with the current schema.
 
 from __future__ import annotations
 
-import math
-
 import torch
-
-from optimization.gpu.model import GAP_BINS, GAP_MAX_MINUTES
-
 
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
 # still emit the normal complete metric set; this list governs only which
@@ -24,7 +19,6 @@ SUPPORTED_METRICS = (
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_strategy_eq",
     "fills_gap_longest_days",
-    "fills_gap_p95_hours",
     "mdg_strategy_eq",
     "position_held_days_max",
     "sharpe_ratio_strategy_eq",
@@ -140,52 +134,55 @@ def _sharpe_sortino(changes, mask, adg):
     return sharpe, sortino
 
 
-def _weighted_adg(day_eq, active):
-    counts = active.sum(dim=1)
-    cumulative = torch.cumsum(active.to(torch.long), dim=1)
-    total = torch.zeros(day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device)
-    for index in range(10):
+def _weighted_adg(
+    day_eq,
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    last_fill_ts,
+    fill_count,
+    first_timestamp,
+    interval_ms,
+):
+    """Match Rust's minute-sliced weighted ADG using compact daily outputs."""
+
+    eligible = (
+        (fill_count > 1)
+        & torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+    )
+    total = torch.where(
+        eligible,
+        _smoothed_adg(day_eq, active),
+        torch.zeros(day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device),
+    )
+    sample_count = (
+        torch.floor((last_eq_ts - first_eq_ts) / float(interval_ms) + 0.5)
+        .to(torch.long)
+        .add(1)
+        .clamp(min=1)
+    )
+    first_day = int(first_timestamp) // 86_400_000
+    day_ids = torch.arange(day_eq.shape[1], device=day_eq.device) + first_day
+    for index in range(1, 10):
         fraction = 1.0 / (1.0 + index)
-        subset_count = torch.round(counts.to(day_eq.dtype) * fraction).to(torch.long)
-        subset_count = torch.where(
-            counts > 0, subset_count.clamp(min=1), torch.zeros_like(subset_count)
+        start_position = torch.floor(
+            sample_count.to(day_eq.dtype) * (1.0 - fraction) + 0.5
+        ).to(torch.long)
+        subset_start_ts = first_eq_ts + start_position.to(day_eq.dtype) * float(
+            interval_ms
         )
-        start_position = counts - subset_count
-        subset = active & (cumulative > start_position.unsqueeze(1))
-        total += _smoothed_adg(day_eq, subset)
+        subset_start_day = torch.floor(subset_start_ts / 86_400_000.0).to(
+            torch.long
+        )
+        subset = active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
+        has_fill = eligible & torch.isfinite(last_fill_ts) & (
+            last_fill_ts >= subset_start_ts
+        )
+        total += torch.where(
+            has_fill, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
+        )
     return total / 10.0
-
-
-def _gap_percentile_hours(gap_hist, boundary_lead_min, boundary_trail_min, pct=95.0):
-    batch_size = gap_hist.shape[0]
-    device = gap_hist.device
-    histogram = gap_hist.to(torch.float32).clone()
-    log_bin_scale = (GAP_BINS - 1) / math.log1p(GAP_MAX_MINUTES)
-    for boundary_gap in (boundary_lead_min, boundary_trail_min):
-        bins = (
-            (torch.log1p(boundary_gap.clamp(min=0.0)) * log_bin_scale)
-            .to(torch.int64)
-            .clamp(0, GAP_BINS - 1)
-        )
-        histogram.scatter_add_(
-            1, bins.unsqueeze(1), torch.ones(batch_size, 1, device=device)
-        )
-    target = histogram.sum(dim=1) * (pct / 100.0)
-    cumulative = torch.cumsum(histogram, dim=1)
-    reached = cumulative >= target.unsqueeze(1)
-    bin_index = (
-        torch.where(
-            reached,
-            torch.arange(GAP_BINS, device=device).unsqueeze(0),
-            torch.full_like(histogram, GAP_BINS - 1, dtype=torch.long),
-        )
-        .min(dim=1)
-        .values
-    )
-    edges = torch.expm1(
-        torch.arange(GAP_BINS, device=device, dtype=torch.float32) / log_bin_scale
-    )
-    return edges[bin_index.clamp(max=GAP_BINS - 1)] / 60.0
 
 
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
@@ -203,7 +200,16 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     mdg = _masked_median(daily_changes, change_mask)
     daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
-    adg_w = _weighted_adg(day_end_eq, active)
+    adg_w = _weighted_adg(
+        day_end_eq,
+        active,
+        out["first_eq_ts"],
+        out["last_eq_ts"],
+        out["last_fill_ts"],
+        out["fill_count"],
+        data["ts0"],
+        run.interval_ms,
+    )
 
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
         dim=1
@@ -246,9 +252,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         (last_eq_ts - out["last_fill_ts"]) / 60_000.0,
         torch.zeros_like(last_eq_ts),
     ).clamp(min=0.0)
-    gap_p95_hours = _gap_percentile_hours(
-        out["gap_hist"], boundary_lead, boundary_trail
-    )
     gap_longest_days = torch.maximum(
         out["gap_max_ms"] / 86_400_000.0,
         torch.maximum(boundary_lead, boundary_trail) / 1440.0,
@@ -272,7 +275,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "drawdown_worst_mean_1pct_strategy_eq": worst_one_pct,
         "drawdown_worst_strategy_eq": out["max_dd"],
         "fills_gap_longest_days": gap_longest_days,
-        "fills_gap_p95_hours": gap_p95_hours,
         "mdg_strategy_eq": mdg,
         "position_held_days_max": held_days,
         "sharpe_ratio_strategy_eq": sharpe,
