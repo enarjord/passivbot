@@ -16,7 +16,7 @@ from optimization.backends.gpu_backend import (
     _constraint_classification_mismatch,
     _DriftMonitor,
     _ObjectiveScale,
-    _recover_completed_hashes,
+    _recover_durable_validations,
     _update_novelty_stall,
     _spearman,
     _resolve_options,
@@ -507,10 +507,24 @@ def test_constraint_classification_drift_detects_feasibility_disagreement():
     assert not _constraint_classification_mismatch(0.1, {})
 
 
-def test_resume_recovers_hashes_for_results_ahead_of_checkpoint():
-    entries = [{"id": 0}, {"id": 1}, {"id": 2}, {"id": 3}]
+def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
+    entries = [
+        {
+            "id": index,
+            "metrics": {
+                "gpu_validation": {
+                    "schema_version": 1,
+                    "proxy_score": float(index),
+                    "exact_score": float(index) + 0.5,
+                    "probe": index == 3,
+                    "constraint_classification_mismatch": False,
+                }
+            },
+        }
+        for index in range(4)
+    ]
 
-    recovered = _recover_completed_hashes(
+    recovered, drift_pairs, mismatch = _recover_durable_validations(
         entries,
         start_index=2,
         stop_index=4,
@@ -519,14 +533,67 @@ def test_resume_recovers_hashes_for_results_ahead_of_checkpoint():
     )
 
     assert recovered == {"hash-2.0", "hash-3.0"}
+    assert drift_pairs == [(2.0, 2.5, False), (3.0, 3.5, True)]
+    assert mismatch is None
 
 
 def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
     with pytest.raises(RuntimeError, match="expected 2, recovered 1"):
-        _recover_completed_hashes(
-            [{"id": 0}, {"id": 1}, {"id": 2}],
+        _recover_durable_validations(
+            [
+                {
+                    "id": index,
+                    "metrics": {
+                        "gpu_validation": {
+                            "schema_version": 1,
+                            "proxy_score": float(index),
+                            "exact_score": float(index),
+                            "probe": False,
+                            "constraint_classification_mismatch": False,
+                        }
+                    },
+                }
+                for index in range(3)
+            ],
             start_index=2,
             stop_index=4,
             vector_from_entry=lambda entry: [float(entry["id"])],
             hash_vector=lambda vector: f"hash-{vector[0]}",
         )
+
+
+def test_resume_fails_closed_when_durable_tail_lacks_drift_evidence():
+    with pytest.raises(RuntimeError, match="cannot recover proxy/exact safety evidence"):
+        _recover_durable_validations(
+            [{"id": 0}],
+            start_index=0,
+            stop_index=1,
+            vector_from_entry=lambda entry: [float(entry["id"])],
+            hash_vector=lambda vector: f"hash-{vector[0]}",
+        )
+
+
+def test_resume_recovers_durable_constraint_disagreement():
+    _hashes, pairs, mismatch = _recover_durable_validations(
+        [
+            {
+                "id": 0,
+                "metrics": {
+                    "gpu_validation": {
+                        "schema_version": 1,
+                        "proxy_score": 0.1,
+                        "exact_score": 0.2,
+                        "probe": True,
+                        "constraint_classification_mismatch": True,
+                    }
+                },
+            }
+        ],
+        start_index=0,
+        stop_index=1,
+        vector_from_entry=lambda entry: [float(entry["id"])],
+        hash_vector=lambda vector: f"hash-{vector[0]}",
+    )
+
+    assert pairs == [(0.1, 0.2, True)]
+    assert "constraint classification disagreed" in mismatch

@@ -671,17 +671,19 @@ def _constraint_classification_mismatch(proxy_violation: float, exact_payload: d
     return proxy_feasible != exact_feasible
 
 
-def _recover_completed_hashes(
+def _recover_durable_validations(
     entries,
     *,
     start_index: int,
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> set[str]:
-    """Recover candidate identities durably recorded after a stale checkpoint."""
+) -> tuple[set[str], list[tuple[float, float, bool]], str | None]:
+    """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
+    drift_pairs: list[tuple[float, float, bool]] = []
+    mismatch_reason = None
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -689,6 +691,43 @@ def _recover_completed_hashes(
         if index >= stop_index:
             break
         recovered.add(hash_vector(vector_from_entry(entry)))
+        metadata = (entry.get("metrics") or {}).get("gpu_validation")
+        if not isinstance(metadata, dict):
+            raise RuntimeError(
+                "GPU resume cannot recover proxy/exact safety evidence from "
+                f"durable result {index}"
+            )
+        if metadata.get("schema_version") != 1:
+            raise RuntimeError(
+                "GPU resume found unsupported proxy/exact safety evidence in "
+                f"durable result {index}"
+            )
+        try:
+            proxy_score = float(metadata["proxy_score"])
+            exact_score = float(metadata["exact_score"])
+            probe = metadata["probe"]
+            classification_mismatch = metadata["constraint_classification_mismatch"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "GPU resume found invalid proxy/exact safety evidence in "
+                f"durable result {index}"
+            ) from exc
+        if not isinstance(probe, bool) or not isinstance(classification_mismatch, bool):
+            raise RuntimeError(
+                "GPU resume found invalid proxy/exact safety evidence in "
+                f"durable result {index}"
+            )
+        if not np.isfinite(proxy_score) or not np.isfinite(exact_score):
+            raise RuntimeError(
+                "GPU resume found non-finite proxy/exact safety evidence in "
+                f"durable result {index}"
+            )
+        drift_pairs.append((proxy_score, exact_score, probe))
+        if classification_mismatch:
+            mismatch_reason = (
+                "GPU proxy/exact constraint classification disagreed for a "
+                "durably recorded exact validation"
+            )
         consumed += 1
     expected = max(0, stop_index - start_index)
     if consumed != expected:
@@ -696,7 +735,7 @@ def _recover_completed_hashes(
             "GPU resume could not reconstruct all durable candidate hashes: "
             f"expected {expected}, recovered {consumed}"
         )
-    return recovered
+    return recovered, drift_pairs, mismatch_reason
 
 
 def run_backend(
@@ -1014,8 +1053,8 @@ def run_backend(
                     )
                 return vectors[0]
 
-            completed_hashes.update(
-                _recover_completed_hashes(
+            recovered_hashes, recovered_pairs, recovered_mismatch = (
+                _recover_durable_validations(
                     load_results(results_file),
                     start_index=exact_done,
                     stop_index=recorded_exact,
@@ -1023,9 +1062,23 @@ def run_backend(
                     hash_vector=vector_hash,
                 )
             )
+            completed_hashes.update(recovered_hashes)
+            drift_monitor.pairs.extend(recovered_pairs)
+            if recovered_mismatch:
+                raise RuntimeError(
+                    "Cannot resume a GPU run stopped by its constraint safety gate: "
+                    f"{recovered_mismatch}"
+                )
+            recovered_drift_status = drift_monitor.evaluate()
+            if recovered_drift_status["halt_reason"]:
+                raise RuntimeError(
+                    "Cannot resume a GPU run stopped by its drift safety gate: "
+                    f"{recovered_drift_status['halt_reason']}"
+                )
             logging.warning(
                 "GPU checkpoint records %d exact evaluations but all_results.bin "
-                "records %d; recovered the missing durable candidate hashes",
+                "records %d; recovered the missing durable candidate identities "
+                "and safety evidence",
                 exact_done,
                 recorded_exact,
             )
@@ -1111,7 +1164,7 @@ def run_backend(
             violations[row] = float(violation)
         return objectives, violations
 
-    def record_exact(vector, payload) -> None:
+    def record_exact(vector, payload, *, validation_metadata: dict) -> None:
         entry = build_pymoo_record_entry(
             vector=payload.get("evaluation_vector", vector),
             metrics=payload.get("metrics") or {},
@@ -1124,6 +1177,7 @@ def run_backend(
             overrides_fn=overrides_fn,
             overrides_list=overrides_list,
         )
+        entry.setdefault("metrics", {})["gpu_validation"] = validation_metadata
         recorder.record(_restore_gpu_result_run_contract(entry, config))
 
     def consume_ready(*, wait_for_one: bool = False) -> None:
@@ -1140,10 +1194,26 @@ def run_backend(
             vector, proxy_score, proxy_violation, is_probe, digest = pending.pop(result)
             payload = result.get()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
-            record_exact(vector, payload)
+            exact_score = float(
+                objective_scale.score(np.asarray(payload["F"]).reshape(1, -1))[0]
+            )
+            classification_mismatch = _constraint_classification_mismatch(
+                proxy_violation, payload
+            )
+            record_exact(
+                vector,
+                payload,
+                validation_metadata={
+                    "schema_version": 1,
+                    "proxy_score": float(proxy_score),
+                    "exact_score": exact_score,
+                    "probe": bool(is_probe),
+                    "constraint_classification_mismatch": classification_mismatch,
+                },
+            )
             exact_done += 1
             completed_hashes.add(digest)
-            if _constraint_classification_mismatch(proxy_violation, payload):
+            if classification_mismatch:
                 persisted_halt_reason = (
                     "GPU proxy/exact constraint classification disagreed for an exact "
                     f"validation: proxy_violation={proxy_violation}, "
@@ -1151,9 +1221,6 @@ def run_backend(
                 )
                 maybe_save_checkpoint(force=True)
                 raise RuntimeError(persisted_halt_reason)
-            exact_score = float(
-                objective_scale.score(np.asarray(payload["F"]).reshape(1, -1))[0]
-            )
             drift_monitor.add(proxy_score, exact_score, probe=is_probe)
             status = drift_monitor.evaluate()
             if status["warn_reason"] and status["warn_reason"] != last_warning:

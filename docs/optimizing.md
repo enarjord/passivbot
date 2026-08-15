@@ -174,8 +174,9 @@ GPU-specific settings live under `optimize.gpu`:
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
-  result batches are checkpointed immediately, and a final checkpoint is always written on
-  successful completion.
+  result batches are checkpointed immediately, and each durable result carries the proxy/exact
+  safety evidence needed to recover if its flush outruns the companion checkpoint. A final
+  checkpoint is always written on successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the
