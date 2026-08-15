@@ -58,6 +58,34 @@ EMA_BOUND_MAP = {
     "long_total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
+
+def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
+    """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
+
+    from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.operators.crossover.sbx import SBX
+    from pymoo.operators.mutation.pm import PM
+
+    from optimization.backends.pymoo_backend import (
+        _resolve_mutation_prob,
+        _resolve_pymoo_shared,
+    )
+
+    shared = _resolve_pymoo_shared(config)
+    return NSGA2(
+        pop_size=population_size,
+        sampling=sampling,
+        crossover=SBX(
+            prob_var=float(shared["crossover_prob_var"]),
+            eta=float(shared["crossover_eta"]),
+        ),
+        mutation=PM(
+            prob=_resolve_mutation_prob(shared, n_params),
+            eta=float(shared["mutation_eta"]),
+        ),
+        eliminate_duplicates=bool(shared["eliminate_duplicates"]),
+    )
+
 PINNED_SCOPE_BOUND_VALUES = {
     "long_hsl_enabled": 0.0,
     "long_unstuck_enabled": 0.0,
@@ -964,7 +992,6 @@ def run_backend(
     def vector_hash(vector) -> str:
         return _canonical_vector_hash(vector, bounds, sig_digits)
 
-    from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.core.problem import Problem
     from pymoo.core.termination import NoTermination
 
@@ -998,8 +1025,11 @@ def run_backend(
         xl=np.zeros(len(active)),
         xu=np.ones(len(active)),
     )
-    algorithm = NSGA2(
-        pop_size=population_size, sampling=sampling, eliminate_duplicates=True
+    algorithm = _build_gpu_nsga2(
+        config,
+        sampling=sampling,
+        population_size=population_size,
+        n_params=len(active),
     )
     algorithm.setup(problem, termination=NoTermination(), seed=seed, verbose=False)
     generation = 0

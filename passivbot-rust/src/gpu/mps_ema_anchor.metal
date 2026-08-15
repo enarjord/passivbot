@@ -190,7 +190,7 @@ inline void passivbot_single_coin_impl(
             went_flat = new_psize <= 0.0f;
             psize = new_psize;
             if (went_flat) pprice = 0.0f;
-            day_volume += fabs(adj) * cp / fmax(balance, 1.0e-9f);
+            day_volume += fabs(adj) * cp / balance;
             if (went_flat) {
                 if (pos_open_k >= 0.0f) held_max_min = fmax(held_max_min, float(k) - pos_open_k);
                 pos_open_k = -1.0f;
@@ -213,7 +213,7 @@ inline void passivbot_single_coin_impl(
             psize = new_psize;
             pprice = new_pprice;
             last_inc_k = float(k);
-            day_volume += fabs(eq) * ep / fmax(balance, 1.0e-9f);
+            day_volume += fabs(eq) * ep / balance;
             entry_qty = 0.0f;
         }
 

@@ -160,6 +160,9 @@ GPU-specific settings live under `optimize.gpu`:
 }
 ```
 
+The CPU-side NSGA-II proposal stage uses the same `optimize.pymoo.shared` crossover, mutation, and
+duplicate-elimination controls as the ordinary pymoo optimizer.
+
 - `population_size` is the NSGA-II proxy population.
 - `batch_size` caps candidates per MPS dispatch.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.

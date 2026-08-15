@@ -98,7 +98,9 @@ def test_objectives_include_final_active_calendar_day():
         "last_eq_ts": torch.tensor([120_000.0], dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
     }
-    run = SimpleNamespace(guard_ts_ms=0, interval_ms=60_000)
+    run = SimpleNamespace(
+        requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+    )
 
     metrics = compute_objectives(
         out,
@@ -132,7 +134,9 @@ def test_completion_uses_rust_exclusive_requested_end():
         "last_eq_ts": torch.tensor([60_000.0], dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
     }
-    run = SimpleNamespace(guard_ts_ms=0, interval_ms=60_000)
+    run = SimpleNamespace(
+        requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+    )
 
     metrics = compute_objectives(
         out,
@@ -164,7 +168,9 @@ def test_completion_is_zero_when_no_equity_sample_exists():
         "last_eq_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
     }
-    run = SimpleNamespace(guard_ts_ms=0, interval_ms=60_000)
+    run = SimpleNamespace(
+        requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+    )
 
     metrics = compute_objectives(
         out,
@@ -174,9 +180,47 @@ def test_completion_is_zero_when_no_equity_sample_exists():
             "adg_strategy_eq",
             "adg_strategy_eq_w",
             "backtest_completion_ratio",
+            "fills_gap_longest_days",
         },
     )
 
     assert metrics["backtest_completion_ratio"].item() == 0.0
     assert metrics["adg_strategy_eq"].item() == 0.0
     assert metrics["adg_strategy_eq_w"].item() == 0.0
+    assert metrics["fills_gap_longest_days"].item() == 0.0
+
+
+def test_completion_uses_raw_requested_start_before_available_history():
+    day_end = torch.tensor([[100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end),
+        "max_dd": torch.zeros(1, dtype=torch.float64),
+        "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
+        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "recovery_max_ms": torch.zeros(1, dtype=torch.float64),
+        "last_high_ts": torch.tensor([60_000.0], dtype=torch.float64),
+        "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
+        "last_eq_ts": torch.tensor([60_000.0], dtype=torch.float64),
+        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+    }
+    run = SimpleNamespace(
+        requested_start_ts_ms=-86_400_000,
+        guard_ts_ms=0,
+        interval_ms=60_000,
+    )
+
+    metrics = compute_objectives(
+        out,
+        run,
+        {"ts0": 0.0, "n": 3},
+        needed={"backtest_completion_ratio"},
+    )
+
+    assert metrics["backtest_completion_ratio"].item() == pytest.approx(1442.0 / 1443.0)

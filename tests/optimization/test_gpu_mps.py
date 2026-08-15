@@ -25,6 +25,7 @@ def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
         starting_balance=1_000.0,
         warmup_bars=1,
         trade_start_idx=1,
+        requested_start_ts_ms=int(timestamps[0]),
         guard_ts_ms=int(timestamps[0]),
         first_ts_ms=int(timestamps[0]),
         interval_ms=60_000,
@@ -54,6 +55,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "psize * price_now * c_mult / balance" in source
     assert "fabs(adj) * cp * c_mult /" not in source
     assert "fabs(eq) * ep * c_mult /" not in source
+    assert "fabs(adj) * cp / balance" in source
+    assert "fabs(eq) * ep / balance" in source
     assert "floor(value / step + 0.5f) * step" in source
     assert "rint(value / step)" not in source
     assert "int(ceil(price_now / price_step - 1.0e-6f))" in source
@@ -83,6 +86,7 @@ def test_mps_ema_anchor_shader_smoke():
         starting_balance=1_000.0,
         warmup_bars=10,
         trade_start_idx=10,
+        requested_start_ts_ms=int(timestamps[0]),
         guard_ts_ms=int(timestamps[0]),
         first_ts_ms=int(timestamps[0]),
         interval_ms=60_000,
@@ -114,3 +118,45 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_volume_uses_raw_non_positive_post_fill_balance():
+    count = 64
+    close = np.full(count, 100.0)
+    high = np.full(count, 101.0)
+    low = np.full(count, 99.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(
+        qty_step=0.001,
+        price_step=0.01,
+        min_qty=0.001,
+        min_cost=5.0,
+        c_mult=1.0,
+        maker_fee=2.0,
+    )
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        requested_start_ts_ms=int(timestamps[0]),
+        guard_ts_ms=int(timestamps[0]),
+        first_ts_ms=int(timestamps[0]),
+        interval_ms=60_000,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    parameters = np.array(
+        [[1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+    output = MpsEmaAnchorRunner(market, run, data).run(parameters)
+    torch.mps.synchronize()
+
+    assert output["day_has_fill"].sum().item() > 0
+    assert output["day_volume"].sum().item() < 0.0

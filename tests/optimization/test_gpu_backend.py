@@ -12,6 +12,7 @@ from config.schema import get_template_config
 from optimization.backends.gpu_backend import (
     _canonical_candidate_values,
     _canonical_vector_hash,
+    _build_gpu_nsga2,
     _build_proxy_parameter_dicts,
     _constraint_classification_mismatch,
     _DriftMonitor,
@@ -105,6 +106,29 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_min_samples"] = 7
     with pytest.raises(ValueError, match="at least 8"):
         _resolve_options(config)
+
+
+def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
+    config = _long_only_ema_config()
+    config["optimize"]["pymoo"]["shared"] = {
+        "crossover_eta": 11.0,
+        "crossover_prob_var": 0.7,
+        "mutation_eta": 13.0,
+        "mutation_prob_var": 0.2,
+        "eliminate_duplicates": False,
+    }
+    algorithm = _build_gpu_nsga2(
+        config,
+        sampling=np.zeros((8, 5), dtype=np.float64),
+        population_size=8,
+        n_params=5,
+    )
+
+    assert algorithm.mating.crossover.eta.value == 11.0
+    assert algorithm.mating.crossover.prob_var.value == 0.7
+    assert algorithm.mating.mutation.eta.value == 13.0
+    assert algorithm.mating.mutation.prob.value == 0.2
+    assert type(algorithm.eliminate_duplicates).__name__ == "NoDuplicateElimination"
 
 
 def test_cpu_backend_registry_import_does_not_import_torch():

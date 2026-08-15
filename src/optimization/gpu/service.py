@@ -158,6 +158,9 @@ class MpsEmaAnchorProxy:
             starting_balance=float(backtest_params["starting_balance"]),
             warmup_bars=max(1, int(backtest_params.get("global_warmup_bars", 0) or 1)),
             trade_start_idx=int(backtest_params["trade_start_indices"][0]),
+            requested_start_ts_ms=int(
+                backtest_params["requested_start_timestamp_ms"]
+            ),
             guard_ts_ms=int(
                 max(
                     backtest_params["requested_start_timestamp_ms"],

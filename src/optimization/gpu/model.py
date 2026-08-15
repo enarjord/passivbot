@@ -40,6 +40,7 @@ class ProxyRun:
     starting_balance: float
     warmup_bars: int
     trade_start_idx: int
+    requested_start_ts_ms: int
     guard_ts_ms: int
     first_ts_ms: int
     interval_ms: int
