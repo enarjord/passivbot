@@ -65,9 +65,7 @@ def _masked_median(values, mask):
 def _smoothed_adg(day_eq, active):
     batch_size, day_count = day_eq.shape
     if day_count == 0:
-        return torch.full(
-            (batch_size,), -1.0, dtype=day_eq.dtype, device=day_eq.device
-        )
+        return torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
     counts = active.sum(dim=1)
     indices = (
         torch.arange(day_count, device=day_eq.device)
@@ -96,7 +94,7 @@ def _smoothed_adg(day_eq, active):
         gain.clamp(min=1e-12) ** (1.0 / duration_days) - 1.0,
         torch.full_like(gain, -1.0),
     )
-    return adg
+    return torch.where(counts > 0, adg, torch.zeros_like(adg))
 
 
 def _sharpe_sortino(changes, mask, adg):

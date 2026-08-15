@@ -169,7 +169,8 @@ GPU-specific settings live under `optimize.gpu`:
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank-safety gate. At
   least eight broad probes are required before low correlation can halt a run, so `drift_window`
   must be large enough to retain eight probes at the configured
-  `validate_per_generation / drift_probes` ratio.
+  `validate_per_generation / drift_probes` ratio. When probes are enabled, `optimize.iters` must
+  also be large enough to reach both that probe budget and `drift_min_samples`.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact

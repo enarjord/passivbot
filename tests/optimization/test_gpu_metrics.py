@@ -170,7 +170,13 @@ def test_completion_is_zero_when_no_equity_sample_exists():
         out,
         run,
         {"ts0": 0.0, "n": 3},
-        needed={"backtest_completion_ratio"},
+        needed={
+            "adg_strategy_eq",
+            "adg_strategy_eq_w",
+            "backtest_completion_ratio",
+        },
     )
 
     assert metrics["backtest_completion_ratio"].item() == 0.0
+    assert metrics["adg_strategy_eq"].item() == 0.0
+    assert metrics["adg_strategy_eq_w"].item() == 0.0
