@@ -55,12 +55,19 @@ def _pct_change(values, active):
 
 
 def _masked_median(values, mask):
+    if values.shape[1] == 0:
+        return torch.zeros(values.shape[0], dtype=values.dtype, device=values.device)
     filled = torch.where(mask, values, torch.full_like(values, float("nan")))
-    return torch.nanmedian(filled, dim=1).values
+    medians = torch.nanmedian(filled, dim=1).values
+    return torch.where(mask.any(dim=1), medians, torch.zeros_like(medians))
 
 
 def _smoothed_adg(day_eq, active):
     batch_size, day_count = day_eq.shape
+    if day_count == 0:
+        return torch.full(
+            (batch_size,), -1.0, dtype=day_eq.dtype, device=day_eq.device
+        )
     counts = active.sum(dim=1)
     indices = (
         torch.arange(day_count, device=day_eq.device)
@@ -77,7 +84,7 @@ def _smoothed_adg(day_eq, active):
     sorted_indices, _ = torch.sort(order, dim=1, descending=True)
     tail_count = torch.minimum(counts, torch.full_like(counts, 3)).clamp(min=1)
     tail_values = torch.zeros_like(start)
-    for offset in range(3):
+    for offset in range(min(3, day_count)):
         take = (offset < tail_count).to(day_eq.dtype)
         gather_index = sorted_indices[:, offset].clamp(min=0)
         tail_values += take * day_eq.gather(1, gather_index.unsqueeze(1)).squeeze(1)
@@ -134,6 +141,9 @@ def _weighted_adg(day_eq, active):
     for index in range(10):
         fraction = 1.0 / (1.0 + index)
         subset_count = torch.round(counts.to(day_eq.dtype) * fraction).to(torch.long)
+        subset_count = torch.where(
+            counts > 0, subset_count.clamp(min=1), torch.zeros_like(subset_count)
+        )
         start_position = counts - subset_count
         subset = active & (cumulative > start_position.unsqueeze(1))
         total += _smoothed_adg(day_eq, subset)

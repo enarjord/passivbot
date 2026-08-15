@@ -156,6 +156,11 @@ def _resolve_options(config: dict) -> dict:
         )
     if not 0.0 <= float(options["drift_halt"]) <= 1.0:
         raise ValueError("optimize.gpu.drift_halt must be between zero and one")
+    if int(options["drift_min_samples"]) > int(options["drift_window"]):
+        raise ValueError(
+            "optimize.gpu.drift_min_samples must be less than or equal to "
+            "optimize.gpu.drift_window"
+        )
     return options
 
 
@@ -178,6 +183,11 @@ def _validate_scope(config: dict, evaluator) -> str:
         raise ValueError(
             "GPU foundation requires backtest.filter_by_min_effective_cost=false "
             "because the screening proxy promotes entries to exchange minimum size"
+        )
+    if bool(config.get("live", {}).get("market_orders_allowed")):
+        raise ValueError(
+            "GPU foundation requires live.market_orders_allowed=false because the "
+            "screening proxy models resting maker orders only"
         )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
@@ -536,6 +546,34 @@ def _canonical_vector_hash(vector, bounds, sig_digits: int) -> str:
     return hashlib.sha256(json.dumps(canonical).encode()).hexdigest()
 
 
+def _build_proxy_parameter_dicts(base_vector, mapped, active, active_values) -> list[dict]:
+    """Include canonical pinned and active EMA values in every proxy candidate."""
+
+    base_parameters = {
+        name: float(base_vector[index]) for name, (index, _bound) in mapped.items()
+    }
+    result = []
+    for row in active_values:
+        parameters = dict(base_parameters)
+        parameters.update(
+            {
+                name: float(row[column])
+                for column, (name, _index, _bound) in enumerate(active)
+            }
+        )
+        result.append(parameters)
+    return result
+
+
+def _constraint_classification_mismatch(proxy_violation: float, exact_payload: dict) -> bool:
+    if "G" not in exact_payload:
+        return False
+    exact = np.asarray(exact_payload["G"], dtype=np.float64).reshape(-1)
+    proxy_feasible = bool(np.isfinite(proxy_violation) and proxy_violation <= 0.0)
+    exact_feasible = bool(len(exact) and np.all(np.isfinite(exact) & (exact <= 0.0)))
+    return proxy_feasible != exact_feasible
+
+
 def _recover_completed_hashes(
     entries,
     *,
@@ -773,13 +811,7 @@ def run_backend(
 
     def parameter_dicts(rows: np.ndarray) -> list[dict]:
         values = normalized_to_values(rows)
-        return [
-            {
-                name: float(values[row, column])
-                for column, (name, _index, _bound) in enumerate(active)
-            }
-            for row in range(len(values))
-        ]
+        return _build_proxy_parameter_dicts(base_vector, mapped, active, values)
 
     def full_vector(row: np.ndarray) -> list[float]:
         result = list(base_vector)
@@ -931,6 +963,7 @@ def run_backend(
         ignore_sigint_in_worker,
     )
     pool = multiprocessing.Pool(processes=workers, initializer=initializer)
+    pool_workers = tuple(getattr(pool, "_pool", ()) or ())
     pending = {}
     submitted_hashes: set[str] = set()
     start_time = time.time()
@@ -1004,14 +1037,23 @@ def run_backend(
                 break
             if not wait_for_one or not pending:
                 return
+            PymooAsyncRecordingRunner._raise_if_pool_workers_exited(pool_workers)
             time.sleep(0.05)
         for result in ready:
-            vector, proxy_score, is_probe, digest = pending.pop(result)
+            vector, proxy_score, proxy_violation, is_probe, digest = pending.pop(result)
             payload = result.get()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
             record_exact(vector, payload)
             exact_done += 1
             completed_hashes.add(digest)
+            if _constraint_classification_mismatch(proxy_violation, payload):
+                persisted_halt_reason = (
+                    "GPU proxy/exact constraint classification disagreed for an exact "
+                    f"validation: proxy_violation={proxy_violation}, "
+                    f"exact_G={np.asarray(payload['G']).tolist()}"
+                )
+                maybe_save_checkpoint(force=True)
+                raise RuntimeError(persisted_halt_reason)
             exact_score = float(
                 objective_scale.score(np.asarray(payload["F"]).reshape(1, -1))[0]
             )
@@ -1050,7 +1092,11 @@ def run_backend(
             population.set("F", proxy_objectives)
             population.set(
                 "G",
-                np.where(proxy_violations > 0.0, proxy_violations, -1.0).reshape(-1, 1),
+                np.where(
+                    np.isfinite(proxy_violations),
+                    np.where(proxy_violations > 0.0, proxy_violations, -1.0),
+                    1.0e18,
+                ).reshape(-1, 1),
             )
             algorithm.tell(infills=population)
             generation += 1
@@ -1082,6 +1128,7 @@ def run_backend(
                 pending[result] = (
                     vector,
                     float(proxy_scores[index]),
+                    float(proxy_violations[index]),
                     bool(is_probe),
                     digest,
                 )

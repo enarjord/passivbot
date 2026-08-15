@@ -108,6 +108,7 @@ The first supported slice is intentionally narrow:
 - BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
   runtime overrides disabled
 - `backtest.filter_by_min_effective_cost: false`
+- `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Short-only, long+short,
@@ -130,6 +131,7 @@ The backend is hybrid rather than a replacement backtester:
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. A rolling Spearman rank gate independently stops the run if broad proxy/exact probe agreement
    falls below `drift_halt` after sufficient evidence, even when aggregate agreement remains high.
+   Any proxy/exact disagreement about optimizer-limit feasibility also stops immediately.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device

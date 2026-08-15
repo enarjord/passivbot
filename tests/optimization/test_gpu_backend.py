@@ -12,6 +12,8 @@ from config.schema import get_template_config
 from optimization.backends.gpu_backend import (
     _canonical_candidate_values,
     _canonical_vector_hash,
+    _build_proxy_parameter_dicts,
+    _constraint_classification_mismatch,
     _DriftMonitor,
     _ObjectiveScale,
     _recover_completed_hashes,
@@ -54,6 +56,12 @@ def test_gpu_options_are_additive_and_validate_ranges():
 
     config["optimize"]["gpu"]["batch_size"] = 0
     with pytest.raises(ValueError, match="batch_size"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["drift_window"] = 16
+    config["optimize"]["gpu"]["drift_min_samples"] = 32
+    with pytest.raises(ValueError, match="drift_min_samples"):
         _resolve_options(config)
 
 
@@ -116,6 +124,12 @@ def test_single_scenario_metric_surface_supports_all_reducers():
                 "filter_by_min_effective_cost", True
             ),
             "filter_by_min_effective_cost",
+        ),
+        (
+            lambda config: config["live"].__setitem__(
+                "market_orders_allowed", True
+            ),
+            "market_orders_allowed",
         ),
         (
             lambda config: config["live"].__setitem__(
@@ -378,6 +392,30 @@ def test_gpu_candidate_hash_uses_exact_significant_digit_quantization():
     assert _canonical_vector_hash([0.1234], bounds, 3) == _canonical_vector_hash(
         [0.12349], bounds, 3
     )
+
+
+def test_proxy_parameters_include_canonical_pinned_ema_values():
+    from optimization.bounds import Bound
+
+    mapped = {
+        "base_qty_pct": (0, Bound(0.25, 0.25, None)),
+        "offset": (1, Bound(0.0, 1.0, None)),
+    }
+    active = [("offset", 1, mapped["offset"][1])]
+
+    parameters = _build_proxy_parameter_dicts(
+        [0.25, 0.5], mapped, active, np.array([[0.75]])
+    )
+
+    assert parameters == [{"base_qty_pct": 0.25, "offset": 0.75}]
+
+
+def test_constraint_classification_drift_detects_feasibility_disagreement():
+    assert _constraint_classification_mismatch(0.0, {"G": np.array([0.1])})
+    assert _constraint_classification_mismatch(0.1, {"G": np.array([-1.0])})
+    assert not _constraint_classification_mismatch(0.0, {"G": np.array([-1.0])})
+    assert not _constraint_classification_mismatch(0.1, {"G": np.array([0.1])})
+    assert not _constraint_classification_mismatch(0.1, {})
 
 
 def test_resume_recovers_hashes_for_results_ahead_of_checkpoint():

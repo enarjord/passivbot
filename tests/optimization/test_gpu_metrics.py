@@ -5,7 +5,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from optimization.gpu.metrics import _sharpe_sortino, _smoothed_adg, compute_objectives
+from optimization.gpu.metrics import (
+    _masked_median,
+    _sharpe_sortino,
+    _smoothed_adg,
+    _weighted_adg,
+    compute_objectives,
+)
 
 
 def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
@@ -17,6 +23,20 @@ def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
 
     assert sharpe.item() == 0.0
     assert sortino.item() == 0.0
+
+
+def test_empty_median_return_series_matches_rust_zero_contract():
+    values = torch.empty((1, 0), dtype=torch.float64)
+    mask = torch.empty((1, 0), dtype=torch.bool)
+
+    assert _masked_median(values, mask).item() == 0.0
+
+
+def test_weighted_adg_keeps_short_active_subsets_nonempty():
+    day_eq = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
+    active = torch.tensor([[True, True]])
+
+    assert _weighted_adg(day_eq, active).item() == pytest.approx(0.0)
 
 
 def test_objectives_include_final_active_calendar_day():
