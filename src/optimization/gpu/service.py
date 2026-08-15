@@ -50,7 +50,7 @@ def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None
 
 
 class MpsEmaAnchorProxy:
-    """Batched single-coin, long-only EMA-anchor screening proxy."""
+    """Batched single-coin directional EMA-anchor screening proxy."""
 
     def __init__(
         self,
@@ -121,28 +121,34 @@ class MpsEmaAnchorProxy:
 
         long_bot = payload.bot_params_list[0]["long"]
         short_bot = payload.bot_params_list[0]["short"]
-        if not _side_enabled(long_bot) or _side_enabled(short_bot):
-            raise ValueError(
-                "GPU foundation currently supports long-only configs; "
-                "enable long and disable short"
+        self.enabled = {
+            "long": _side_enabled(long_bot),
+            "short": _side_enabled(short_bot),
+        }
+        if not any(self.enabled.values()):
+            raise ValueError("GPU foundation requires at least one enabled side")
+        self.base_params = {}
+        for side, bot in (("long", long_bot), ("short", short_bot)):
+            if self.enabled[side] and bool(bot.get("unstuck_enabled")):
+                raise ValueError(
+                    f"GPU foundation requires bot.{side}.unstuck.enabled=false"
+                )
+            if self.enabled[side] and bool(bot.get("hsl_enabled")):
+                raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
+            strategy = dict(payload.strategy_params_list[0][side])
+            risk = config["bot"][side]["risk"]
+            strategy["entry_cooldown_minutes"] = float(
+                risk.get("entry_cooldown_minutes", 0.0) or 0.0
             )
-        if bool(long_bot.get("unstuck_enabled")):
-            raise ValueError("GPU foundation requires bot.long.unstuck.enabled=false")
-        if bool(long_bot.get("hsl_enabled")):
-            raise ValueError("GPU foundation requires bot.long.hsl.enabled=false")
-
-        strategy = dict(payload.strategy_params_list[0]["long"])
-        risk = config["bot"]["long"]["risk"]
-        strategy["entry_cooldown_minutes"] = float(
-            risk.get("entry_cooldown_minutes", 0.0) or 0.0
-        )
-        strategy["total_wallet_exposure_limit"] = float(
-            risk["total_wallet_exposure_limit"]
-        )
-        missing = [key for key in EMA_ANCHOR_PARAM_KEYS if key not in strategy]
-        if missing:
-            raise ValueError(f"GPU EMA payload is missing parameters: {missing}")
-        self.base_params = strategy
+            strategy["total_wallet_exposure_limit"] = float(
+                risk["total_wallet_exposure_limit"]
+            )
+            missing = [key for key in EMA_ANCHOR_PARAM_KEYS if key not in strategy]
+            if missing:
+                raise ValueError(
+                    f"GPU EMA payload for {side} is missing parameters: {missing}"
+                )
+            self.base_params[side] = strategy
 
         market_params = payload.exchange_params[0]
         self.market = ProxyMarket(
@@ -185,14 +191,26 @@ class MpsEmaAnchorProxy:
             self.market,
             self.run,
             self.data,
+            long_enabled=self.enabled["long"],
+            short_enabled=self.enabled["short"],
+            hedge_mode=bool(backtest_params["hedge_mode"]),
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
         rows = []
         for candidate in candidates:
-            merged = dict(self.base_params)
-            merged.update(candidate)
-            rows.append([float(merged[key]) for key in EMA_ANCHOR_PARAM_KEYS])
+            row = []
+            for side in ("long", "short"):
+                merged = dict(self.base_params[side])
+                merged.update(
+                    {
+                        key.removeprefix(f"{side}_"): value
+                        for key, value in candidate.items()
+                        if key.startswith(f"{side}_")
+                    }
+                )
+                row.extend(float(merged[key]) for key in EMA_ANCHOR_PARAM_KEYS)
+            rows.append(row)
         return np.asarray(rows, dtype=np.float64)
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:

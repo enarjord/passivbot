@@ -101,8 +101,9 @@ The first supported slice is intentionally narrow:
 
 - Apple Silicon with `torch.backends.mps.is_available()`
 - one exchange and one coin, using one-minute candles
-- `strategy_kind: ema_anchor`, long-only
-- `bot.long.risk.n_positions` pinned to `1`
+- `strategy_kind: ema_anchor`, with long-only, short-only, or long+short enabled
+- each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
+- hedge mode and one-way mode; one-way flat-side arbitration matches the Rust EMA-band rule
 - suite mode disabled
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
@@ -111,9 +112,8 @@ The first supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Short-only, long+short,
-trailing-martingale, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not
-silently approximated by this foundation release.
+Unsupported combinations fail before optimization begins. Trailing-martingale, multi-coin, suites,
+HSL, auto-unstuck, and forager-dependent selection are not silently approximated by this release.
 
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
@@ -127,7 +127,8 @@ The backend is hybrid rather than a replacement backtester:
 
 1. pymoo NSGA-II proposes large normalized candidate batches.
 2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
-   MPS; Python only prepares buffers and dispatches the program.
+   MPS; Python only prepares buffers and dispatches the program. Directional runs use separate
+   long/short EMA and position state with one shared balance and the exact Rust fill ordering.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. A rolling Spearman rank gate independently stops the run if broad proxy/exact probe agreement
