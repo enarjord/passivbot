@@ -25,7 +25,9 @@ from optimization.backends.gpu_backend import (
     _single_scenario_metric_surface,
     _select_novel_validations,
     _select_validation_indices,
+    _validate_directional_search_space,
     _validate_pinned_scope_bounds,
+    _validate_seed_side_match,
     _validate_scope,
 )
 
@@ -50,6 +52,26 @@ def _long_only_ema_config():
     config["bot"]["long"]["risk"]["total_exposure_entry_gate_enabled"] = True
     config["bot"]["long"]["risk"]["we_excess_allowance_pct"] = 0.0
     config["backtest"]["suite_enabled"] = False
+    return config
+
+
+def _directional_ema_config(*, long_enabled: bool, short_enabled: bool):
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"] = {
+        "long": ["BTC"] if long_enabled else [],
+        "short": ["BTC"] if short_enabled else [],
+    }
+    for side, enabled in (("long", long_enabled), ("short", short_enabled)):
+        config["bot"][side]["risk"]["total_wallet_exposure_limit"] = (
+            1.0 if enabled else 0.0
+        )
+        config["bot"][side]["risk"]["n_positions"] = 1 if enabled else 0
+        config["bot"][side]["hsl"]["enabled"] = False
+        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["position_exposure_enforcer_enabled"] = False
+        config["bot"][side]["risk"]["total_exposure_enforcer_enabled"] = False
+        config["bot"][side]["risk"]["total_exposure_entry_gate_enabled"] = True
+        config["bot"][side]["risk"]["we_excess_allowance_pct"] = 0.0
     return config
 
 
@@ -273,6 +295,35 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_gpu_foundation_accepts_each_directional_ema_mode(
+    long_enabled, short_enabled
+):
+    config = _directional_ema_config(
+        long_enabled=long_enabled, short_enabled=short_enabled
+    )
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_checks_unsupported_behavior_on_short_side():
+    config = _directional_ema_config(long_enabled=False, short_enabled=True)
+    config["bot"]["short"]["unstuck"]["enabled"] = True
+
+    with pytest.raises(ValueError, match=r"bot\.short\.unstuck"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_foundation_rejects_both_sides_disabled():
+    config = _directional_ema_config(long_enabled=False, short_enabled=False)
+
+    with pytest.raises(ValueError, match="at least one enabled side"):
+        _validate_scope(config, _Evaluator())
 
 
 def test_gpu_foundation_honors_approved_coins_when_disabled_side_risk_is_nonzero():
@@ -507,6 +558,25 @@ def test_proxy_parameters_include_canonical_pinned_ema_values():
     assert parameters == [{"base_qty_pct": 0.25, "offset": 0.75}]
 
 
+def test_proxy_parameters_keep_directional_names_distinct():
+    from optimization.bounds import Bound
+
+    mapped = {
+        "long_offset": (0, Bound(0.0, 1.0, None)),
+        "short_offset": (1, Bound(0.0, 1.0, None)),
+    }
+    active = [
+        ("long_offset", 0, mapped["long_offset"][1]),
+        ("short_offset", 1, mapped["short_offset"][1]),
+    ]
+
+    parameters = _build_proxy_parameter_dicts(
+        [0.25, 0.5], mapped, active, np.array([[0.75, 0.125]])
+    )
+
+    assert parameters == [{"long_offset": 0.75, "short_offset": 0.125}]
+
+
 def test_gpu_rejects_pinned_unsupported_risk_behavior():
     from optimization.bounds import Bound
 
@@ -521,6 +591,64 @@ def test_gpu_rejects_pinned_unsupported_risk_behavior():
             {"long_risk_total_exposure_enforcer_threshold": Bound(0.8, 0.8, None)},
             {"long_risk_total_exposure_enforcer_threshold": 0.8},
         )
+
+
+def test_gpu_directional_search_space_keeps_side_enablement_fixed():
+    from optimization.bounds import Bound
+
+    approved = {"long": ["BTC"], "short": []}
+    base = {
+        "long_total_wallet_exposure_limit": 1.0,
+        "long_n_positions": 1.0,
+        "short_total_wallet_exposure_limit": 0.0,
+        "short_n_positions": 0.0,
+    }
+    bounds = {
+        "long_total_wallet_exposure_limit": Bound(0.5, 1.5, None),
+        "long_n_positions": Bound(1.0, 1.0, None),
+        "short_total_wallet_exposure_limit": Bound(0.0, 2.0, None),
+        "short_n_positions": Bound(0.0, 1.0, None),
+    }
+
+    _validate_directional_search_space(bounds, base, approved, {"long"})
+
+    bounds["long_total_wallet_exposure_limit"] = Bound(0.0, 1.5, None)
+    with pytest.raises(ValueError, match="remain positive"):
+        _validate_directional_search_space(bounds, base, approved, {"long"})
+
+    bounds["long_total_wallet_exposure_limit"] = Bound(0.5, 1.5, None)
+    bounds["long_n_positions"] = Bound(1.0, 2.0, None)
+    with pytest.raises(ValueError, match="pinned at 1"):
+        _validate_directional_search_space(bounds, base, approved, {"long"})
+
+
+def test_gpu_directional_search_space_rejects_disabled_approved_side_activation():
+    from optimization.bounds import Bound
+
+    bounds = {
+        "long_total_wallet_exposure_limit": Bound(0.5, 1.5, None),
+        "long_n_positions": Bound(1.0, 1.0, None),
+        "short_total_wallet_exposure_limit": Bound(0.0, 1.5, None),
+        "short_n_positions": Bound(0.0, 1.0, None),
+    }
+
+    with pytest.raises(ValueError, match="short enabledness"):
+        _validate_directional_search_space(
+            bounds,
+            {},
+            {"long": ["BTC"], "short": ["BTC"]},
+            {"long"},
+        )
+
+
+def test_gpu_rejects_optimizer_bounds_that_change_config_side_enablement():
+    _validate_seed_side_match({"long"}, {"long"})
+
+    with pytest.raises(ValueError, match="activate or disable"):
+        _validate_seed_side_match({"long"}, {"long", "short"})
+
+    with pytest.raises(ValueError, match="activate or disable"):
+        _validate_seed_side_match({"long", "short"}, {"long"})
 
 
 def test_constraint_classification_drift_detects_feasibility_disagreement():

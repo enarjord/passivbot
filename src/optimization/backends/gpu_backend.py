@@ -18,6 +18,7 @@ import numpy as np
 from optimization.backend_shared import load_starting_individuals
 from optimization.bounds import enforce_bounds
 from optimization.callback import build_pymoo_record_entry
+from optimization.gpu.model import gpu_side_enabled
 from optimization.problem import (
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
@@ -43,19 +44,25 @@ MIN_DRIFT_PROBES = 8
 
 MAX_NOVELTY_STALL_GENERATIONS = 8
 
+_EMA_SIDE_BOUND_SUFFIXES = {
+    "base_qty_pct": "base_qty_pct",
+    "ema_span_0": "ema_span_0",
+    "ema_span_1": "ema_span_1",
+    "entry_double_down_factor": "entry_double_down_factor",
+    "offset": "offset",
+    "offset_psize_weight": "offset_psize_weight",
+    "offset_volatility_1h_weight": "offset_volatility_1h_weight",
+    "offset_volatility_1m_weight": "offset_volatility_1m_weight",
+    "offset_volatility_ema_span_1h": "offset_volatility_ema_span_1h",
+    "offset_volatility_ema_span_1m": "offset_volatility_ema_span_1m",
+    "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "total_wallet_exposure_limit": "total_wallet_exposure_limit",
+}
+
 EMA_BOUND_MAP = {
-    "long_base_qty_pct": "base_qty_pct",
-    "long_ema_span_0": "ema_span_0",
-    "long_ema_span_1": "ema_span_1",
-    "long_entry_double_down_factor": "entry_double_down_factor",
-    "long_offset": "offset",
-    "long_offset_psize_weight": "offset_psize_weight",
-    "long_offset_volatility_1h_weight": "offset_volatility_1h_weight",
-    "long_offset_volatility_1m_weight": "offset_volatility_1m_weight",
-    "long_offset_volatility_ema_span_1h": "offset_volatility_ema_span_1h",
-    "long_offset_volatility_ema_span_1m": "offset_volatility_ema_span_1m",
-    "long_risk_entry_cooldown_minutes": "entry_cooldown_minutes",
-    "long_total_wallet_exposure_limit": "total_wallet_exposure_limit",
+    f"{side}_{bound_suffix}": f"{side}_{parameter}"
+    for side in ("long", "short")
+    for bound_suffix, parameter in _EMA_SIDE_BOUND_SUFFIXES.items()
 }
 
 
@@ -87,13 +94,17 @@ def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     )
 
 PINNED_SCOPE_BOUND_VALUES = {
-    "long_hsl_enabled": 0.0,
-    "long_unstuck_enabled": 0.0,
-    "long_risk_position_exposure_enforcer_enabled": 0.0,
-    "long_risk_total_exposure_enforcer_enabled": 0.0,
-    "long_risk_total_exposure_entry_gate_enabled": 1.0,
-    "long_risk_total_exposure_enforcer_threshold": 1.0,
-    "long_risk_we_excess_allowance_pct": 0.0,
+    f"{side}_{suffix}": expected
+    for side in ("long", "short")
+    for suffix, expected in {
+        "hsl_enabled": 0.0,
+        "unstuck_enabled": 0.0,
+        "risk_position_exposure_enforcer_enabled": 0.0,
+        "risk_total_exposure_enforcer_enabled": 0.0,
+        "risk_total_exposure_entry_gate_enabled": 1.0,
+        "risk_total_exposure_enforcer_threshold": 1.0,
+        "risk_we_excess_allowance_pct": 0.0,
+    }.items()
 }
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
@@ -231,18 +242,6 @@ def _resolve_options(config: dict) -> dict:
     return options
 
 
-def _gpu_side_enabled(config: dict, side: str) -> bool:
-    risk = config.get("bot", {}).get(side, {}).get("risk", {})
-    total_exposure = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
-    n_positions = int(round(float(risk.get("n_positions", 0) or 0)))
-    if total_exposure <= 0.0 or n_positions <= 0:
-        return False
-    approved = config.get("live", {}).get("approved_coins", {})
-    if isinstance(approved, dict):
-        return bool(approved.get(side, []))
-    return True
-
-
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
@@ -294,35 +293,31 @@ def _validate_scope(config: dict, evaluator) -> str:
             "GPU foundation supports strategy_kind=ema_anchor only; "
             f"got {strategy_kind!r}"
         )
-    if not _gpu_side_enabled(config, "long") or _gpu_side_enabled(config, "short"):
-        raise ValueError(
-            "GPU foundation supports long-only configs; enable long and disable short"
-        )
-    long_config = config["bot"]["long"]
-    if bool(long_config.get("hsl", {}).get("enabled")):
-        raise ValueError("GPU foundation requires bot.long.hsl.enabled=false")
-    if bool(long_config.get("unstuck", {}).get("enabled")):
-        raise ValueError("GPU foundation requires bot.long.unstuck.enabled=false")
-    risk = long_config.get("risk", {})
-    if bool(risk.get("position_exposure_enforcer_enabled")):
-        raise ValueError(
-            "GPU foundation requires "
-            "bot.long.risk.position_exposure_enforcer_enabled=false"
-        )
-    if bool(risk.get("total_exposure_enforcer_enabled")):
-        raise ValueError(
-            "GPU foundation requires "
-            "bot.long.risk.total_exposure_enforcer_enabled=false"
-        )
-    if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
-        raise ValueError(
-            "GPU foundation requires bot.long.risk.we_excess_allowance_pct=0.0"
-        )
-    if not bool(risk.get("total_exposure_entry_gate_enabled", True)):
-        raise ValueError(
-            "GPU foundation requires "
-            "bot.long.risk.total_exposure_entry_gate_enabled=true"
-        )
+    enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
+    if not enabled_sides:
+        raise ValueError("GPU foundation requires at least one enabled side")
+    for side in enabled_sides:
+        side_config = config["bot"][side]
+        if bool(side_config.get("hsl", {}).get("enabled")):
+            raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
+        if bool(side_config.get("unstuck", {}).get("enabled")):
+            raise ValueError(
+                f"GPU foundation requires bot.{side}.unstuck.enabled=false"
+            )
+        risk = side_config.get("risk", {})
+        for key, expected in (
+            ("position_exposure_enforcer_enabled", False),
+            ("total_exposure_enforcer_enabled", False),
+            ("total_exposure_entry_gate_enabled", True),
+        ):
+            if bool(risk.get(key, expected)) != expected:
+                raise ValueError(
+                    f"GPU foundation requires bot.{side}.risk.{key}={str(expected).lower()}"
+                )
+        if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
+            raise ValueError(
+                f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
+            )
     return exchange
 
 
@@ -675,8 +670,11 @@ def _build_proxy_parameter_dicts(base_vector, mapped, active, active_values) -> 
     return result
 
 
-def _validate_pinned_scope_bounds(bound_by_key, base_by_key) -> None:
+def _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides=None) -> None:
+    enabled_sides = set(enabled_sides or ("long", "short"))
     for key, expected in PINNED_SCOPE_BOUND_VALUES.items():
+        if key.split("_", 1)[0] not in enabled_sides:
+            continue
         bound = bound_by_key.get(key)
         values = (
             (float(bound.low), float(bound.high))
@@ -688,6 +686,65 @@ def _validate_pinned_scope_bounds(bound_by_key, base_by_key) -> None:
                 "GPU foundation requires "
                 f"{key} to remain pinned at {expected}; got bounds {values}"
             )
+
+
+def _validate_directional_search_space(
+    bound_by_key, base_by_key, approved, enabled_sides
+) -> None:
+    """Keep candidate-side eligibility identical to the proxy runner's flags."""
+
+    enabled_sides = set(enabled_sides)
+
+    def side_approved(side: str) -> bool:
+        return bool(approved.get(side, [])) if isinstance(approved, dict) else True
+
+    def bound_edge(key: str, edge: str) -> float:
+        bound = bound_by_key.get(key)
+        return (
+            float(getattr(bound, edge))
+            if bound is not None
+            else float(base_by_key.get(key, 0.0))
+        )
+
+    for side in ("long", "short"):
+        can_activate = (
+            side_approved(side)
+            and bound_edge(f"{side}_total_wallet_exposure_limit", "high") > 0.0
+            and bound_edge(f"{side}_n_positions", "high") > 0.0
+        )
+        if can_activate != (side in enabled_sides):
+            raise ValueError(
+                f"GPU foundation requires {side} enabledness to remain fixed across "
+                "the full search space; pin exposure/positions or approved coins"
+            )
+        if side not in enabled_sides:
+            continue
+        if bound_edge(f"{side}_total_wallet_exposure_limit", "low") <= 0.0:
+            raise ValueError(
+                f"GPU foundation requires {side} total_wallet_exposure_limit "
+                "to remain positive across the full search space"
+            )
+        n_positions = (
+            bound_edge(f"{side}_n_positions", "low"),
+            bound_edge(f"{side}_n_positions", "high"),
+        )
+        if n_positions != (1.0, 1.0):
+            raise ValueError(
+                f"GPU foundation requires {side}_n_positions pinned at 1; "
+                f"got bounds {n_positions}"
+            )
+
+
+def _validate_seed_side_match(config_enabled_sides, seed_enabled_sides) -> None:
+    config_enabled_sides = set(config_enabled_sides)
+    seed_enabled_sides = set(seed_enabled_sides)
+    if config_enabled_sides != seed_enabled_sides:
+        raise ValueError(
+            "GPU foundation does not allow optimizer bounds to activate or disable "
+            "a side relative to the input config; "
+            f"config={sorted(config_enabled_sides)}, "
+            f"bounds_clamped_seed={sorted(seed_enabled_sides)}"
+        )
 
 
 def _constraint_classification_mismatch(proxy_violation: float, exact_payload: dict) -> bool:
@@ -823,89 +880,18 @@ def run_backend(
         )
     base_vector = [float(value) for value in template_vectors[0]]
 
-    mapped = {
+    mapped_all = {
         EMA_BOUND_MAP[bound_key]: (index, bounds[index])
         for index, (bound_key, _path) in enumerate(key_paths)
         if bound_key in EMA_BOUND_MAP
     }
-    missing = sorted(set(EMA_BOUND_MAP.values()) - set(mapped))
+    missing = sorted(set(EMA_BOUND_MAP.values()) - set(mapped_all))
     if missing:
         raise ValueError(f"GPU backend could not locate EMA bounds for {missing}")
-    active = [
-        (name, index, bound)
-        for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
-        if bound.high > bound.low
-    ]
-    if not active:
-        raise ValueError("GPU backend found no free EMA-anchor dimensions")
-
-    bound_by_key = {
-        bound_key: bounds[index] for index, (bound_key, _path) in enumerate(key_paths)
-    }
-    base_by_key = {
-        bound_key: float(base_vector[index])
-        for index, (bound_key, _path) in enumerate(key_paths)
-    }
-    _validate_pinned_scope_bounds(bound_by_key, base_by_key)
     approved = config.get("live", {}).get("approved_coins", {})
 
     def side_approved(side: str) -> bool:
         return bool(approved.get(side, [])) if isinstance(approved, dict) else True
-
-    def maximum_bound_value(key: str) -> float:
-        bound = bound_by_key.get(key)
-        return (
-            float(bound.high) if bound is not None else float(base_by_key.get(key, 0.0))
-        )
-
-    short_can_activate = (
-        side_approved("short")
-        and maximum_bound_value("short_total_wallet_exposure_limit") > 0.0
-        and maximum_bound_value("short_n_positions") > 0.0
-    )
-    if short_can_activate:
-        raise ValueError(
-            "GPU foundation requires short to remain disabled across the full search space; "
-            "clear live.approved_coins.short or pin short exposure/positions off"
-        )
-
-    long_n_positions_bound = bound_by_key.get("long_n_positions")
-    if long_n_positions_bound is None:
-        long_n_positions_values = (
-            base_by_key.get("long_n_positions", 0.0),
-            base_by_key.get("long_n_positions", 0.0),
-        )
-    else:
-        long_n_positions_values = (
-            float(long_n_positions_bound.low),
-            float(long_n_positions_bound.high),
-        )
-    if long_n_positions_values != (1.0, 1.0):
-        raise ValueError(
-            "GPU foundation requires long_n_positions to remain pinned at 1; "
-            f"got bounds {long_n_positions_values}"
-        )
-
-    for index, (bound_key, _path) in enumerate(key_paths):
-        if bounds[index].high <= bounds[index].low:
-            continue
-        if bound_key.startswith("short_"):
-            continue
-        if bound_key.startswith("long_forager_"):
-            # Forager ranking cannot affect a one-coin backtest.
-            continue
-        if bound_key.startswith("long_hsl_") or bound_key.startswith("long_unstuck_"):
-            # The enabling flags are not optimizer bounds. Scope validation
-            # requires both features off, so these dormant values cannot affect
-            # either the exact Rust backtest or the proxy.
-            continue
-        if bound_key == "long_n_positions":
-            continue
-        if bound_key not in EMA_BOUND_MAP:
-            raise ValueError(
-                "GPU foundation cannot optimize active bound "
-                f"{bound_key!r}; pin it or use the CPU optimizer"
-            )
 
     side_values = {}
     for index, (bound_key, _path) in enumerate(key_paths):
@@ -924,14 +910,67 @@ def run_backend(
             and side_values.get(f"{side}_n_positions", 0.0) > 0.0
         )
 
-    vector_long = vector_side_enabled("long")
-    vector_short = vector_side_enabled("short")
-    if not vector_long or vector_short:
+    enabled_sides = {side for side in ("long", "short") if vector_side_enabled(side)}
+    config_enabled_sides = {
+        side for side in ("long", "short") if gpu_side_enabled(config, side)
+    }
+    _validate_seed_side_match(config_enabled_sides, enabled_sides)
+    if not enabled_sides:
         raise ValueError(
-            "GPU bounds would make exact validation disagree with the long-only proxy; "
-            "pin long exposure/positions on and short exposure/positions off "
-            f"(effective seed values: {side_values})"
+            "GPU bounds would disable both sides for exact validation; "
+            f"effective seed values: {side_values}"
         )
+    mapped = {
+        name: value
+        for name, value in mapped_all.items()
+        if name.split("_", 1)[0] in enabled_sides
+    }
+    active = [
+        (name, index, bound)
+        for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
+        if bound.high > bound.low
+    ]
+    if not active:
+        raise ValueError("GPU backend found no free EMA-anchor dimensions")
+
+    bound_by_key = {
+        bound_key: bounds[index] for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    base_by_key = {
+        bound_key: float(base_vector[index])
+        for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
+
+    _validate_directional_search_space(
+        bound_by_key, base_by_key, approved, enabled_sides
+    )
+
+    for index, (bound_key, _path) in enumerate(key_paths):
+        if bounds[index].high <= bounds[index].low:
+            continue
+        side = bound_key.split("_", 1)[0]
+        if side in {"long", "short"} and side not in enabled_sides:
+            continue
+        if any(bound_key.startswith(f"{side}_forager_") for side in enabled_sides):
+            # Forager ranking cannot affect a one-coin backtest.
+            continue
+        if any(
+            bound_key.startswith(f"{side}_hsl_")
+            or bound_key.startswith(f"{side}_unstuck_")
+            for side in enabled_sides
+        ):
+            # The enabling flags are not optimizer bounds. Scope validation
+            # requires both features off, so these dormant values cannot affect
+            # either the exact Rust backtest or the proxy.
+            continue
+        if bound_key in {f"{side}_n_positions" for side in enabled_sides}:
+            continue
+        if bound_key not in EMA_BOUND_MAP:
+            raise ValueError(
+                "GPU foundation cannot optimize active bound "
+                f"{bound_key!r}; pin it or use the CPU optimizer"
+            )
 
     specs = extract_objective_specs(config)
     metric_names = [canonicalize_metric_name(spec.metric) for spec in specs]

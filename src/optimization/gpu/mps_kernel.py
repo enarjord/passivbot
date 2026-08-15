@@ -15,7 +15,7 @@ from optimization.gpu.model import (
 
 
 MPS_DAILY_COLS = 5
-MPS_SCALAR_COLS = 15
+MPS_SCALAR_COLS = 18
 
 
 @lru_cache(maxsize=1)
@@ -35,9 +35,18 @@ class MpsEmaAnchorRunner:
         market: ProxyMarket,
         run: ProxyRun,
         data: dict,
+        *,
+        long_enabled: bool = True,
+        short_enabled: bool = False,
+        hedge_mode: bool = True,
     ):
         self.market = market
         self.run_config = run
+        self.long_enabled = bool(long_enabled)
+        self.short_enabled = bool(short_enabled)
+        self.hedge_mode = bool(hedge_mode)
+        if not self.long_enabled and not self.short_enabled:
+            raise ValueError("MPS EMA proxy requires at least one enabled side")
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
         self.bars = (
@@ -79,6 +88,9 @@ class MpsEmaAnchorRunner:
                 run.starting_balance,
                 liq_floor,
                 run.interval_ms,
+                float(self.long_enabled),
+                float(self.short_enabled),
+                float(self.hedge_mode),
             ],
             dtype=torch.float32,
             device="mps",
@@ -88,10 +100,11 @@ class MpsEmaAnchorRunner:
         self.last_profile: dict[str, float] = {}
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
-        if params.ndim != 2 or params.shape[1] != len(EMA_ANCHOR_PARAM_KEYS):
+        expected = len(EMA_ANCHOR_PARAM_KEYS) * 2
+        if params.ndim != 2 or params.shape[1] != expected:
             got = params.shape[1] if params.ndim == 2 else params.shape
             raise ValueError(
-                f"expected EMA parameter matrix with {len(EMA_ANCHOR_PARAM_KEYS)} columns, got {got}"
+                f"expected directional EMA parameter matrix with {expected} columns, got {got}"
             )
         return np.ascontiguousarray(params, dtype=np.float32)
 
@@ -205,4 +218,6 @@ class MpsEmaAnchorRunner:
             "psize": scalars[:, 11],
             "pprice": scalars[:, 12],
             "alive": scalars[:, 13] > 0.0,
+            "short_psize": scalars[:, 15],
+            "short_pprice": scalars[:, 16],
         }

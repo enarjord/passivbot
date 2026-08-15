@@ -51,8 +51,11 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SCALAR_COLS = 15" in source
-    assert "psize * price_now * c_mult / balance" in source
+    assert "constant int SCALAR_COLS = 18" in source
+    assert "side.psize * price_now * c_mult / balance" in source
+    assert "short_side.psize * c_mult * (short_side.pprice - close)" in source
+    assert "long_close_fill || long_entry_fill" in source
+    assert "short_close_fill || short_entry_fill" in source
     assert "fabs(adj) * cp * c_mult /" not in source
     assert "fabs(eq) * ep * c_mult /" not in source
     assert "fabs(adj) * cp / balance" in source
@@ -61,11 +64,11 @@ def test_mps_ema_anchor_shader_smoke():
     assert "rint(value / step)" not in source
     assert "int(ceil(price_now / price_step - 1.0e-6f))" in source
     assert "int(floor(price_now / price_step + 1.0e-6f))" in source
-    assert "float dd = fmax((run_peak - eqf)" in source
+    assert "(run_peak - eqf) / fmax(fabs(run_peak)" in source
     assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
     assert "if (current_cost_we >= cap" in source
     assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
-        "float dd = fmax((run_peak - eqf)"
+        "(run_peak - eqf) / fmax(fabs(run_peak)"
     )
 
     count = 512
@@ -109,7 +112,7 @@ def test_mps_ema_anchor_shader_smoke():
         0.0,
         1.0,
     ]
-    parameters = np.array([row, row], dtype=np.float64)
+    parameters = np.array([row + row, row + row], dtype=np.float64)
 
     output = MpsEmaAnchorRunner(market, run, data).run(parameters)
     torch.mps.synchronize()
@@ -150,8 +153,9 @@ def test_mps_volume_uses_raw_non_positive_post_fill_balance():
         last_valid_idx=count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
     parameters = np.array(
-        [[1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]],
+        [row + row],
         dtype=np.float64,
     )
 
@@ -160,3 +164,84 @@ def test_mps_volume_uses_raw_non_positive_post_fill_balance():
 
     assert output["day_has_fill"].sum().item() > 0
     assert output["day_volume"].sum().item() < 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(
+        qty_step=0.001,
+        price_step=0.01,
+        min_qty=0.001,
+        min_cost=5.0,
+        c_mult=1.0,
+        maker_fee=0.0002,
+    )
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        requested_start_ts_ms=int(timestamps[0]),
+        guard_ts_ms=int(timestamps[0]),
+        first_ts_ms=int(timestamps[0]),
+        interval_ms=60_000,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+
+    output = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=hedge_mode,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() > 0.0
+    assert (output["short_psize"].item() > 0.0) is hedge_mode
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_short_only_opens_short_position():
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 100.0])
+    low = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+
+    output = MpsEmaAnchorRunner(
+        market, run, data, long_enabled=False, short_enabled=True
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() == 0.0
+    assert output["short_psize"].item() > 0.0
