@@ -136,9 +136,11 @@ The backend is hybrid rather than a replacement backtester:
    trailing, and position state with one shared balance and the exact Rust fill ordering.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
-5. A rolling Spearman rank gate independently stops the run if broad proxy/exact probe agreement
-   falls below `drift_halt` after sufficient evidence, even when aggregate agreement remains high.
-   Any proxy/exact disagreement about optimizer-limit feasibility also stops immediately.
+5. Rolling rank and constraint-agreement gates independently stop the run if broad proxy/exact
+   probe agreement falls below `drift_halt` after sufficient evidence, even when aggregate
+   agreement remains high. A feasibility disagreement on a proxy-front candidate still stops
+   immediately; broad-probe disagreements are retained as rolling evidence because those probes
+   deliberately sample regions where the float32 screening path may be less representative.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
@@ -175,11 +177,13 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `drift_probes` reserves part of that validation budget for candidates away from the proxy front.
   A generation fails closed if its complete feasible proxy front leaves too few independent
   off-front candidates for the requested probe count.
-- `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank-safety gate. At
-  least eight broad probes are required before low correlation can halt a run, so `drift_window`
-  must be large enough to retain eight probes at the configured
-  `validate_per_generation / drift_probes` ratio. When probes are enabled, `optimize.iters` must
-  also be large enough to reach both that probe budget and `drift_min_samples`.
+- `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
+  limit classification safety gates. Broad-probe Spearman correlation and constraint agreement
+  must each remain at or above `drift_halt`. At least eight broad probes are required before low
+  agreement can halt a run, so `drift_window` must be large enough to retain eight probes at the
+  configured `validate_per_generation / drift_probes` ratio. When probes are enabled,
+  `optimize.iters` must also be large enough to reach both that probe budget and
+  `drift_min_samples`.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact

@@ -100,13 +100,13 @@ inline void update_indicators(
     thread TmSide& s, float close, float lr, float hour_lr, bool valid, bool hour_valid
 ) {
     if (hour_valid && s.alpha1h > 0.0f)
-        s.vol1h = s.alpha1h * hour_lr + (1.0f - s.alpha1h) * s.vol1h;
+        s.vol1h = fma(s.alpha1h, hour_lr - s.vol1h, s.vol1h);
     if (valid) {
-        s.ema0 = s.alpha0 * close + (1.0f - s.alpha0) * s.ema0;
-        s.ema1 = s.alpha1 * close + (1.0f - s.alpha1) * s.ema1;
-        s.ema2 = s.alpha2 * close + (1.0f - s.alpha2) * s.ema2;
+        s.ema0 = fma(s.alpha0, close - s.ema0, s.ema0);
+        s.ema1 = fma(s.alpha1, close - s.ema1, s.ema1);
+        s.ema2 = fma(s.alpha2, close - s.ema2, s.ema2);
         if (s.alpha1m > 0.0f)
-            s.vol1m = s.alpha1m * lr + (1.0f - s.alpha1m) * s.vol1m;
+            s.vol1m = fma(s.alpha1m, lr - s.vol1m, s.vol1m);
     }
 }
 

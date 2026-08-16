@@ -15,6 +15,9 @@ from typing import Any
 
 import numpy as np
 
+from config.metrics import resolve_metric_value
+from limit_utils import compute_limit_violation
+from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import load_starting_individuals
 from optimization.bounds import enforce_bounds
 from optimization.callback import build_pymoo_record_entry
@@ -444,10 +447,24 @@ class _DriftMonitor:
         self.window = int(options["drift_window"])
         self.minimum = int(options["drift_min_samples"])
         self.halt = float(options["drift_halt"])
-        self.pairs: deque[tuple[float, float, bool]] = deque(maxlen=self.window)
+        self.pairs: deque[tuple[float, float, bool, bool]] = deque(maxlen=self.window)
 
-    def add(self, proxy_score: float, exact_score: float, *, probe: bool) -> None:
-        self.pairs.append((float(proxy_score), float(exact_score), bool(probe)))
+    def add(
+        self,
+        proxy_score: float,
+        exact_score: float,
+        *,
+        probe: bool,
+        constraint_mismatch: bool = False,
+    ) -> None:
+        self.pairs.append(
+            (
+                float(proxy_score),
+                float(exact_score),
+                bool(probe),
+                bool(constraint_mismatch),
+            )
+        )
 
     def evaluate(self) -> dict:
         result = {
@@ -456,6 +473,8 @@ class _DriftMonitor:
             "front_rho": float("nan"),
             "samples": len(self.pairs),
             "probes": 0,
+            "probe_constraint_agreement": float("nan"),
+            "probe_constraint_mismatches": 0,
             "halt_reason": None,
             "warn_reason": None,
         }
@@ -464,16 +483,34 @@ class _DriftMonitor:
         proxy = np.asarray([row[0] for row in self.pairs], dtype=np.float64)
         exact = np.asarray([row[1] for row in self.pairs], dtype=np.float64)
         probes = np.asarray([row[2] for row in self.pairs], dtype=bool)
+        constraint_mismatches = np.asarray(
+            [row[3] if len(row) > 3 else False for row in self.pairs], dtype=bool
+        )
         result["probes"] = int(probes.sum())
         result["rho"] = _spearman(proxy, exact)
         result["probe_rho"] = _spearman(proxy[probes], exact[probes])
         result["front_rho"] = _spearman(proxy[~probes], exact[~probes])
+        result["probe_constraint_mismatches"] = int(
+            (constraint_mismatches & probes).sum()
+        )
+        if result["probes"]:
+            result["probe_constraint_agreement"] = 1.0 - (
+                result["probe_constraint_mismatches"] / result["probes"]
+            )
         detail = (
             f"rho={result['rho']:.3f}, probe_rho={result['probe_rho']:.3f}, "
             f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
-            f"probes={result['probes']}"
+            f"probes={result['probes']}, "
+            f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}"
         )
         if result["probes"] >= self.MIN_PROBES and (
+            result["probe_constraint_agreement"] < self.halt
+        ):
+            result["halt_reason"] = (
+                "GPU proxy/exact broad-probe constraint agreement fell below "
+                f"safety threshold ({detail})"
+            )
+        elif result["probes"] >= self.MIN_PROBES and (
             not np.isfinite(result["probe_rho"])
             or result["probe_rho"] < self.halt
         ):
@@ -815,6 +852,48 @@ def _constraint_classification_mismatch(proxy_violation: float, exact_payload: d
     return proxy_feasible != exact_feasible
 
 
+def _constraint_diagnostics(evaluator, proxy_metrics: dict, exact_payload: dict) -> list[dict]:
+    """Describe proxy/exact values for every active optimizer limit."""
+
+    proxy_surface = _single_scenario_metric_surface(proxy_metrics)
+    exact_stats = (exact_payload.get("metrics") or {}).get("stats") or {}
+    exact_surface = flatten_metric_stats(exact_stats)
+    diagnostics = []
+    for check in getattr(evaluator, "limit_checks", []):
+        proxy_value = resolve_metric_value(proxy_surface, check["metric_key"])
+        exact_value = resolve_metric_value(exact_surface, check["metric_key"])
+        entry = {
+            "metric": check["metric"],
+            "metric_key": check["metric_key"],
+            "mode": check["mode"],
+            "proxy_value": None if proxy_value is None else float(proxy_value),
+            "exact_value": None if exact_value is None else float(exact_value),
+            "proxy_violation": float(compute_limit_violation(check, proxy_value)),
+            "exact_violation": float(compute_limit_violation(check, exact_value)),
+        }
+        if "bound" in check:
+            entry["bound"] = float(check["bound"])
+        if "range" in check:
+            entry["range"] = [float(value) for value in check["range"]]
+        diagnostics.append(entry)
+    return diagnostics
+
+
+def _format_constraint_diagnostics(diagnostics: list[dict]) -> str:
+    differing = [
+        item
+        for item in diagnostics
+        if (item["proxy_violation"] > 0.0) != (item["exact_violation"] > 0.0)
+    ]
+    selected = differing or diagnostics
+    return "; ".join(
+        f"{item['metric_key']}: proxy={item['proxy_value']} "
+        f"exact={item['exact_value']} mode={item['mode']} "
+        f"bound={item.get('bound', item.get('range'))}"
+        for item in selected
+    )
+
+
 def _recover_durable_validations(
     entries,
     *,
@@ -822,11 +901,11 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> tuple[set[str], list[tuple[float, float, bool]], str | None]:
+) -> tuple[set[str], list[tuple[float, float, bool, bool]], str | None]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
-    drift_pairs: list[tuple[float, float, bool]] = []
+    drift_pairs: list[tuple[float, float, bool, bool]] = []
     mismatch_reason = None
     consumed = 0
     for index, entry in enumerate(entries):
@@ -866,8 +945,8 @@ def _recover_durable_validations(
                 "GPU resume found non-finite proxy/exact safety evidence in "
                 f"durable result {index}"
             )
-        drift_pairs.append((proxy_score, exact_score, probe))
-        if classification_mismatch:
+        drift_pairs.append((proxy_score, exact_score, probe, classification_mismatch))
+        if classification_mismatch and not probe:
             mismatch_reason = (
                 "GPU proxy/exact constraint classification disagreed for a "
                 "durably recorded exact validation"
@@ -1328,7 +1407,14 @@ def run_backend(
             PymooAsyncRecordingRunner._raise_if_pool_workers_exited(pool_workers)
             time.sleep(0.05)
         for result in ready:
-            vector, proxy_score, proxy_violation, is_probe, digest = pending.pop(result)
+            (
+                vector,
+                proxy_score,
+                proxy_violation,
+                proxy_metrics,
+                is_probe,
+                digest,
+            ) = pending.pop(result)
             payload = result.get()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
             exact_score = float(
@@ -1336,6 +1422,9 @@ def run_backend(
             )
             classification_mismatch = _constraint_classification_mismatch(
                 proxy_violation, payload
+            )
+            constraint_diagnostics = _constraint_diagnostics(
+                evaluator, proxy_metrics, payload
             )
             record_exact(
                 vector,
@@ -1346,19 +1435,32 @@ def run_backend(
                     "exact_score": exact_score,
                     "probe": bool(is_probe),
                     "constraint_classification_mismatch": classification_mismatch,
+                    "constraint_diagnostics": constraint_diagnostics,
                 },
             )
             exact_done += 1
             completed_hashes.add(digest)
-            if classification_mismatch:
+            if classification_mismatch and not is_probe:
                 persisted_halt_reason = (
                     "GPU proxy/exact constraint classification disagreed for an exact "
                     f"validation: proxy_violation={proxy_violation}, "
-                    f"exact_G={np.asarray(payload['G']).tolist()}"
+                    f"exact_G={np.asarray(payload['G']).tolist()}; "
+                    f"limits=[{_format_constraint_diagnostics(constraint_diagnostics)}]"
                 )
                 maybe_save_checkpoint(force=True)
                 raise RuntimeError(persisted_halt_reason)
-            drift_monitor.add(proxy_score, exact_score, probe=is_probe)
+            if classification_mismatch:
+                logging.warning(
+                    "GPU broad-probe proxy/exact constraint classification disagreed; "
+                    "recording rolling drift evidence: %s",
+                    _format_constraint_diagnostics(constraint_diagnostics),
+                )
+            drift_monitor.add(
+                proxy_score,
+                exact_score,
+                probe=is_probe,
+                constraint_mismatch=classification_mismatch,
+            )
             status = drift_monitor.evaluate()
             if status["warn_reason"] and status["warn_reason"] != last_warning:
                 logging.warning(status["warn_reason"])
@@ -1433,6 +1535,7 @@ def run_backend(
                     vector,
                     float(proxy_scores[index]),
                     float(proxy_violations[index]),
+                    dict(metric_rows[index]),
                     bool(is_probe),
                     digest,
                 )

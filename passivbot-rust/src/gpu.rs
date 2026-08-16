@@ -28,6 +28,8 @@ mod tests {
         assert!(source.contains("constant int SCALAR_COLS = 18"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
+        assert_eq!(source.matches("= fma(").count(), 5);
+        assert!(!source.contains("alpha0 * close +"));
     }
 
     #[test]
@@ -41,5 +43,7 @@ mod tests {
         assert!(source.contains("min_since_max"));
         assert!(source.contains("if (we_if <= s.twel * 1.01f) return qty"));
         assert!(source.contains("s.twel * balance - cost"));
+        assert_eq!(source.matches("= fma(").count(), 5);
+        assert!(!source.contains("alpha0 * close +"));
     }
 }

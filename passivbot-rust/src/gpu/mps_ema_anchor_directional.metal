@@ -110,15 +110,14 @@ inline void update_indicators(
     bool hour_valid
 ) {
     if (hour_valid && side.alpha1h > 0.0f) {
-        side.vol1h = side.alpha1h * hour_lr + (1.0f - side.alpha1h) * side.vol1h;
+        side.vol1h = fma(side.alpha1h, hour_lr - side.vol1h, side.vol1h);
     }
     if (valid) {
-        side.ema0 = side.alpha0 * close + (1.0f - side.alpha0) * side.ema0;
-        side.ema1 = side.alpha1 * close + (1.0f - side.alpha1) * side.ema1;
-        side.ema2 = side.alpha2 * close + (1.0f - side.alpha2) * side.ema2;
+        side.ema0 = fma(side.alpha0, close - side.ema0, side.ema0);
+        side.ema1 = fma(side.alpha1, close - side.ema1, side.ema1);
+        side.ema2 = fma(side.alpha2, close - side.ema2, side.ema2);
         if (side.alpha1m > 0.0f) {
-            side.vol1m = side.alpha1m * log_range
-                + (1.0f - side.alpha1m) * side.vol1m;
+            side.vol1m = fma(side.alpha1m, log_range - side.vol1m, side.vol1m);
         }
     }
 }
