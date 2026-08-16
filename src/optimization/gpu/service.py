@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import os
 
 import numpy as np
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GPU_STRATEGY_PARAM_KEYS,
+    MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
     build_mps_data,
+    build_mps_multicoin_data,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
 )
@@ -272,3 +276,267 @@ class MpsSingleCoinProxy:
 
 # Compatibility name retained for downstream imports from the EMA foundation PR.
 MpsEmaAnchorProxy = MpsSingleCoinProxy
+
+
+class MpsMulticoinEmaProxy:
+    """Batched long-only multi-coin EMA Anchor screening proxy."""
+
+    def __init__(
+        self,
+        *,
+        config: dict,
+        hlcvs: np.ndarray,
+        mss: dict,
+        btc: np.ndarray,
+        timestamps: np.ndarray,
+        exchange: str,
+        batch_size: int,
+        needed_metrics,
+    ):
+        try:
+            import torch
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise ModuleNotFoundError(
+                "GPU optimization requires the optional 'gpu-mps' dependencies; "
+                "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+            ) from exc
+        if not torch.backends.mps.is_available():
+            raise RuntimeError(
+                "GPU optimization requested but Apple MPS is unavailable in this process"
+            )
+
+        from backtest import build_backtest_payload
+        from optimization.gpu.metrics import compute_objectives
+        from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinLongRunner
+
+        self._torch = torch
+        self._compute_objectives = compute_objectives
+        self.needed_metrics = set(needed_metrics)
+        self.batch_size = max(1, int(batch_size))
+        self.profile_enabled = os.environ.get(
+            "PASSIVBOT_GPU_PROFILE", ""
+        ).strip().lower() in {"1", "true", "yes", "y"}
+
+        values = np.asarray(hlcvs)
+        if values.ndim != 3:
+            raise ValueError(
+                "expected multicoin HLCVs with three dimensions, "
+                f"got {values.shape}"
+            )
+        coin_count = int(values.shape[1])
+        if not (2 <= coin_count <= MPS_MULTICOIN_MAX_COINS):
+            raise ValueError(
+                f"MPS multicoin proxy supports 2..{MPS_MULTICOIN_MAX_COINS} coins; "
+                f"got {coin_count}"
+            )
+        if (
+            str(config.get("live", {}).get("strategy_kind", "")).lower()
+            != "ema_anchor"
+        ):
+            raise ValueError("MPS multicoin proxy currently supports ema_anchor only")
+        if not gpu_side_enabled(config, "long") or gpu_side_enabled(config, "short"):
+            raise ValueError("MPS multicoin proxy currently requires long-only enabledness")
+
+        payload = build_backtest_payload(
+            np.ascontiguousarray(values),
+            mss,
+            copy.deepcopy(config),
+            exchange,
+            np.ascontiguousarray(btc),
+            timestamps,
+            metrics_only=True,
+            skip_btc_analysis=True,
+        )
+        if not (
+            len(payload.bot_params_list)
+            == len(payload.strategy_params_list)
+            == len(payload.exchange_params)
+            == coin_count
+        ):
+            raise ValueError(
+                "MPS multicoin payload length disagrees with prepared coin count: "
+                f"coins={coin_count}, bots={len(payload.bot_params_list)}, "
+                f"strategies={len(payload.strategy_params_list)}, "
+                f"markets={len(payload.exchange_params)}"
+            )
+        backtest_params = payload.backtest_params
+        if int(backtest_params.get("candle_interval_minutes", 1)) != 1:
+            raise ValueError("MPS multicoin proxy currently supports one-minute candles only")
+        if not bool(backtest_params.get("dynamic_wel_by_tradability")):
+            raise ValueError(
+                "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
+            )
+        if (
+            float(backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0)
+            != 0.0
+        ):
+            raise ValueError(
+                "MPS multicoin proxy requires live.forager_score_hysteresis_pct=0"
+            )
+        for last_valid_idx in backtest_params["last_valid_indices"]:
+            _require_complete_valid_tail(int(last_valid_idx), len(values))
+
+        first_bot = payload.bot_params_list[0]["long"]
+        first_strategy = dict(payload.strategy_params_list[0]["long"])
+        if bool(first_bot.get("unstuck_enabled")) or bool(first_bot.get("hsl_enabled")):
+            raise ValueError("MPS multicoin proxy requires long HSL and unstuck disabled")
+        weights = first_bot.get("forager_score_weights", {}) or {}
+        first_strategy.update(
+            {
+                "entry_cooldown_minutes": float(
+                    first_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+                ),
+                "total_wallet_exposure_limit": float(
+                    first_bot["total_wallet_exposure_limit"]
+                ),
+                "forager_volume_ema_span_1m": float(
+                    first_bot.get("filter_volume_ema_span_1m", 0.0) or 0.0
+                ),
+                "forager_volatility_ema_span_1m": float(
+                    first_bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0
+                ),
+                "forager_volume_drop_pct": float(
+                    first_bot.get("filter_volume_drop_pct", 0.0) or 0.0
+                ),
+                "forager_score_weights_volume": float(weights.get("volume", 0.0)),
+                "forager_score_weights_ema_readiness": float(
+                    weights.get("ema_readiness", 0.0)
+                ),
+                "forager_score_weights_volatility": float(
+                    weights.get("volatility", 0.0)
+                ),
+                "n_positions": float(first_bot["n_positions"]),
+            }
+        )
+        missing = [
+            key for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS if key not in first_strategy
+        ]
+        if missing:
+            raise ValueError(f"MPS multicoin EMA payload is missing parameters: {missing}")
+        self.base_params = first_strategy
+
+        comparable_bot_keys = (
+            "entry_cooldown_minutes",
+            "total_wallet_exposure_limit",
+            "filter_volume_ema_span_1m",
+            "filter_volatility_ema_span_1m",
+            "filter_volume_drop_pct",
+            "forager_score_weights",
+            "n_positions",
+            "unstuck_enabled",
+            "hsl_enabled",
+        )
+        for coin in range(1, coin_count):
+            strategy = payload.strategy_params_list[coin]["long"]
+            bot = payload.bot_params_list[coin]["long"]
+            if strategy != payload.strategy_params_list[0]["long"] or any(
+                bot.get(key) != first_bot.get(key) for key in comparable_bot_keys
+            ):
+                raise ValueError(
+                    "MPS multicoin proxy requires identical long strategy/forager "
+                    "settings across coins"
+                )
+
+        markets = [
+            ProxyMarket(
+                qty_step=float(item["qty_step"]),
+                price_step=float(item["price_step"]),
+                min_qty=float(item["min_qty"]),
+                min_cost=float(item["min_cost"]),
+                c_mult=float(item["c_mult"]),
+                maker_fee=float(item["maker_fee"]),
+            )
+            for item in payload.exchange_params
+        ]
+        interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
+        runs = [
+            ProxyRun(
+                starting_balance=float(backtest_params["starting_balance"]),
+                warmup_bars=max(
+                    1, int(backtest_params.get("global_warmup_bars", 0) or 1)
+                ),
+                trade_start_idx=int(backtest_params["trade_start_indices"][coin]),
+                requested_start_ts_ms=int(
+                    backtest_params["requested_start_timestamp_ms"]
+                ),
+                guard_ts_ms=int(
+                    max(
+                        backtest_params["requested_start_timestamp_ms"],
+                        backtest_params["first_timestamp_ms"],
+                    )
+                ),
+                first_ts_ms=int(backtest_params["first_timestamp_ms"]),
+                interval_ms=interval_ms,
+                liquidation_threshold=float(
+                    backtest_params.get("liquidation_threshold", 0.05)
+                ),
+                first_valid_idx=int(backtest_params["first_valid_indices"][coin]),
+                last_valid_idx=int(backtest_params["last_valid_indices"][coin]),
+            )
+            for coin in range(coin_count)
+        ]
+        self.run = replace(
+            runs[0],
+            first_valid_idx=min(run.first_valid_idx for run in runs),
+            last_valid_idx=max(run.last_valid_idx for run in runs),
+            trade_start_idx=min(run.trade_start_idx for run in runs),
+        )
+        self.data = build_mps_multicoin_data(
+            values, timestamps, runs=runs, markets=markets
+        )
+        self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
+        self.runner = MpsEmaAnchorMulticoinLongRunner(self.run, self.data)
+
+    def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
+        rows = []
+        for candidate in candidates:
+            merged = dict(self.base_params)
+            merged.update(
+                {
+                    key.removeprefix("long_"): value
+                    for key, value in candidate.items()
+                    if key.startswith("long_")
+                }
+            )
+            rows.append(
+                [float(merged[key]) for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
+            )
+        return np.asarray(rows, dtype=np.float64)
+
+    def evaluate(self, candidates: list[dict]) -> list[dict]:
+        results: list[dict] = []
+        torch = self._torch
+        for start in range(0, len(candidates), self.batch_size):
+            chunk = candidates[start : start + self.batch_size]
+            output = self.runner.run(
+                self._parameter_matrix(chunk), profile=self.profile_enabled
+            )
+            output = {
+                key: value.cpu()
+                for key, value in output.items()
+                if key in CORE_OUTPUT_KEYS
+            }
+            timestamp_origin = float(self.metrics_data["ts0"])
+            for key in (
+                "first_fill_ts",
+                "last_fill_ts",
+                "last_high_ts",
+                "first_eq_ts",
+                "last_eq_ts",
+            ):
+                values = output[key].to(torch.float64)
+                output[key] = torch.where(
+                    torch.isfinite(values), values + timestamp_origin, values
+                )
+            objectives = self._compute_objectives(
+                output, self.run, self.metrics_data, needed=self.needed_metrics
+            )
+            arrays = {
+                name: value.detach().cpu().numpy()
+                for name, value in objectives.items()
+            }
+            results.extend(
+                {name: float(values[index]) for name, values in arrays.items()}
+                for index in range(len(chunk))
+            )
+        return results

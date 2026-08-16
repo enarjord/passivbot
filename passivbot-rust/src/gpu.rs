@@ -5,11 +5,17 @@
 //! dispatches this source through the optional Apple MPS backend.
 
 pub const MPS_EMA_ANCHOR_SOURCE: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
+pub const MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE: &str =
+    include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
 pub const MPS_TRAILING_MARTINGALE_SOURCE: &str =
     include_str!("gpu/mps_trailing_martingale_directional.metal");
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE
+}
+
+pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
+    MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE
 }
 
 pub fn mps_trailing_martingale_source() -> &'static str {
@@ -36,6 +42,25 @@ mod tests {
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert!(!source.contains("nextafter("));
+    }
+
+    #[test]
+    fn ema_anchor_multicoin_long_mps_source_exposes_expected_kernel_contract() {
+        let source = mps_ema_anchor_multicoin_long_source();
+        assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
+        assert!(source.contains("constant int MAX_COINS = 64"));
+        assert!(source.contains("constant int PARAM_COLS = 19"));
+        assert!(source.contains("constant int COIN_COLS = 11"));
+        assert!(source.contains("constant int DAILY_COLS = 5"));
+        assert!(source.contains("constant int SCALAR_COLS = 18"));
+        assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
+        assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
+        assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
+        assert!(source.contains("effective_n_positions"));
+        assert!(source.contains("float total_cap = twel - 1.0e-7f"));
+        assert!(source.contains("= fma("));
+        assert!(!source.contains("unstuck"));
+        assert!(!source.contains("hard_stop"));
     }
 
     #[test]

@@ -68,6 +68,22 @@ EMA_BOUND_MAP = {
     for bound_suffix, parameter in _EMA_SIDE_BOUND_SUFFIXES.items()
 }
 
+EMA_MULTICOIN_LONG_BOUND_MAP = {
+    **EMA_BOUND_MAP,
+    **{
+        f"long_{suffix}": f"long_{parameter}"
+        for suffix, parameter in {
+            "forager_volume_ema_span_1m": "forager_volume_ema_span_1m",
+            "forager_volatility_ema_span_1m": "forager_volatility_ema_span_1m",
+            "forager_volume_drop_pct": "forager_volume_drop_pct",
+            "forager_score_weights_volume": "forager_score_weights_volume",
+            "forager_score_weights_ema_readiness": "forager_score_weights_ema_readiness",
+            "forager_score_weights_volatility": "forager_score_weights_volatility",
+            "n_positions": "n_positions",
+        }.items()
+    },
+}
+
 _TM_SIDE_BOUND_SUFFIXES = {
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
@@ -469,11 +485,9 @@ def _validate_scope(config: dict, evaluator) -> str:
         )
     exchange = exchanges[0]
     hlcvs = evaluator.shared_hlcvs_np[exchange]
-    if int(hlcvs.shape[1]) != 1:
-        raise ValueError(
-            "GPU foundation supports exactly one coin; "
-            f"prepared {int(hlcvs.shape[1])}"
-        )
+    coin_count = int(hlcvs.shape[1])
+    if coin_count < 1:
+        raise ValueError("GPU foundation requires at least one prepared coin")
     strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )
@@ -486,6 +500,38 @@ def _validate_scope(config: dict, evaluator) -> str:
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
+    if coin_count > 1:
+        from optimization.gpu.model import MPS_MULTICOIN_MAX_COINS
+
+        if coin_count > MPS_MULTICOIN_MAX_COINS:
+            raise ValueError(
+                "GPU multicoin foundation supports at most "
+                f"{MPS_MULTICOIN_MAX_COINS} coins; prepared {coin_count}"
+            )
+        if strategy_kind != "ema_anchor":
+            raise ValueError(
+                "GPU multicoin foundation currently supports strategy_kind=ema_anchor only"
+            )
+        if enabled_sides != ["long"]:
+            raise ValueError(
+                "GPU multicoin foundation currently supports long-only enabledness"
+            )
+        if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
+            raise ValueError(
+                "GPU multicoin foundation requires "
+                "backtest.dynamic_wel_by_tradability=true"
+            )
+        if (
+            float(
+                config.get("live", {}).get("forager_score_hysteresis_pct", 0.0)
+                or 0.0
+            )
+            != 0.0
+        ):
+            raise ValueError(
+                "GPU multicoin foundation requires "
+                "live.forager_score_hysteresis_pct=0"
+            )
     for side in enabled_sides:
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
@@ -1002,7 +1048,7 @@ def _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides=None)
 
 
 def _validate_directional_search_space(
-    bound_by_key, base_by_key, approved, enabled_sides
+    bound_by_key, base_by_key, approved, enabled_sides, *, coin_count: int = 1
 ) -> None:
     """Keep candidate-side eligibility identical to the proxy runner's flags."""
 
@@ -1041,10 +1087,17 @@ def _validate_directional_search_space(
             bound_edge(f"{side}_n_positions", "low"),
             bound_edge(f"{side}_n_positions", "high"),
         )
-        if n_positions != (1.0, 1.0):
+        if coin_count == 1 and n_positions != (1.0, 1.0):
             raise ValueError(
                 f"GPU foundation requires {side}_n_positions pinned at 1; "
                 f"got bounds {n_positions}"
+            )
+        if coin_count > 1 and not (
+            1.0 <= n_positions[0] <= n_positions[1] <= float(coin_count)
+        ):
+            raise ValueError(
+                f"GPU multicoin foundation requires {side}_n_positions bounds "
+                f"within [1, {coin_count}]; got {n_positions}"
             )
 
 
@@ -1217,9 +1270,10 @@ def run_backend(
     from config.metrics import canonicalize_metric_name
     from config.scoring import extract_objective_specs
     from optimization.gpu.metrics import SUPPORTED_METRICS
-    from optimization.gpu.service import MpsSingleCoinProxy
+    from optimization.gpu.service import MpsMulticoinEmaProxy, MpsSingleCoinProxy
 
     exchange = _validate_scope(config, evaluator)
+    coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
 
@@ -1244,7 +1298,11 @@ def run_backend(
     base_vector = [float(value) for value in template_vectors[0]]
 
     strategy_kind = str(config["live"]["strategy_kind"]).strip().lower()
-    bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
+    bound_map = (
+        EMA_MULTICOIN_LONG_BOUND_MAP
+        if strategy_kind == "ema_anchor" and coin_count > 1
+        else GPU_STRATEGY_BOUND_MAPS[strategy_kind]
+    )
 
     mapped_all = {
         bound_map[bound_key]: (index, bounds[index])
@@ -1313,7 +1371,11 @@ def run_backend(
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
     _validate_directional_search_space(
-        bound_by_key, base_by_key, approved, enabled_sides
+        bound_by_key,
+        base_by_key,
+        approved,
+        enabled_sides,
+        coin_count=coin_count,
     )
 
     for index, (bound_key, _path) in enumerate(key_paths):
@@ -1322,7 +1384,9 @@ def run_backend(
         side = bound_key.split("_", 1)[0]
         if side in {"long", "short"} and side not in enabled_sides:
             continue
-        if any(bound_key.startswith(f"{side}_forager_") for side in enabled_sides):
+        if coin_count == 1 and any(
+            bound_key.startswith(f"{side}_forager_") for side in enabled_sides
+        ):
             # Forager ranking cannot affect a one-coin backtest.
             continue
         if any(
@@ -1334,7 +1398,10 @@ def run_backend(
             # requires both features off, so these dormant values cannot affect
             # either the exact Rust backtest or the proxy.
             continue
-        if bound_key in {f"{side}_n_positions" for side in enabled_sides}:
+        if (
+            coin_count == 1
+            and bound_key in {f"{side}_n_positions" for side in enabled_sides}
+        ):
             continue
         if bound_key not in bound_map:
             raise ValueError(
@@ -1356,7 +1423,8 @@ def run_backend(
             "use supported metrics or the CPU optimizer"
         )
 
-    proxy = MpsSingleCoinProxy(
+    proxy_cls = MpsMulticoinEmaProxy if coin_count > 1 else MpsSingleCoinProxy
+    proxy = proxy_cls(
         config=config,
         hlcvs=evaluator.shared_hlcvs_np[exchange],
         mss=evaluator.msss[exchange],

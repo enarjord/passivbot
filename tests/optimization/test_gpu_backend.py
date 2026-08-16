@@ -35,6 +35,7 @@ from optimization.backends.gpu_backend import (
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
     _validate_scope,
+    EMA_MULTICOIN_LONG_BOUND_MAP,
     TRAILING_MARTINGALE_BOUND_MAP,
 )
 
@@ -42,6 +43,11 @@ from optimization.backends.gpu_backend import (
 class _Evaluator:
     exchanges = ["bybit"]
     shared_hlcvs_np = {"bybit": np.zeros((100, 1, 4), dtype=np.float64)}
+
+
+class _MulticoinEvaluator:
+    exchanges = ["bybit"]
+    shared_hlcvs_np = {"bybit": np.zeros((100, 3, 4), dtype=np.float64)}
 
 
 def _long_only_ema_config():
@@ -461,6 +467,80 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_accepts_ema_long_multicoin():
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda config: config["live"].__setitem__(
+                "strategy_kind", "trailing_martingale"
+            ),
+            "ema_anchor only",
+        ),
+        (
+            lambda config: config["backtest"].__setitem__(
+                "dynamic_wel_by_tradability", False
+            ),
+            "dynamic_wel_by_tradability",
+        ),
+        (
+            lambda config: config["live"].__setitem__(
+                "forager_score_hysteresis_pct", 0.01
+            ),
+            "forager_score_hysteresis_pct",
+        ),
+    ],
+)
+def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
+    mutate, message
+):
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    mutate(config)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_short_and_hedge_modes():
+    for long_enabled, short_enabled in ((False, True), (True, True)):
+        config = _directional_ema_config(
+            long_enabled=long_enabled, short_enabled=short_enabled
+        )
+        config["live"]["approved_coins"] = {
+            "long": ["BTC", "ETH", "SOL"] if long_enabled else [],
+            "short": ["BTC", "ETH", "SOL"] if short_enabled else [],
+        }
+        config["live"]["forager_score_hysteresis_pct"] = 0.0
+        config["backtest"]["dynamic_wel_by_tradability"] = True
+        with pytest.raises(ValueError, match="long-only"):
+            _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_bound_map_exposes_forager_and_position_dimensions():
+    for key in (
+        "long_forager_volume_ema_span_1m",
+        "long_forager_volatility_ema_span_1m",
+        "long_forager_volume_drop_pct",
+        "long_forager_score_weights_volume",
+        "long_forager_score_weights_ema_readiness",
+        "long_forager_score_weights_volatility",
+        "long_n_positions",
+    ):
+        assert EMA_MULTICOIN_LONG_BOUND_MAP[key] == key
 
 
 @pytest.mark.parametrize(
@@ -1074,6 +1154,30 @@ def test_gpu_directional_search_space_keeps_side_enablement_fixed():
     with pytest.raises(ValueError, match="pinned at 1"):
         _validate_directional_search_space(bounds, base, approved, {"long"})
 
+
+def test_gpu_multicoin_search_space_allows_bounded_n_positions():
+    approved = {"long": ["BTC", "ETH", "SOL"], "short": []}
+    base = {
+        "long_total_wallet_exposure_limit": 1.0,
+        "long_n_positions": 2.0,
+        "short_total_wallet_exposure_limit": 0.0,
+        "short_n_positions": 0.0,
+    }
+    bounds = {
+        "long_total_wallet_exposure_limit": Bound(0.5, 1.5, None),
+        "long_n_positions": Bound(1.0, 3.0, 1.0),
+        "short_total_wallet_exposure_limit": Bound(0.0, 0.0, None),
+        "short_n_positions": Bound(0.0, 0.0, None),
+    }
+
+    _validate_directional_search_space(
+        bounds, base, approved, {"long"}, coin_count=3
+    )
+    bounds["long_n_positions"] = Bound(1.0, 4.0, 1.0)
+    with pytest.raises(ValueError, match=r"within \[1, 3\]"):
+        _validate_directional_search_space(
+            bounds, base, approved, {"long"}, coin_count=3
+        )
 
 def test_gpu_directional_search_space_rejects_disabled_approved_side_activation():
     from optimization.bounds import Bound
