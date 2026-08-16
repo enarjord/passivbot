@@ -4298,7 +4298,7 @@ async def test_live_ema_provisionally_fills_bounded_unknown_gap_and_recomputes(
 
 
 @pytest.mark.asyncio
-async def test_refreshed_forager_metrics_bridge_bounded_internal_gap(
+async def test_forager_metrics_bridge_bounded_internal_gap_without_persistence(
     monkeypatch, tmp_path
 ):
     now = 11 * ONE_MIN_MS
@@ -4351,20 +4351,26 @@ async def test_refreshed_forager_metrics_bridge_bounded_internal_gap(
     )
     assert refreshed["qv"][3.0] == pytest.approx(expected_qv)
     assert refreshed["log_range"][3.0] == pytest.approx(expected_log_range)
-    qv_context = cm.get_ema_provisional_internal_gap_context(
-        symbol, "qv", 3.0, timeframe="1m"
+    assert cm.ema_spans_use_provisional_internal_gap(
+        symbol, [3.0], timeframe="1m"
     )
-    log_range_context = cm.get_ema_provisional_internal_gap_context(
-        symbol, "log_range", 3.0, timeframe="1m"
-    )
-    assert qv_context == log_range_context
-    assert qv_context["gap_count"] == 1
-    assert qv_context["gap_candles"] == 1
-    assert qv_context["max_gap_candles"] == 1
-    assert qv_context["oldest_gap_age_ms"] == 2 * ONE_MIN_MS
     assert np.array_equal(
         cm._cache[symbol]["ts"],
         np.asarray([start, end], dtype=np.int64),
+    )
+
+    cm._persist_batch(
+        symbol,
+        np.array(
+            [(missing, 110.0, 110.0, 110.0, 110.0, 2.0)],
+            dtype=CANDLE_DTYPE,
+        ),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now,
+    )
+    assert not cm.ema_spans_use_provisional_internal_gap(
+        symbol, [3.0], timeframe="1m"
     )
 
 

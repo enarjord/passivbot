@@ -100,15 +100,13 @@
    do not permanently block strategy inputs. The timestamps remain unresolved and retryable;
    delayed authoritative rows replace the provisional values and invalidate affected EMA caches.
    This exception is selected explicitly by the consumer: completed-candle forager ranking metrics
-   may bridge bounded internal gaps only after the current planning bundle observes that the symbol's
-   authoritative refresh timestamp advanced. Merely allowing a remote fetch is insufficient;
-   cache-only candidate reads remain strict. Synthetic replacement tracking follows the
-   manager's live/replay clock so delayed authoritative rows invalidate provisional replay EMAs
-   deterministically. Runtime provenance is retained per symbol, metric, span, and EMA window so
-   live orchestration can report gap count, age, synthetic source, consecutive uses, and recovery.
-   The live orchestrator requests forager quote-volume and log-range with bounded internal-gap
-   continuity only for symbols actually refreshed during that planner bundle; cache-only stale
-   candidates cannot invent zero-volume or zero-range observations.
+   for current, remote-enabled candidates may bridge bounded internal gaps, while cache-only
+   candidate reads remain strict. This is approximate ranking continuity, not evidence that the
+   missing rows were fetched. Synthetic replacement tracking follows the manager's live/replay
+   clock so delayed authoritative rows invalidate provisional replay EMAs deterministically.
+   Existing known-gap and refresh diagnostics expose repair state. Live orchestration derives
+   ranking-input consumption from canonical gap state and emits activation/recovery transitions
+   per symbol and metric without a second per-span provenance state machine or use counter.
    Open-ended tails use the separate bounded projection policy below.
    Refresh budgets count
    symbol/timeframe fetches, health scans are bounded and rotated across cycles, interleave each
@@ -246,9 +244,9 @@
     Missing rows remain unavailable to ordinary candle consumers until an authoritative row
     arrives. Live strategy EMA reads may provisionally bridge a later-bracketed internal gap with
     non-persistent flat zero-volume rows only when the gap is no wider than
-    `live.max_active_candle_tail_gap_minutes`; forager ranking reads use the same bounded internal-gap
-    rule only after an authoritative refresh advances during the current planning bundle, while
-    cache-only forager ranking carry-forward remains unavailable across an unresolved internal gap.
+    `live.max_active_candle_tail_gap_minutes`; current remote-enabled forager ranking reads use the
+    same bounded internal-gap rule, while cache-only forager ranking carry-forward remains
+    unavailable across an unresolved internal gap.
     Complete rows in the supplied EMA window remain
     authoritative even if stale known-gap metadata still names their timestamps. Recording or
     extending a 1m gap invalidates cached 1m EMA and open-tail projection values. An overlap refresh

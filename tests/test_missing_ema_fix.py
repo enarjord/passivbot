@@ -1609,7 +1609,7 @@ async def test_explicit_normal_missing_required_forager_features_are_scoped_to_r
 
 
 @pytest.mark.asyncio
-async def test_forager_internal_gap_retry_requires_actual_refresh_provenance():
+async def test_current_forager_ranking_uses_bounded_internal_gap_policy_directly():
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -1648,74 +1648,18 @@ async def test_forager_internal_gap_retry_requires_actual_refresh_provenance():
         bot, [symbol], bot.PB_modes
     )
 
-    assert result[1][symbol] == {}
-    assert bot._orchestrator_forager_m1_log_range_emas[symbol] == {}
-    assert bot.qv_provisional_flags == [False]
-    assert [flag for _tf, flag in bot.lr_provisional_flags if flag is not None] == [
-        False
-    ]
-
-
-@pytest.mark.asyncio
-async def test_forager_internal_gap_retry_follows_successful_bundle_refresh():
-    try:
-        import passivbot as pb_mod
-    except ImportError:
-        pytest.skip("passivbot module not importable in test environment")
-
-    symbol = "HYPE/USDT:USDT"
-    bot = _BundleReproBot(symbol, close_mode="value")
-    _enable_forager_required_ranking(bot)
-    refresh = {"value": 100}
-    bot.cm.get_last_refresh_ms = lambda _symbol: refresh["value"]
-
-    async def quote_volume(
-        _symbol,
-        span,
-        max_age_ms=60_000,
-        allow_remote_fetch=True,
-        allow_provisional_internal_gaps=None,
-    ):
-        bot.qv_provisional_flags.append(allow_provisional_internal_gaps)
-        if not allow_provisional_internal_gaps:
-            refresh["value"] += 1
-            return float("nan")
-        return 250000.0
-
-    async def log_range(
-        _symbol,
-        span,
-        tf=None,
-        max_age_ms=60_000,
-        allow_remote_fetch=True,
-        allow_provisional_internal_gaps=None,
-    ):
-        bot.lr_provisional_flags.append((tf or "1m", allow_provisional_internal_gaps))
-        if not allow_provisional_internal_gaps:
-            refresh["value"] += 1
-            return float("nan")
-        return 0.0015
-
-    bot.cm.get_latest_ema_quote_volume = quote_volume
-    bot.cm.get_latest_ema_log_range = log_range
-
-    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot, [symbol], bot.PB_modes
-    )
-
     assert result[1][symbol][10.0] == pytest.approx(250000.0)
     assert bot._orchestrator_forager_m1_log_range_emas[symbol][10.0] == pytest.approx(
         0.0015
     )
-    assert bot.qv_provisional_flags == [False, True]
+    assert bot.qv_provisional_flags == [True]
     assert [flag for _tf, flag in bot.lr_provisional_flags if flag is not None] == [
-        False,
-        True,
+        True
     ]
 
 
 @pytest.mark.asyncio
-async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(caplog):
+async def test_forager_gap_consumption_logs_only_activation_and_recovery(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -1724,53 +1668,12 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
     symbol = "HYPE/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode="value")
     _enable_forager_required_ranking(bot)
-    context = {
-        "gap_count": 1,
-        "gap_candles": 2,
-        "max_gap_candles": 2,
-        "oldest_gap_age_ms": 180_000,
-    }
-    current_context = {"value": context}
-    refresh = {"value": 100}
-    authoritative = {"value": False}
-    bot.cm.get_last_refresh_ms = lambda _symbol: refresh["value"]
-
-    async def quote_volume(
-        _symbol,
-        span,
-        max_age_ms=60_000,
-        allow_remote_fetch=True,
-        allow_provisional_internal_gaps=None,
-    ):
-        if not allow_provisional_internal_gaps:
-            if authoritative["value"]:
-                return 250000.0
-            refresh["value"] += 1
-            return float("nan")
-        return 250000.0
-
-    async def log_range(
-        _symbol,
-        span,
-        tf=None,
-        max_age_ms=60_000,
-        allow_remote_fetch=True,
-        allow_provisional_internal_gaps=None,
-    ):
-        if not allow_provisional_internal_gaps:
-            if authoritative["value"]:
-                return 0.0015
-            refresh["value"] += 1
-            return float("nan")
-        return 0.0015
-
-    bot.cm.get_latest_ema_quote_volume = quote_volume
-    bot.cm.get_latest_ema_log_range = log_range
-    bot.cm.get_ema_provisional_internal_gap_context = (
-        lambda _symbol, _metric, _span, **_kwargs: current_context["value"]
+    usage = {"value": True}
+    bot.cm.ema_spans_use_provisional_internal_gap = (
+        lambda _symbol, _spans, **_kwargs: usage["value"]
     )
 
-    with caplog.at_level(logging.DEBUG):
+    with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], bot.PB_modes
         )
@@ -1778,42 +1681,38 @@ async def test_forager_provisional_internal_gap_logs_use_count_and_recovery(capl
             bot, [symbol], bot.PB_modes
         )
 
-    assert bot._orchestrator_forager_gap_fallback_counts == {
-        (symbol, "quote_volume"): 2,
-        (symbol, "log_range"): 2,
-    }
-    fallback_logs = [
-        record
+    activation_logs = [
+        record.message
         for record in caplog.records
-        if "forager ranking provisional internal-gap fallback" in record.message
-        and "recovered" not in record.message
+        if "forager ranking input using bounded internal-gap continuity"
+        in record.message
     ]
-    assert fallback_logs
-    assert any(record.levelno == logging.WARNING for record in fallback_logs)
-    assert any(
-        "source=synthetic_zero_volume_continuity" in record.message
-        for record in fallback_logs
+    assert len(activation_logs) == 2
+    assert all(
+        "source=synthetic_zero_volume_continuity" in msg
+        for msg in activation_logs
     )
-    assert any("consecutive_uses=2" in record.message for record in fallback_logs)
+    assert bot._orchestrator_forager_provisional_gap_inputs_active == {
+        (symbol, "quote_volume"),
+        (symbol, "log_range"),
+    }
 
-    authoritative["value"] = True
+    usage["value"] = False
     caplog.clear()
     with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], bot.PB_modes
         )
 
-    assert bot._orchestrator_forager_gap_fallback_counts == {
-        (symbol, "quote_volume"): 0,
-        (symbol, "log_range"): 0,
-    }
-    recoveries = [
+    recovery_logs = [
         record.message
         for record in caplog.records
-        if "provisional internal-gap fallback recovered" in record.message
+        if "forager ranking input resumed authoritative candles"
+        in record.message
     ]
-    assert len(recoveries) == 2
-    assert all("after_consecutive_uses=2" in message for message in recoveries)
+    assert len(recovery_logs) == 2
+    assert bot._orchestrator_forager_provisional_gap_inputs_active == set()
+    assert not hasattr(bot, "_orchestrator_forager_gap_fallback_counts")
 
 
 @pytest.mark.asyncio
@@ -2009,8 +1908,8 @@ async def test_active_forager_open_tail_projects_strategy_required_log_range():
     assert m1_volume_emas[symbol][span0] == pytest.approx(250000.0)
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert _log_ranges_long[symbol] == pytest.approx(0.0015)
-    assert bot.qv_provisional_flags == [False]
-    assert bot.lr_provisional_flags == [("1m", False)]
+    assert bot.qv_provisional_flags == [True]
+    assert bot.lr_provisional_flags == [("1m", True)]
     assert bot._orchestrator_ema_projection_symbols == {symbol}
 
 
@@ -2732,7 +2631,8 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
         for request, allow_provisional in batch_requests
     ]
     assert ("close", True) in request_flags
-    assert ("qv", False) in request_flags
+    assert ("qv", True) in request_flags
+    assert ("log_range", True) in request_flags
 
 
 @pytest.mark.asyncio

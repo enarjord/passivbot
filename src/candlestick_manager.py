@@ -971,11 +971,6 @@ class CandlestickManager:
         ] = {}
         # Cache for EMA computations: per symbol -> {(metric, span, tf): (value, end_ts, computed_at_ms)}
         self._ema_cache: Dict[str, Dict[Tuple[str, int, str], Tuple[float, int, int]]] = {}
-        # Non-persistent provenance for EMA values computed with later-bounded
-        # internal zero-volume continuity rows. Keys mirror the EMA cache.
-        self._ema_provisional_internal_gap_context: Dict[
-            str, Dict[Tuple[str, float, str], Dict[str, int]]
-        ] = {}
         # Compatibility attribute retained for older monitor/tool code.  The
         # candlestick manager no longer owns current in-progress prices.
         self._current_close_cache: Dict[str, Tuple[float, int]] = {}
@@ -2979,24 +2974,6 @@ class CandlestickManager:
         self, symbol: str, *, timeframe: Optional[str] = None
     ) -> None:
         """Invalidate cached EMA values for a symbol, optionally for one timeframe."""
-        if symbol in self._ema_provisional_internal_gap_context:
-            if timeframe is None:
-                self._ema_provisional_internal_gap_context.pop(symbol, None)
-            else:
-                tf_key = str(_tf_to_ms(timeframe))
-                retained_context = {
-                    key: value
-                    for key, value in self._ema_provisional_internal_gap_context[
-                        symbol
-                    ].items()
-                    if len(key) < 3 or str(key[2]) != tf_key
-                }
-                if retained_context:
-                    self._ema_provisional_internal_gap_context[symbol] = (
-                        retained_context
-                    )
-                else:
-                    self._ema_provisional_internal_gap_context.pop(symbol, None)
         if symbol not in self._ema_cache:
             return
         if timeframe is None:
@@ -9462,82 +9439,57 @@ class CandlestickManager:
             tf=tf,
         )
 
-    def _record_ema_provisional_internal_gap_context(
+    def ema_spans_use_provisional_internal_gap(
         self,
         symbol: str,
-        metric_key: str,
-        span: float,
-        period_ms: int,
-        start_ts: int,
-        end_ts: int,
-    ) -> None:
-        key = (str(metric_key), float(span), str(period_ms))
-        contexts = self._ema_provisional_internal_gap_context.setdefault(symbol, {})
-        if period_ms != ONE_MIN_MS:
-            contexts.pop(key, None)
-            return
+        spans: Iterable[float],
+        *,
+        timeframe: Optional[str] = None,
+        tf: Optional[str] = None,
+    ) -> bool:
+        """Whether current EMA windows use bounded unresolved-gap continuity.
+
+        This derives consumption from canonical gap and candle state on demand;
+        it does not retain per-span fallback provenance.
+        """
+        period_ms = _tf_to_ms(timeframe if timeframe is not None else tf)
         tolerance_ms = int(
             self.provisional_internal_gap_tolerance_minutes * ONE_MIN_MS
         )
-        if tolerance_ms <= 0:
-            contexts.pop(key, None)
-            return
+        if period_ms != ONE_MIN_MS or tolerance_ms <= 0:
+            return False
+        normalized_spans = {
+            float(span)
+            for span in spans
+            if math.isfinite(float(span)) and float(span) > 0.0
+        }
+        if not normalized_spans:
+            return False
+        end_ts = (
+            (int(self._now_ms()) // int(period_ms)) * int(period_ms)
+            - int(period_ms)
+        )
+        start_ts = int(
+            end_ts
+            - period_ms
+            * (max(1, int(math.ceil(max(normalized_spans)))) - 1)
+        )
         last_final_ts = int(self.get_last_final_ts(symbol) or 0)
         cached = self._cache.get(symbol)
         if isinstance(cached, np.ndarray) and cached.size > 0:
             last_final_ts = max(
-                last_final_ts, int(np.max(np.asarray(cached["ts"], dtype=np.int64)))
+                last_final_ts,
+                int(np.max(np.asarray(cached["ts"], dtype=np.int64))),
             )
-        used_ranges: List[Tuple[int, int]] = []
-        for full_gap_start, full_gap_end in self._unverified_uncovered_gap_ranges(
-            symbol, int(start_ts), int(end_ts)
+        for gap_start, gap_end in self._unverified_uncovered_gap_ranges(
+            symbol,
+            start_ts,
+            end_ts,
         ):
-            gap_width_ms = int(full_gap_end) - int(full_gap_start) + ONE_MIN_MS
-            overlap_start = max(int(start_ts), int(full_gap_start))
-            overlap_end = min(int(end_ts), int(full_gap_end))
-            if (
-                overlap_start <= overlap_end
-                and gap_width_ms <= tolerance_ms
-                and int(full_gap_end) < last_final_ts
-            ):
-                used_ranges.append((overlap_start, overlap_end))
-        if not used_ranges:
-            contexts.pop(key, None)
-            if not contexts:
-                self._ema_provisional_internal_gap_context.pop(symbol, None)
-            return
-        gap_candles = sum(
-            (gap_end - gap_start) // ONE_MIN_MS + 1
-            for gap_start, gap_end in used_ranges
-        )
-        max_gap_candles = max(
-            (gap_end - gap_start) // ONE_MIN_MS + 1
-            for gap_start, gap_end in used_ranges
-        )
-        oldest_gap_start = min(gap_start for gap_start, _gap_end in used_ranges)
-        contexts[key] = {
-            "gap_count": int(len(used_ranges)),
-            "gap_candles": int(gap_candles),
-            "max_gap_candles": int(max_gap_candles),
-            "oldest_gap_age_ms": max(0, int(self._now_ms()) - oldest_gap_start),
-            "window_start_ts": int(start_ts),
-            "window_end_ts": int(end_ts),
-        }
-
-    def get_ema_provisional_internal_gap_context(
-        self,
-        symbol: str,
-        metric_key: str,
-        span: float,
-        *,
-        timeframe: Optional[str] = None,
-        tf: Optional[str] = None,
-    ) -> Optional[Dict[str, int]]:
-        period_ms = _tf_to_ms(timeframe if timeframe is not None else tf)
-        context = self._ema_provisional_internal_gap_context.get(symbol, {}).get(
-            (str(metric_key), float(span), str(period_ms))
-        )
-        return None if context is None else dict(context)
+            gap_width_ms = int(gap_end) - int(gap_start) + ONE_MIN_MS
+            if gap_width_ms <= tolerance_ms and int(gap_end) < last_final_ts:
+                return True
+        return False
 
     async def get_latest_ema_close(
         self,
@@ -9587,15 +9539,6 @@ class CandlestickManager:
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
         res = float(self._ema(closes, span))
-        if allow_provisional_internal_gaps:
-            self._record_ema_provisional_internal_gap_context(
-                symbol,
-                "close",
-                span,
-                period_ms,
-                start_ts,
-                end_ts,
-            )
         # Store in cache
         cache[key] = (res, int(end_ts), int(now))
         return res
@@ -9851,20 +9794,6 @@ class CandlestickManager:
             return float("nan")
         series = series_fn(arr)
         res = float(self._ema(series, span))
-        if allow_provisional_internal_gaps:
-            if math.isfinite(res):
-                self._record_ema_provisional_internal_gap_context(
-                    symbol,
-                    metric_key,
-                    span,
-                    period_ms,
-                    start_ts,
-                    end_ts,
-                )
-            else:
-                self._ema_provisional_internal_gap_context.get(symbol, {}).pop(
-                    (str(metric_key), float(span), str(period_ms)), None
-                )
         cache[key] = (res, int(end_ts), int(now))
         return res
 
@@ -10120,20 +10049,7 @@ class CandlestickManager:
                 value = float(self._ema(self._ema_metric_series(metric_key, tail), span))
                 out[metric_key][span] = value
                 if not math.isfinite(value):
-                    if allow_provisional_internal_gaps:
-                        self._ema_provisional_internal_gap_context.get(symbol, {}).pop(
-                            (str(metric_key), float(span), str(period_ms)), None
-                        )
                     continue
-                if allow_provisional_internal_gaps:
-                    self._record_ema_provisional_internal_gap_context(
-                        symbol,
-                        metric_key,
-                        span,
-                        period_ms,
-                        metric_start_ts,
-                        end_ts,
-                    )
                 cache[(cache_metric_key, float(span), tf_key)] = (
                     value,
                     int(end_ts),

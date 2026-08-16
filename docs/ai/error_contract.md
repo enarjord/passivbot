@@ -83,12 +83,15 @@ flat zero-volume rows for active strategy inputs while authoritative overlap rep
 Trailing-extrema reconstruction may use the same projection only for a still-open tail after dense
 post-fill coverage; it must not bridge a missing reset boundary or internal minute, and the
 projected rows must be discarded after that read so delayed authoritative highs and lows replace
-them immediately. Forager ranking quote-volume and log-range inputs may bridge a later-bounded
-internal gap only after the current planning bundle records a successful authoritative refresh for
-that symbol; remote fetch permission alone is not refresh provenance. The complete gap length must
-be within `live.max_active_candle_tail_gap_minutes`; cache-only candidates retain their narrower
-carry-forward contract. Each refreshed-symbol ranking metric records warning-visible gap count,
-age, source, and consecutive-use diagnostics, followed by an authoritative-recovery diagnostic.
+them immediately. Forager ranking quote-volume and log-range inputs for current, remote-enabled
+candidates may bridge a later-bounded internal gap when the complete gap length is within
+`live.max_active_candle_tail_gap_minutes`. This is an explicitly approximate ranking-continuity
+policy, not proof that the missing rows were fetched. The rows remain unresolved and retryable,
+are never persisted, and are replaced by delayed authoritative candles. Cache-only candidates
+remain strict across unresolved internal gaps. Existing known-gap and refresh diagnostics expose
+the underlying repair state. A compact per-symbol/metric transition diagnostic additionally marks
+when ranking-input calculation consumes bounded continuity and later resumes from authoritative
+candles; it does not retain per-span contexts or consecutive-use counters.
 
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
@@ -97,9 +100,9 @@ symbol-scoped requirements are fresh, even if unrelated strategy surfaces are un
 
 Flat-symbol forager candidates may remain rankable within
 `live.max_forager_candle_staleness_minutes`. Close EMA readiness may use bounded flat-close
-projection. Quote-volume and log-range ranking inputs may use flat zero-volume continuity for
-later-bounded internal gaps within `live.max_active_candle_tail_gap_minutes` only after an
-authoritative refresh advances during the current planning bundle.
+projection. Quote-volume and log-range ranking inputs for current, remote-enabled candidates may
+use flat zero-volume continuity for later-bounded internal gaps within
+`live.max_active_candle_tail_gap_minutes`.
 Cache-only ranking inputs instead carry forward their latest known EMA with age/source metadata;
 they do not receive invented zero tails.
 When the forager setting is unset, its budget-derived acceptable age must not be shorter than
