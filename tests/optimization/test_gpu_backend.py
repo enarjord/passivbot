@@ -16,6 +16,8 @@ from optimization.backends.gpu_backend import (
     _build_gpu_nsga2,
     _build_proxy_parameter_dicts,
     _constraint_classification_mismatch,
+    _constraint_diagnostics,
+    _format_constraint_diagnostics,
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
@@ -565,6 +567,53 @@ def test_drift_monitor_probe_failure_cannot_be_masked_by_high_aggregate_rho():
     assert status["halt_reason"]
 
 
+def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            constraint_mismatch=probe and index < 3,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["probe_constraint_agreement"] == pytest.approx(0.625)
+    assert status["probe_constraint_mismatches"] == 3
+    assert status["halt_reason"] is None
+
+
+def test_drift_monitor_halts_on_low_broad_probe_constraint_agreement():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            constraint_mismatch=probe and index < 4,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["probe_constraint_agreement"] == pytest.approx(0.5)
+    assert "constraint agreement fell below" in status["halt_reason"]
+
+
 def test_novelty_stall_terminates_and_resets_on_progress():
     stall = 0
     for _ in range(7):
@@ -734,6 +783,53 @@ def test_constraint_classification_drift_detects_feasibility_disagreement():
     assert not _constraint_classification_mismatch(0.1, {})
 
 
+def test_constraint_diagnostics_name_disagreeing_limit_values():
+    check = {
+        "metric": "position_held_days_max",
+        "metric_key": "position_held_days_max_max",
+        "mode": "greater_than",
+        "bound": 60.0,
+        "penalty_weight": 1.0e6,
+    }
+    evaluator = type("Evaluator", (), {"limit_checks": [check]})()
+    exact_payload = {
+        "metrics": {
+            "stats": {
+                "position_held_days_max": {
+                    "mean": 195.0,
+                    "min": 195.0,
+                    "max": 195.0,
+                    "std": 0.0,
+                    "median": 195.0,
+                }
+            }
+        }
+    }
+
+    diagnostics = _constraint_diagnostics(
+        evaluator,
+        {"position_held_days_max": 24.0},
+        exact_payload,
+    )
+
+    assert diagnostics == [
+        {
+            "metric": "position_held_days_max",
+            "metric_key": "position_held_days_max_max",
+            "mode": "greater_than",
+            "proxy_value": 24.0,
+            "exact_value": 195.0,
+            "proxy_violation": 0.0,
+            "exact_violation": 135_000_000.0,
+            "bound": 60.0,
+        }
+    ]
+    detail = _format_constraint_diagnostics(diagnostics)
+    assert "position_held_days_max_max" in detail
+    assert "proxy=24.0 exact=195.0" in detail
+    assert "bound=60.0" in detail
+
+
 def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
     entries = [
         {
@@ -760,7 +856,10 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
     )
 
     assert recovered == {"hash-2.0", "hash-3.0"}
-    assert drift_pairs == [(2.0, 2.5, False), (3.0, 3.5, True)]
+    assert drift_pairs == [
+        (2.0, 2.5, False, False),
+        (3.0, 3.5, True, False),
+    ]
     assert mismatch is None
 
 
@@ -800,7 +899,33 @@ def test_resume_fails_closed_when_durable_tail_lacks_drift_evidence():
         )
 
 
-def test_resume_recovers_durable_constraint_disagreement():
+def test_resume_recovers_durable_front_constraint_disagreement():
+    _hashes, pairs, mismatch = _recover_durable_validations(
+        [
+            {
+                "id": 0,
+                "metrics": {
+                    "gpu_validation": {
+                        "schema_version": 1,
+                        "proxy_score": 0.1,
+                        "exact_score": 0.2,
+                        "probe": False,
+                        "constraint_classification_mismatch": True,
+                    }
+                },
+            }
+        ],
+        start_index=0,
+        stop_index=1,
+        vector_from_entry=lambda entry: [float(entry["id"])],
+        hash_vector=lambda vector: f"hash-{vector[0]}",
+    )
+
+    assert pairs == [(0.1, 0.2, False, True)]
+    assert "constraint classification disagreed" in mismatch
+
+
+def test_resume_records_broad_probe_constraint_disagreement_without_immediate_halt():
     _hashes, pairs, mismatch = _recover_durable_validations(
         [
             {
@@ -822,5 +947,5 @@ def test_resume_recovers_durable_constraint_disagreement():
         hash_vector=lambda vector: f"hash-{vector[0]}",
     )
 
-    assert pairs == [(0.1, 0.2, True)]
-    assert "constraint classification disagreed" in mismatch
+    assert pairs == [(0.1, 0.2, True, True)]
+    assert mismatch is None

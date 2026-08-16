@@ -13,9 +13,11 @@ All notable user-facing changes will be documented in this file.
   ordering, and hedge/one-way initial-side semantics. Recursive trailing-martingale grid modes,
   other strategies, suites, multi-coin, HSL, auto-unstuck, collateral,
   minimum-effective-cost filtering, market-order execution, incomplete candle tails, non-inert
-  fixed runtime overrides, and unmodeled risk gates fail closed. Proxy/exact optimizer-limit
-  feasibility disagreement also halts immediately. Existing CPU bot, backtest, and optimizer paths
-  do not import or require the optional PyTorch dependency.
+  fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal EMA updates
+  reduce long-horizon float32 path drift. Proxy-front optimizer-limit feasibility disagreement
+  halts immediately; broad-probe disagreements feed a rolling constraint-agreement gate and persist
+  per-limit proxy/exact diagnostics. Existing CPU bot, backtest, and optimizer paths do not import
+  or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
