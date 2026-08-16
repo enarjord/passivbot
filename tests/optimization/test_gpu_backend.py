@@ -21,7 +21,9 @@ from optimization.backends.gpu_backend import (
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
+    _ready_submission_prefix,
     _update_novelty_stall,
+    _validation_probe_count,
     _spearman,
     _resolve_options,
     _restore_gpu_result_run_contract,
@@ -30,6 +32,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _validate_directional_search_space,
     _validate_pinned_scope_bounds,
+    _validate_resume_evidence_budget,
     _validate_seed_side_match,
     _validate_scope,
     _validate_trailing_martingale_mode_bounds,
@@ -106,25 +109,45 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_window"] = 7
     config["optimize"]["gpu"]["drift_min_samples"] = 7
     config["optimize"]["gpu"]["drift_probes"] = 1
-    config["optimize"]["gpu"]["validate_per_generation"] = 1
-    with pytest.raises(ValueError, match="at least 8"):
+    config["optimize"]["gpu"]["validate_per_generation"] = 2
+    with pytest.raises(ValueError, match="at least 16"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["validate_per_generation"] = 8
     config["optimize"]["gpu"]["drift_probes"] = 1
-    config["optimize"]["gpu"]["drift_window"] = 64
-    config["optimize"]["iters"] = 63
-    with pytest.raises(ValueError, match="optimize.iters must be at least 64"):
+    config["optimize"]["gpu"]["drift_window"] = 96
+    config["optimize"]["iters"] = 95
+    with pytest.raises(ValueError, match="optimize.iters must be at least 96"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
-    config["optimize"]["gpu"]["validate_per_generation"] = 1
-    config["optimize"]["gpu"]["drift_probes"] = 1
+    config["optimize"]["gpu"]["validate_per_generation"] = 2
+    config["optimize"]["gpu"]["drift_probes"] = 0
     config["optimize"]["gpu"]["drift_window"] = 16
     config["optimize"]["gpu"]["drift_min_samples"] = 16
     config["optimize"]["iters"] = 15
     with pytest.raises(ValueError, match="optimize.iters must be at least 16"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 7
+    config["optimize"]["gpu"]["drift_window"] = 32
+    config["optimize"]["gpu"]["drift_min_samples"] = 32
+    config["optimize"]["iters"] = 32
+    with pytest.raises(ValueError, match="retain 8 true proxy-front validations"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 8
+    with pytest.raises(ValueError, match="must be less than"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["max_pending_exact"] = 1
+    with pytest.raises(ValueError, match="at least optimize.gpu"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
@@ -139,8 +162,103 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_probes"] = 4
     config["optimize"]["gpu"]["drift_window"] = 7
     config["optimize"]["gpu"]["drift_min_samples"] = 7
-    with pytest.raises(ValueError, match="at least 8"):
+    with pytest.raises(ValueError, match="must be less than"):
         _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["drift_halt"] = 0.0
+    with pytest.raises(ValueError, match="greater than zero"):
+        _resolve_options(config)
+
+
+def test_fresh_run_rejects_partial_suffix_without_rank_probe_budget():
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 1
+    config["optimize"]["gpu"]["drift_window"] = 96
+    config["optimize"]["iters"] = 97
+
+    with pytest.raises(ValueError, match="GPU fresh run.*broad-probe"):
+        _resolve_options(config)
+
+
+def test_partial_validation_batch_preserves_front_evidence_ratio():
+    assert _validation_probe_count(10, 10, 7) == 7
+    assert _validation_probe_count(7, 10, 7) == 4
+    assert _validation_probe_count(1, 10, 7) == 0
+
+
+class _PendingResult:
+    def __init__(self, ready):
+        self._ready = ready
+
+    def ready(self):
+        return self._ready
+
+
+def test_exact_results_are_consumed_only_as_ready_submission_prefix():
+    first = _PendingResult(False)
+    second = _PendingResult(True)
+    assert _ready_submission_prefix({first: None, second: None}) == []
+
+    first._ready = True
+    second._ready = False
+    third = _PendingResult(True)
+    assert _ready_submission_prefix({first: None, second: None, third: None}) == [
+        first
+    ]
+
+
+def _drift_pair(*, front: bool):
+    return (0.0, 0.0, not front, False, front)
+
+
+def test_resume_budget_rejects_too_few_remaining_front_samples():
+    pairs = [_drift_pair(front=index < 6) for index in range(57)]
+    options = {
+        "drift_window": 128,
+        "validate_per_generation": 8,
+        "drift_probes": 4,
+    }
+
+    with pytest.raises(RuntimeError, match="proxy-front safety samples"):
+        _validate_resume_evidence_budget(
+            pairs,
+            exact_done=57,
+            exact_budget=64,
+            options=options,
+        )
+
+
+def test_resume_budget_accepts_sufficient_recovered_and_future_evidence():
+    pairs = [_drift_pair(front=index < 7) for index in range(57)]
+
+    _validate_resume_evidence_budget(
+        pairs,
+        exact_done=57,
+        exact_budget=64,
+        options={
+            "drift_window": 128,
+            "validate_per_generation": 8,
+            "drift_probes": 4,
+        },
+    )
+
+
+def test_resume_budget_rejects_too_few_remaining_broad_probes():
+    pairs = [_drift_pair(front=index >= 3) for index in range(57)]
+
+    with pytest.raises(RuntimeError, match="broad-probe safety samples"):
+        _validate_resume_evidence_budget(
+            pairs,
+            exact_done=57,
+            exact_budget=64,
+            options={
+                "drift_window": 128,
+                "validate_per_generation": 8,
+                "drift_probes": 4,
+            },
+        )
 
 
 def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
@@ -429,9 +547,9 @@ def test_validation_selection_includes_front_and_broad_probes():
 
     chosen = selected[:5]
     assert len(chosen) == 5
-    assert sum(is_probe for _index, is_probe in chosen) == 1
-    assert all(index == 6 for index, is_probe in chosen if is_probe)
-    assert len({index for index, _is_probe in selected}) == len(objectives)
+    assert sum(is_probe for _index, is_probe, _front in chosen) == 1
+    assert all(index == 6 for index, is_probe, _front in chosen if is_probe)
+    assert len({index for index, _is_probe, _front in selected}) == len(objectives)
 
 
 def test_validation_selection_fails_without_requested_off_front_evidence():
@@ -455,7 +573,7 @@ def test_validation_selection_prefers_feasible_candidates():
         objectives, scores, violations, total=3, probes=1
     )
 
-    assert {index for index, _probe in selected[:3]} == {1, 2, 4}
+    assert {index for index, _probe, _front in selected[:3]} == {1, 2, 4}
 
 
 def test_validation_broad_probes_exclude_the_entire_proxy_front():
@@ -474,11 +592,18 @@ def test_validation_broad_probes_exclude_the_entire_proxy_front():
 
     selected = _select_validation_indices(objectives, scores, total=5, probes=2)
 
-    assert {index for index, is_probe in selected[:5] if is_probe} == {5, 6}
+    assert {
+        index for index, is_probe, _front in selected[:5] if is_probe
+    } == {5, 6}
 
 
 def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
-    selections = [(0, False), (1, True), (2, False), (3, True)]
+    selections = [
+        (0, False, True),
+        (1, True, False),
+        (2, False, True),
+        (3, True, False),
+    ]
 
     chosen = _select_novel_validations(
         selections,
@@ -491,14 +616,17 @@ def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
     )
 
     assert len(chosen) == 2
-    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 1
+    assert sum(
+        is_probe
+        for _index, is_probe, _front, _candidate, _digest in chosen
+    ) == 1
     assert chosen[0][0] == 3
 
 
 def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
     with pytest.raises(RuntimeError, match="replace duplicate broad probes"):
         _select_novel_validations(
-            [(0, False), (1, True)],
+            [(0, False, True), (1, True, False)],
             total=2,
             probes=1,
             candidate_for_index=lambda index: [index],
@@ -506,6 +634,125 @@ def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
             completed_hashes={"hash-1"},
             submitted_hashes=set(),
         )
+
+
+def test_validation_batch_preserves_true_front_and_off_front_classification():
+    objectives = np.array(
+        [[float(index), float(index)] for index in range(12)], dtype=np.float64
+    )
+    scores = objectives.mean(axis=1)
+    selections = _select_validation_indices(
+        objectives, scores, total=8, probes=4
+    )
+
+    # The complete feasible Pareto front has one member. The remaining seven
+    # candidates must stay truthfully classified as broad/off-front evidence.
+    chosen = _select_novel_validations(
+        selections,
+        total=8,
+        probes=4,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes=set(),
+        submitted_hashes=set(),
+    )
+
+    assert len(chosen) == 8
+    assert sum(
+        is_probe
+        for _index, is_probe, _front, _candidate, _digest in chosen
+    ) == 7
+
+
+def test_all_infeasible_validation_fallback_keeps_front_membership_explicit():
+    objectives = np.array(
+        [[float(index), float(index)] for index in range(6)], dtype=np.float64
+    )
+    scores = objectives.mean(axis=1)
+    violations = np.arange(1.0, 7.0)
+
+    selected = _select_validation_indices(
+        objectives, scores, violations, total=4, probes=1
+    )
+
+    assert selected[0] == (0, False, True)
+    assert all(is_probe != is_front for _index, is_probe, is_front in selected)
+    assert all(
+        is_probe and not is_front
+        for index, is_probe, is_front in selected
+        if index != 0
+    )
+
+
+def test_validation_fails_closed_without_novel_proxy_front_evidence():
+    with pytest.raises(RuntimeError, match="novel proxy-front safety evidence"):
+        _select_novel_validations(
+            [(0, False, True), (1, True, False), (2, True, False)],
+            total=2,
+            probes=1,
+            candidate_for_index=lambda index: [index],
+            digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+            completed_hashes={"hash-0"},
+            submitted_hashes=set(),
+        )
+
+
+def test_validation_scans_fallbacks_for_novel_proxy_front_before_failing():
+    chosen = _select_novel_validations(
+        [
+            (0, False, True),
+            (1, True, False),
+            (2, True, False),
+            (3, False, True),
+        ],
+        total=2,
+        probes=1,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes={"hash-0"},
+        submitted_hashes=set(),
+    )
+
+    assert {index for index, _probe, _front, _candidate, _digest in chosen} == {
+        1,
+        3,
+    }
+
+
+def test_true_front_mismatches_halt_even_when_off_front_agreement_is_high():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 32,
+            "drift_halt": 0.6,
+        }
+    )
+    for generation in range(8):
+        monitor.add(
+            generation,
+            generation,
+            probe=False,
+            proxy_front=True,
+            constraint_mismatch=True,
+        )
+        for probe in range(7):
+            score = generation * 7 + probe
+            monitor.add(
+                score,
+                score,
+                probe=True,
+                proxy_front=False,
+                constraint_mismatch=False,
+            )
+
+    status = monitor.evaluate()
+
+    assert status["samples"] == 64
+    assert status["front_samples"] == 8
+    assert status["probes"] == 56
+    assert status["constraint_agreement"] == pytest.approx(0.875)
+    assert status["front_constraint_agreement"] == 0.0
+    assert "proxy-front constraint agreement" in status["halt_reason"]
 
 
 def test_drift_monitor_needs_broad_probe_evidence_before_halting():
@@ -516,14 +763,16 @@ def test_drift_monitor_needs_broad_probe_evidence_before_halting():
     }
     monitor = _DriftMonitor(options)
     for index in range(16):
-        monitor.add(index, -index, probe=index < 4)
+        probe = index < 4
+        monitor.add(index, -index, probe=probe, proxy_front=not probe)
 
     first = monitor.evaluate()
     assert first["halt_reason"] is None
     assert first["warn_reason"]
 
     for index in range(16, 32):
-        monitor.add(index, -index, probe=index < 24)
+        probe = index < 24
+        monitor.add(index, -index, probe=probe, proxy_front=not probe)
     second = monitor.evaluate()
     assert second["probe_rho"] < 0.0
     assert second["halt_reason"]
@@ -538,7 +787,8 @@ def test_drift_monitor_halts_when_proxy_cannot_rank_broad_probes():
         }
     )
     for index in range(16):
-        monitor.add(1.0, float(index), probe=index < 8)
+        probe = index < 8
+        monitor.add(1.0, float(index), probe=probe, proxy_front=not probe)
 
     status = monitor.evaluate()
 
@@ -556,9 +806,9 @@ def test_drift_monitor_probe_failure_cannot_be_masked_by_high_aggregate_rho():
         }
     )
     for index in range(56):
-        monitor.add(index, index, probe=False)
+        monitor.add(index, index, probe=False, proxy_front=True)
     for index in range(56, 64):
-        monitor.add(index, 119 - index, probe=True)
+        monitor.add(index, 119 - index, probe=True, proxy_front=False)
 
     status = monitor.evaluate()
 
@@ -579,8 +829,9 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
         probe = index < 8
         monitor.add(
             index,
-            index,
+            1000 - index if probe and index < 3 else index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=probe and index < 3,
         )
 
@@ -588,7 +839,88 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
 
     assert status["probe_constraint_agreement"] == pytest.approx(0.625)
     assert status["probe_constraint_mismatches"] == 3
+    assert status["probe_rank_samples"] == 5
+    assert status["rho"] == pytest.approx(1.0)
     assert status["halt_reason"] is None
+
+
+def test_drift_monitor_ranks_only_classification_agreeing_broad_probes():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 128,
+            "drift_min_samples": 32,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(33):
+        probe = index % 2 == 0
+        mismatch = probe and index in (16, 32)
+        monitor.add(
+            float(index),
+            float(1000 - index if mismatch else index),
+            probe=probe,
+            proxy_front=not probe,
+            constraint_mismatch=mismatch,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["probes"] == 17
+    assert status["probe_rank_samples"] == 15
+    assert status["probe_rho"] == pytest.approx(1.0)
+    assert status["probe_constraint_agreement"] == pytest.approx(15 / 17)
+    assert status["halt_reason"] is None
+
+
+def test_drift_monitor_allows_isolated_proxy_front_constraint_mismatches():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            proxy_front=not probe,
+            constraint_mismatch=not probe and index < 11,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["constraint_agreement"] == pytest.approx(0.8125)
+    assert status["front_constraint_agreement"] == pytest.approx(0.625)
+    assert status["front_constraint_mismatches"] == 3
+    assert status["halt_reason"] is None
+
+
+def test_drift_monitor_halts_on_low_proxy_front_constraint_agreement():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            proxy_front=not probe,
+            constraint_mismatch=not probe and index < 12,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["constraint_agreement"] == pytest.approx(0.75)
+    assert status["front_constraint_agreement"] == pytest.approx(0.5)
+    assert "proxy-front constraint agreement fell below" in status["halt_reason"]
 
 
 def test_drift_monitor_halts_on_low_broad_probe_constraint_agreement():
@@ -605,6 +937,7 @@ def test_drift_monitor_halts_on_low_broad_probe_constraint_agreement():
             index,
             index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=probe and index < 4,
         )
 
@@ -836,10 +1169,11 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
             "id": index,
             "metrics": {
                 "gpu_validation": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "proxy_score": float(index),
                     "exact_score": float(index) + 0.5,
                     "probe": index == 3,
+                    "proxy_front": index != 3,
                     "constraint_classification_mismatch": False,
                 }
             },
@@ -847,7 +1181,7 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
         for index in range(4)
     ]
 
-    recovered, drift_pairs, mismatch = _recover_durable_validations(
+    recovered, drift_pairs = _recover_durable_validations(
         entries,
         start_index=2,
         stop_index=4,
@@ -857,10 +1191,9 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
 
     assert recovered == {"hash-2.0", "hash-3.0"}
     assert drift_pairs == [
-        (2.0, 2.5, False, False),
-        (3.0, 3.5, True, False),
+        (2.0, 2.5, False, False, True),
+        (3.0, 3.5, True, False, False),
     ]
-    assert mismatch is None
 
 
 def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
@@ -871,10 +1204,11 @@ def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
                     "id": index,
                     "metrics": {
                         "gpu_validation": {
-                            "schema_version": 1,
+                            "schema_version": 2,
                             "proxy_score": float(index),
                             "exact_score": float(index),
                             "probe": False,
+                            "proxy_front": True,
                             "constraint_classification_mismatch": False,
                         }
                     },
@@ -899,17 +1233,18 @@ def test_resume_fails_closed_when_durable_tail_lacks_drift_evidence():
         )
 
 
-def test_resume_recovers_durable_front_constraint_disagreement():
-    _hashes, pairs, mismatch = _recover_durable_validations(
+def test_resume_recovers_durable_front_constraint_disagreement_as_drift_evidence():
+    _hashes, pairs = _recover_durable_validations(
         [
             {
                 "id": 0,
                 "metrics": {
                     "gpu_validation": {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "proxy_score": 0.1,
                         "exact_score": 0.2,
                         "probe": False,
+                        "proxy_front": True,
                         "constraint_classification_mismatch": True,
                     }
                 },
@@ -921,21 +1256,21 @@ def test_resume_recovers_durable_front_constraint_disagreement():
         hash_vector=lambda vector: f"hash-{vector[0]}",
     )
 
-    assert pairs == [(0.1, 0.2, False, True)]
-    assert "constraint classification disagreed" in mismatch
+    assert pairs == [(0.1, 0.2, False, True, True)]
 
 
 def test_resume_records_broad_probe_constraint_disagreement_without_immediate_halt():
-    _hashes, pairs, mismatch = _recover_durable_validations(
+    _hashes, pairs = _recover_durable_validations(
         [
             {
                 "id": 0,
                 "metrics": {
                     "gpu_validation": {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "proxy_score": 0.1,
                         "exact_score": 0.2,
                         "probe": True,
+                        "proxy_front": False,
                         "constraint_classification_mismatch": True,
                     }
                 },
@@ -947,5 +1282,4 @@ def test_resume_records_broad_probe_constraint_disagreement_without_immediate_ha
         hash_vector=lambda vector: f"hash-{vector[0]}",
     )
 
-    assert pairs == [(0.1, 0.2, True, True)]
-    assert mismatch is None
+    assert pairs == [(0.1, 0.2, True, True, False)]

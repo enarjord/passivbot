@@ -108,6 +108,14 @@ GPU_STRATEGY_BOUND_MAPS = {
 }
 
 
+def _minimum_rank_evidence_samples(halt: float) -> int:
+    """Total samples needed to guarantee eight comparable at agreement >= halt."""
+
+    if not 0.0 < float(halt) <= 1.0:
+        raise ValueError("GPU drift_halt must be greater than zero and at most one")
+    return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
+
+
 def _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides) -> None:
     """Reject recursive grid modes until the proxy models their full ladders."""
 
@@ -266,39 +274,176 @@ def _resolve_options(config: dict) -> dict:
         raise ValueError(
             "optimize.gpu.checkpoint_interval_seconds must be greater than zero"
         )
-    if not 0.0 <= float(options["drift_halt"]) <= 1.0:
-        raise ValueError("optimize.gpu.drift_halt must be between zero and one")
+    if not 0.0 < float(options["drift_halt"]) <= 1.0:
+        raise ValueError(
+            "optimize.gpu.drift_halt must be greater than zero and at most one"
+        )
     if int(options["drift_min_samples"]) > int(options["drift_window"]):
         raise ValueError(
             "optimize.gpu.drift_min_samples must be less than or equal to "
             "optimize.gpu.drift_window"
         )
+    validations = int(options["validate_per_generation"])
+    probes = int(options["drift_probes"])
+    if probes >= validations:
+        raise ValueError(
+            "optimize.gpu.drift_probes must be less than "
+            "optimize.gpu.validate_per_generation so proxy-front safety evidence "
+            "is always collected"
+        )
+    exact_workers = int(options["exact_workers"]) or int(
+        config.get("optimize", {}).get("n_cpus", 0)
+    )
+    effective_pending = int(options["max_pending_exact"]) or exact_workers * 2
+    if effective_pending < validations:
+        raise ValueError(
+            "optimize.gpu.max_pending_exact (or its exact-worker default) must be "
+            "at least optimize.gpu.validate_per_generation so each full validation "
+            "batch retains its configured proxy-front/broad-probe allocation"
+        )
+    # A complete feasible proxy Pareto front may contain only one novel
+    # candidate. All remaining validation slots are truthfully broad/off-front
+    # evidence, so budget for the worst-case one true-front sample per full
+    # generation rather than assuming a fixed front/probe split.
+    required_front_window = MIN_DRIFT_PROBES * validations
+    if int(options["drift_window"]) < required_front_window:
+        raise ValueError(
+            "optimize.gpu.drift_window must be at least "
+            f"{required_front_window} to retain {MIN_DRIFT_PROBES} true "
+            "proxy-front validations when a complete proxy front contributes "
+            "only one novel candidate per generation"
+        )
+    required_evidence_window = required_front_window
     if int(options["drift_probes"]) > 0:
+        required_rank_probes = _minimum_rank_evidence_samples(
+            float(options["drift_halt"])
+        )
         required_probe_window = max(
-            MIN_DRIFT_PROBES,
-            math.ceil(
-                MIN_DRIFT_PROBES
-                * int(options["validate_per_generation"])
-                / int(options["drift_probes"])
-            ),
+            required_rank_probes,
+            math.ceil(required_rank_probes * validations / probes),
         )
         if int(options["drift_window"]) < required_probe_window:
             raise ValueError(
                 "optimize.gpu.drift_window must be at least "
-                f"{required_probe_window} to retain {MIN_DRIFT_PROBES} broad probes "
-                "at the configured validate_per_generation/drift_probes ratio"
+                f"{required_probe_window} to retain {required_rank_probes} broad "
+                "probes, guaranteeing eight rank-comparable samples whenever "
+                "the broad-probe constraint gate has not failed"
             )
-        exact_budget = int(config.get("optimize", {}).get("iters", 0))
-        required_exact_budget = max(
-            int(options["drift_min_samples"]), required_probe_window
+        required_evidence_window = max(
+            required_evidence_window, required_probe_window
         )
-        if exact_budget < required_exact_budget:
-            raise ValueError(
-                "optimize.iters must be at least "
-                f"{required_exact_budget} to activate the configured GPU drift gate; "
-                f"got {exact_budget}"
-            )
+    exact_budget = int(config.get("optimize", {}).get("iters", 0))
+    required_exact_budget = max(
+        int(options["drift_min_samples"]), required_evidence_window
+    )
+    if exact_budget < required_exact_budget:
+        raise ValueError(
+            "optimize.iters must be at least "
+            f"{required_exact_budget} to activate the configured GPU drift gate; "
+            f"got {exact_budget}"
+        )
+    # Apply the same conservative rolling-suffix proof to a fresh run that is
+    # used for resume. Ratio-based window sizing alone misses partial final
+    # batches whose zero-probe tail can evict early evidence.
+    _validate_resume_evidence_budget(
+        [],
+        exact_done=0,
+        exact_budget=exact_budget,
+        options=options,
+        context="fresh run",
+        error_type=ValueError,
+    )
     return options
+
+
+def _validation_probe_count(
+    validation_count: int, validate_per_generation: int, drift_probes: int
+) -> int:
+    """Preserve the configured evidence ratio in a partial final batch."""
+    if validation_count <= 1 or drift_probes <= 0:
+        return 0
+    return min(
+        validation_count - 1,
+        drift_probes * validation_count // validate_per_generation,
+    )
+
+
+def _ready_submission_prefix(pending) -> list:
+    """Return only the contiguous ready prefix in submission order."""
+
+    ready = []
+    for result in pending:
+        if not result.ready():
+            break
+        ready.append(result)
+    return ready
+
+
+def _validate_resume_evidence_budget(
+    pairs,
+    *,
+    exact_done: int,
+    exact_budget: int,
+    options: dict,
+    context: str = "resume",
+    error_type: type[Exception] = RuntimeError,
+) -> None:
+    """Fail closed if a resumed run cannot still activate each drift gate."""
+
+    remaining = max(0, int(exact_budget) - int(exact_done))
+    window = int(options["drift_window"])
+    validations = int(options["validate_per_generation"])
+    configured_probes = int(options["drift_probes"])
+    required_probes = _minimum_rank_evidence_samples(
+        float(options.get("drift_halt", GPU_DEFAULTS["drift_halt"]))
+    )
+
+    # Recovered samples already have a durable order. Future exact results are
+    # consumed strictly in submission order, so each validation generation is
+    # a contiguous segment. A partially retained future segment may lose any
+    # evidence samples first, which is the conservative within-batch order.
+    segments = [
+        (1, int(bool(row[4])), int(bool(row[2])))
+        for row in pairs
+    ]
+    future = remaining
+    while future > 0:
+        count = min(validations, future)
+        segments.append(
+            (
+                count,
+                1,
+                _validation_probe_count(count, validations, configured_probes),
+            )
+        )
+        future -= count
+
+    kept = 0
+    guaranteed_front = 0
+    guaranteed_probes = 0
+    for length, front_count, probe_count in reversed(segments):
+        if kept >= window:
+            break
+        included = min(length, window - kept)
+        excluded = length - included
+        guaranteed_front += max(0, front_count - excluded)
+        guaranteed_probes += max(0, probe_count - excluded)
+        kept += included
+
+    if guaranteed_front < MIN_DRIFT_PROBES:
+        raise error_type(
+            f"GPU {context} has insufficient exact budget to retain "
+            f"{MIN_DRIFT_PROBES} proxy-front safety samples in the drift window: "
+            f"guaranteed={guaranteed_front}, exact_done={exact_done}, "
+            f"remaining={remaining}"
+        )
+    if configured_probes > 0 and guaranteed_probes < required_probes:
+        raise error_type(
+            f"GPU {context} has insufficient exact budget to retain "
+            f"{required_probes} broad-probe safety samples in the drift window: "
+            f"guaranteed={guaranteed_probes}, exact_done={exact_done}, "
+            f"remaining={remaining}"
+        )
 
 
 def _validate_scope(config: dict, evaluator) -> str:
@@ -442,12 +587,15 @@ class _ObjectiveScale:
 
 class _DriftMonitor:
     MIN_PROBES = MIN_DRIFT_PROBES
+    MIN_FRONT_SAMPLES = MIN_DRIFT_PROBES
 
     def __init__(self, options: dict):
         self.window = int(options["drift_window"])
         self.minimum = int(options["drift_min_samples"])
         self.halt = float(options["drift_halt"])
-        self.pairs: deque[tuple[float, float, bool, bool]] = deque(maxlen=self.window)
+        self.pairs: deque[tuple[float, float, bool, bool, bool]] = deque(
+            maxlen=self.window
+        )
 
     def add(
         self,
@@ -455,14 +603,21 @@ class _DriftMonitor:
         exact_score: float,
         *,
         probe: bool,
+        proxy_front: bool,
         constraint_mismatch: bool = False,
     ) -> None:
+        if bool(probe) == bool(proxy_front):
+            raise ValueError(
+                "GPU validation evidence must be exactly one of proxy-front "
+                "or broad/off-front"
+            )
         self.pairs.append(
             (
                 float(proxy_score),
                 float(exact_score),
                 bool(probe),
                 bool(constraint_mismatch),
+                bool(proxy_front),
             )
         )
 
@@ -473,8 +628,16 @@ class _DriftMonitor:
             "front_rho": float("nan"),
             "samples": len(self.pairs),
             "probes": 0,
+            "front_samples": 0,
+            "rank_samples": 0,
+            "probe_rank_samples": 0,
+            "front_rank_samples": 0,
+            "constraint_agreement": float("nan"),
+            "constraint_mismatches": 0,
             "probe_constraint_agreement": float("nan"),
             "probe_constraint_mismatches": 0,
+            "front_constraint_agreement": float("nan"),
+            "front_constraint_mismatches": 0,
             "halt_reason": None,
             "warn_reason": None,
         }
@@ -483,13 +646,41 @@ class _DriftMonitor:
         proxy = np.asarray([row[0] for row in self.pairs], dtype=np.float64)
         exact = np.asarray([row[1] for row in self.pairs], dtype=np.float64)
         probes = np.asarray([row[2] for row in self.pairs], dtype=bool)
+        fronts = np.asarray(
+            [row[4] for row in self.pairs],
+            dtype=bool,
+        )
+        if np.any(probes == fronts):
+            raise RuntimeError(
+                "GPU drift evidence contains invalid proxy-front/broad-probe "
+                "classification"
+            )
         constraint_mismatches = np.asarray(
             [row[3] if len(row) > 3 else False for row in self.pairs], dtype=bool
         )
+        result["constraint_mismatches"] = int(constraint_mismatches.sum())
         result["probes"] = int(probes.sum())
-        result["rho"] = _spearman(proxy, exact)
-        result["probe_rho"] = _spearman(proxy[probes], exact[probes])
-        result["front_rho"] = _spearman(proxy[~probes], exact[~probes])
+        result["front_samples"] = int(fronts.sum())
+        # Feasibility disagreements have their own independent fail-closed
+        # gates below. They are not rank-comparable: including them in
+        # Spearman both double-counts the same failure and can turn otherwise
+        # exact near-ties into arbitrary rank inversions.
+        rank_eligible = ~constraint_mismatches
+        probe_rank_eligible = probes & rank_eligible
+        front_rank_eligible = fronts & rank_eligible
+        result["rank_samples"] = int(rank_eligible.sum())
+        result["probe_rank_samples"] = int(probe_rank_eligible.sum())
+        result["front_rank_samples"] = int(front_rank_eligible.sum())
+        result["rho"] = _spearman(proxy[rank_eligible], exact[rank_eligible])
+        result["probe_rho"] = _spearman(
+            proxy[probe_rank_eligible], exact[probe_rank_eligible]
+        )
+        result["front_rho"] = _spearman(
+            proxy[front_rank_eligible], exact[front_rank_eligible]
+        )
+        result["constraint_agreement"] = 1.0 - (
+            result["constraint_mismatches"] / result["samples"]
+        )
         result["probe_constraint_mismatches"] = int(
             (constraint_mismatches & probes).sum()
         )
@@ -497,20 +688,44 @@ class _DriftMonitor:
             result["probe_constraint_agreement"] = 1.0 - (
                 result["probe_constraint_mismatches"] / result["probes"]
             )
+        result["front_constraint_mismatches"] = int(
+            (constraint_mismatches & fronts).sum()
+        )
+        if result["front_samples"]:
+            result["front_constraint_agreement"] = 1.0 - (
+                result["front_constraint_mismatches"] / result["front_samples"]
+            )
         detail = (
             f"rho={result['rho']:.3f}, probe_rho={result['probe_rho']:.3f}, "
             f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
+            f"constraint_agreement={result['constraint_agreement']:.3f}, "
             f"probes={result['probes']}, "
-            f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}"
+            f"probe_rank_samples={result['probe_rank_samples']}, "
+            f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}, "
+            f"front_samples={result['front_samples']}, "
+            f"front_rank_samples={result['front_rank_samples']}, "
+            f"front_constraint_agreement={result['front_constraint_agreement']:.3f}"
         )
-        if result["probes"] >= self.MIN_PROBES and (
+        if result["constraint_agreement"] < self.halt:
+            result["halt_reason"] = (
+                "GPU proxy/exact rolling constraint agreement fell below "
+                f"safety threshold ({detail})"
+            )
+        elif result["probes"] >= self.MIN_PROBES and (
             result["probe_constraint_agreement"] < self.halt
         ):
             result["halt_reason"] = (
                 "GPU proxy/exact broad-probe constraint agreement fell below "
                 f"safety threshold ({detail})"
             )
-        elif result["probes"] >= self.MIN_PROBES and (
+        elif result["front_samples"] >= self.MIN_FRONT_SAMPLES and (
+            result["front_constraint_agreement"] < self.halt
+        ):
+            result["halt_reason"] = (
+                "GPU proxy/exact proxy-front constraint agreement fell below "
+                f"safety threshold ({detail})"
+            )
+        elif result["probe_rank_samples"] >= self.MIN_PROBES and (
             not np.isfinite(result["probe_rho"])
             or result["probe_rho"] < self.halt
         ):
@@ -519,9 +734,10 @@ class _DriftMonitor:
             )
         elif np.isfinite(result["rho"]) and result["rho"] >= self.halt:
             return result
-        elif result["probes"] < self.MIN_PROBES:
+        elif result["probe_rank_samples"] < self.MIN_PROBES:
             result["warn_reason"] = (
-                f"GPU drift below threshold without enough broad probes ({detail})"
+                "GPU drift below threshold without enough rank-comparable broad "
+                f"probes ({detail})"
             )
         else:
             result["warn_reason"] = (
@@ -557,7 +773,7 @@ def _select_validation_indices(
     *,
     total: int,
     probes: int,
-) -> list[tuple[int, bool]]:
+) -> list[tuple[int, bool, bool]]:
     from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
     objectives = np.asarray(objectives, dtype=np.float64)
@@ -585,8 +801,8 @@ def _select_validation_indices(
     front_ids = {int(index) for index in front}
     front_count = max(0, total - probes)
     elite_local = _normalized_farthest_indices(objectives[front], front_count)
-    selected = [(int(front[index]), False) for index in elite_local]
-    selected_ids = {index for index, _probe in selected}
+    selected = [(int(front[index]), False, True) for index in elite_local]
+    selected_ids = {index for index, _probe, _front in selected}
 
     broad_pool = np.asarray(
         [
@@ -611,7 +827,7 @@ def _select_validation_indices(
         for position in positions:
             index = int(broad_pool[position])
             if index not in selected_ids:
-                selected.append((index, True))
+                selected.append((index, True, False))
                 selected_ids.add(index)
 
     preferred_order = sorted(
@@ -621,7 +837,8 @@ def _select_validation_indices(
         if len(selected) >= total:
             break
         if index not in selected_ids:
-            selected.append((index, index not in front_ids))
+            is_front = index in front_ids
+            selected.append((index, not is_front, is_front))
             selected_ids.add(index)
 
     # Return a complete preference order. The caller may skip candidates whose
@@ -637,7 +854,8 @@ def _select_validation_indices(
     )
     for index in fallback_order:
         if index not in selected_ids:
-            selected.append((index, index not in front_ids and index in feasible_ids))
+            is_front = index in front_ids
+            selected.append((index, not is_front, is_front))
             selected_ids.add(index)
     return selected
 
@@ -655,16 +873,22 @@ def _select_novel_validations(
     novel = []
     seen = set()
     novel_probe_count = 0
-    for index, is_probe in selections:
+    novel_front_count = 0
+    for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
         if digest in completed_hashes or digest in submitted_hashes or digest in seen:
             continue
         seen.add(digest)
-        item = (index, bool(is_probe), candidate, digest)
+        item = (index, bool(is_probe), bool(is_front), candidate, digest)
         novel.append(item)
         novel_probe_count += int(bool(is_probe))
-        if len(novel) >= total and novel_probe_count >= probes:
+        novel_front_count += int(bool(is_front))
+        if (
+            len(novel) >= total
+            and novel_probe_count >= probes
+            and novel_front_count > 0
+        ):
             break
 
     probe_items = [item for item in novel if item[1]]
@@ -674,14 +898,24 @@ def _select_novel_validations(
             "candidates outside the complete feasible proxy Pareto front: "
             f"requested {probes}, available {len(probe_items)}"
         )
+    front_items = [item for item in novel if item[2]]
+    if not front_items:
+        raise RuntimeError(
+            "GPU validation cannot provide novel proxy-front safety evidence; "
+            "the current proxy front was already evaluated or submitted"
+        )
     chosen = probe_items[:probes]
-    chosen_digests = {item[3] for item in chosen}
+    chosen_digests = {item[4] for item in chosen}
+    first_front = front_items[0]
+    if first_front[4] not in chosen_digests:
+        chosen.append(first_front)
+        chosen_digests.add(first_front[4])
     for item in novel:
         if len(chosen) >= total:
             break
-        if item[3] not in chosen_digests:
+        if item[4] not in chosen_digests:
             chosen.append(item)
-            chosen_digests.add(item[3])
+            chosen_digests.add(item[4])
     return chosen
 
 
@@ -707,7 +941,7 @@ def _checkpoint_signature(active, scoring) -> str:
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 1,
+        "version": 2,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -901,12 +1135,11 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> tuple[set[str], list[tuple[float, float, bool, bool]], str | None]:
+) -> tuple[set[str], list[tuple[float, float, bool, bool, bool]]]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
-    drift_pairs: list[tuple[float, float, bool, bool]] = []
-    mismatch_reason = None
+    drift_pairs: list[tuple[float, float, bool, bool, bool]] = []
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -920,7 +1153,7 @@ def _recover_durable_validations(
                 "GPU resume cannot recover proxy/exact safety evidence from "
                 f"durable result {index}"
             )
-        if metadata.get("schema_version") != 1:
+        if metadata.get("schema_version") != 2:
             raise RuntimeError(
                 "GPU resume found unsupported proxy/exact safety evidence in "
                 f"durable result {index}"
@@ -929,13 +1162,19 @@ def _recover_durable_validations(
             proxy_score = float(metadata["proxy_score"])
             exact_score = float(metadata["exact_score"])
             probe = metadata["probe"]
+            proxy_front = metadata["proxy_front"]
             classification_mismatch = metadata["constraint_classification_mismatch"]
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(
                 "GPU resume found invalid proxy/exact safety evidence in "
                 f"durable result {index}"
             ) from exc
-        if not isinstance(probe, bool) or not isinstance(classification_mismatch, bool):
+        if (
+            not isinstance(probe, bool)
+            or not isinstance(proxy_front, bool)
+            or probe == proxy_front
+            or not isinstance(classification_mismatch, bool)
+        ):
             raise RuntimeError(
                 "GPU resume found invalid proxy/exact safety evidence in "
                 f"durable result {index}"
@@ -945,12 +1184,15 @@ def _recover_durable_validations(
                 "GPU resume found non-finite proxy/exact safety evidence in "
                 f"durable result {index}"
             )
-        drift_pairs.append((proxy_score, exact_score, probe, classification_mismatch))
-        if classification_mismatch and not probe:
-            mismatch_reason = (
-                "GPU proxy/exact constraint classification disagreed for a "
-                "durably recorded exact validation"
+        drift_pairs.append(
+            (
+                proxy_score,
+                exact_score,
+                probe,
+                classification_mismatch,
+                proxy_front,
             )
+        )
         consumed += 1
     expected = max(0, stop_index - start_index)
     if consumed != expected:
@@ -958,7 +1200,7 @@ def _recover_durable_validations(
             "GPU resume could not reconstruct all durable candidate hashes: "
             f"expected {expected}, recovered {consumed}"
         )
-    return recovered, drift_pairs, mismatch_reason
+    return recovered, drift_pairs
 
 
 def run_backend(
@@ -1225,6 +1467,9 @@ def run_backend(
     drift_monitor = _DriftMonitor(options)
     persisted_halt_reason = None
     signature = _checkpoint_signature(active, config["optimize"]["scoring"])
+    budget = int(config["optimize"]["iters"])
+    if budget <= 0:
+        raise ValueError("optimize.iters must be greater than zero")
 
     if resume:
         if checkpoint_path is None or not os.path.isfile(checkpoint_path):
@@ -1269,22 +1514,15 @@ def run_backend(
                     )
                 return vectors[0]
 
-            recovered_hashes, recovered_pairs, recovered_mismatch = (
-                _recover_durable_validations(
-                    load_results(results_file),
-                    start_index=exact_done,
-                    stop_index=recorded_exact,
-                    vector_from_entry=vector_from_entry,
-                    hash_vector=vector_hash,
-                )
+            recovered_hashes, recovered_pairs = _recover_durable_validations(
+                load_results(results_file),
+                start_index=exact_done,
+                stop_index=recorded_exact,
+                vector_from_entry=vector_from_entry,
+                hash_vector=vector_hash,
             )
             completed_hashes.update(recovered_hashes)
             drift_monitor.pairs.extend(recovered_pairs)
-            if recovered_mismatch:
-                raise RuntimeError(
-                    "Cannot resume a GPU run stopped by its constraint safety gate: "
-                    f"{recovered_mismatch}"
-                )
             recovered_drift_status = drift_monitor.evaluate()
             if recovered_drift_status["halt_reason"]:
                 raise RuntimeError(
@@ -1304,6 +1542,12 @@ def run_backend(
                 "Cannot resume a GPU run stopped by its drift safety gate: "
                 f"{persisted_halt_reason}"
             )
+        _validate_resume_evidence_budget(
+            drift_monitor.pairs,
+            exact_done=exact_done,
+            exact_budget=budget,
+            options=options,
+        )
         logging.info(
             "Resumed GPU optimizer at generation %d with %d exact evaluations",
             generation,
@@ -1399,7 +1643,11 @@ def run_backend(
     def consume_ready(*, wait_for_one: bool = False) -> None:
         nonlocal exact_done, last_warning, persisted_halt_reason
         while True:
-            ready = [result for result in pending if result.ready()]
+            # Preserve submission/generation order in the durable evidence
+            # stream. Workers may finish out of order, but later completions
+            # wait behind the oldest pending result so resume guarantees match
+            # the class allocation modeled above.
+            ready = _ready_submission_prefix(pending)
             if ready:
                 break
             if not wait_for_one or not pending:
@@ -1413,6 +1661,7 @@ def run_backend(
                 proxy_violation,
                 proxy_metrics,
                 is_probe,
+                is_proxy_front,
                 digest,
             ) = pending.pop(result)
             payload = result.get()
@@ -1430,35 +1679,30 @@ def run_backend(
                 vector,
                 payload,
                 validation_metadata={
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "proxy_score": float(proxy_score),
                     "exact_score": exact_score,
                     "probe": bool(is_probe),
+                    "proxy_front": bool(is_proxy_front),
                     "constraint_classification_mismatch": classification_mismatch,
                     "constraint_diagnostics": constraint_diagnostics,
                 },
             )
             exact_done += 1
             completed_hashes.add(digest)
-            if classification_mismatch and not is_probe:
-                persisted_halt_reason = (
-                    "GPU proxy/exact constraint classification disagreed for an exact "
-                    f"validation: proxy_violation={proxy_violation}, "
-                    f"exact_G={np.asarray(payload['G']).tolist()}; "
-                    f"limits=[{_format_constraint_diagnostics(constraint_diagnostics)}]"
-                )
-                maybe_save_checkpoint(force=True)
-                raise RuntimeError(persisted_halt_reason)
             if classification_mismatch:
                 logging.warning(
-                    "GPU broad-probe proxy/exact constraint classification disagreed; "
-                    "recording rolling drift evidence: %s",
+                    "GPU %s proxy/exact constraint classification disagreed; exact Rust "
+                    "classification remains authoritative and the mismatch is rolling "
+                    "drift evidence: %s",
+                    "broad-probe" if is_probe else "proxy-front",
                     _format_constraint_diagnostics(constraint_diagnostics),
                 )
             drift_monitor.add(
                 proxy_score,
                 exact_score,
                 probe=is_probe,
+                proxy_front=is_proxy_front,
                 constraint_mismatch=classification_mismatch,
             )
             status = drift_monitor.evaluate()
@@ -1475,12 +1719,16 @@ def run_backend(
         maybe_save_checkpoint(force=True)
 
     try:
-        budget = int(config["optimize"]["iters"])
-        if budget <= 0:
-            raise ValueError("optimize.iters must be greater than zero")
         while exact_done < budget:
             consume_ready()
             if exact_done + len(pending) >= budget:
+                consume_ready(wait_for_one=True)
+                continue
+            validation_count = min(
+                int(options["validate_per_generation"]),
+                budget - exact_done - len(pending),
+            )
+            if max_pending - len(pending) < validation_count:
                 consume_ready(wait_for_one=True)
                 continue
 
@@ -1504,12 +1752,11 @@ def run_backend(
             algorithm.tell(infills=population)
             generation += 1
 
-            capacity = min(
-                max_pending - len(pending),
-                budget - exact_done - len(pending),
+            probe_count = _validation_probe_count(
+                validation_count,
+                int(options["validate_per_generation"]),
+                int(options["drift_probes"]),
             )
-            validation_count = min(int(options["validate_per_generation"]), capacity)
-            probe_count = min(int(options["drift_probes"]), validation_count)
             selections = _select_validation_indices(
                 proxy_objectives,
                 proxy_scores,
@@ -1527,7 +1774,7 @@ def run_backend(
                 submitted_hashes=submitted_hashes,
             )
             submitted_this_generation = 0
-            for index, is_probe, vector, digest in novel_selections:
+            for index, is_probe, is_proxy_front, vector, digest in novel_selections:
                 result = pool.apply_async(
                     _evaluate_pymoo_worker_from_globals, (vector,)
                 )
@@ -1537,6 +1784,7 @@ def run_backend(
                     float(proxy_violations[index]),
                     dict(metric_rows[index]),
                     bool(is_probe),
+                    bool(is_proxy_front),
                     digest,
                 )
                 submitted_hashes.add(digest)

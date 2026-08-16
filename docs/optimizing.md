@@ -135,14 +135,25 @@ The backend is hybrid rather than a replacement backtester:
    trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
    trailing, and position state with one shared balance and the exact Rust fill ordering. Python
    also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
-   comparisons preserve Rust's decimal-tick fill decisions.
+   comparisons preserve Rust's decimal-tick fill decisions. Candle-derived touches are classified
+   from the original float64 data. EMA uses Rust-compatible directional ticks. Trailing-martingale
+   uses those ticks to choose the controlling raw/target value before float32 can collapse nearby
+   prices, then mirrors Rust's directional entry finalization and nearest-tick close finalization.
+   Raw-touch close minimum quantities are computed from the original float64 price before close-
+   price finalization, and their ordering relative to aligned quantity steps is retained across
+   float32 transport. Tick-aligned computed targets remain on their exchange tick; residual
+   float32 arithmetic drift is measured by exact validation.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
-5. Rolling rank and constraint-agreement gates independently stop the run if broad proxy/exact
-   probe agreement falls below `drift_halt` after sufficient evidence, even when aggregate
-   agreement remains high. A feasibility disagreement on a proxy-front candidate still stops
-   immediately; broad-probe disagreements are retained as rolling evidence because those probes
-   deliberately sample regions where the float32 screening path may be less representative.
+5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
+   falls below `drift_halt` after sufficient evidence. Constraint classification is monitored over
+   all validations and independently for proxy-front candidates and broad probes. An isolated
+   disagreement is retained as drift evidence rather than aborting immediately; the exact Rust
+   result remains authoritative and an exact-infeasible candidate cannot enter the Pareto front.
+   Feasibility disagreements are not rank-comparable and already count against the constraint
+   gates, so rank correlation uses only classification-agreeing samples and requires at least eight
+   comparable broad probes. Window and exact-budget validation reserve enough total probes to retain
+   those eight whenever the configured probe constraint-agreement gate has not already failed.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
@@ -176,22 +187,39 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `population_size` is the NSGA-II proxy population.
 - `batch_size` caps candidates per MPS dispatch.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
-- `drift_probes` reserves part of that validation budget for candidates away from the proxy front.
+- `drift_probes` reserves at least part of that validation budget for candidates away from the
+  proxy front.
   A generation fails closed if its complete feasible proxy front leaves too few independent
   off-front candidates for the requested probe count.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
-  limit classification safety gates. Broad-probe Spearman correlation and constraint agreement
-  must each remain at or above `drift_halt`. At least eight broad probes are required before low
-  agreement can halt a run, so `drift_window` must be large enough to retain eight probes at the
-  configured `validate_per_generation / drift_probes` ratio. When probes are enabled,
-  `optimize.iters` must also be large enough to reach both that probe budget and
-  `drift_min_samples`.
+  limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
+  proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
+  `drift_halt` must be greater than zero and at most one.
+  At least eight samples of a validation class are required before its independent low agreement
+  can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
+  eight true proxy-front validations even when the complete feasible proxy front contributes only
+  one novel candidate per generation. If that front is smaller than the non-probe quota, remaining
+  off-front validations stay truthfully classified as broad probes rather than being relabeled as
+  front evidence. Front membership is carried independently through exact-result persistence and
+  resume recovery. A generation fails closed if duplicate filtering leaves no novel proxy-front
+  candidate, so broad probes cannot silently consume the exact budget needed to activate the front
+  gate. `drift_probes` must remain below `validate_per_generation` so each generation requests
+  proxy-front safety evidence. A partial final validation batch scales its reserved probe count down
+  proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
+  It must be at least `validate_per_generation` so throttling cannot change the configured
+  proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
+  screening another generation.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
-  result batches are checkpointed immediately, and each durable result carries the proxy/exact
-  safety evidence needed to recover if its flush outruns the companion checkpoint. A final
-  checkpoint is always written on successful completion.
+   result batches are checkpointed immediately, and each durable result carries the proxy/exact
+   safety evidence needed to recover if its flush outruns the companion checkpoint. A final
+   evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
+   the rolling-window suffix, discarded pending work, and all full or partial validation batches.
+   Exact worker results are consumed in submission order even if workers finish out of order,
+   preserving the modeled batch sequence; resume fails closed if either class-specific gate can no
+   longer reach its minimum sample count. A final checkpoint is always written on successful
+   completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the
