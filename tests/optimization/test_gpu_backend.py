@@ -535,6 +535,31 @@ def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
         )
 
 
+def test_final_validation_batch_caps_probe_classification_to_requested_quota():
+    objectives = np.array(
+        [[float(index), float(index)] for index in range(12)], dtype=np.float64
+    )
+    scores = objectives.mean(axis=1)
+    selections = _select_validation_indices(
+        objectives, scores, total=8, probes=4
+    )
+
+    # The complete feasible Pareto front has one member. Off-front candidates
+    # are probe-eligible fallbacks, but the submitted batch must still be 4/4.
+    chosen = _select_novel_validations(
+        selections,
+        total=8,
+        probes=4,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes=set(),
+        submitted_hashes=set(),
+    )
+
+    assert len(chosen) == 8
+    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 4
+
+
 def test_drift_monitor_needs_broad_probe_evidence_before_halting():
     options = {
         "drift_window": 64,

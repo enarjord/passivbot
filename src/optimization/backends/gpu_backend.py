@@ -757,7 +757,11 @@ def _select_novel_validations(
         if len(chosen) >= total:
             break
         if item[3] not in chosen_digests:
-            chosen.append(item)
+            # Off-front fallback candidates remain eligible to replace a
+            # duplicate broad probe, but only the configured probe quota is
+            # classified as probe evidence in the submitted exact batch.
+            index, _probe_eligible, candidate, digest = item
+            chosen.append((index, False, candidate, digest))
             chosen_digests.add(item[3])
     return chosen
 
