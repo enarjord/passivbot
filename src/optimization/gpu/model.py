@@ -334,6 +334,48 @@ def _directional_touch_ticks(
     )
 
 
+def _minimum_entry_qty_steps(prices, market: ProxyMarket) -> np.ndarray:
+    """Precompute Rust-compatible minimum quantities from float64 touch prices."""
+
+    prices = np.asarray(prices, dtype=np.float64)
+    finite = np.isfinite(prices) & (prices > 0.0)
+    safe = np.where(finite, prices, 1.0)
+    raw_min = np.maximum(
+        float(market.min_qty),
+        float(market.min_cost) / safe / float(market.c_mult),
+    )
+    raw_steps = raw_min / float(market.qty_step)
+    nearest_steps = np.floor(raw_steps + 0.5)
+    nearest_qty = nearest_steps * float(market.qty_step)
+    representation_tolerance = (
+        np.finfo(np.float64).eps
+        * np.maximum(np.abs(raw_min), np.abs(nearest_qty))
+        * 4.0
+    )
+    aligned = (
+        (nearest_steps > 0.0)
+        & (np.abs(raw_steps - nearest_steps) <= 1e-8)
+        & (
+            (nearest_qty >= raw_min)
+            | (raw_min - nearest_qty <= representation_tolerance)
+        )
+    )
+    steps = np.where(
+        raw_min == 0.0,
+        0.0,
+        np.where(aligned, nearest_steps, np.ceil(raw_steps)),
+    )
+    steps = np.where(finite, steps, 0.0)
+    i32 = np.iinfo(np.int32)
+    if (
+        np.any(~np.isfinite(steps))
+        or np.any(steps < 0.0)
+        or np.any(steps > i32.max)
+    ):
+        raise ValueError("MPS proxy minimum touch quantities exceed signed 32-bit range")
+    return steps.astype(np.int32)
+
+
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
@@ -395,6 +437,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     touch_down_tick, touch_up_tick, touch_nearest_tick = _directional_touch_ticks(
         close, market.price_step
     )
+    touch_min_qty_steps = _minimum_entry_qty_steps(close, market)
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -414,6 +457,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "touch_down_tick": tensor(touch_down_tick),
         "touch_up_tick": tensor(touch_up_tick),
         "touch_nearest_tick": tensor(touch_nearest_tick),
+        "touch_min_qty_steps": tensor(touch_min_qty_steps),
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,

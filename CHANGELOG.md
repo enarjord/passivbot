@@ -22,12 +22,13 @@ All notable user-facing changes will be documented in this file.
   sees just beyond a decimal tick. Candle-derived EMA touches use Rust-compatible directional ticks.
   Trailing-martingale uses float64-derived directional ticks to choose the controlling raw/target
   value before Metal float32 can collapse them, then mirrors Rust's directional entry and nearest-
-  tick close finalization. Tick-aligned targets remain on their exchange tick, and partial final
-  validation batches scale their reserved broad probes proportionally. True proxy-front membership
-  is persisted independently from off-front probe eligibility, with the safety window and exact
-  budget sized for a one-member proxy
-  front; a generation with no novel front candidate fails closed instead of silently consuming that
-  evidence budget. Resume also proves that its recovered evidence plus remaining exact budget can
+  tick close finalization. Raw-touch close minimum quantities are sized from the original float64
+  price before that finalization. Tick-aligned targets remain on their exchange tick, and partial
+  final validation batches scale their reserved broad probes proportionally. True proxy-front
+  membership is persisted independently from off-front probe eligibility, with the safety window
+  and exact budget sized for a one-member proxy front; a generation with no novel front candidate
+  fails closed instead of silently consuming that evidence budget. Resume also proves that its
+  recovered evidence plus remaining exact budget can
   still activate both class-specific gates; exact worker completions are durably consumed in
   submission order so that proof remains valid when workers finish out of order. Feasibility
   disagreements are evaluated by the independent constraint-agreement gates and excluded from rank

@@ -139,8 +139,9 @@ The backend is hybrid rather than a replacement backtester:
    from the original float64 data. EMA uses Rust-compatible directional ticks. Trailing-martingale
    uses those ticks to choose the controlling raw/target value before float32 can collapse nearby
    prices, then mirrors Rust's directional entry finalization and nearest-tick close finalization.
-   Tick-aligned computed targets remain on their exchange tick; residual float32 arithmetic drift
-   is measured by exact validation.
+   Raw-touch close minimum quantities are computed from the original float64 price before close-
+   price finalization. Tick-aligned computed targets remain on their exchange tick; residual
+   float32 arithmetic drift is measured by exact validation.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement

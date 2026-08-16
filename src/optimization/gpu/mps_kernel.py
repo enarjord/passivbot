@@ -87,6 +87,7 @@ class MpsEmaAnchorRunner:
                     data["touch_down_tick"].to(torch.int32),
                     data["touch_up_tick"].to(torch.int32),
                     data["touch_nearest_tick"].to(torch.int32),
+                    data["touch_min_qty_steps"].to(torch.int32),
                 ],
                 dim=1,
             )

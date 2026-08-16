@@ -9,6 +9,7 @@ from optimization.gpu.model import (
     ProxyRun,
     _build_hourly_log_range,
     _directional_touch_ticks,
+    _minimum_entry_qty_steps,
     _strict_fill_tick_boundaries,
     build_mps_data,
 )
@@ -22,6 +23,13 @@ def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices
     assert down.tolist() == [10_000, 10_000, 30]
     assert up.tolist() == [10_000, 10_001, 30]
     assert nearest.tolist() == [10_000, 10_001, 30]
+
+
+def test_minimum_entry_qty_steps_uses_original_float64_touch_price():
+    market = ProxyMarket(0.001, 0.01, 0.001, 10.0004, 1.0, 0.0)
+
+    assert _minimum_entry_qty_steps(np.array([100.004]), market).tolist() == [100]
+    assert _minimum_entry_qty_steps(np.array([100.0]), market).tolist() == [101]
 
 
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
@@ -704,6 +712,49 @@ def test_mps_trailing_quantizes_selected_raw_close_to_nearest_tick():
     # calc_closes_long quantizes it to the nearest tick, 100.00. The following
     # 100.000002 high must therefore close it.
     assert output["psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_sizes_raw_touch_close_before_price_finalization():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 6
+    close = np.full(count, 100.004, dtype=np.float64)
+    high = np.array([100.004, 100.004, 100.004, 100.004, 101.0, 100.004])
+    low = np.array([100.004, 100.004, 100.004, 99.0, 100.004, 100.004])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 10.0004, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row[15] = 0.01
+    row[16] = 0.0
+    row[17] = 1e-6  # keep grid-close sizing on close_qty_pct
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # The raw 100.004 ask implies a 0.100 minimum close. Only after sizing does
+    # Rust finalize the executable close to 100.00, whose minimum would be
+    # 0.101 if it were incorrectly used for sizing. The 1.000 position must
+    # therefore retain 0.900 after the close.
+    assert output["psize"].item() == pytest.approx(0.9, abs=1e-6)
 
 
 @pytest.mark.skipif(
