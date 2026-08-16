@@ -137,8 +137,10 @@ The backend is hybrid rather than a replacement backtester:
    also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
    comparisons preserve Rust's decimal-tick fill decisions. Candle-derived touches are classified
    from the original float64 data: EMA uses Rust-compatible directional ticks, while trailing-
-   martingale keeps raw non-aligned touch prices for strict fills. Tick-aligned computed targets
-   remain on their exchange tick; residual float32 target drift is measured by exact validation.
+   martingale keeps raw non-aligned touch prices for strict fills. Raw strict comparisons carry the
+   original positive float64 price bit words into Metal, preserving ordering when two nearby prices
+   collapse to the same float32 value. Tick-aligned computed targets remain on their exchange tick;
+   residual float32 arithmetic drift is measured by exact validation.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
@@ -205,7 +207,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
   result batches are checkpointed immediately, and each durable result carries the proxy/exact
   safety evidence needed to recover if its flush outruns the companion checkpoint. A final
-  checkpoint is always written on successful completion.
+  resume-budget check includes recovered class membership, the rolling-window suffix, discarded
+  pending work, and the remaining full or partial validation batches; resume fails closed if either
+  class-specific gate can no longer reach its minimum sample count. A final checkpoint is always
+  written on successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the

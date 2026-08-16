@@ -9,6 +9,7 @@ from optimization.gpu.model import (
     ProxyRun,
     _build_hourly_log_range,
     _directional_touch_ticks,
+    _positive_f64_words,
     _strict_fill_tick_boundaries,
     build_mps_data,
 )
@@ -21,6 +22,16 @@ def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices
 
     assert down.tolist() == [10_000, 10_000, 30]
     assert up.tolist() == [10_000, 10_001, 30]
+
+
+def test_positive_f64_words_preserve_strict_price_ordering():
+    values = np.array([100.0, 100.000001, 100.000003], dtype=np.float64)
+    high, low = _positive_f64_words(values)
+    words = (high.view(np.uint32).astype(np.uint64) << np.uint64(32)) | low.view(
+        np.uint32
+    ).astype(np.uint64)
+
+    assert np.all(words[:-1] < words[1:])
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
 
 
@@ -528,6 +539,48 @@ def test_mps_trailing_martingale_preserves_non_aligned_raw_touch():
 
     # Exact Rust keeps the raw 100.006 bid. The following 100.005 low must
     # fill it; rounding the touch down to 100.00 would miss the fill.
+    assert output["psize"].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_raw_touch_keeps_float64_strict_ordering():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 5
+    close = np.full(count, 100.000003, dtype=np.float64)
+    high = close.copy()
+    low = np.array(
+        [100.000003, 100.000003, 100.000003, 100.000001, 100.000003],
+        dtype=np.float64,
+    )
+    assert np.float32(close[2]) == np.float32(low[3])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Both prices collapse to 100.0 in float32, but exact Rust sees the low
+    # strictly below the raw bid and fills. Metal compares the original f64
+    # bit words for this decision.
     assert output["psize"].item() > 0.0
 
 

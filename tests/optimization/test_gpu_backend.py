@@ -31,6 +31,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _validate_directional_search_space,
     _validate_pinned_scope_bounds,
+    _validate_resume_evidence_budget,
     _validate_seed_side_match,
     _validate_scope,
     _validate_trailing_martingale_mode_bounds,
@@ -168,6 +169,58 @@ def test_partial_validation_batch_preserves_front_evidence_ratio():
     assert _validation_probe_count(10, 10, 7) == 7
     assert _validation_probe_count(7, 10, 7) == 4
     assert _validation_probe_count(1, 10, 7) == 0
+
+
+def _drift_pair(*, front: bool):
+    return (0.0, 0.0, not front, False, front)
+
+
+def test_resume_budget_rejects_too_few_remaining_front_samples():
+    pairs = [_drift_pair(front=index < 6) for index in range(57)]
+    options = {
+        "drift_window": 128,
+        "validate_per_generation": 8,
+        "drift_probes": 4,
+    }
+
+    with pytest.raises(RuntimeError, match="proxy-front safety samples"):
+        _validate_resume_evidence_budget(
+            pairs,
+            exact_done=57,
+            exact_budget=64,
+            options=options,
+        )
+
+
+def test_resume_budget_accepts_sufficient_recovered_and_future_evidence():
+    pairs = [_drift_pair(front=index < 7) for index in range(57)]
+
+    _validate_resume_evidence_budget(
+        pairs,
+        exact_done=57,
+        exact_budget=64,
+        options={
+            "drift_window": 128,
+            "validate_per_generation": 8,
+            "drift_probes": 4,
+        },
+    )
+
+
+def test_resume_budget_rejects_too_few_remaining_broad_probes():
+    pairs = [_drift_pair(front=index >= 3) for index in range(57)]
+
+    with pytest.raises(RuntimeError, match="broad-probe safety samples"):
+        _validate_resume_evidence_budget(
+            pairs,
+            exact_done=57,
+            exact_budget=64,
+            options={
+                "drift_window": 128,
+                "validate_per_generation": 8,
+                "drift_probes": 4,
+            },
+        )
 
 
 def test_gpu_nsga2_uses_configured_pymoo_variation_operators():

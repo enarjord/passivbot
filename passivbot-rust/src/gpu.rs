@@ -30,7 +30,7 @@ mod tests {
         assert!(source.contains("const bool hedge_mode"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 8").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 14").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
@@ -51,16 +51,16 @@ mod tests {
         assert!(source.contains("s.twel * balance - cost"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 8").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 14").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert!(!source.contains("nextafter("));
-        assert!(source.contains("low < long_side.entry_price"));
-        assert!(source.contains("high > short_side.entry_price"));
-        assert!(source.contains("high > long_side.close_price"));
-        assert!(source.contains("low < short_side.close_price"));
+        assert!(source.contains("positive_f64_words_less"));
+        assert!(source.contains("positive_f64_words_greater"));
+        assert!(source.contains("long_side.entry_raw_hi"));
+        assert!(source.contains("short_side.close_raw_hi"));
         assert!(!source.contains("nearest_ticks("));
     }
 }

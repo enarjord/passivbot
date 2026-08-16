@@ -49,6 +49,7 @@ struct TmSide {
     int entry_ticks, close_ticks;
     float entry_price, close_price, entry_qty, close_qty;
     bool entry_raw_touch, close_raw_touch;
+    uint entry_raw_hi, entry_raw_lo, close_raw_hi, close_raw_lo;
     float min_since_open, max_since_min, max_since_open, min_since_max;
 };
 
@@ -94,6 +95,8 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.close_ticks = 0; s.close_qty = 0.0f;
     s.entry_price = 0.0f; s.close_price = 0.0f;
     s.entry_raw_touch = false; s.close_raw_touch = false;
+    s.entry_raw_hi = 0; s.entry_raw_lo = 0;
+    s.close_raw_hi = 0; s.close_raw_lo = 0;
     s.min_since_open = INFINITY; s.max_since_min = 0.0f;
     s.max_since_open = 0.0f; s.min_since_max = INFINITY;
     return s;
@@ -135,6 +138,14 @@ inline int directional_ticks(float price, float step, bool up) {
               : int(floor(price / step + 1.0e-6f));
 }
 
+inline bool positive_f64_words_less(uint a_hi, uint a_lo, uint b_hi, uint b_lo) {
+    return a_hi < b_hi || (a_hi == b_hi && a_lo < b_lo);
+}
+
+inline bool positive_f64_words_greater(uint a_hi, uint a_lo, uint b_hi, uint b_lo) {
+    return a_hi > b_hi || (a_hi == b_hi && a_lo > b_lo);
+}
+
 inline float crop_entry(
     thread TmSide& s, float balance, float price, float qty,
     float qty_step, float min_qty, float min_cost, float c_mult
@@ -170,6 +181,7 @@ inline float calc_close_qty(
 inline void generate_orders(
     thread TmSide& s, bool is_long, float balance, float price_now,
     int touch_down_ticks, int touch_up_ticks,
+    uint touch_raw_hi, uint touch_raw_lo,
     float qty_step, float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
@@ -292,6 +304,8 @@ inline void generate_orders(
     s.entry_ticks = eticks;
     s.entry_price = eprice;
     s.entry_raw_touch = eraw;
+    s.entry_raw_hi = touch_raw_hi;
+    s.entry_raw_lo = touch_raw_lo;
     s.entry_qty = crop_entry(
         s, balance, eprice, eqty,
         qty_step, min_qty, min_cost, c_mult
@@ -338,6 +352,8 @@ inline void generate_orders(
     s.close_ticks = cticks;
     s.close_price = close_price;
     s.close_raw_touch = close_raw_touch;
+    s.close_raw_hi = touch_raw_hi;
+    s.close_raw_lo = touch_raw_lo;
     s.close_qty = s.psize > 0.0f && close_price > 0.0f
             && (!trailing_close || close_triggered)
         ? calc_close_qty(
@@ -348,24 +364,28 @@ inline void generate_orders(
 inline void generate_long_orders(
     thread TmSide& s, float balance, float price_now, float qty_step,
     int touch_down_ticks, int touch_up_ticks,
+    uint touch_raw_hi, uint touch_raw_lo,
     float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
     generate_orders(
-        s, true, balance, price_now, touch_down_ticks, touch_up_ticks, qty_step,
-        price_step, min_qty, min_cost, c_mult, kf, block_initial
+        s, true, balance, price_now, touch_down_ticks, touch_up_ticks,
+        touch_raw_hi, touch_raw_lo, qty_step, price_step, min_qty, min_cost,
+        c_mult, kf, block_initial
     );
 }
 
 inline void generate_short_orders(
     thread TmSide& s, float balance, float price_now, float qty_step,
     int touch_down_ticks, int touch_up_ticks,
+    uint touch_raw_hi, uint touch_raw_lo,
     float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
     generate_orders(
-        s, false, balance, price_now, touch_down_ticks, touch_up_ticks, qty_step,
-        price_step, min_qty, min_cost, c_mult, kf, block_initial
+        s, false, balance, price_now, touch_down_ticks, touch_up_ticks,
+        touch_raw_hi, touch_raw_lo, qty_step, price_step, min_qty, min_cost,
+        c_mult, kf, block_initial
     );
 }
 
@@ -436,7 +456,7 @@ inline void passivbot_single_coin_impl(
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
-        const int fo = k * 8;
+        const int fo = k * 14;
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
@@ -450,6 +470,12 @@ inline void passivbot_single_coin_impl(
         const int low_nonfill_max_tick = flags[fo + 5];
         const int touch_down_tick = flags[fo + 6];
         const int touch_up_tick = flags[fo + 7];
+        const uint touch_raw_hi = as_type<uint>(flags[fo + 8]);
+        const uint touch_raw_lo = as_type<uint>(flags[fo + 9]);
+        const uint high_raw_hi = as_type<uint>(flags[fo + 10]);
+        const uint high_raw_lo = as_type<uint>(flags[fo + 11]);
+        const uint low_raw_hi = as_type<uint>(flags[fo + 12]);
+        const uint low_raw_lo = as_type<uint>(flags[fo + 13]);
         const float kf = float(k);
 
         if (di != cur_day) {
@@ -473,7 +499,10 @@ inline void passivbot_single_coin_impl(
         bool long_close_fill = valid && alive && long_enabled
             && long_side.close_qty > 0.0f && long_side.psize > 0.0f
             && (long_side.close_raw_touch
-                ? high > long_side.close_price
+                ? positive_f64_words_greater(
+                    high_raw_hi, high_raw_lo,
+                    long_side.close_raw_hi, long_side.close_raw_lo
+                )
                 : long_side.close_ticks <= high_fill_max_tick);
         if (long_close_fill) {
             float cp = long_side.close_price;
@@ -497,7 +526,10 @@ inline void passivbot_single_coin_impl(
         bool long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
             && (long_side.entry_raw_touch
-                ? low < long_side.entry_price
+                ? positive_f64_words_less(
+                    low_raw_hi, low_raw_lo,
+                    long_side.entry_raw_hi, long_side.entry_raw_lo
+                )
                 : long_side.entry_ticks > low_nonfill_max_tick);
         if (long_entry_fill) {
             float ep = long_side.entry_price;
@@ -519,7 +551,10 @@ inline void passivbot_single_coin_impl(
         bool short_close_fill = valid && alive && short_enabled
             && short_side.close_qty > 0.0f && short_side.psize > 0.0f
             && (short_side.close_raw_touch
-                ? low < short_side.close_price
+                ? positive_f64_words_less(
+                    low_raw_hi, low_raw_lo,
+                    short_side.close_raw_hi, short_side.close_raw_lo
+                )
                 : short_side.close_ticks > low_nonfill_max_tick);
         if (short_close_fill) {
             float cp = short_side.close_price;
@@ -543,7 +578,10 @@ inline void passivbot_single_coin_impl(
         bool short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
             && (short_side.entry_raw_touch
-                ? high > short_side.entry_price
+                ? positive_f64_words_greater(
+                    high_raw_hi, high_raw_lo,
+                    short_side.entry_raw_hi, short_side.entry_raw_lo
+                )
                 : short_side.entry_ticks <= high_fill_max_tick);
         if (short_entry_fill) {
             float ep = short_side.entry_price;
@@ -629,15 +667,15 @@ inline void passivbot_single_coin_impl(
             if (long_enabled) {
                 generate_long_orders(
                     long_side, balance, close, qty_step, touch_down_tick,
-                    touch_up_tick, price_step, min_qty, min_cost, c_mult, kf,
-                    block_long_initial
+                    touch_up_tick, touch_raw_hi, touch_raw_lo, price_step, min_qty,
+                    min_cost, c_mult, kf, block_long_initial
                 );
             }
             if (short_enabled) {
                 generate_short_orders(
                     short_side, balance, close, qty_step, touch_down_tick,
-                    touch_up_tick, price_step, min_qty, min_cost, c_mult, kf,
-                    block_short_initial
+                    touch_up_tick, touch_raw_hi, touch_raw_lo, price_step, min_qty,
+                    min_cost, c_mult, kf, block_short_initial
                 );
             }
         }

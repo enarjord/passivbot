@@ -345,6 +345,67 @@ def _validation_probe_count(
     )
 
 
+def _validate_resume_evidence_budget(
+    pairs,
+    *,
+    exact_done: int,
+    exact_budget: int,
+    options: dict,
+) -> None:
+    """Fail closed if a resumed run cannot still activate each drift gate."""
+
+    remaining = max(0, int(exact_budget) - int(exact_done))
+    window = int(options["drift_window"])
+    validations = int(options["validate_per_generation"])
+    configured_probes = int(options["drift_probes"])
+
+    # Model exact recovered samples individually, then future validation
+    # generations as segments. A partially retained future segment may lose
+    # any evidence samples first, which is the conservative completion order.
+    segments = [
+        (1, int(bool(row[4])), int(bool(row[2])))
+        for row in pairs
+    ]
+    future = remaining
+    while future > 0:
+        count = min(validations, future)
+        segments.append(
+            (
+                count,
+                1,
+                _validation_probe_count(count, validations, configured_probes),
+            )
+        )
+        future -= count
+
+    kept = 0
+    guaranteed_front = 0
+    guaranteed_probes = 0
+    for length, front_count, probe_count in reversed(segments):
+        if kept >= window:
+            break
+        included = min(length, window - kept)
+        excluded = length - included
+        guaranteed_front += max(0, front_count - excluded)
+        guaranteed_probes += max(0, probe_count - excluded)
+        kept += included
+
+    if guaranteed_front < MIN_DRIFT_PROBES:
+        raise RuntimeError(
+            "GPU resume has insufficient remaining exact budget to retain "
+            f"{MIN_DRIFT_PROBES} proxy-front safety samples in the drift window: "
+            f"guaranteed={guaranteed_front}, exact_done={exact_done}, "
+            f"remaining={remaining}"
+        )
+    if configured_probes > 0 and guaranteed_probes < MIN_DRIFT_PROBES:
+        raise RuntimeError(
+            "GPU resume has insufficient remaining exact budget to retain "
+            f"{MIN_DRIFT_PROBES} broad-probe safety samples in the drift window: "
+            f"guaranteed={guaranteed_probes}, exact_done={exact_done}, "
+            f"remaining={remaining}"
+        )
+
+
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
@@ -1346,6 +1407,9 @@ def run_backend(
     drift_monitor = _DriftMonitor(options)
     persisted_halt_reason = None
     signature = _checkpoint_signature(active, config["optimize"]["scoring"])
+    budget = int(config["optimize"]["iters"])
+    if budget <= 0:
+        raise ValueError("optimize.iters must be greater than zero")
 
     if resume:
         if checkpoint_path is None or not os.path.isfile(checkpoint_path):
@@ -1418,6 +1482,12 @@ def run_backend(
                 "Cannot resume a GPU run stopped by its drift safety gate: "
                 f"{persisted_halt_reason}"
             )
+        _validate_resume_evidence_budget(
+            drift_monitor.pairs,
+            exact_done=exact_done,
+            exact_budget=budget,
+            options=options,
+        )
         logging.info(
             "Resumed GPU optimizer at generation %d with %d exact evaluations",
             generation,
@@ -1585,9 +1655,6 @@ def run_backend(
         maybe_save_checkpoint(force=True)
 
     try:
-        budget = int(config["optimize"]["iters"])
-        if budget <= 0:
-            raise ValueError("optimize.iters must be greater than zero")
         while exact_done < budget:
             consume_ready()
             if exact_done + len(pending) >= budget:
