@@ -279,7 +279,7 @@ MpsEmaAnchorProxy = MpsSingleCoinProxy
 
 
 class MpsMulticoinEmaProxy:
-    """Batched long-only multi-coin EMA Anchor screening proxy."""
+    """Batched single-side multi-coin EMA Anchor screening proxy."""
 
     def __init__(
         self,
@@ -307,7 +307,7 @@ class MpsMulticoinEmaProxy:
 
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import compute_objectives
-        from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinLongRunner
+        from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinRunner
 
         self._torch = torch
         self._compute_objectives = compute_objectives
@@ -334,8 +334,14 @@ class MpsMulticoinEmaProxy:
             != "ema_anchor"
         ):
             raise ValueError("MPS multicoin proxy currently supports ema_anchor only")
-        if not gpu_side_enabled(config, "long") or gpu_side_enabled(config, "short"):
-            raise ValueError("MPS multicoin proxy currently requires long-only enabledness")
+        enabled_sides = [
+            side for side in ("long", "short") if gpu_side_enabled(config, side)
+        ]
+        if len(enabled_sides) != 1:
+            raise ValueError(
+                "MPS multicoin proxy currently requires exactly one enabled side"
+            )
+        self.side = enabled_sides[0]
 
         payload = build_backtest_payload(
             np.ascontiguousarray(values),
@@ -376,10 +382,12 @@ class MpsMulticoinEmaProxy:
         for last_valid_idx in backtest_params["last_valid_indices"]:
             _require_complete_valid_tail(int(last_valid_idx), len(values))
 
-        first_bot = payload.bot_params_list[0]["long"]
-        first_strategy = dict(payload.strategy_params_list[0]["long"])
+        first_bot = payload.bot_params_list[0][self.side]
+        first_strategy = dict(payload.strategy_params_list[0][self.side])
         if bool(first_bot.get("unstuck_enabled")) or bool(first_bot.get("hsl_enabled")):
-            raise ValueError("MPS multicoin proxy requires long HSL and unstuck disabled")
+            raise ValueError(
+                f"MPS multicoin proxy requires {self.side} HSL and unstuck disabled"
+            )
         weights = first_bot.get("forager_score_weights", {}) or {}
         first_strategy.update(
             {
@@ -427,14 +435,14 @@ class MpsMulticoinEmaProxy:
             "hsl_enabled",
         )
         for coin in range(1, coin_count):
-            strategy = payload.strategy_params_list[coin]["long"]
-            bot = payload.bot_params_list[coin]["long"]
-            if strategy != payload.strategy_params_list[0]["long"] or any(
+            strategy = payload.strategy_params_list[coin][self.side]
+            bot = payload.bot_params_list[coin][self.side]
+            if strategy != payload.strategy_params_list[0][self.side] or any(
                 bot.get(key) != first_bot.get(key) for key in comparable_bot_keys
             ):
                 raise ValueError(
-                    "MPS multicoin proxy requires identical long strategy/forager "
-                    "settings across coins"
+                    "MPS multicoin proxy requires identical "
+                    f"{self.side} strategy/forager settings across coins"
                 )
 
         markets = [
@@ -485,7 +493,9 @@ class MpsMulticoinEmaProxy:
             values, timestamps, runs=runs, markets=markets
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
-        self.runner = MpsEmaAnchorMulticoinLongRunner(self.run, self.data)
+        self.runner = MpsEmaAnchorMulticoinRunner(
+            self.run, self.data, side=self.side
+        )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
         rows = []
@@ -493,9 +503,9 @@ class MpsMulticoinEmaProxy:
             merged = dict(self.base_params)
             merged.update(
                 {
-                    key.removeprefix("long_"): value
+                    key.removeprefix(f"{self.side}_"): value
                     for key, value in candidate.items()
-                    if key.startswith("long_")
+                    if key.startswith(f"{self.side}_")
                 }
             )
             rows.append(

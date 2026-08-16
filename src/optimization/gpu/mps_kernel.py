@@ -41,13 +41,13 @@ def _trailing_martingale_shader_library():
 
 
 @lru_cache(maxsize=1)
-def _ema_anchor_multicoin_long_shader_library():
+def _ema_anchor_multicoin_shader_library():
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_ema_anchor_multicoin_long_source_py()
+        passivbot_rust.mps_ema_anchor_multicoin_source_py()
     )
 
 
@@ -294,10 +294,15 @@ class MpsEmaAnchorRunner:
         }
 
 
-class MpsEmaAnchorMulticoinLongRunner:
-    """Persistent long-only multi-coin EMA Anchor screening runner on MPS."""
+class MpsEmaAnchorMulticoinRunner:
+    """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
-    def __init__(self, run: ProxyRun, data: dict):
+    def __init__(self, run: ProxyRun, data: dict, *, side: str):
+        if side not in {"long", "short"}:
+            raise ValueError(
+                f"MPS multicoin EMA runner side must be long or short, got {side!r}"
+            )
+        self.side = side
         self.run_config = run
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
@@ -310,7 +315,7 @@ class MpsEmaAnchorMulticoinLongRunner:
             0.0, run.liquidation_threshold
         )
         self.settings = torch.tensor(
-            [run.starting_balance, liq_floor, run.interval_ms],
+            [run.starting_balance, liq_floor, run.interval_ms, float(side == "short")],
             dtype=torch.float32,
             device="mps",
         )
@@ -385,14 +390,14 @@ class MpsEmaAnchorMulticoinLongRunner:
                 device="mps",
             )
         prepared = time.perf_counter()
-        library = _ema_anchor_multicoin_long_shader_library()
+        library = _ema_anchor_multicoin_shader_library()
         compiled = time.perf_counter()
         if profile:
             torch.mps.synchronize()
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
-        library.passivbot_ema_anchor_multicoin_long(
+        library.passivbot_ema_anchor_multicoin(
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
@@ -416,6 +421,20 @@ class MpsEmaAnchorMulticoinLongRunner:
             "kernel_seconds": finished - dispatched,
         }
         return _decode_outputs(daily, scalars, gaps)
+
+
+class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
+    """Compatibility wrapper for the original long-only multicoin runner."""
+
+    def __init__(self, run: ProxyRun, data: dict):
+        super().__init__(run, data, side="long")
+
+
+class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
+    """Short-only multicoin EMA Anchor screening runner."""
+
+    def __init__(self, run: ProxyRun, data: dict):
+        super().__init__(run, data, side="short")
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

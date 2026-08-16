@@ -39,6 +39,11 @@ fn mps_ema_anchor_source_py() -> &'static str {
 }
 
 #[pyfunction]
+fn mps_ema_anchor_multicoin_source_py() -> &'static str {
+    gpu::mps_ema_anchor_multicoin_source()
+}
+
+#[pyfunction]
 fn mps_ema_anchor_multicoin_long_source_py() -> &'static str {
     gpu::mps_ema_anchor_multicoin_long_source()
 }
@@ -56,6 +61,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EquityHardStopRuntimePy>()?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_source_py, m)?)?;
+    m.add_function(wrap_pyfunction!(mps_ema_anchor_multicoin_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(
         mps_ema_anchor_multicoin_long_source_py,
         m
