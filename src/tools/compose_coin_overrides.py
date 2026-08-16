@@ -13,7 +13,14 @@ from config.overrides import get_allowed_modifications, parse_overrides
 from config.schema import get_template_config
 from config_utils import clean_config
 from pure_funcs import sort_dict_keys
-from utils import json_dumps_streamlined
+from utils import (
+    MarketIdentifierResolutionError,
+    coin_to_symbol,
+    heuristic_symbol_to_coin,
+    json_dumps_streamlined,
+    split_exchange_qualified_market_identifier,
+    to_standard_exchange_name,
+)
 
 
 CONFIG_SUFFIXES = frozenset({".json", ".hjson"})
@@ -133,6 +140,8 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
         raw_snapshot=raw_snapshot,
     )
     config = clean_config(prepared)
+    if config.get("coin_overrides"):
+        raise ValueError(f"{path}: single-coin input must not contain coin_overrides")
     approved = _side_coin_lists(config, "approved_coins", path=path)
     ignored = _side_coin_lists(config, "ignored_coins", path=path)
     approved_union = {coin for coins in approved.values() for coin in coins}
@@ -142,6 +151,11 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
             f"{path}: expected exactly one approved coin across long/short; found {formatted}"
         )
     coin = next(iter(approved_union))
+    if coin.strip().casefold() == "all":
+        raise ValueError(
+            f"{path}: live.approved_coins must name one coin; the 'all' sentinel is not valid "
+            "for a single-coin input"
+        )
     approved_sides = frozenset(side for side, coins in approved.items() if coin in coins)
     for side in POSITION_SIDES:
         if coin in ignored[side]:
@@ -155,6 +169,53 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
                 + ", ".join(extra)
             )
     return SingleCoinConfig(path=path, coin=coin, approved_sides=approved_sides, config=config)
+
+
+def _market_resolution_exchanges(configs: list[SingleCoinConfig]) -> tuple[str, ...]:
+    exchanges = set()
+    for item in configs:
+        backtest = item.config.get("backtest", {})
+        configured = backtest.get("exchanges", [])
+        if isinstance(configured, str):
+            configured = [configured]
+        coin_sources = backtest.get("coin_sources", {})
+        source_exchanges = coin_sources.values() if isinstance(coin_sources, dict) else []
+        for exchange in [*configured, *source_exchanges]:
+            normalized = to_standard_exchange_name(str(exchange))
+            if normalized and normalized != "fake":
+                exchanges.add(normalized)
+    return tuple(sorted(exchanges))
+
+
+def _market_identity(
+    identifier: str, exchanges: tuple[str, ...]
+) -> tuple[frozenset[tuple[str, str]], str]:
+    resolved = set()
+    for exchange in exchanges:
+        try:
+            symbol = coin_to_symbol(identifier, exchange, verbose=False)
+        except MarketIdentifierResolutionError:
+            continue
+        resolved.add((exchange, symbol))
+    _qualified_exchange, unqualified = split_exchange_qualified_market_identifier(identifier)
+    fallback = heuristic_symbol_to_coin(unqualified).strip().casefold()
+    return frozenset(resolved), fallback
+
+
+def _identifiers_refer_to_same_market(
+    left: str, right: str, exchanges: tuple[str, ...]
+) -> bool:
+    if left == right:
+        return True
+    left_resolved, left_fallback = _market_identity(left, exchanges)
+    right_resolved, right_fallback = _market_identity(right, exchanges)
+    if left_resolved & right_resolved:
+        return True
+    # When cached venue metadata cannot resolve one or both identifiers, fail closed
+    # on the deterministic underlying-name fallback instead of permitting a duplicate.
+    return (
+        not left_resolved or not right_resolved
+    ) and left_fallback == right_fallback
 
 
 def _resolve_master_path(
@@ -193,6 +254,16 @@ def load_single_coin_directory(
                 f"{by_coin[item.coin]} and {item.path}"
             )
         by_coin[item.coin] = item.path
+    resolution_exchanges = _market_resolution_exchanges(configs)
+    for index, item in enumerate(configs):
+        for previous in configs[:index]:
+            if _identifiers_refer_to_same_market(
+                previous.coin, item.coin, resolution_exchanges
+            ):
+                raise ValueError(
+                    "duplicate single-coin configs resolve to the same market: "
+                    f"{previous.coin} ({previous.path}) and {item.coin} ({item.path})"
+                )
     strategy_kinds = {
         str(item.config.get("live", {}).get("strategy_kind")) for item in configs
     }
@@ -412,9 +483,15 @@ def compose_configs(
         for side in POSITION_SIDES
     }
     master["live"]["approved_coins"] = approved
+    resolution_exchanges = _market_resolution_exchanges(configs)
     for side in POSITION_SIDES:
         master["live"]["ignored_coins"][side] = sorted(
-            set(master["live"]["ignored_coins"][side]) - set(approved[side])
+            ignored
+            for ignored in set(master["live"]["ignored_coins"][side])
+            if not any(
+                _identifiers_refer_to_same_market(ignored, coin, resolution_exchanges)
+                for coin in approved[side]
+            )
         )
         if approved[side] and float(master["bot"][side]["risk"]["total_wallet_exposure_limit"]) > 0:
             master["bot"][side]["risk"]["n_positions"] = float(len(approved[side]))

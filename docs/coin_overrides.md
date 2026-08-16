@@ -205,10 +205,12 @@ passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 ```
 
 Each input must validate as a current config, approve exactly one coin across its long/short lists,
-and contain no existing `coin_overrides`. Files and coins are processed deterministically, with the
-alphabetically first filename supplying the master config by default. Pass `--master-config FILE`
-to select another input as the source of master/global values. The tool combines the per-side
-approved coin lists and expands `n_positions` to the approved-coin count on active sides. Legal
+reject the `all` sentinel, and contain no existing `coin_overrides`, including in nested-current
+input. Files and coins are processed deterministically, with the alphabetically first filename
+supplying the master config by default. Pass `--master-config FILE` to select another input as the
+source of master/global values. The tool rejects input aliases that resolve to the same configured
+venue market, combines the per-side approved coin lists, removes approved market aliases from the
+master's ignored lists, and expands `n_positions` to the approved-coin count on active sides. Legal
 per-coin differences become overrides only when they differ from the master; differing account-wide
 or otherwise non-overridable values retain the master value and are listed in the command output.
 

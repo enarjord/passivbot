@@ -175,6 +175,26 @@ def test_rejects_non_single_and_precomposed_inputs(tmp_path: Path):
         compose_directory(tmp_path)
 
 
+def test_rejects_nested_precomposed_input(tmp_path: Path):
+    _write(tmp_path / "a.json", _single_coin_config("BTC"))
+    nested = _single_coin_config("ETH")
+    nested["coin_overrides"] = {"ETH": {"live": {"leverage": 4}}}
+    _write(tmp_path / "b.json", {"config": nested})
+
+    with pytest.raises(ValueError, match="must not contain coin_overrides"):
+        compose_directory(tmp_path)
+
+
+def test_rejects_all_as_single_coin(tmp_path: Path):
+    _write(tmp_path / "a.json", _single_coin_config("BTC"))
+    wildcard = _single_coin_config("ETH")
+    wildcard["live"]["approved_coins"] = "all"
+    _write(tmp_path / "b.json", wildcard)
+
+    with pytest.raises(ValueError, match="'all' sentinel"):
+        compose_directory(tmp_path)
+
+
 def test_rejects_duplicate_coin_and_master_outside_directory(tmp_path: Path):
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     _write(tmp_path / "b.json", _single_coin_config("BTC"))
@@ -183,6 +203,25 @@ def test_rejects_duplicate_coin_and_master_outside_directory(tmp_path: Path):
         compose_directory(tmp_path)
     with pytest.raises(ValueError, match="selected master config is not"):
         compose_directory(tmp_path, master_config=tmp_path / "missing.json")
+
+
+def test_rejects_duplicate_resolved_market_aliases(tmp_path: Path):
+    _write(tmp_path / "a.json", _single_coin_config("BTC"))
+    _write(tmp_path / "b.json", _single_coin_config("BTCUSDT"))
+
+    with pytest.raises(ValueError, match="resolve to the same market"):
+        compose_directory(tmp_path)
+
+
+def test_removes_ignored_alias_of_approved_market(tmp_path: Path):
+    master = _single_coin_config("ETH")
+    master["live"]["ignored_coins"]["long"] = ["BTCUSDT", "DOGE"]
+    _write(tmp_path / "a.json", master)
+    _write(tmp_path / "b.json", _single_coin_config("BTC"))
+
+    composed, _report = compose_directory(tmp_path)
+
+    assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
 
 
 def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, capsys):
