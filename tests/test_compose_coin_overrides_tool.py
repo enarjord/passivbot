@@ -206,7 +206,13 @@ def test_rejects_duplicate_coin_and_master_outside_directory(tmp_path: Path):
         compose_directory(tmp_path, master_config=tmp_path / "missing.json")
 
 
-def test_rejects_duplicate_resolved_market_aliases(tmp_path: Path):
+def test_rejects_duplicate_resolved_market_aliases(tmp_path: Path, monkeypatch):
+    def fake_coin_to_symbol(identifier, exchange, **_kwargs):
+        if exchange == "binance" and identifier in {"BTC", "BTCUSDT"}:
+            return "BTC/USDT:USDT"
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
     _write(tmp_path / "a.json", _single_coin_config("BTC"))
     _write(tmp_path / "b.json", _single_coin_config("BTCUSDT"))
 
@@ -214,7 +220,15 @@ def test_rejects_duplicate_resolved_market_aliases(tmp_path: Path):
         compose_directory(tmp_path)
 
 
-def test_removes_ignored_alias_of_approved_market(tmp_path: Path):
+def test_removes_ignored_alias_of_approved_market(tmp_path: Path, monkeypatch):
+    def fake_coin_to_symbol(identifier, exchange, **_kwargs):
+        if exchange == "binance" and identifier in {"BTC", "BTCUSDT"}:
+            return "BTC/USDT:USDT"
+        if identifier in {"ETH", "DOGE"}:
+            return f"{identifier}/USDT:USDT"
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
     master = _single_coin_config("ETH")
     master["live"]["ignored_coins"]["long"] = ["BTCUSDT", "DOGE"]
     _write(tmp_path / "a.json", master)
@@ -223,6 +237,30 @@ def test_removes_ignored_alias_of_approved_market(tmp_path: Path):
     composed, _report = compose_directory(tmp_path)
 
     assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
+
+
+@pytest.mark.parametrize("field", ["approved", "ignored"])
+def test_rejects_unresolved_exact_market_identifiers(
+    tmp_path: Path, monkeypatch, field: str
+):
+    def unavailable_market(*_args, **_kwargs):
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", unavailable_market)
+    first = _single_coin_config("ETH")
+    second = _single_coin_config("BTC")
+    if field == "approved":
+        second["live"]["approved_coins"] = {
+            "long": ["hyperliquid::12345"],
+            "short": ["hyperliquid::12345"],
+        }
+    else:
+        first["live"]["ignored_coins"]["long"] = ["hyperliquid::12345"]
+    _write(tmp_path / "a.json", first)
+    _write(tmp_path / "b.json", second)
+
+    with pytest.raises(ValueError, match="could not resolve exact market identifier"):
+        compose_directory(tmp_path)
 
 
 def test_qualified_identifier_venue_participates_in_alias_resolution(

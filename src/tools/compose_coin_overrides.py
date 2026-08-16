@@ -18,6 +18,7 @@ from utils import (
     coin_to_symbol,
     heuristic_symbol_to_coin,
     json_dumps_streamlined,
+    looks_like_exact_market_identifier,
     split_exchange_qualified_market_identifier,
     to_standard_exchange_name,
 )
@@ -210,6 +211,12 @@ def _market_identity(
         except MarketIdentifierResolutionError:
             continue
         resolved.add((exchange, symbol))
+    if looks_like_exact_market_identifier(identifier) and not resolved:
+        formatted_exchanges = ", ".join(exchanges) or "none"
+        raise ValueError(
+            f"could not resolve exact market identifier {identifier!r} on configured "
+            f"venue(s): {formatted_exchanges}; refresh market metadata before composing"
+        )
     _qualified_exchange, unqualified = split_exchange_qualified_market_identifier(identifier)
     fallback = heuristic_symbol_to_coin(unqualified).strip().casefold()
     return frozenset(resolved), fallback
@@ -229,6 +236,21 @@ def _identifiers_refer_to_same_market(
     return (
         not left_resolved or not right_resolved
     ) and left_fallback == right_fallback
+
+
+def _validate_market_identifiers(
+    configs: list[SingleCoinConfig], exchanges: tuple[str, ...]
+) -> None:
+    for item in configs:
+        for key in ("approved_coins", "ignored_coins"):
+            for side, identifiers in item.config.get("live", {}).get(key, {}).items():
+                for identifier in identifiers:
+                    try:
+                        _market_identity(identifier, exchanges)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"{item.path}: live.{key}.{side}: {exc}"
+                        ) from exc
 
 
 def _resolve_master_path(
@@ -268,6 +290,7 @@ def load_single_coin_directory(
             )
         by_coin[item.coin] = item.path
     resolution_exchanges = _market_resolution_exchanges(configs)
+    _validate_market_identifiers(configs, resolution_exchanges)
     for index, item in enumerate(configs):
         for previous in configs[:index]:
             if _identifiers_refer_to_same_market(
