@@ -116,9 +116,9 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["validate_per_generation"] = 8
     config["optimize"]["gpu"]["drift_probes"] = 1
-    config["optimize"]["gpu"]["drift_window"] = 64
-    config["optimize"]["iters"] = 63
-    with pytest.raises(ValueError, match="optimize.iters must be at least 64"):
+    config["optimize"]["gpu"]["drift_window"] = 96
+    config["optimize"]["iters"] = 95
+    with pytest.raises(ValueError, match="optimize.iters must be at least 96"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
@@ -163,6 +163,22 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_window"] = 7
     config["optimize"]["gpu"]["drift_min_samples"] = 7
     with pytest.raises(ValueError, match="must be less than"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["drift_halt"] = 0.0
+    with pytest.raises(ValueError, match="greater than zero"):
+        _resolve_options(config)
+
+
+def test_fresh_run_rejects_partial_suffix_without_rank_probe_budget():
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 1
+    config["optimize"]["gpu"]["drift_window"] = 96
+    config["optimize"]["iters"] = 97
+
+    with pytest.raises(ValueError, match="GPU fresh run.*broad-probe"):
         _resolve_options(config)
 
 

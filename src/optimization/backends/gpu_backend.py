@@ -108,6 +108,14 @@ GPU_STRATEGY_BOUND_MAPS = {
 }
 
 
+def _minimum_rank_evidence_samples(halt: float) -> int:
+    """Total samples needed to guarantee eight comparable at agreement >= halt."""
+
+    if not 0.0 < float(halt) <= 1.0:
+        raise ValueError("GPU drift_halt must be greater than zero and at most one")
+    return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
+
+
 def _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides) -> None:
     """Reject recursive grid modes until the proxy models their full ladders."""
 
@@ -266,8 +274,10 @@ def _resolve_options(config: dict) -> dict:
         raise ValueError(
             "optimize.gpu.checkpoint_interval_seconds must be greater than zero"
         )
-    if not 0.0 <= float(options["drift_halt"]) <= 1.0:
-        raise ValueError("optimize.gpu.drift_halt must be between zero and one")
+    if not 0.0 < float(options["drift_halt"]) <= 1.0:
+        raise ValueError(
+            "optimize.gpu.drift_halt must be greater than zero and at most one"
+        )
     if int(options["drift_min_samples"]) > int(options["drift_window"]):
         raise ValueError(
             "optimize.gpu.drift_min_samples must be less than or equal to "
@@ -305,17 +315,19 @@ def _resolve_options(config: dict) -> dict:
         )
     required_evidence_window = required_front_window
     if int(options["drift_probes"]) > 0:
+        required_rank_probes = _minimum_rank_evidence_samples(
+            float(options["drift_halt"])
+        )
         required_probe_window = max(
-            MIN_DRIFT_PROBES,
-            math.ceil(
-                MIN_DRIFT_PROBES * validations / probes
-            ),
+            required_rank_probes,
+            math.ceil(required_rank_probes * validations / probes),
         )
         if int(options["drift_window"]) < required_probe_window:
             raise ValueError(
                 "optimize.gpu.drift_window must be at least "
-                f"{required_probe_window} to retain {MIN_DRIFT_PROBES} broad probes "
-                "at the configured validate_per_generation/drift_probes ratio"
+                f"{required_probe_window} to retain {required_rank_probes} broad "
+                "probes, guaranteeing eight rank-comparable samples whenever "
+                "the broad-probe constraint gate has not failed"
             )
         required_evidence_window = max(
             required_evidence_window, required_probe_window
@@ -330,6 +342,17 @@ def _resolve_options(config: dict) -> dict:
             f"{required_exact_budget} to activate the configured GPU drift gate; "
             f"got {exact_budget}"
         )
+    # Apply the same conservative rolling-suffix proof to a fresh run that is
+    # used for resume. Ratio-based window sizing alone misses partial final
+    # batches whose zero-probe tail can evict early evidence.
+    _validate_resume_evidence_budget(
+        [],
+        exact_done=0,
+        exact_budget=exact_budget,
+        options=options,
+        context="fresh run",
+        error_type=ValueError,
+    )
     return options
 
 
@@ -362,6 +385,8 @@ def _validate_resume_evidence_budget(
     exact_done: int,
     exact_budget: int,
     options: dict,
+    context: str = "resume",
+    error_type: type[Exception] = RuntimeError,
 ) -> None:
     """Fail closed if a resumed run cannot still activate each drift gate."""
 
@@ -369,6 +394,9 @@ def _validate_resume_evidence_budget(
     window = int(options["drift_window"])
     validations = int(options["validate_per_generation"])
     configured_probes = int(options["drift_probes"])
+    required_probes = _minimum_rank_evidence_samples(
+        float(options.get("drift_halt", GPU_DEFAULTS["drift_halt"]))
+    )
 
     # Recovered samples already have a durable order. Future exact results are
     # consumed strictly in submission order, so each validation generation is
@@ -403,16 +431,16 @@ def _validate_resume_evidence_budget(
         kept += included
 
     if guaranteed_front < MIN_DRIFT_PROBES:
-        raise RuntimeError(
-            "GPU resume has insufficient remaining exact budget to retain "
+        raise error_type(
+            f"GPU {context} has insufficient exact budget to retain "
             f"{MIN_DRIFT_PROBES} proxy-front safety samples in the drift window: "
             f"guaranteed={guaranteed_front}, exact_done={exact_done}, "
             f"remaining={remaining}"
         )
-    if configured_probes > 0 and guaranteed_probes < MIN_DRIFT_PROBES:
-        raise RuntimeError(
-            "GPU resume has insufficient remaining exact budget to retain "
-            f"{MIN_DRIFT_PROBES} broad-probe safety samples in the drift window: "
+    if configured_probes > 0 and guaranteed_probes < required_probes:
+        raise error_type(
+            f"GPU {context} has insufficient exact budget to retain "
+            f"{required_probes} broad-probe safety samples in the drift window: "
             f"guaranteed={guaranteed_probes}, exact_done={exact_done}, "
             f"remaining={remaining}"
         )

@@ -31,8 +31,10 @@ All notable user-facing changes will be documented in this file.
   submission order so that proof remains valid when workers finish out of order. Feasibility
   disagreements are evaluated by the independent constraint-agreement gates and excluded from rank
   correlation, preventing the same disagreement from being double-counted as arbitrary ordering of
-  otherwise exact near-ties. Existing CPU bot, backtest, and optimizer paths do not import or
-  require the optional PyTorch dependency.
+  otherwise exact near-ties. Window, exact-budget, and fresh/resumed suffix checks reserve enough
+  total broad probes to retain eight rank-comparable samples whenever their constraint gate has not
+  already failed. Existing CPU bot, backtest, and optimizer paths do not import or require the
+  optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable

@@ -587,6 +587,49 @@ def test_mps_trailing_raw_touch_keeps_float64_strict_ordering():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_trailing_initial_gate_chooses_tick_before_float32_collapse():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 5
+    close = np.full(count, 100.000003, dtype=np.float64)
+    high = close.copy()
+    low = np.array(
+        [100.000003, 100.000003, 100.000003, 100.000001, 100.000003],
+        dtype=np.float64,
+    )
+    assert np.float32(close[2]) == np.float32(low[3])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=1.0)
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Exact Rust's min(raw bid, EMA target) chooses the 100.00 tick. The
+    # following 100.000001 low must not fill it. A float32 pre-comparison
+    # incorrectly retained the raw 100.000003 bid and filled.
+    assert not output["day_has_fill"].any().item()
+    assert output["psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_trailing_chooses_raw_close_before_float32_collapse():
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 

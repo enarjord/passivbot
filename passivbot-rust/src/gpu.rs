@@ -63,6 +63,10 @@ mod tests {
         assert!(source.contains("short_side.close_raw_hi"));
         assert!(source.contains("close_touch > target_ticks"));
         assert!(source.contains("close_touch < target_ticks"));
+        assert!(source.contains("touch_down_ticks >= band_ticks"));
+        assert!(source.contains("touch_up_ticks <= band_ticks"));
+        assert!(source.contains("touch_down_ticks >= raw_reentry_ticks"));
+        assert!(source.contains("touch_up_ticks <= raw_reentry_ticks"));
         assert!(!source.contains("price_now > rounded_target"));
         assert!(!source.contains("price_now < rounded_target"));
         assert!(!source.contains("nearest_ticks("));

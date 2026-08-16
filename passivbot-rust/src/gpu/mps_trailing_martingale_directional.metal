@@ -191,16 +191,17 @@ inline void generate_orders(
                          : fmax(s.ema0, fmax(s.ema1, s.ema2));
     int entry_touch = is_long ? touch_down_ticks : touch_up_ticks;
     bool touch_is_raw = touch_down_ticks != touch_up_ticks;
-    float entry_touch_price = touch_is_raw
-        ? price_now : float(entry_touch) * price_step;
     int band_ticks = directional_ticks(
         band * (is_long ? 1.0f - s.initial_ema_dist
                         : 1.0f + s.initial_ema_dist),
         price_step, entry_up
     );
     float band_price = float(band_ticks) * price_step;
+    // Compare float64-derived directional touch ticks before selecting raw
+    // entry prices. The raw close and a neighboring tick target may collapse
+    // to equality in float32 even though exact Rust's min/max selects the tick.
     bool initial_touch_controls = !s.gate_initial || (entry_up
-        ? entry_touch_price >= band_price : entry_touch_price <= band_price);
+        ? touch_down_ticks >= band_ticks : touch_up_ticks <= band_ticks);
     int initial_ticks = initial_touch_controls ? entry_touch : band_ticks;
     bool initial_raw_touch = initial_touch_controls && touch_is_raw;
     float initial_price = initial_raw_touch
@@ -259,18 +260,16 @@ inline void generate_orders(
     bool reentry_target_is_touch = trailing_entry && threshold <= 0.0f;
     int raw_reentry_ticks = reentry_target_is_touch
         ? entry_touch : directional_ticks(reentry_target, price_step, entry_up);
-    float raw_reentry_price = reentry_target_is_touch && touch_is_raw
-        ? price_now : float(raw_reentry_ticks) * price_step;
-    bool reentry_touch_controls = entry_up
-        ? entry_touch_price >= raw_reentry_price
-        : entry_touch_price <= raw_reentry_price;
+    bool reentry_touch_controls = reentry_target_is_touch || (entry_up
+        ? touch_down_ticks >= raw_reentry_ticks
+        : touch_up_ticks <= raw_reentry_ticks);
     int reentry_ticks = reentry_touch_controls ? entry_touch : raw_reentry_ticks;
     bool reentry_raw_touch = reentry_touch_controls && touch_is_raw;
     float reentry_price = reentry_raw_touch
         ? price_now : float(reentry_ticks) * price_step;
     if (s.gate_reentry) {
         bool band_controls = entry_up
-            ? band_price >= reentry_price : band_price <= reentry_price;
+            ? band_ticks >= reentry_ticks : band_ticks <= reentry_ticks;
         if (band_controls) {
             reentry_ticks = band_ticks;
             reentry_price = band_price;

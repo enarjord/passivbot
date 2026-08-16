@@ -150,7 +150,8 @@ The backend is hybrid rather than a replacement backtester:
    result remains authoritative and an exact-infeasible candidate cannot enter the Pareto front.
    Feasibility disagreements are not rank-comparable and already count against the constraint
    gates, so rank correlation uses only classification-agreeing samples and requires at least eight
-   comparable broad probes.
+   comparable broad probes. Window and exact-budget validation reserve enough total probes to retain
+   those eight whenever the configured probe constraint-agreement gate has not already failed.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
@@ -191,6 +192,7 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
   limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
   proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
+  `drift_halt` must be greater than zero and at most one.
   At least eight samples of a validation class are required before its independent low agreement
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
   eight true proxy-front validations even when the complete feasible proxy front contributes only
@@ -210,11 +212,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
    result batches are checkpointed immediately, and each durable result carries the proxy/exact
    safety evidence needed to recover if its flush outruns the companion checkpoint. A final
-   resume-budget check includes recovered class membership, the rolling-window suffix, discarded
-   pending work, and the remaining full or partial validation batches. Exact worker results are
-   consumed in submission order even if workers finish out of order, preserving the modeled batch
-   sequence; resume fails closed if either class-specific gate can no longer reach its minimum
-   sample count. A final checkpoint is always written on successful completion.
+   evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
+   the rolling-window suffix, discarded pending work, and all full or partial validation batches.
+   Exact worker results are consumed in submission order even if workers finish out of order,
+   preserving the modeled batch sequence; resume fails closed if either class-specific gate can no
+   longer reach its minimum sample count. A final checkpoint is always written on successful
+   completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the
