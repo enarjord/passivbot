@@ -135,9 +135,8 @@ The backend is hybrid rather than a replacement backtester:
    trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
    trailing, and position state with one shared balance and the exact Rust fill ordering. Python
    also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
-   comparisons preserve Rust's decimal-tick fill decisions. Computed Metal order targets step one
-   float32 ULP in the requested ceil/floor direction before conversion to integer ticks, preventing
-   a rounded integer boundary from reversing Rust's directional price quantization.
+   comparisons preserve Rust's decimal-tick fill decisions. Tick-aligned computed targets remain
+   on their exchange tick; residual float32 target drift is measured by exact validation.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
@@ -188,7 +187,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
   eight proxy-front validations and, when enabled, eight broad probes at the configured
   `validate_per_generation / drift_probes` ratio. `drift_probes` must remain below
-  `validate_per_generation` so each generation contributes proxy-front safety evidence.
+  `validate_per_generation` so each generation contributes proxy-front safety evidence. A partial
+  final validation batch scales its probe reservation down proportionally instead of consuming the
+  front evidence needed to activate the independent gate.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
   It must be at least `validate_per_generation` so throttling cannot change the configured

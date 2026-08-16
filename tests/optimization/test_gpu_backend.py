@@ -22,6 +22,7 @@ from optimization.backends.gpu_backend import (
     _ObjectiveScale,
     _recover_durable_validations,
     _update_novelty_stall,
+    _validation_probe_count,
     _spearman,
     _resolve_options,
     _restore_gpu_result_run_contract,
@@ -161,6 +162,12 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_min_samples"] = 7
     with pytest.raises(ValueError, match="must be less than"):
         _resolve_options(config)
+
+
+def test_partial_validation_batch_preserves_front_evidence_ratio():
+    assert _validation_probe_count(10, 10, 7) == 7
+    assert _validation_probe_count(7, 10, 7) == 4
+    assert _validation_probe_count(1, 10, 7) == 0
 
 
 def test_gpu_nsga2_uses_configured_pymoo_variation_operators():

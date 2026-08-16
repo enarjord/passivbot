@@ -19,10 +19,10 @@ All notable user-facing changes will be documented in this file.
   authoritative classification, and persist per-limit proxy/exact diagnostics. Strict candle/order
   crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
-  sees just beyond a decimal tick. Directional order-target conversion also steps away from rounded
-  float32 integer boundaries before applying ceil/floor, preventing one-tick proxy order drift from
-  compounding over long runs. Existing CPU bot, backtest, and optimizer paths do not import or
-  require the optional PyTorch dependency.
+  sees just beyond a decimal tick. Tick-aligned computed targets remain on their exchange tick, and
+  partial final validation batches preserve the configured proxy-front/broad-probe evidence ratio.
+  Existing CPU bot, backtest, and optimizer paths do not import or require the optional PyTorch
+  dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable

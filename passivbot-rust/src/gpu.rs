@@ -33,8 +33,7 @@ mod tests {
         assert_eq!(source.matches("const int fo = k * 6").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
-        assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
-        assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
+        assert!(!source.contains("nextafter("));
     }
 
     #[test]
@@ -53,8 +52,7 @@ mod tests {
         assert_eq!(source.matches("const int fo = k * 6").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
-        assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
-        assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
+        assert!(!source.contains("nextafter("));
         assert_eq!(source.matches("int entry_touch = nearest_ticks").count(), 1);
         assert_eq!(source.matches("? nearest_ticks(price_now").count(), 2);
     }

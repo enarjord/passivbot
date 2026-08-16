@@ -98,8 +98,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "rint(value / step)" not in source
     assert source.count("nearest_ticks(price_now, price_step)") == 4
     assert "directional_ticks(price_now, price_step" not in source
-    assert "nextafter(tick_value, INFINITY)" in source
-    assert "nextafter(tick_value, -INFINITY)" in source
+    assert "nextafter(" not in source
     assert "(run_peak - eqf) / fmax(fabs(run_peak)" in source
     assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
     assert "if (current_cost_we >= cap" in source
@@ -157,6 +156,41 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_anchor_preserves_tick_aligned_computed_target():
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.array([100.0, 100.0, 100.0, 99.99, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [0.1, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+
+    output = MpsEmaAnchorRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # A 100.00 bid must fill when the following candle trades one tick below.
+    # Unconditionally nudging the aligned target down to 99.99 misses this fill.
+    assert output["psize"].item() > 0.0
 
 
 @pytest.mark.skipif(
@@ -339,6 +373,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "s.close_retracement_base > 0.0f" in source
     assert "int entry_touch = nearest_ticks(price_now, price_step)" in source
     assert "int raw_reentry_ticks = trailing_entry" in source
+    assert "nextafter(" not in source
 
     count = 8
     close = np.full(count, 100.0)
@@ -374,6 +409,41 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert output["day_has_fill"].sum().item() > 0
     assert (output["psize"].item() > 0.0) is long_enabled
     assert (output["short_psize"].item() > 0.0) is short_enabled
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_preserves_tick_aligned_computed_target():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.array([100.0, 100.0, 100.0, 99.99, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0)
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() > 0.0
 
 
 @pytest.mark.skipif(

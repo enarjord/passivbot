@@ -333,6 +333,18 @@ def _resolve_options(config: dict) -> dict:
     return options
 
 
+def _validation_probe_count(
+    validation_count: int, validate_per_generation: int, drift_probes: int
+) -> int:
+    """Preserve the configured evidence ratio in a partial final batch."""
+    if validation_count <= 1 or drift_probes <= 0:
+        return 0
+    return min(
+        validation_count - 1,
+        drift_probes * validation_count // validate_per_generation,
+    )
+
+
 def _validate_scope(config: dict, evaluator) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")):
         raise ValueError("GPU foundation does not support suite mode")
@@ -1556,8 +1568,10 @@ def run_backend(
             algorithm.tell(infills=population)
             generation += 1
 
-            probe_count = min(
-                int(options["drift_probes"]), max(0, validation_count - 1)
+            probe_count = _validation_probe_count(
+                validation_count,
+                int(options["validate_per_generation"]),
+                int(options["drift_probes"]),
             )
             selections = _select_validation_indices(
                 proxy_objectives,
