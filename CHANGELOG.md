@@ -20,9 +20,10 @@ All notable user-facing changes will be documented in this file.
   crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
   sees just beyond a decimal tick. Tick-aligned computed targets remain on their exchange tick, and
-  partial final validation batches preserve the configured proxy-front/broad-probe evidence ratio.
-  Existing CPU bot, backtest, and optimizer paths do not import or require the optional PyTorch
-  dependency.
+  partial final validation batches scale their reserved broad probes proportionally. True proxy-
+  front evidence remains distinct from off-front fallback probes, with the safety window and exact
+  budget sized for a one-member proxy front. Existing CPU bot, backtest, and optimizer paths do not
+  import or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable

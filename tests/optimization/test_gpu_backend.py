@@ -134,7 +134,7 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_window"] = 32
     config["optimize"]["gpu"]["drift_min_samples"] = 32
     config["optimize"]["iters"] = 32
-    with pytest.raises(ValueError, match="retain 8 proxy-front validations"):
+    with pytest.raises(ValueError, match="retain 8 true proxy-front validations"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
@@ -535,7 +535,7 @@ def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
         )
 
 
-def test_final_validation_batch_caps_probe_classification_to_requested_quota():
+def test_validation_batch_preserves_true_front_and_off_front_classification():
     objectives = np.array(
         [[float(index), float(index)] for index in range(12)], dtype=np.float64
     )
@@ -544,8 +544,8 @@ def test_final_validation_batch_caps_probe_classification_to_requested_quota():
         objectives, scores, total=8, probes=4
     )
 
-    # The complete feasible Pareto front has one member. Off-front candidates
-    # are probe-eligible fallbacks, but the submitted batch must still be 4/4.
+    # The complete feasible Pareto front has one member. The remaining seven
+    # candidates must stay truthfully classified as broad/off-front evidence.
     chosen = _select_novel_validations(
         selections,
         total=8,
@@ -557,7 +557,36 @@ def test_final_validation_batch_caps_probe_classification_to_requested_quota():
     )
 
     assert len(chosen) == 8
-    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 4
+    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 7
+
+
+def test_true_front_mismatches_halt_even_when_off_front_agreement_is_high():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 32,
+            "drift_halt": 0.6,
+        }
+    )
+    for generation in range(8):
+        monitor.add(
+            generation,
+            generation,
+            probe=False,
+            constraint_mismatch=True,
+        )
+        for probe in range(7):
+            score = generation * 7 + probe
+            monitor.add(score, score, probe=True, constraint_mismatch=False)
+
+    status = monitor.evaluate()
+
+    assert status["samples"] == 64
+    assert status["front_samples"] == 8
+    assert status["probes"] == 56
+    assert status["constraint_agreement"] == pytest.approx(0.875)
+    assert status["front_constraint_agreement"] == 0.0
+    assert "proxy-front constraint agreement" in status["halt_reason"]
 
 
 def test_drift_monitor_needs_broad_probe_evidence_before_halting():

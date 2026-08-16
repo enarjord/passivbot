@@ -291,17 +291,17 @@ def _resolve_options(config: dict) -> dict:
             "at least optimize.gpu.validate_per_generation so each full validation "
             "batch retains its configured proxy-front/broad-probe allocation"
         )
-    front_samples_per_generation = validations - probes
-    required_front_window = max(
-        MIN_DRIFT_PROBES,
-        math.ceil(MIN_DRIFT_PROBES * validations / front_samples_per_generation),
-    )
+    # A complete feasible proxy Pareto front may contain only one novel
+    # candidate. All remaining validation slots are truthfully broad/off-front
+    # evidence, so budget for the worst-case one true-front sample per full
+    # generation rather than assuming a fixed front/probe split.
+    required_front_window = MIN_DRIFT_PROBES * validations
     if int(options["drift_window"]) < required_front_window:
         raise ValueError(
             "optimize.gpu.drift_window must be at least "
-            f"{required_front_window} to retain {MIN_DRIFT_PROBES} proxy-front "
-            "validations at the configured "
-            "validate_per_generation/drift_probes ratio"
+            f"{required_front_window} to retain {MIN_DRIFT_PROBES} true "
+            "proxy-front validations when a complete proxy front contributes "
+            "only one novel candidate per generation"
         )
     required_evidence_window = required_front_window
     if int(options["drift_probes"]) > 0:
@@ -757,11 +757,7 @@ def _select_novel_validations(
         if len(chosen) >= total:
             break
         if item[3] not in chosen_digests:
-            # Off-front fallback candidates remain eligible to replace a
-            # duplicate broad probe, but only the configured probe quota is
-            # classified as probe evidence in the submitted exact batch.
-            index, _probe_eligible, candidate, digest = item
-            chosen.append((index, False, candidate, digest))
+            chosen.append(item)
             chosen_digests.add(item[3])
     return chosen
 

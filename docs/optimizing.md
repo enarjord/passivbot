@@ -177,7 +177,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `population_size` is the NSGA-II proxy population.
 - `batch_size` caps candidates per MPS dispatch.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
-- `drift_probes` reserves part of that validation budget for candidates away from the proxy front.
+- `drift_probes` reserves at least part of that validation budget for candidates away from the
+  proxy front.
   A generation fails closed if its complete feasible proxy front leaves too few independent
   off-front candidates for the requested probe count.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
@@ -185,11 +186,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
   At least eight samples of a validation class are required before its independent low agreement
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
-  eight proxy-front validations and, when enabled, eight broad probes at the configured
-  `validate_per_generation / drift_probes` ratio. `drift_probes` must remain below
-  `validate_per_generation` so each generation contributes proxy-front safety evidence. A partial
-  final validation batch scales its probe reservation down proportionally instead of consuming the
-  front evidence needed to activate the independent gate.
+  eight true proxy-front validations even when the complete feasible proxy front contributes only
+  one novel candidate per generation. If that front is smaller than the non-probe quota, remaining
+  off-front validations stay truthfully classified as broad probes rather than being relabeled as
+  front evidence. `drift_probes` must remain below `validate_per_generation` so each generation
+  requests proxy-front safety evidence. A partial final validation batch scales its reserved probe
+  count down proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
   It must be at least `validate_per_generation` so throttling cannot change the configured
