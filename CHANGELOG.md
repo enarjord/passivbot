@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add `passivbot tool compose-coin-overrides` to validate and combine a directory of single-coin
+  configs into a lean unified config with minimal inline per-coin patches. The tool canonicalizes
+  parameters belonging only to features disabled in every input, reports account-wide conflicts,
+  merges approved coins with fail-closed resolved-market and cross-venue contract identity
+  validation, supports selecting the master input, and can optionally retain that input's
+  backtest and optimizer sections for fixed-override fine-tuning. Full output rejects the
+  single-coin-only GPU optimizer backend.
 - Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
   EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
   Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and
