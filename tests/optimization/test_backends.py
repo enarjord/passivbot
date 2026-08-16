@@ -13,6 +13,7 @@ from config_utils import (
     update_config_with_args,
 )
 from optimization.backends import get_backend_runner
+from optimization.backends import run_gpu_backend
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
     _clone_evaluated_individual,
@@ -62,6 +63,16 @@ def test_format_config_normalizes_backend_name():
     assert out["optimize"]["backend"] == "pymoo"
 
 
+def test_format_config_accepts_gpu_backend():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["backend"] = "GPU"
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["backend"] == "gpu"
+    assert out["optimize"]["gpu"]["population_size"] == 4096
+
+
 def test_format_config_rejects_unknown_backend():
     current = copy.deepcopy(get_template_config())
     current["optimize"]["backend"] = "unknown"
@@ -79,6 +90,10 @@ def test_optimizer_backend_cli_alias_updates_config():
     out = format_config(config, verbose=False)
 
     assert out["optimize"]["backend"] == "pymoo"
+
+
+def test_gpu_backend_registry_entry_is_lazy():
+    assert get_backend_runner("gpu") is run_gpu_backend
 
 
 def test_optimizer_backend_cli_explicit_deap_matches_default():

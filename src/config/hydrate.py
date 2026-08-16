@@ -219,9 +219,10 @@ def apply_non_live_adjustments(
 
     result["optimize"]["scoring"] = [spec.to_config() for spec in extract_objective_specs(result)]
     backend = str(result["optimize"].get("backend", "pymoo") or "pymoo").strip().lower()
-    if backend not in {"deap", "pymoo"}:
+    if backend not in {"deap", "gpu", "pymoo"}:
         raise ValueError(
-            f"optimize.backend must be one of ['deap', 'pymoo']; got {result['optimize'].get('backend')!r}"
+            "optimize.backend must be one of ['deap', 'gpu', 'pymoo']; "
+            f"got {result['optimize'].get('backend')!r}"
         )
     result["optimize"]["backend"] = backend
     population_size = result["optimize"].get("population_size")

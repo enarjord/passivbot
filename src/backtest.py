@@ -2444,6 +2444,9 @@ def prep_backtest_args(
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
             elif "wallet_exposure_limit" not in coin_override_bot.get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
+            coin_specific_bot_params[pside]["entry_eligible"] = (
+                coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
+            )
         bot_params_list.append(coin_specific_bot_params)
         strategy_params_list.append(coin_specific_strategy_params)
     maker_fee_override = get_optional_config_value(

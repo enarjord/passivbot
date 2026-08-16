@@ -61,13 +61,16 @@ minimize or maximize the metric.
 
 ### Backend Selection
 
-Passivbot supports two optimizer backends:
+Passivbot supports three optimizer backends:
 
 - `optimize.backend: deap`
   - Uses the existing DEAP evolutionary backend.
 - `optimize.backend: pymoo`
   - Uses pymoo. This is now the default optimizer backend.
   - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
+- `optimize.backend: gpu`
+  - Uses an Apple Metal screening proxy and exact Rust validation. This backend is experimental and
+    deliberately limited to the scope documented below.
 
 Example:
 
@@ -81,6 +84,148 @@ Example:
   }
 }
 ```
+
+### Apple MPS GPU Backend (Experimental)
+
+The GPU backend is an additive research backend for Apple Silicon. Install the normal optimizer
+dependencies plus its optional PyTorch runtime:
+
+```bash
+python3 -m pip install -e ".[full,gpu-mps]"
+```
+
+Select it with `--backend gpu` or `optimize.backend: "gpu"`. Normal live operation, backtesting,
+and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
+
+The supported slice is intentionally narrow:
+
+- Apple Silicon with `torch.backends.mps.is_available()`
+- one exchange and one coin, using one-minute candles
+- `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
+  long+short enabled
+- trailing-martingale entry and close `retracement_base_pct` optimizer bounds strictly above zero;
+  zero or negative values select recursive grid ladders that this screening slice does not model
+- each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
+- hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
+- suite mode disabled
+- HSL and auto-unstuck disabled
+- BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
+  runtime overrides disabled
+- `backtest.filter_by_min_effective_cost: false`
+- `live.market_orders_allowed: false`
+- no invalid candle tail after the selected coin's final valid candle
+
+Unsupported combinations fail before optimization begins. Recursive trailing-martingale grid
+modes, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not silently
+approximated by this release.
+
+Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
+`adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
+`sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,
+`position_held_days_max`, `strategy_eq_underwater_pct_mean`, `drawdown_worst_strategy_eq`,
+`drawdown_worst_mean_1pct_strategy_eq`, `fills_gap_longest_days`, and
+`backtest_completion_ratio`. Metrics such as `fills_gap_p95_hours` that require exact per-fill
+interpolation are rejected before a run starts.
+
+The backend is hybrid rather than a replacement backtester:
+
+1. pymoo NSGA-II proposes large normalized candidate batches.
+2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
+   MPS; Python only prepares buffers and dispatches the program. EMA-anchor and
+   trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
+   trailing, and position state with one shared balance and the exact Rust fill ordering. Python
+   also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
+   comparisons preserve Rust's decimal-tick fill decisions. Candle-derived touches are classified
+   from the original float64 data. EMA uses Rust-compatible directional ticks. Trailing-martingale
+   uses those ticks to choose the controlling raw/target value before float32 can collapse nearby
+   prices, then mirrors Rust's directional entry finalization and nearest-tick close finalization.
+   Raw-touch close minimum quantities are computed from the original float64 price before close-
+   price finalization, and their ordering relative to aligned quantity steps is retained across
+   float32 transport. Tick-aligned computed targets remain on their exchange tick; residual
+   float32 arithmetic drift is measured by exact validation.
+3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
+4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
+5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
+   falls below `drift_halt` after sufficient evidence. Constraint classification is monitored over
+   all validations and independently for proxy-front candidates and broad probes. An isolated
+   disagreement is retained as drift evidence rather than aborting immediately; the exact Rust
+   result remains authoritative and an exact-infeasible candidate cannot enter the Pareto front.
+   Feasibility disagreements are not rank-comparable and already count against the constraint
+   gates, so rank correlation uses only classification-agreeing samples and requires at least eight
+   comparable broad probes. Window and exact-budget validation reserve enough total probes to retain
+   those eight whenever the configured probe constraint-agreement gate has not already failed.
+
+`optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
+are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
+scheduling is managed by Metal.
+
+GPU-specific settings live under `optimize.gpu`:
+
+```json
+{
+  "optimize": {
+    "backend": "gpu",
+    "gpu": {
+      "batch_size": 4096,
+      "checkpoint_interval_seconds": 5.0,
+      "drift_halt": 0.6,
+      "drift_min_samples": 32,
+      "drift_probes": 4,
+      "drift_window": 128,
+      "exact_workers": 0,
+      "max_pending_exact": 0,
+      "population_size": 4096,
+      "validate_per_generation": 8
+    }
+  }
+}
+```
+
+The CPU-side NSGA-II proposal stage uses the same `optimize.pymoo.shared` crossover, mutation, and
+duplicate-elimination controls as the ordinary pymoo optimizer.
+
+- `population_size` is the NSGA-II proxy population.
+- `batch_size` caps candidates per MPS dispatch.
+- `validate_per_generation` caps exact candidates selected from each proxy generation.
+- `drift_probes` reserves at least part of that validation budget for candidates away from the
+  proxy front.
+  A generation fails closed if its complete feasible proxy front leaves too few independent
+  off-front candidates for the requested probe count.
+- `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
+  limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
+  proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
+  `drift_halt` must be greater than zero and at most one.
+  At least eight samples of a validation class are required before its independent low agreement
+  can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
+  eight true proxy-front validations even when the complete feasible proxy front contributes only
+  one novel candidate per generation. If that front is smaller than the non-probe quota, remaining
+  off-front validations stay truthfully classified as broad probes rather than being relabeled as
+  front evidence. Front membership is carried independently through exact-result persistence and
+  resume recovery. A generation fails closed if duplicate filtering leaves no novel proxy-front
+  candidate, so broad probes cannot silently consume the exact budget needed to activate the front
+  gate. `drift_probes` must remain below `validate_per_generation` so each generation requests
+  proxy-front safety evidence. A partial final validation batch scales its reserved probe count down
+  proportionally.
+- `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
+- `max_pending_exact: 0` defaults to twice the exact-worker count.
+  It must be at least `validate_per_generation` so throttling cannot change the configured
+  proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
+  screening another generation.
+- `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
+   result batches are checkpointed immediately, and each durable result carries the proxy/exact
+   safety evidence needed to recover if its flush outruns the companion checkpoint. A final
+   evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
+   the rolling-window suffix, discarded pending work, and all full or partial validation batches.
+   Exact worker results are consumed in submission order even if workers finish out of order,
+   preserving the modeled batch sequence; resume fails closed if either class-specific gate can no
+   longer reach its minimum sample count. A final checkpoint is always written on successful
+   completion.
+
+The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
+remain the only stored optimization results. The screening source is owned and exported by the
+Rust extension; it does not replace or modify the exact Rust backtester. Credit: the Torch
+metric-reduction work was adapted from RustyCZ's Passivbot GPU branch at commit `7c529bc73`; the
+MPS Metal integration and hybrid validation gates are specific to this implementation.
 
 ### Pymoo Configuration
 
@@ -511,7 +656,7 @@ mode is enabled) instead of the older `analyses_combined` / per-exchange analysi
 
 ## Optimization Process
 
-- Uses a multi-objective evolutionary backend (`deap` or `pymoo`)
+- Uses a multi-objective evolutionary backend (`deap`, `pymoo`, or experimental `gpu`)
 - `pymoo` defaults to NSGA-III for many-objective runs, with NSGA-II still available explicitly
 - Backtests across historical OHLCV data
 - Uses multiprocessing with shared memory for reduced RAM load
