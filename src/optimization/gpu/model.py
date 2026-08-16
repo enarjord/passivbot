@@ -272,8 +272,8 @@ def _strict_fill_tick_boundaries(
 
 def _directional_touch_ticks(
     prices, price_step: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Encode Rust-compatible down/up ticks for candle-derived touch prices."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Encode Rust-compatible down/up/nearest ticks for candle touch prices."""
 
     if not np.isfinite(price_step) or price_step <= 0.0:
         raise ValueError(
@@ -316,26 +316,22 @@ def _directional_touch_ticks(
     up_ticks = np.where(aligned, nearest_ticks, np.ceil(step_counts)).astype(np.int64)
     down_ticks[~finite] = 0
     up_ticks[~finite] = 0
+    nearest_ticks[~finite] = 0
     i32 = np.iinfo(np.int32)
     if (
         down_ticks.min(initial=0) < i32.min
         or down_ticks.max(initial=0) > i32.max
         or up_ticks.min(initial=0) < i32.min
         or up_ticks.max(initial=0) > i32.max
+        or nearest_ticks.min(initial=0) < i32.min
+        or nearest_ticks.max(initial=0) > i32.max
     ):
         raise ValueError("MPS proxy candle touch ticks exceed signed 32-bit range")
-    return down_ticks.astype(np.int32), up_ticks.astype(np.int32)
-
-
-def _positive_f64_words(values) -> tuple[np.ndarray, np.ndarray]:
-    """Split positive float64 prices into lexicographically ordered words."""
-
-    values = np.asarray(values, dtype=np.float64)
-    safe = np.where(np.isfinite(values) & (values > 0.0), values, 0.0)
-    bits = np.ascontiguousarray(safe).view(np.uint64)
-    high = (bits >> np.uint64(32)).astype(np.uint32).view(np.int32)
-    low = (bits & np.uint64(0xFFFFFFFF)).astype(np.uint32).view(np.int32)
-    return high, low
+    return (
+        down_ticks.astype(np.int32),
+        up_ticks.astype(np.int32),
+        nearest_ticks.astype(np.int32),
+    )
 
 
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
@@ -396,12 +392,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     high_fill_max_tick, low_nonfill_max_tick = _strict_fill_tick_boundaries(
         high, low, market.price_step
     )
-    touch_down_tick, touch_up_tick = _directional_touch_ticks(
+    touch_down_tick, touch_up_tick, touch_nearest_tick = _directional_touch_ticks(
         close, market.price_step
     )
-    close_f64_hi, close_f64_lo = _positive_f64_words(close)
-    high_f64_hi, high_f64_lo = _positive_f64_words(high)
-    low_f64_hi, low_f64_lo = _positive_f64_words(low)
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -420,12 +413,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "low_nonfill_max_tick": tensor(low_nonfill_max_tick),
         "touch_down_tick": tensor(touch_down_tick),
         "touch_up_tick": tensor(touch_up_tick),
-        "close_f64_hi": tensor(close_f64_hi),
-        "close_f64_lo": tensor(close_f64_lo),
-        "high_f64_hi": tensor(high_f64_hi),
-        "high_f64_lo": tensor(high_f64_lo),
-        "low_f64_hi": tensor(low_f64_hi),
-        "low_f64_lo": tensor(low_f64_lo),
+        "touch_nearest_tick": tensor(touch_nearest_tick),
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,

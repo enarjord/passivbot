@@ -86,12 +86,7 @@ class MpsEmaAnchorRunner:
                     data["low_nonfill_max_tick"].to(torch.int32),
                     data["touch_down_tick"].to(torch.int32),
                     data["touch_up_tick"].to(torch.int32),
-                    data["close_f64_hi"].to(torch.int32),
-                    data["close_f64_lo"].to(torch.int32),
-                    data["high_f64_hi"].to(torch.int32),
-                    data["high_f64_lo"].to(torch.int32),
-                    data["low_f64_hi"].to(torch.int32),
-                    data["low_f64_lo"].to(torch.int32),
+                    data["touch_nearest_tick"].to(torch.int32),
                 ],
                 dim=1,
             )
