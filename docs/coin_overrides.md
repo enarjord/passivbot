@@ -210,9 +210,10 @@ input. Files and coins are processed deterministically, with the alphabetically 
 supplying the master config by default. Pass `--master-config FILE` to select another input as the
 source of master/global values. The tool rejects input aliases that resolve to the same configured
 venue market, combines the per-side approved coin lists, removes approved market aliases from the
-master's ignored lists, and expands `n_positions` to the approved-coin count on active sides. Legal
-per-coin differences become overrides only when they differ from the master; differing account-wide
-or otherwise non-overridable values retain the master value and are listed in the command output.
+master's ignored lists, and expands `n_positions` to the approved-coin count on active sides.
+Exchange-qualified identifiers contribute their explicit venue to alias resolution. Legal per-coin
+differences become overrides only when they differ from the master; differing account-wide or
+otherwise non-overridable values retain the master value and are listed in the command output.
 
 When HSL, auto unstuck, or a position/total-exposure enforcer is disabled in every input, parameters
 used only by that disabled feature are normalized before diffing. Optimized numeric fields use the
@@ -223,7 +224,9 @@ gate and enforcer, so it is normalized only when both are disabled.
 By default the output omits `backtest` and `optimize`, producing a lean live config. Add
 `--include-backtest-optimize` to copy both sections from the master input, which makes the result
 directly usable for backtesting or fine-tuning inherited master parameters while the coin overrides
-remain fixed. Existing output files are protected unless `--overwrite` is supplied.
+remain fixed. A master using the single-coin-only `gpu` optimizer backend is rejected in this mode;
+select a CPU optimizer backend before composing. Existing output files are protected unless
+`--overwrite` is supplied.
 
 ## Common pitfalls
 

@@ -9,7 +9,7 @@ All notable user-facing changes will be documented in this file.
   parameters belonging only to features disabled in every input, reports account-wide conflicts,
   merges approved coins without resolved-market alias collisions, supports selecting the master
   input, and can optionally retain that input's backtest and optimizer sections for fixed-override
-  fine-tuning.
+  fine-tuning. Full output rejects the single-coin-only GPU optimizer backend.
 - Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
   EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
   Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and

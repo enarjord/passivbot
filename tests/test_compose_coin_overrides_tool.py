@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import tools.compose_coin_overrides as compose_tool
 
 from config.load import prepare_config
 from config.overrides import parse_overrides
@@ -222,6 +223,59 @@ def test_removes_ignored_alias_of_approved_market(tmp_path: Path):
     composed, _report = compose_directory(tmp_path)
 
     assert composed["live"]["ignored_coins"]["long"] == ["DOGE"]
+
+
+def test_qualified_identifier_venue_participates_in_alias_resolution(
+    tmp_path: Path, monkeypatch
+):
+    def fake_coin_to_symbol(identifier, exchange, **_kwargs):
+        if exchange == "hyperliquid" and identifier in {
+            "hyperliquid::12345",
+            "xyz:TSLA",
+        }:
+            return "xyz:TSLA/USDC:USDC"
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
+    _write(tmp_path / "a.json", _single_coin_config("hyperliquid::12345"))
+    _write(tmp_path / "b.json", _single_coin_config("xyz:TSLA"))
+
+    with pytest.raises(ValueError, match="resolve to the same market"):
+        compose_directory(tmp_path)
+
+
+def test_qualified_identifier_venue_removes_ignored_alias(tmp_path: Path, monkeypatch):
+    def fake_coin_to_symbol(identifier, exchange, **_kwargs):
+        if exchange == "hyperliquid" and identifier in {
+            "hyperliquid::12345",
+            "xyz:TSLA",
+        }:
+            return "xyz:TSLA/USDC:USDC"
+        if identifier == "ETH":
+            return "ETH/USDC:USDC"
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
+    master = _single_coin_config("ETH")
+    master["live"]["ignored_coins"]["long"] = ["hyperliquid::12345"]
+    _write(tmp_path / "a.json", master)
+    _write(tmp_path / "b.json", _single_coin_config("xyz:TSLA"))
+
+    composed, _report = compose_directory(tmp_path)
+
+    assert composed["live"]["ignored_coins"]["long"] == []
+
+
+def test_rejects_retaining_gpu_optimizer_for_composed_config(tmp_path: Path):
+    master = _single_coin_config("BTC")
+    master["optimize"]["backend"] = "gpu"
+    _write(tmp_path / "a.json", master)
+    _write(tmp_path / "b.json", _single_coin_config("ETH"))
+
+    lean, _report = compose_directory(tmp_path)
+    assert "optimize" not in lean
+    with pytest.raises(ValueError, match="optimize.backend='gpu'"):
+        compose_directory(tmp_path, include_backtest_optimize=True)
 
 
 def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, capsys):
