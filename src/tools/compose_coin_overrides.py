@@ -19,6 +19,7 @@ from utils import (
     heuristic_symbol_to_coin,
     json_dumps_streamlined,
     looks_like_exact_market_identifier,
+    market_denomination_identity,
     split_exchange_qualified_market_identifier,
     to_standard_exchange_name,
 )
@@ -211,12 +212,27 @@ def _market_identity(
         except MarketIdentifierResolutionError:
             continue
         resolved.add((exchange, symbol))
-    if looks_like_exact_market_identifier(identifier) and not resolved:
-        formatted_exchanges = ", ".join(exchanges) or "none"
-        raise ValueError(
-            f"could not resolve exact market identifier {identifier!r} on configured "
-            f"venue(s): {formatted_exchanges}; refresh market metadata before composing"
-        )
+    if looks_like_exact_market_identifier(identifier):
+        if not resolved:
+            formatted_exchanges = ", ".join(exchanges) or "none"
+            raise ValueError(
+                f"could not resolve exact market identifier {identifier!r} on configured "
+                f"venue(s): {formatted_exchanges}; refresh market metadata before composing"
+            )
+        resolved_contracts = {
+            market_denomination_identity(symbol, exchange=exchange)
+            for exchange, symbol in resolved
+        }
+        if len(resolved_contracts) > 1:
+            formatted_resolutions = ", ".join(
+                f"{exchange}={symbol}"
+                for exchange, symbol in sorted(resolved)
+            )
+            raise ValueError(
+                f"exact market identifier {identifier!r} resolves to different contracts "
+                f"across configured venues ({formatted_resolutions}); use "
+                "exchange::<native-id>"
+            )
     _qualified_exchange, unqualified = split_exchange_qualified_market_identifier(identifier)
     fallback = heuristic_symbol_to_coin(unqualified).strip().casefold()
     return frozenset(resolved), fallback

@@ -214,8 +214,9 @@ master's ignored lists, and expands `n_positions` to the approved-coin count on 
 Exchange-qualified identifiers contribute their explicit venue to alias resolution. Legal per-coin
 differences become overrides only when they differ from the master; differing account-wide or
 otherwise non-overridable values retain the master value and are listed in the command output.
-Exact market identifiers must resolve through cached market metadata; unresolved exact approved or
-ignored identifiers fail validation instead of falling back to a lossy ticker guess.
+Exact market identifiers must resolve unambiguously through cached market metadata; unresolved
+exact approved or ignored identifiers, and identifiers resolving to different contracts across
+configured venues, fail validation instead of falling back to a lossy ticker guess.
 
 When HSL, auto unstuck, or a position/total-exposure enforcer is disabled in every input, parameters
 used only by that disabled feature are normalized before diffing. Optimized numeric fields use the

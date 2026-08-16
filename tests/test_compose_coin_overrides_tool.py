@@ -263,6 +263,30 @@ def test_rejects_unresolved_exact_market_identifiers(
         compose_directory(tmp_path)
 
 
+@pytest.mark.parametrize("field", ["approved", "ignored"])
+def test_rejects_exact_identifier_resolving_to_different_venue_markets(
+    tmp_path: Path, monkeypatch, field: str
+):
+    def fake_coin_to_symbol(identifier, exchange, **_kwargs):
+        if identifier == "12345":
+            return {
+                "binance": "ABC/USDT:USDT",
+                "bybit": "OTHER/USDT:USDT",
+            }[exchange]
+        raise compose_tool.MarketIdentifierResolutionError("unavailable")
+
+    monkeypatch.setattr(compose_tool, "coin_to_symbol", fake_coin_to_symbol)
+    first = _single_coin_config("ETH")
+    second = _single_coin_config("12345" if field == "approved" else "BTC")
+    if field == "ignored":
+        first["live"]["ignored_coins"]["long"] = ["12345"]
+    _write(tmp_path / "a.json", first)
+    _write(tmp_path / "b.json", second)
+
+    with pytest.raises(ValueError, match="resolves to different contracts"):
+        compose_directory(tmp_path)
+
+
 def test_qualified_identifier_venue_participates_in_alias_resolution(
     tmp_path: Path, monkeypatch
 ):
