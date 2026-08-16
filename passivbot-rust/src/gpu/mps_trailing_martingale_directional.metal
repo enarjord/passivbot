@@ -48,6 +48,8 @@ struct TmSide {
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks;
     float entry_price, close_price, entry_qty, close_qty;
+    float entry_gen_balance, entry_gen_psize, entry_gen_pprice, entry_gen_kf;
+    int entry_gen_touch_ticks;
     float min_since_open, max_since_min, max_since_open, min_since_max;
 };
 
@@ -92,6 +94,9 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.entry_ticks = 0; s.entry_qty = 0.0f;
     s.close_ticks = 0; s.close_qty = 0.0f;
     s.entry_price = 0.0f; s.close_price = 0.0f;
+    s.entry_gen_balance = 0.0f;
+    s.entry_gen_psize = 0.0f; s.entry_gen_pprice = 0.0f;
+    s.entry_gen_kf = -1.0f; s.entry_gen_touch_ticks = 0;
     s.min_since_open = INFINITY; s.max_since_min = 0.0f;
     s.max_since_open = 0.0f; s.min_since_max = INFINITY;
     return s;
@@ -179,6 +184,14 @@ inline void generate_orders(
     float band = is_long ? fmin(s.ema0, fmin(s.ema1, s.ema2))
                          : fmax(s.ema0, fmax(s.ema1, s.ema2));
     int entry_touch = is_long ? touch_down_ticks : touch_up_ticks;
+    // Exact Rust builds a recursive entry ladder from one immutable generation
+    // snapshot. Preserve that snapshot so all rungs touched by the next candle
+    // can be reconstructed without fee-adjusted sizing drift.
+    s.entry_gen_balance = balance;
+    s.entry_gen_psize = s.psize;
+    s.entry_gen_pprice = s.pprice;
+    s.entry_gen_kf = kf;
+    s.entry_gen_touch_ticks = entry_touch;
     int band_ticks = directional_ticks(
         band * (is_long ? 1.0f - s.initial_ema_dist
                         : 1.0f + s.initial_ema_dist),
@@ -506,19 +519,55 @@ inline void passivbot_single_coin_impl(
             && long_side.entry_qty > 0.0f
             && long_side.entry_ticks > low_nonfill_max_tick;
         if (long_entry_fill) {
-            float ep = long_side.entry_price;
-            float eq = round_step(long_side.entry_qty, qty_step);
-            balance -= eq * ep * c_mult * maker_fee;
-            bool was_flat = long_side.psize <= 0.0f;
-            float new_psize = round_step(long_side.psize + eq, qty_step);
-            float new_pprice = was_flat ? ep
-                : long_side.pprice * (long_side.psize / fmax(new_psize, 1.0e-12f))
-                    + ep * (eq / fmax(new_psize, 1.0e-12f));
-            if (was_flat) long_side.pos_open_k = kf;
-            long_side.psize = new_psize;
-            long_side.pprice = new_pprice;
-            long_side.last_inc_k = kf;
-            day_volume += fabs(eq) * ep / balance;
+            TmSide ladder_side = long_side;
+            ladder_side.psize = long_side.entry_gen_psize;
+            ladder_side.pprice = long_side.entry_gen_pprice;
+            const float ladder_balance = long_side.entry_gen_balance;
+            const float ladder_kf = long_side.entry_gen_kf;
+            int ladder_touch_ticks = long_side.entry_gen_touch_ticks;
+            int previous_ticks = 0;
+            for (int rung = 0; rung < 500; ++rung) {
+                int entry_ticks = rung == 0
+                    ? long_side.entry_ticks : ladder_side.entry_ticks;
+                float ep = rung == 0
+                    ? long_side.entry_price : ladder_side.entry_price;
+                float eq = round_step(
+                    rung == 0 ? long_side.entry_qty : ladder_side.entry_qty,
+                    qty_step
+                );
+                if (eq <= 0.0f || entry_ticks <= low_nonfill_max_tick
+                    || (rung > 0 && entry_ticks == previous_ticks)) break;
+
+                balance -= eq * ep * c_mult * maker_fee;
+                bool was_flat = long_side.psize <= 0.0f;
+                float new_psize = round_step(long_side.psize + eq, qty_step);
+                float new_pprice = was_flat ? ep
+                    : long_side.pprice * (long_side.psize / fmax(new_psize, 1.0e-12f))
+                        + ep * (eq / fmax(new_psize, 1.0e-12f));
+                if (was_flat) long_side.pos_open_k = kf;
+                long_side.psize = new_psize;
+                long_side.pprice = new_pprice;
+                long_side.last_inc_k = kf;
+                day_volume += fabs(eq) * ep / balance;
+
+                bool sim_flat = ladder_side.psize <= 0.0f;
+                float sim_psize = round_step(ladder_side.psize + eq, qty_step);
+                ladder_side.pprice = sim_flat ? ep
+                    : ladder_side.pprice
+                        * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
+                        + ep * (eq / fmax(sim_psize, 1.0e-12f));
+                ladder_side.psize = sim_psize;
+                previous_ticks = entry_ticks;
+                ladder_touch_ticks = min(ladder_touch_ticks, entry_ticks);
+                if (long_side.entry_retracement_base > 0.0f
+                    || long_side.cooldown_min != 0.0f) break;
+                generate_long_orders(
+                    ladder_side, ladder_balance, ep, qty_step,
+                    ladder_touch_ticks, ladder_touch_ticks, ladder_touch_ticks,
+                    touch_min_qty, touch_min_qty_relation, price_step, min_qty,
+                    min_cost, c_mult, ladder_kf, false
+                );
+            }
             long_side.entry_qty = 0.0f;
         }
 
@@ -548,19 +597,55 @@ inline void passivbot_single_coin_impl(
             && short_side.entry_qty > 0.0f
             && short_side.entry_ticks <= high_fill_max_tick;
         if (short_entry_fill) {
-            float ep = short_side.entry_price;
-            float eq = round_step(short_side.entry_qty, qty_step);
-            balance -= eq * ep * c_mult * maker_fee;
-            bool was_flat = short_side.psize <= 0.0f;
-            float new_psize = round_step(short_side.psize + eq, qty_step);
-            float new_pprice = was_flat ? ep
-                : short_side.pprice * (short_side.psize / fmax(new_psize, 1.0e-12f))
-                    + ep * (eq / fmax(new_psize, 1.0e-12f));
-            if (was_flat) short_side.pos_open_k = kf;
-            short_side.psize = new_psize;
-            short_side.pprice = new_pprice;
-            short_side.last_inc_k = kf;
-            day_volume += fabs(eq) * ep / balance;
+            TmSide ladder_side = short_side;
+            ladder_side.psize = short_side.entry_gen_psize;
+            ladder_side.pprice = short_side.entry_gen_pprice;
+            const float ladder_balance = short_side.entry_gen_balance;
+            const float ladder_kf = short_side.entry_gen_kf;
+            int ladder_touch_ticks = short_side.entry_gen_touch_ticks;
+            int previous_ticks = 0;
+            for (int rung = 0; rung < 500; ++rung) {
+                int entry_ticks = rung == 0
+                    ? short_side.entry_ticks : ladder_side.entry_ticks;
+                float ep = rung == 0
+                    ? short_side.entry_price : ladder_side.entry_price;
+                float eq = round_step(
+                    rung == 0 ? short_side.entry_qty : ladder_side.entry_qty,
+                    qty_step
+                );
+                if (eq <= 0.0f || entry_ticks > high_fill_max_tick
+                    || (rung > 0 && entry_ticks == previous_ticks)) break;
+
+                balance -= eq * ep * c_mult * maker_fee;
+                bool was_flat = short_side.psize <= 0.0f;
+                float new_psize = round_step(short_side.psize + eq, qty_step);
+                float new_pprice = was_flat ? ep
+                    : short_side.pprice * (short_side.psize / fmax(new_psize, 1.0e-12f))
+                        + ep * (eq / fmax(new_psize, 1.0e-12f));
+                if (was_flat) short_side.pos_open_k = kf;
+                short_side.psize = new_psize;
+                short_side.pprice = new_pprice;
+                short_side.last_inc_k = kf;
+                day_volume += fabs(eq) * ep / balance;
+
+                bool sim_flat = ladder_side.psize <= 0.0f;
+                float sim_psize = round_step(ladder_side.psize + eq, qty_step);
+                ladder_side.pprice = sim_flat ? ep
+                    : ladder_side.pprice
+                        * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
+                        + ep * (eq / fmax(sim_psize, 1.0e-12f));
+                ladder_side.psize = sim_psize;
+                previous_ticks = entry_ticks;
+                ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);
+                if (short_side.entry_retracement_base > 0.0f
+                    || short_side.cooldown_min != 0.0f) break;
+                generate_short_orders(
+                    ladder_side, ladder_balance, ep, qty_step,
+                    ladder_touch_ticks, ladder_touch_ticks, ladder_touch_ticks,
+                    touch_min_qty, touch_min_qty_relation, price_step, min_qty,
+                    min_cost, c_mult, ladder_kf, false
+                );
+            }
             short_side.entry_qty = 0.0f;
         }
 

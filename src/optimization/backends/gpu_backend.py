@@ -117,20 +117,19 @@ def _minimum_rank_evidence_samples(halt: float) -> int:
 
 
 def _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides) -> None:
-    """Reject recursive grid modes until the proxy models their full ladders."""
+    """Reject recursive close grids until the proxy models their full ladders."""
 
     for side in enabled_sides:
-        for mode in ("entry", "close"):
-            key = f"{side}_{mode}_retracement_base_pct"
-            bound = bound_by_key[key]
-            if float(bound.low) <= 0.0:
-                raise ValueError(
-                    "GPU trailing_martingale requires "
-                    f"bot.{side}.strategy.trailing_martingale.{mode}."
-                    "retracement_base_pct bounds to stay strictly positive; "
-                    "zero or negative values select recursive grid ladders that "
-                    "the screening proxy does not model"
-                )
+        key = f"{side}_close_retracement_base_pct"
+        bound = bound_by_key[key]
+        if float(bound.low) <= 0.0:
+            raise ValueError(
+                "GPU trailing_martingale requires "
+                f"bot.{side}.strategy.trailing_martingale.close."
+                "retracement_base_pct bounds to stay strictly positive; "
+                "zero or negative values select recursive close grids that "
+                "the screening proxy does not model"
+            )
 
 
 def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):

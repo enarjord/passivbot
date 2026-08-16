@@ -320,17 +320,28 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
     }
 
 
-def test_trailing_martingale_gpu_rejects_recursive_grid_mode_bounds():
+def test_trailing_martingale_gpu_allows_recursive_entry_mode_bounds():
     bounds = {
         f"{side}_{mode}_retracement_base_pct": Bound(0.0001, 0.01, 0.0001)
         for side in ("long", "short")
         for mode in ("entry", "close")
     }
 
+    bounds["long_entry_retracement_base_pct"] = Bound(0.0, 0.01, 0.0001)
+    bounds["short_entry_retracement_base_pct"] = Bound(-0.01, 0.01, 0.0001)
     _validate_trailing_martingale_mode_bounds(bounds, {"long", "short"})
+
+
+def test_trailing_martingale_gpu_rejects_recursive_close_mode_bounds():
+    bounds = {
+        f"{side}_{mode}_retracement_base_pct": Bound(0.0001, 0.01, 0.0001)
+        for side in ("long", "short")
+        for mode in ("entry", "close")
+    }
+
     bounds["short_close_retracement_base_pct"] = Bound(0.0, 0.01, 0.0001)
 
-    with pytest.raises(ValueError, match="recursive grid ladders"):
+    with pytest.raises(ValueError, match="recursive close grids"):
         _validate_trailing_martingale_mode_bounds(bounds, {"long", "short"})
 
 
@@ -502,6 +513,16 @@ def test_gpu_foundation_accepts_each_directional_trailing_martingale_mode(
     config = _directional_tm_config(
         long_enabled=long_enabled, short_enabled=short_enabled
     )
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_accepts_recursive_trailing_martingale_entry_bounds():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    for side in ("long", "short"):
+        config["optimize"]["bounds"][side]["strategy"]["trailing_martingale"][
+            "entry"
+        ]["retracement_base_pct"] = [-0.01, 0.01, 0.0001]
 
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
