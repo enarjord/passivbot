@@ -38,7 +38,7 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
-kernel void passivbot_ema_anchor_multicoin_long(
+inline void passivbot_ema_anchor_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
@@ -49,7 +49,8 @@ kernel void passivbot_ema_anchor_multicoin_long(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
-    uint b [[thread_position_in_grid]]
+    uint b,
+    bool short_side
 ) {
     const int B = sizes[0];
     const int T = sizes[1];
@@ -236,11 +237,15 @@ kernel void passivbot_ema_anchor_multicoin_long(
             const float maker_fee = coin_settings[coin_offset + 5];
 
             bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
-                && close_tick[c] <= fill_ticks[tick_offset + 0];
+                && (short_side
+                    ? close_tick[c] > fill_ticks[tick_offset + 1]
+                    : close_tick[c] <= fill_ticks[tick_offset + 0]);
             if (filled_close) {
                 float fill_price = float(close_tick[c]) * price_step;
                 float adjusted = fmin(round_step(close_qty[c], qty_step), psize[c]);
-                float pnl = adjusted * c_mult * (fill_price - pprice[c]);
+                float pnl = adjusted * c_mult * (short_side
+                    ? pprice[c] - fill_price
+                    : fill_price - pprice[c]);
                 balance += pnl - adjusted * fill_price * c_mult * maker_fee;
                 float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
                 bool went_flat = new_size <= 0.0f;
@@ -259,7 +264,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
 
             bool was_flat = psize[c] <= 0.0f;
             bool filled_entry = entry_qty[c] > 0.0f
-                && entry_tick[c] > fill_ticks[tick_offset + 1];
+                && (short_side
+                    ? entry_tick[c] <= fill_ticks[tick_offset + 0]
+                    : entry_tick[c] > fill_ticks[tick_offset + 1]);
             if (filled_entry) {
                 float fill_price = float(entry_tick[c]) * price_step;
                 float adjusted = round_step(entry_qty[c], qty_step);
@@ -414,9 +421,13 @@ kernel void passivbot_ema_anchor_multicoin_long(
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                    float threshold = lower * (1.0f - offset);
+                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float threshold = short_side
+                        ? upper * (1.0f + offset)
+                        : lower * (1.0f - offset);
                     float readiness = threshold > 0.0f
-                        ? close / threshold - 1.0f : INFINITY;
+                        ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
+                        : INFINITY;
                     volume_min = fmin(volume_min, forager_volume[c]);
                     volume_max = fmax(volume_max, forager_volume[c]);
                     ready_min = fmin(ready_min, readiness);
@@ -430,9 +441,13 @@ kernel void passivbot_ema_anchor_multicoin_long(
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                    float threshold = lower * (1.0f - offset);
+                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float threshold = short_side
+                        ? upper * (1.0f + offset)
+                        : lower * (1.0f - offset);
                     float readiness = threshold > 0.0f
-                        ? close / threshold - 1.0f : INFINITY;
+                        ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
+                        : INFINITY;
                     float volume_component = volume_max > volume_min
                         ? (forager_volume[c] - volume_min) / (volume_max - volume_min) : 1.0f;
                     float ready_component = ready_max > ready_min
@@ -496,7 +511,8 @@ kernel void passivbot_ema_anchor_multicoin_long(
                 float wallet_ratio = psize[c] > 0.0f && balance > 0.0f
                     ? (psize[c] * price_now * c_mult / balance)
                         / fmax(effective_wel, 1.0e-12f) : 0.0f;
-                float inventory_shift = wallet_ratio * psize_weight;
+                float signed_wallet_ratio = short_side ? -wallet_ratio : wallet_ratio;
+                float inventory_shift = signed_wallet_ratio * psize_weight;
                 int bid_tick = min(
                     int(floor(
                         lower * (1.0f - offset * multiplier - inventory_shift)
@@ -513,8 +529,12 @@ kernel void passivbot_ema_anchor_multicoin_long(
                 );
                 float bid_price = float(bid_tick) * price_step;
                 float ask_price = float(ask_tick) * price_step;
+                int candidate_entry_tick = short_side ? ask_tick : bid_tick;
+                int candidate_close_tick = short_side ? bid_tick : ask_tick;
+                float entry_price = short_side ? ask_price : bid_price;
+                float close_price = short_side ? bid_price : ask_price;
                 float minimum = min_entry_qty(
-                    bid_price, qty_step, min_qty, min_cost, c_mult
+                    entry_price, qty_step, min_qty, min_cost, c_mult
                 );
                 minimum_entry[c] = minimum;
                 bool cooldown = cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
@@ -522,11 +542,11 @@ kernel void passivbot_ema_anchor_multicoin_long(
                 float cost_we = psize[c] > 0.0f && balance > 0.0f
                     ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
                 float position_cap = effective_wel - 1.0e-7f;
-                if (selected[c] && !cooldown && bid_price > 0.0f && balance > 0.0f
+                if (selected[c] && !cooldown && entry_price > 0.0f && balance > 0.0f
                     && cost_we < position_cap && base_qty_pct > 0.0f) {
                     float base_qty = fmax(minimum, round_step(
                         balance * effective_wel * base_qty_pct
-                            / fmax(bid_price * c_mult, 1.0e-12f),
+                            / fmax(entry_price * c_mult, 1.0e-12f),
                         qty_step
                     ));
                     float quantity = round_step(
@@ -535,8 +555,8 @@ kernel void passivbot_ema_anchor_multicoin_long(
                     );
                     float headroom = (
                         position_cap * balance - psize[c] * pprice[c] * c_mult
-                    ) / fmax(bid_price * c_mult, 1.0e-12f);
-                    bool over = (psize[c] * pprice[c] + quantity * bid_price) * c_mult
+                    ) / fmax(entry_price * c_mult, 1.0e-12f);
+                    bool over = (psize[c] * pprice[c] + quantity * entry_price) * c_mult
                         / fmax(balance, 1.0e-9f) >= position_cap;
                     if (over) {
                         float capped = floor_step(headroom, qty_step);
@@ -544,23 +564,23 @@ kernel void passivbot_ema_anchor_multicoin_long(
                             ? capped : 0.0f;
                     }
                     entry_qty[c] = quantity;
-                    entry_tick[c] = bid_tick;
+                    entry_tick[c] = candidate_entry_tick;
                     entry_candidate[c] = quantity > 0.0f;
-                    contribution[c] = quantity * bid_price * c_mult / balance;
+                    contribution[c] = quantity * entry_price * c_mult / balance;
                 }
-                if (psize[c] > 0.0f && ask_price > 0.0f) {
+                if (psize[c] > 0.0f && close_price > 0.0f) {
                     float minimum_close = min_entry_qty(
-                        ask_price, qty_step, min_qty, min_cost, c_mult
+                        close_price, qty_step, min_qty, min_cost, c_mult
                     );
                     float clip = fmin(psize[c], fmax(minimum_close, round_step(
                         balance * effective_wel * base_qty_pct
-                            / fmax(ask_price * c_mult, 1.0e-12f),
+                            / fmax(close_price * c_mult, 1.0e-12f),
                         qty_step
                     )));
                     close_qty[c] = psize[c] <= minimum_close
                             || psize[c] - clip < minimum_close
                         ? psize[c] : clip;
-                    close_tick[c] = ask_tick;
+                    close_tick[c] = candidate_close_tick;
                 }
             }
 
@@ -584,9 +604,10 @@ kernel void passivbot_ema_anchor_multicoin_long(
                         int coin_offset = c * COIN_COLS;
                         float price_now = bars[bar_offset + 2];
                         float price_step = coin_settings[coin_offset + 1];
-                        float distance = (
-                            price_now - float(entry_tick[c]) * price_step
-                        ) / fmax(price_now, 1.0e-12f);
+                        float entry_price = float(entry_tick[c]) * price_step;
+                        float distance = (short_side
+                            ? entry_price - price_now
+                            : price_now - entry_price) / fmax(price_now, 1.0e-12f);
                         if (best < 0 || distance < best_distance
                             || (distance == best_distance && c < best)) {
                             best = c;
@@ -631,7 +652,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
             }
             if (psize[c] > 0.0f) {
                 unrealized += psize[c] * coin_settings[coin_offset + 4]
-                    * (close - pprice[c]);
+                    * (short_side ? pprice[c] - close : close - pprice[c]);
             }
         }
         float equity = balance + unrealized;
@@ -703,8 +724,49 @@ kernel void passivbot_ema_anchor_multicoin_long(
         ? last_eq_k * interval_ms : -1.0f;
     scalars[scalar_offset + 9] = float(liquidation_day);
     scalars[scalar_offset + 10] = balance;
-    scalars[scalar_offset + 11] = total_size;
-    scalars[scalar_offset + 12] = total_cost;
+    scalars[scalar_offset + 11] = short_side ? 0.0f : total_size;
+    scalars[scalar_offset + 12] = short_side ? 0.0f : total_cost;
     scalars[scalar_offset + 13] = alive ? 1.0f : 0.0f;
     scalars[scalar_offset + 14] = float(open_positions);
+    scalars[scalar_offset + 15] = short_side ? total_size : 0.0f;
+    scalars[scalar_offset + 16] = short_side ? total_cost : 0.0f;
+}
+
+kernel void passivbot_ema_anchor_multicoin(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* params,
+    constant float* run_settings,
+    constant int* sizes,
+    device float* daily,
+    device float* scalars,
+    device int* gap_hist,
+    uint b [[thread_position_in_grid]]
+) {
+    const bool short_side = run_settings[3] > 0.5f;
+    passivbot_ema_anchor_multicoin_impl(
+        bars, fill_ticks, touch_ticks, coin_settings, params, run_settings,
+        sizes, daily, scalars, gap_hist, b, short_side
+    );
+}
+
+kernel void passivbot_ema_anchor_multicoin_long(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* params,
+    constant float* run_settings,
+    constant int* sizes,
+    device float* daily,
+    device float* scalars,
+    device int* gap_hist,
+    uint b [[thread_position_in_grid]]
+) {
+    passivbot_ema_anchor_multicoin_impl(
+        bars, fill_ticks, touch_ticks, coin_settings, params, run_settings,
+        sizes, daily, scalars, gap_hist, b, false
+    );
 }

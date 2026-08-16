@@ -47,6 +47,7 @@ def test_minimum_entry_qty_encoding_preserves_just_above_aligned_minimum():
 
 
 from optimization.gpu.mps_kernel import (
+    MpsEmaAnchorMulticoinRunner,
     MpsEmaAnchorMulticoinLongRunner,
     MpsEmaAnchorRunner,
 )
@@ -200,10 +201,12 @@ def test_mps_ema_anchor_shader_smoke():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_ema_anchor_multicoin_long_shader_smoke():
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     import passivbot_rust
 
-    source = passivbot_rust.mps_ema_anchor_multicoin_long_source_py()
+    source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
+    assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
     count = 512
     coin_count = 3
@@ -258,7 +261,7 @@ def test_mps_ema_anchor_multicoin_long_shader_smoke():
         2.0,
     ]
 
-    output = MpsEmaAnchorMulticoinLongRunner(runs[0], data).run(
+    output = MpsEmaAnchorMulticoinRunner(runs[0], data, side=side).run(
         np.array([row, row], dtype=np.float64)
     )
     torch.mps.synchronize()
@@ -268,6 +271,9 @@ def test_mps_ema_anchor_multicoin_long_shader_smoke():
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
+
+    legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
+    assert legacy_long.side == "long"
 
 
 @pytest.mark.skipif(

@@ -13,8 +13,9 @@ All notable user-facing changes will be documented in this file.
   remains unsupported by the GPU optimizer backend.
 - Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
   EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
-  Long-only multi-coin EMA-anchor searches are also supported for up to 64 coins with shared
-  balance, per-coin market and indicator state, dynamic wallet-exposure allocation, Forager
+  Single-side long-only or short-only multi-coin EMA-anchor searches are also supported for up to
+  64 coins with shared balance, per-coin market and indicator state, dynamic wallet-exposure
+  allocation, Forager
   selection, searchable Forager parameters and position count, strict tick-boundary fills, and
   compact unified-memory inputs guarded against excessive MPS allocation.
   Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and
@@ -26,7 +27,7 @@ All notable user-facing changes will be documented in this file.
   validation and rolling drift gates remain authoritative for this screening approximation.
   Recursive trailing-martingale entry and close ladders use immutable generation snapshots, merge
   equal-price closes, and fill every strictly crossed rung in Rust's canonical order. Other
-  strategies, suites, multi-coin short/hedged or trailing-martingale runs, HSL, auto-unstuck,
+  strategies, suites, multi-coin hedged or trailing-martingale runs, HSL, auto-unstuck,
   collateral, minimum-effective-cost filtering, market-order execution, incomplete candle tails,
   non-inert fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal
   EMA updates reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements

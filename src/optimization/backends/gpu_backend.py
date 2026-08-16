@@ -68,21 +68,30 @@ EMA_BOUND_MAP = {
     for bound_suffix, parameter in _EMA_SIDE_BOUND_SUFFIXES.items()
 }
 
-EMA_MULTICOIN_LONG_BOUND_MAP = {
-    **EMA_BOUND_MAP,
-    **{
-        f"long_{suffix}": f"long_{parameter}"
-        for suffix, parameter in {
-            "forager_volume_ema_span_1m": "forager_volume_ema_span_1m",
-            "forager_volatility_ema_span_1m": "forager_volatility_ema_span_1m",
-            "forager_volume_drop_pct": "forager_volume_drop_pct",
-            "forager_score_weights_volume": "forager_score_weights_volume",
-            "forager_score_weights_ema_readiness": "forager_score_weights_ema_readiness",
-            "forager_score_weights_volatility": "forager_score_weights_volatility",
-            "n_positions": "n_positions",
-        }.items()
-    },
+_EMA_MULTICOIN_SIDE_BOUND_SUFFIXES = {
+    "forager_volume_ema_span_1m": "forager_volume_ema_span_1m",
+    "forager_volatility_ema_span_1m": "forager_volatility_ema_span_1m",
+    "forager_volume_drop_pct": "forager_volume_drop_pct",
+    "forager_score_weights_volume": "forager_score_weights_volume",
+    "forager_score_weights_ema_readiness": "forager_score_weights_ema_readiness",
+    "forager_score_weights_volatility": "forager_score_weights_volatility",
+    "n_positions": "n_positions",
 }
+
+EMA_MULTICOIN_BOUND_MAPS = {
+    side: {
+        **EMA_BOUND_MAP,
+        **{
+            f"{side}_{suffix}": f"{side}_{parameter}"
+            for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
+        },
+    }
+    for side in ("long", "short")
+}
+
+# Compatibility name for consumers of the first multicoin slice.
+EMA_MULTICOIN_LONG_BOUND_MAP = EMA_MULTICOIN_BOUND_MAPS["long"]
+EMA_MULTICOIN_SHORT_BOUND_MAP = EMA_MULTICOIN_BOUND_MAPS["short"]
 
 _TM_SIDE_BOUND_SUFFIXES = {
     "ema_span_0": "ema_span_0",
@@ -512,9 +521,9 @@ def _validate_scope(config: dict, evaluator) -> str:
             raise ValueError(
                 "GPU multicoin foundation currently supports strategy_kind=ema_anchor only"
             )
-        if enabled_sides != ["long"]:
+        if len(enabled_sides) != 1:
             raise ValueError(
-                "GPU multicoin foundation currently supports long-only enabledness"
+                "GPU multicoin foundation currently supports exactly one enabled side"
             )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
@@ -1298,11 +1307,17 @@ def run_backend(
     base_vector = [float(value) for value in template_vectors[0]]
 
     strategy_kind = str(config["live"]["strategy_kind"]).strip().lower()
-    bound_map = (
-        EMA_MULTICOIN_LONG_BOUND_MAP
-        if strategy_kind == "ema_anchor" and coin_count > 1
-        else GPU_STRATEGY_BOUND_MAPS[strategy_kind]
-    )
+    if strategy_kind == "ema_anchor" and coin_count > 1:
+        multicoin_sides = [
+            side for side in ("long", "short") if gpu_side_enabled(config, side)
+        ]
+        if len(multicoin_sides) != 1:
+            raise ValueError(
+                "GPU multicoin foundation requires exactly one enabled side"
+            )
+        bound_map = EMA_MULTICOIN_BOUND_MAPS[multicoin_sides[0]]
+    else:
+        bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
     mapped_all = {
         bound_map[bound_key]: (index, bounds[index])

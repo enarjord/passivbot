@@ -5,13 +5,18 @@
 //! dispatches this source through the optional Apple MPS backend.
 
 pub const MPS_EMA_ANCHOR_SOURCE: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
-pub const MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE: &str =
+pub const MPS_EMA_ANCHOR_MULTICOIN_SOURCE: &str =
     include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
+pub const MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE: &str = MPS_EMA_ANCHOR_MULTICOIN_SOURCE;
 pub const MPS_TRAILING_MARTINGALE_SOURCE: &str =
     include_str!("gpu/mps_trailing_martingale_directional.metal");
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE
+}
+
+pub fn mps_ema_anchor_multicoin_source() -> &'static str {
+    MPS_EMA_ANCHOR_MULTICOIN_SOURCE
 }
 
 pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
@@ -45,9 +50,11 @@ mod tests {
     }
 
     #[test]
-    fn ema_anchor_multicoin_long_mps_source_exposes_expected_kernel_contract() {
-        let source = mps_ema_anchor_multicoin_long_source();
+    fn ema_anchor_multicoin_mps_source_exposes_expected_kernel_contract() {
+        let source = mps_ema_anchor_multicoin_source();
+        assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
+        assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 19"));
         assert!(source.contains("constant int COIN_COLS = 11"));
@@ -61,6 +68,7 @@ mod tests {
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));
         assert!(!source.contains("hard_stop"));
+        assert_eq!(source, mps_ema_anchor_multicoin_long_source());
     }
 
     #[test]

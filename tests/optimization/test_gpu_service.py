@@ -1,12 +1,17 @@
 import pytest
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
 )
-from optimization.gpu.service import MpsEmaAnchorProxy, _require_complete_valid_tail
+from optimization.gpu.service import (
+    MpsEmaAnchorProxy,
+    MpsMulticoinEmaProxy,
+    _require_complete_valid_tail,
+)
 
 
 def test_gpu_proxy_requires_complete_valid_tail():
@@ -32,6 +37,24 @@ def test_directional_parameter_matrix_keeps_side_values_separate():
     offset_index = EMA_ANCHOR_PARAM_KEYS.index("offset")
     assert matrix[0, offset_index] == 0.125
     assert matrix[0, len(EMA_ANCHOR_PARAM_KEYS) + offset_index] == 0.25
+
+
+@pytest.mark.parametrize(("side", "base"), [("long", 1.0), ("short", 2.0)])
+def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.side = side
+    proxy.base_params = {
+        key: base for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    }
+
+    other_side = "short" if side == "long" else "long"
+    matrix = proxy._parameter_matrix(
+        [{f"{side}_offset": 0.125, f"{other_side}_offset": 9.0}]
+    )
+
+    assert matrix.shape == (1, len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS))
+    offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
+    assert matrix[0, offset_index] == 0.125
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():
