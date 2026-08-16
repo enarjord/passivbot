@@ -17,12 +17,13 @@ All notable user-facing changes will be documented in this file.
   feed feasible, diverse candidates into the unchanged exact Rust backtester; only exact results
   reach the Pareto store, and independent broad-probe rank checks halt on proxy drift. Dual-side
   screening preserves separate indicator/trailing/position state, a shared balance, Rust fill
-  ordering, and hedge/one-way initial-side semantics. Recursive trailing-martingale grid modes,
-  other strategies, suites, multi-coin, HSL, auto-unstuck, collateral,
-  minimum-effective-cost filtering, market-order execution, incomplete candle tails, non-inert
-  fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal EMA updates
-  reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements feed aggregate,
-  proxy-front, and broad-probe rolling constraint-agreement gates, retain exact Rust as the only
+  ordering, and hedge/one-way initial-side semantics. Recursive trailing-martingale entry ladders
+  use immutable generation snapshots and fill every strictly crossed rung in Rust order. Recursive
+  trailing-martingale close grids, other strategies, suites, multi-coin, HSL, auto-unstuck,
+  collateral, minimum-effective-cost filtering, market-order execution, incomplete candle tails,
+  non-inert fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal
+  EMA updates reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements
+  feed aggregate, proxy-front, and broad-probe rolling constraint-agreement gates, retain exact Rust as the only
   authoritative classification, and persist per-limit proxy/exact diagnostics. Strict candle/order
   crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
