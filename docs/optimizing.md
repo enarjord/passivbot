@@ -133,7 +133,9 @@ The backend is hybrid rather than a replacement backtester:
 2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
    MPS; Python only prepares buffers and dispatches the program. EMA-anchor and
    trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
-   trailing, and position state with one shared balance and the exact Rust fill ordering.
+   trailing, and position state with one shared balance and the exact Rust fill ordering. Python
+   also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
+   comparisons preserve Rust's decimal-tick fill decisions.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. Rolling rank and constraint-agreement gates independently stop the run if broad proxy/exact

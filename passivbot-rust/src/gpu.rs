@@ -30,6 +30,9 @@ mod tests {
         assert!(source.contains("const bool hedge_mode"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
+        assert_eq!(source.matches("const int fo = k * 6").count(), 1);
+        assert_eq!(source.matches("high_fill_max_tick").count(), 3);
+        assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
     }
 
     #[test]
@@ -45,5 +48,8 @@ mod tests {
         assert!(source.contains("s.twel * balance - cost"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
+        assert_eq!(source.matches("const int fo = k * 6").count(), 1);
+        assert_eq!(source.matches("high_fill_max_tick").count(), 3);
+        assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
     }
 }

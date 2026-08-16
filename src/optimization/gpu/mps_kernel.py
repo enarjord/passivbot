@@ -82,6 +82,8 @@ class MpsEmaAnchorRunner:
                     data["can_gen"].to(torch.int32),
                     data["day_idx"].to(torch.int32),
                     data["hour_valid"].to(torch.int32),
+                    data["high_fill_max_tick"].to(torch.int32),
+                    data["low_nonfill_max_tick"].to(torch.int32),
                 ],
                 dim=1,
             )

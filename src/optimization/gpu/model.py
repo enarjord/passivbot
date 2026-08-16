@@ -202,6 +202,52 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
     return hour_log_range, hour_valid
 
 
+def _strict_fill_tick_boundaries(
+    high, low, price_step: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode Rust's strict candle/order comparisons as integer tick boundaries."""
+
+    if not np.isfinite(price_step) or price_step <= 0.0:
+        raise ValueError(
+            f"MPS proxy requires a positive finite price_step, got {price_step}"
+        )
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    finite = np.isfinite(high) & np.isfinite(low)
+    safe_high = np.where(finite, high, 0.0)
+    safe_low = np.where(finite, low, 0.0)
+    high_fill_max = np.floor(safe_high / price_step).astype(np.int64)
+    low_nonfill_max = np.floor(safe_low / price_step).astype(np.int64)
+
+    # Division can land one tick to either side near an exact boundary. Repair
+    # against the same float64 multiplication used by Rust order prices.
+    for _ in range(2):
+        high_fill_max -= (
+            high_fill_max.astype(np.float64) * price_step >= safe_high
+        ).astype(np.int64)
+        high_fill_max += (
+            (high_fill_max + 1).astype(np.float64) * price_step < safe_high
+        ).astype(np.int64)
+        low_nonfill_max -= (
+            low_nonfill_max.astype(np.float64) * price_step > safe_low
+        ).astype(np.int64)
+        low_nonfill_max += (
+            (low_nonfill_max + 1).astype(np.float64) * price_step <= safe_low
+        ).astype(np.int64)
+
+    high_fill_max[~finite] = 0
+    low_nonfill_max[~finite] = 0
+    i32 = np.iinfo(np.int32)
+    if (
+        high_fill_max.min(initial=0) < i32.min
+        or high_fill_max.max(initial=0) > i32.max
+        or low_nonfill_max.min(initial=0) < i32.min
+        or low_nonfill_max.max(initial=0) > i32.max
+    ):
+        raise ValueError("MPS proxy candle price ticks exceed signed 32-bit range")
+    return high_fill_max.astype(np.int32), low_nonfill_max.astype(np.int32)
+
+
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
@@ -257,6 +303,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         & (indices >= run.trade_start_idx)
         & valid
     )
+    high_fill_max_tick, low_nonfill_max_tick = _strict_fill_tick_boundaries(
+        high, low, market.price_step
+    )
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -271,6 +320,8 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "valid": tensor(valid),
         "can_gen": tensor(can_generate),
         "day_idx": tensor(day_idx),
+        "high_fill_max_tick": tensor(high_fill_max_tick),
+        "low_nonfill_max_tick": tensor(low_nonfill_max_tick),
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,

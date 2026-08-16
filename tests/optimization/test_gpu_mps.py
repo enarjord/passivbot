@@ -8,9 +8,27 @@ from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
     _build_hourly_log_range,
+    _strict_fill_tick_boundaries,
     build_mps_data,
 )
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
+
+
+def test_strict_fill_tick_boundaries_preserve_float32_candle_crossing():
+    step = 0.01
+    order_tick = 371_177
+    exact_order_price = order_tick * step
+    represented_above = float(np.float32(exact_order_price))
+    assert represented_above > exact_order_price
+
+    high_fill_max, low_nonfill_max = _strict_fill_tick_boundaries(
+        np.array([represented_above, exact_order_price]),
+        np.array([exact_order_price, represented_above]),
+        step,
+    )
+
+    assert high_fill_max.tolist() == [order_tick, order_tick - 1]
+    assert low_nonfill_max.tolist() == [order_tick, order_tick]
 
 
 def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
