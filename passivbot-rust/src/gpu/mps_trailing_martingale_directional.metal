@@ -150,7 +150,7 @@ inline float crop_entry(
 }
 
 inline float calc_close_qty(
-    thread TmSide& s, float balance, float mq, float pct,
+    thread TmSide& s, float balance, float mq, int mq_relation, float pct,
     float qty_step, float c_mult
 ) {
     float full = balance * s.twel / fmax(s.pprice * c_mult, 1.0e-12f);
@@ -158,7 +158,10 @@ inline float calc_close_qty(
         round_step(s.psize, qty_step),
         fmax(mq, ceil_step(full * pct + fmax(s.psize - full, 0.0f), qty_step))
     );
-    if (qty > 0.0f && qty < s.psize && s.psize - qty < mq) qty = s.psize;
+    float remainder = s.psize - qty;
+    bool remainder_below_mq = remainder < mq
+        || (remainder == mq && mq_relation > 0);
+    if (qty > 0.0f && qty < s.psize && remainder_below_mq) qty = s.psize;
     if (s.psize < mq * (1.0f - 1.0e-6f) && qty > 0.0f) qty = s.psize;
     else if (qty > 0.0f && qty * (1.0f + 1.0e-6f) < mq) qty = 0.0f;
     return qty;
@@ -167,7 +170,7 @@ inline float calc_close_qty(
 inline void generate_orders(
     thread TmSide& s, bool is_long, float balance, float price_now,
     int touch_down_ticks, int touch_up_ticks, int touch_nearest_ticks,
-    int touch_min_qty_steps,
+    float touch_min_qty, int touch_min_qty_relation,
     float qty_step, float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
@@ -326,10 +329,12 @@ inline void generate_orders(
     int cticks = touch_controls ? touch_nearest_ticks : target_ticks;
     float close_price = float(cticks) * price_step;
     // Rust sizes the selected raw touch before calc_closes_* quantizes its
-    // executable price. Python precomputes that float64 minimum as qty steps.
+    // executable price. Python preserves the float64 minimum's ordering
+    // relative to its float32 representation for the remainder comparison.
     float close_mq = touch_controls
-        ? float(touch_min_qty_steps) * qty_step
+        ? touch_min_qty
         : min_entry_qty(close_price, qty_step, min_qty, min_cost, c_mult);
+    int close_mq_relation = touch_controls ? touch_min_qty_relation : 0;
     float pct = trailing_close ? s.close_qty_pct
         : (s.close_threshold_we == 0.0f ? 1.0f : s.close_qty_pct);
     s.close_ticks = cticks;
@@ -337,20 +342,21 @@ inline void generate_orders(
     s.close_qty = s.psize > 0.0f && close_price > 0.0f
             && (!trailing_close || close_triggered)
         ? calc_close_qty(
-            s, balance, close_mq, pct, qty_step, c_mult
+            s, balance, close_mq, close_mq_relation, pct, qty_step, c_mult
         ) : 0.0f;
 }
 
 inline void generate_long_orders(
     thread TmSide& s, float balance, float price_now, float qty_step,
     int touch_down_ticks, int touch_up_ticks, int touch_nearest_ticks,
-    int touch_min_qty_steps,
+    float touch_min_qty, int touch_min_qty_relation,
     float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
     generate_orders(
         s, true, balance, price_now, touch_down_ticks, touch_up_ticks,
-        touch_nearest_ticks, touch_min_qty_steps, qty_step, price_step, min_qty, min_cost,
+        touch_nearest_ticks, touch_min_qty, touch_min_qty_relation,
+        qty_step, price_step, min_qty, min_cost,
         c_mult, kf, block_initial
     );
 }
@@ -358,13 +364,14 @@ inline void generate_long_orders(
 inline void generate_short_orders(
     thread TmSide& s, float balance, float price_now, float qty_step,
     int touch_down_ticks, int touch_up_ticks, int touch_nearest_ticks,
-    int touch_min_qty_steps,
+    float touch_min_qty, int touch_min_qty_relation,
     float price_step, float min_qty, float min_cost, float c_mult,
     float kf, bool block_initial
 ) {
     generate_orders(
         s, false, balance, price_now, touch_down_ticks, touch_up_ticks,
-        touch_nearest_ticks, touch_min_qty_steps, qty_step, price_step, min_qty, min_cost,
+        touch_nearest_ticks, touch_min_qty, touch_min_qty_relation,
+        qty_step, price_step, min_qty, min_cost,
         c_mult, kf, block_initial
     );
 }
@@ -436,7 +443,7 @@ inline void passivbot_single_coin_impl(
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
-        const int fo = k * 10;
+        const int fo = k * 11;
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
@@ -451,7 +458,8 @@ inline void passivbot_single_coin_impl(
         const int touch_down_tick = flags[fo + 6];
         const int touch_up_tick = flags[fo + 7];
         const int touch_nearest_tick = flags[fo + 8];
-        const int touch_min_qty_steps = flags[fo + 9];
+        const float touch_min_qty = as_type<float>(flags[fo + 9]);
+        const int touch_min_qty_relation = flags[fo + 10];
         const float kf = float(k);
 
         if (di != cur_day) {
@@ -623,14 +631,16 @@ inline void passivbot_single_coin_impl(
             if (long_enabled) {
                 generate_long_orders(
                     long_side, balance, close, qty_step, touch_down_tick,
-                    touch_up_tick, touch_nearest_tick, touch_min_qty_steps, price_step, min_qty,
+                    touch_up_tick, touch_nearest_tick, touch_min_qty,
+                    touch_min_qty_relation, price_step, min_qty,
                     min_cost, c_mult, kf, block_long_initial
                 );
             }
             if (short_enabled) {
                 generate_short_orders(
                     short_side, balance, close, qty_step, touch_down_tick,
-                    touch_up_tick, touch_nearest_tick, touch_min_qty_steps, price_step, min_qty,
+                    touch_up_tick, touch_nearest_tick, touch_min_qty,
+                    touch_min_qty_relation, price_step, min_qty,
                     min_cost, c_mult, kf, block_short_initial
                 );
             }

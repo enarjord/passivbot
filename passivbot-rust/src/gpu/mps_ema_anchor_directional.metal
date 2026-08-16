@@ -336,7 +336,7 @@ inline void passivbot_single_coin_impl(
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
-        const int fo = k * 10;
+        const int fo = k * 11;
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];

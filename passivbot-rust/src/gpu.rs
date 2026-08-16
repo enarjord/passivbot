@@ -30,7 +30,7 @@ mod tests {
         assert!(source.contains("const bool hedge_mode"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 10").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
@@ -51,14 +51,14 @@ mod tests {
         assert!(source.contains("s.twel * balance - cost"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 10").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert!(!source.contains("nextafter("));
         assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
-        assert!(source.contains("float(touch_min_qty_steps) * qty_step"));
+        assert!(source.contains("remainder == mq && mq_relation > 0"));
         assert!(!source.contains("entry_raw_touch"));
         assert!(!source.contains("close_raw_touch"));
         assert!(source.contains("close_touch > target_ticks"));

@@ -334,8 +334,10 @@ def _directional_touch_ticks(
     )
 
 
-def _minimum_entry_qty_steps(prices, market: ProxyMarket) -> np.ndarray:
-    """Precompute Rust-compatible minimum quantities from float64 touch prices."""
+def _minimum_entry_qty_encoding(
+    prices, market: ProxyMarket
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode Rust-compatible float64 touch minima for float32 Metal comparisons."""
 
     prices = np.asarray(prices, dtype=np.float64)
     finite = np.isfinite(prices) & (prices > 0.0)
@@ -360,20 +362,26 @@ def _minimum_entry_qty_steps(prices, market: ProxyMarket) -> np.ndarray:
             | (raw_min - nearest_qty <= representation_tolerance)
         )
     )
-    steps = np.where(
+    minimum_qty = np.where(
         raw_min == 0.0,
         0.0,
-        np.where(aligned, nearest_steps, np.ceil(raw_steps)),
+        np.where(
+            aligned,
+            np.maximum(nearest_qty, raw_min),
+            np.ceil(raw_steps) * float(market.qty_step),
+        ),
     )
-    steps = np.where(finite, steps, 0.0)
-    i32 = np.iinfo(np.int32)
+    minimum_qty = np.where(finite, minimum_qty, 0.0)
+    rounded = minimum_qty.astype(np.float32)
     if (
-        np.any(~np.isfinite(steps))
-        or np.any(steps < 0.0)
-        or np.any(steps > i32.max)
+        np.any(~np.isfinite(minimum_qty))
+        or np.any(minimum_qty < 0.0)
+        or np.any(~np.isfinite(rounded))
     ):
-        raise ValueError("MPS proxy minimum touch quantities exceed signed 32-bit range")
-    return steps.astype(np.int32)
+        raise ValueError("MPS proxy minimum touch quantities exceed float32 range")
+    relation = np.sign(minimum_qty - rounded.astype(np.float64)).astype(np.int32)
+    rounded_bits = np.ascontiguousarray(rounded).view(np.int32)
+    return rounded_bits, relation
 
 
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
@@ -437,7 +445,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     touch_down_tick, touch_up_tick, touch_nearest_tick = _directional_touch_ticks(
         close, market.price_step
     )
-    touch_min_qty_steps = _minimum_entry_qty_steps(close, market)
+    touch_min_qty_bits, touch_min_qty_relation = _minimum_entry_qty_encoding(
+        close, market
+    )
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -457,7 +467,8 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "touch_down_tick": tensor(touch_down_tick),
         "touch_up_tick": tensor(touch_up_tick),
         "touch_nearest_tick": tensor(touch_nearest_tick),
-        "touch_min_qty_steps": tensor(touch_min_qty_steps),
+        "touch_min_qty_bits": tensor(touch_min_qty_bits),
+        "touch_min_qty_relation": tensor(touch_min_qty_relation),
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,

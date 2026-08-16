@@ -23,8 +23,9 @@ All notable user-facing changes will be documented in this file.
   Trailing-martingale uses float64-derived directional ticks to choose the controlling raw/target
   value before Metal float32 can collapse them, then mirrors Rust's directional entry and nearest-
   tick close finalization. Raw-touch close minimum quantities are sized from the original float64
-  price before that finalization. Tick-aligned targets remain on their exchange tick, and partial
-  final validation batches scale their reserved broad probes proportionally. True proxy-front
+  price before that finalization, including their ordering relative to an aligned quantity step
+  when float32 rounds both values together. Tick-aligned targets remain on their exchange tick,
+  and partial final validation batches scale their reserved broad probes proportionally. True proxy-front
   membership is persisted independently from off-front probe eligibility, with the safety window
   and exact budget sized for a one-member proxy front; a generation with no novel front candidate
   fails closed instead of silently consuming that evidence budget. Resume also proves that its

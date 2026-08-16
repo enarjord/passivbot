@@ -9,7 +9,7 @@ from optimization.gpu.model import (
     ProxyRun,
     _build_hourly_log_range,
     _directional_touch_ticks,
-    _minimum_entry_qty_steps,
+    _minimum_entry_qty_encoding,
     _strict_fill_tick_boundaries,
     build_mps_data,
 )
@@ -25,11 +25,24 @@ def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices
     assert nearest.tolist() == [10_000, 10_001, 30]
 
 
-def test_minimum_entry_qty_steps_uses_original_float64_touch_price():
+def test_minimum_entry_qty_encoding_uses_original_float64_touch_price():
     market = ProxyMarket(0.001, 0.01, 0.001, 10.0004, 1.0, 0.0)
 
-    assert _minimum_entry_qty_steps(np.array([100.004]), market).tolist() == [100]
-    assert _minimum_entry_qty_steps(np.array([100.0]), market).tolist() == [101]
+    bits, relation = _minimum_entry_qty_encoding(
+        np.array([100.004, 100.0]), market
+    )
+    rounded = np.ascontiguousarray(bits).view(np.float32)
+    assert rounded.tolist() == pytest.approx([0.1, 0.101])
+    assert relation.tolist() == [-1, -1]
+
+
+def test_minimum_entry_qty_encoding_preserves_just_above_aligned_minimum():
+    market = ProxyMarket(1.0, 0.001, 0.0, 11.0, 1.0, 0.0)
+
+    bits, relation = _minimum_entry_qty_encoding(np.array([0.088]), market)
+    rounded = np.ascontiguousarray(bits).view(np.float32)
+    assert rounded.tolist() == [125.0]
+    assert relation.tolist() == [1]
 
 
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
@@ -755,6 +768,62 @@ def test_mps_trailing_sizes_raw_touch_close_before_price_finalization():
     # 0.101 if it were incorrectly used for sizing. The 1.000 position must
     # therefore retain 0.900 after the close.
     assert output["psize"].item() == pytest.approx(0.9, abs=1e-6)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_preserves_just_above_aligned_raw_touch_minimum():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 6
+    close = np.full(count, 0.088, dtype=np.float64)
+    high = np.array([0.088, 0.088, 0.088, 0.088, 0.1, 0.088])
+    low = np.array([0.088, 0.088, 0.088, 0.07, 0.088, 0.088])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.0, 11.0, 1.0, 0.0)
+    run = ProxyRun(
+        200.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row[15] = 0.05
+    row[16] = 0.0
+    row[17] = 1e-6  # keep grid-close sizing on close_qty_pct
+    row[20] = 0.0
+
+    rounded_only_data = dict(data)
+    rounded_only_data["touch_min_qty_relation"] = torch.zeros_like(
+        data["touch_min_qty_relation"]
+    )
+    rounded_only = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        rounded_only_data,
+        long_enabled=True,
+        short_enabled=False,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+    assert rounded_only["psize"].item() == 125.0
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Rust's raw-touch minimum is 125.00000000000001. A nominal 125-unit
+    # remainder is therefore below the effective minimum, so the 250-unit
+    # position must be closed in full rather than leaving half open.
+    assert output["psize"].item() == 0.0
 
 
 @pytest.mark.skipif(
