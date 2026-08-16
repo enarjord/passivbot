@@ -442,8 +442,10 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "s.entry_retracement_base > 0.0f" in source
     assert "s.close_retracement_base > 0.0f" in source
     assert "entry_gen_balance" in source
+    assert "close_gen_balance" in source
     assert "for (int rung = 0; rung < 500; ++rung)" in source
     assert "ladder_side, ladder_balance" in source
+    assert "recursive_close_groups" in source
     assert "cooldown_min != 0.0f" in source
     assert "int entry_touch = is_long ? touch_down_ticks : touch_up_ticks" in source
     assert "int raw_reentry_ticks = reentry_target_is_touch" in source
@@ -584,6 +586,110 @@ def test_mps_trailing_martingale_fills_recursive_entry_ladders_in_hedge_mode():
 
     assert output["psize"].item() > 1.25
     assert output["short_psize"].item() > 1.25
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("is_long", [True, False])
+@pytest.mark.parametrize("close_threshold_we", [-0.005, 0.005])
+def test_mps_trailing_martingale_fills_sorted_recursive_close_grid(
+    is_long, close_threshold_we
+):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if is_long:
+        low[3] = 99.0  # Fill the initial entry generated on the prior bar.
+        high[4] = 100.85 if close_threshold_we > 0.0 else 100.6
+    else:
+        high[3] = 101.0
+        low[4] = 99.15 if close_threshold_we > 0.0 else 99.4
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[6] = 0.1  # Open a 1-unit position.
+    row[7] = 0.01  # Exposure cap prevents reentries in this fixture.
+    row[15] = 0.05  # Two recursive close rungs at the standard lower bound.
+    row[16] = 0.005 if close_threshold_we > 0.0 else 0.01
+    row[17] = close_threshold_we * 10.0
+    row[20] = 0.0  # Recursive close mode.
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=is_long,
+        short_enabled=not is_long,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    position = output["psize" if is_long else "short_psize"].item()
+    # The candle strictly crosses one of two sorted 0.5-unit closes. With
+    # positive WE weight, the generated grid must be reversed before filling;
+    # its first generated (farthest) order is deliberately not crossed.
+    assert position == pytest.approx(0.5, abs=1e-6)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_fills_recursive_close_grids_in_hedge_mode():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3], high[3] = 99.0, 101.0
+    low[4], high[4] = 99.15, 100.85
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[6], row[7], row[15] = 1.0, 1.0, 0.2
+    row[16], row[17], row[20] = 0.005, 0.005, 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=True,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() == pytest.approx(4.0, abs=1e-6)
+    assert output["short_psize"].item() == pytest.approx(4.0, abs=1e-6)
 
 
 @pytest.mark.skipif(
@@ -856,8 +962,8 @@ def test_mps_trailing_sizes_raw_touch_close_before_price_finalization():
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
     row[15] = 0.01
-    row[16] = 0.0
-    row[17] = 1e-6  # keep grid-close sizing on close_qty_pct
+    row[16] = 0.199
+    row[17] = -2.0  # keep later grid closes above this fixture's high
     row[20] = 0.0
 
     output = MpsTrailingMartingaleRunner(
@@ -899,8 +1005,8 @@ def test_mps_trailing_preserves_just_above_aligned_raw_touch_minimum():
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
     row[15] = 0.05
-    row[16] = 0.0
-    row[17] = 1e-6  # keep grid-close sizing on close_qty_pct
+    row[16] = 0.299
+    row[17] = -3.0  # keep a possible second grid close above the high
     row[20] = 0.0
 
     rounded_only_data = dict(data)

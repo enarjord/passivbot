@@ -116,22 +116,6 @@ def _minimum_rank_evidence_samples(halt: float) -> int:
     return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
 
 
-def _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides) -> None:
-    """Reject recursive close grids until the proxy models their full ladders."""
-
-    for side in enabled_sides:
-        key = f"{side}_close_retracement_base_pct"
-        bound = bound_by_key[key]
-        if float(bound.low) <= 0.0:
-            raise ValueError(
-                "GPU trailing_martingale requires "
-                f"bot.{side}.strategy.trailing_martingale.close."
-                "retracement_base_pct bounds to stay strictly positive; "
-                "zero or negative values select recursive close grids that "
-                "the screening proxy does not model"
-            )
-
-
 def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
 
@@ -1326,8 +1310,6 @@ def run_backend(
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
     }
-    if strategy_kind == "trailing_martingale":
-        _validate_trailing_martingale_mode_bounds(bound_by_key, enabled_sides)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
     _validate_directional_search_space(
