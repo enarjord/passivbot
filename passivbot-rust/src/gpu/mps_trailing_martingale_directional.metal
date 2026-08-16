@@ -128,8 +128,12 @@ inline void update_trailing(
 }
 
 inline int directional_ticks(float price, float step, bool up) {
-    return up ? int(ceil(price / step - 1.0e-6f))
-              : int(floor(price / step + 1.0e-6f));
+    float tick_value = price / step;
+    // A float32 strategy target may round exactly onto an integer tick even
+    // when Rust's float64 target remains just beyond it. Preserve directional
+    // ceil/floor intent by stepping away from that rounded boundary by one ULP.
+    return up ? int(ceil(nextafter(tick_value, INFINITY)))
+              : int(floor(nextafter(tick_value, -INFINITY)));
 }
 
 inline int nearest_ticks(float price, float step) {

@@ -33,6 +33,8 @@ mod tests {
         assert_eq!(source.matches("const int fo = k * 6").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
+        assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
+        assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
     }
 
     #[test]
@@ -51,5 +53,7 @@ mod tests {
         assert_eq!(source.matches("const int fo = k * 6").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
+        assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
+        assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
     }
 }

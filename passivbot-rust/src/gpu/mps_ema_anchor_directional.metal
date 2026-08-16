@@ -18,6 +18,19 @@ inline float floor_step(float value, float step) {
     return floor(value / step + 1.0e-6f) * step;
 }
 
+inline int directional_ticks(float price, float step, bool up) {
+    float tick_value = price / step;
+    // A float32 strategy target may round exactly onto an integer tick even
+    // when Rust's float64 target remains just beyond it. Preserve directional
+    // ceil/floor intent by stepping away from that rounded boundary by one ULP.
+    return up ? int(ceil(nextafter(tick_value, INFINITY)))
+              : int(floor(nextafter(tick_value, -INFINITY)));
+}
+
+inline int nearest_ticks(float price, float step) {
+    return int(floor(price / step + 0.5f));
+}
+
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {
@@ -147,8 +160,8 @@ inline void generate_long_orders(
     float inv_shift = swer * side.psize_weight;
 
     int bid_ticks = min(
-        int(floor(lower * (1.0f - eff_off - inv_shift) / price_step + 1.0e-6f)),
-        int(floor(price_now / price_step + 1.0e-6f))
+        directional_ticks(lower * (1.0f - eff_off - inv_shift), price_step, false),
+        nearest_ticks(price_now, price_step)
     );
     float bid_price = float(bid_ticks) * price_step;
     float min_q = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
@@ -177,8 +190,8 @@ inline void generate_long_orders(
     side.entry_qty = e_qty;
 
     int ask_ticks = max(
-        int(ceil(upper * (1.0f + eff_off - inv_shift) / price_step - 1.0e-6f)),
-        int(ceil(price_now / price_step - 1.0e-6f))
+        directional_ticks(upper * (1.0f + eff_off - inv_shift), price_step, true),
+        nearest_ticks(price_now, price_step)
     );
     float ask_price = float(ask_ticks) * price_step;
     float min_cq = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
@@ -218,8 +231,8 @@ inline void generate_short_orders(
     float inv_shift = swer * side.psize_weight;
 
     int ask_ticks = max(
-        int(ceil(upper * (1.0f + eff_off - inv_shift) / price_step - 1.0e-6f)),
-        int(ceil(price_now / price_step - 1.0e-6f))
+        directional_ticks(upper * (1.0f + eff_off - inv_shift), price_step, true),
+        nearest_ticks(price_now, price_step)
     );
     float ask_price = float(ask_ticks) * price_step;
     float min_q = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
@@ -248,8 +261,8 @@ inline void generate_short_orders(
     side.entry_qty = e_qty;
 
     int bid_ticks = min(
-        int(floor(lower * (1.0f - eff_off - inv_shift) / price_step + 1.0e-6f)),
-        int(floor(price_now / price_step + 1.0e-6f))
+        directional_ticks(lower * (1.0f - eff_off - inv_shift), price_step, false),
+        nearest_ticks(price_now, price_step)
     );
     float bid_price = float(bid_ticks) * price_step;
     float min_cq = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);

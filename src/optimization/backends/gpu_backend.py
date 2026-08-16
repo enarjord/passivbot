@@ -442,6 +442,7 @@ class _ObjectiveScale:
 
 class _DriftMonitor:
     MIN_PROBES = MIN_DRIFT_PROBES
+    MIN_FRONT_SAMPLES = MIN_DRIFT_PROBES
 
     def __init__(self, options: dict):
         self.window = int(options["drift_window"])
@@ -473,8 +474,13 @@ class _DriftMonitor:
             "front_rho": float("nan"),
             "samples": len(self.pairs),
             "probes": 0,
+            "front_samples": 0,
+            "constraint_agreement": float("nan"),
+            "constraint_mismatches": 0,
             "probe_constraint_agreement": float("nan"),
             "probe_constraint_mismatches": 0,
+            "front_constraint_agreement": float("nan"),
+            "front_constraint_mismatches": 0,
             "halt_reason": None,
             "warn_reason": None,
         }
@@ -487,9 +493,14 @@ class _DriftMonitor:
             [row[3] if len(row) > 3 else False for row in self.pairs], dtype=bool
         )
         result["probes"] = int(probes.sum())
+        result["front_samples"] = int((~probes).sum())
         result["rho"] = _spearman(proxy, exact)
         result["probe_rho"] = _spearman(proxy[probes], exact[probes])
         result["front_rho"] = _spearman(proxy[~probes], exact[~probes])
+        result["constraint_mismatches"] = int(constraint_mismatches.sum())
+        result["constraint_agreement"] = 1.0 - (
+            result["constraint_mismatches"] / result["samples"]
+        )
         result["probe_constraint_mismatches"] = int(
             (constraint_mismatches & probes).sum()
         )
@@ -497,17 +508,39 @@ class _DriftMonitor:
             result["probe_constraint_agreement"] = 1.0 - (
                 result["probe_constraint_mismatches"] / result["probes"]
             )
+        result["front_constraint_mismatches"] = int(
+            (constraint_mismatches & ~probes).sum()
+        )
+        if result["front_samples"]:
+            result["front_constraint_agreement"] = 1.0 - (
+                result["front_constraint_mismatches"] / result["front_samples"]
+            )
         detail = (
             f"rho={result['rho']:.3f}, probe_rho={result['probe_rho']:.3f}, "
             f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
+            f"constraint_agreement={result['constraint_agreement']:.3f}, "
             f"probes={result['probes']}, "
-            f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}"
+            f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}, "
+            f"front_samples={result['front_samples']}, "
+            f"front_constraint_agreement={result['front_constraint_agreement']:.3f}"
         )
-        if result["probes"] >= self.MIN_PROBES and (
+        if result["constraint_agreement"] < self.halt:
+            result["halt_reason"] = (
+                "GPU proxy/exact rolling constraint agreement fell below "
+                f"safety threshold ({detail})"
+            )
+        elif result["probes"] >= self.MIN_PROBES and (
             result["probe_constraint_agreement"] < self.halt
         ):
             result["halt_reason"] = (
                 "GPU proxy/exact broad-probe constraint agreement fell below "
+                f"safety threshold ({detail})"
+            )
+        elif result["front_samples"] >= self.MIN_FRONT_SAMPLES and (
+            result["front_constraint_agreement"] < self.halt
+        ):
+            result["halt_reason"] = (
+                "GPU proxy/exact proxy-front constraint agreement fell below "
                 f"safety threshold ({detail})"
             )
         elif result["probes"] >= self.MIN_PROBES and (
@@ -901,12 +934,11 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> tuple[set[str], list[tuple[float, float, bool, bool]], str | None]:
+) -> tuple[set[str], list[tuple[float, float, bool, bool]]]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
     drift_pairs: list[tuple[float, float, bool, bool]] = []
-    mismatch_reason = None
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -946,11 +978,6 @@ def _recover_durable_validations(
                 f"durable result {index}"
             )
         drift_pairs.append((proxy_score, exact_score, probe, classification_mismatch))
-        if classification_mismatch and not probe:
-            mismatch_reason = (
-                "GPU proxy/exact constraint classification disagreed for a "
-                "durably recorded exact validation"
-            )
         consumed += 1
     expected = max(0, stop_index - start_index)
     if consumed != expected:
@@ -958,7 +985,7 @@ def _recover_durable_validations(
             "GPU resume could not reconstruct all durable candidate hashes: "
             f"expected {expected}, recovered {consumed}"
         )
-    return recovered, drift_pairs, mismatch_reason
+    return recovered, drift_pairs
 
 
 def run_backend(
@@ -1269,22 +1296,15 @@ def run_backend(
                     )
                 return vectors[0]
 
-            recovered_hashes, recovered_pairs, recovered_mismatch = (
-                _recover_durable_validations(
-                    load_results(results_file),
-                    start_index=exact_done,
-                    stop_index=recorded_exact,
-                    vector_from_entry=vector_from_entry,
-                    hash_vector=vector_hash,
-                )
+            recovered_hashes, recovered_pairs = _recover_durable_validations(
+                load_results(results_file),
+                start_index=exact_done,
+                stop_index=recorded_exact,
+                vector_from_entry=vector_from_entry,
+                hash_vector=vector_hash,
             )
             completed_hashes.update(recovered_hashes)
             drift_monitor.pairs.extend(recovered_pairs)
-            if recovered_mismatch:
-                raise RuntimeError(
-                    "Cannot resume a GPU run stopped by its constraint safety gate: "
-                    f"{recovered_mismatch}"
-                )
             recovered_drift_status = drift_monitor.evaluate()
             if recovered_drift_status["halt_reason"]:
                 raise RuntimeError(
@@ -1440,19 +1460,12 @@ def run_backend(
             )
             exact_done += 1
             completed_hashes.add(digest)
-            if classification_mismatch and not is_probe:
-                persisted_halt_reason = (
-                    "GPU proxy/exact constraint classification disagreed for an exact "
-                    f"validation: proxy_violation={proxy_violation}, "
-                    f"exact_G={np.asarray(payload['G']).tolist()}; "
-                    f"limits=[{_format_constraint_diagnostics(constraint_diagnostics)}]"
-                )
-                maybe_save_checkpoint(force=True)
-                raise RuntimeError(persisted_halt_reason)
             if classification_mismatch:
                 logging.warning(
-                    "GPU broad-probe proxy/exact constraint classification disagreed; "
-                    "recording rolling drift evidence: %s",
+                    "GPU %s proxy/exact constraint classification disagreed; exact Rust "
+                    "classification remains authoritative and the mismatch is rolling "
+                    "drift evidence: %s",
+                    "broad-probe" if is_probe else "proxy-front",
                     _format_constraint_diagnostics(constraint_diagnostics),
                 )
             drift_monitor.add(

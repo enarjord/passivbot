@@ -14,11 +14,14 @@ All notable user-facing changes will be documented in this file.
   other strategies, suites, multi-coin, HSL, auto-unstuck, collateral,
   minimum-effective-cost filtering, market-order execution, incomplete candle tails, non-inert
   fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal EMA updates
-  reduce long-horizon float32 path drift. Proxy-front optimizer-limit feasibility disagreement
-  halts immediately; broad-probe disagreements feed a rolling constraint-agreement gate and persist
-  per-limit proxy/exact diagnostics. Strict candle/order crossing comparisons are precomputed as
+  reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements feed aggregate,
+  proxy-front, and broad-probe rolling constraint-agreement gates, retain exact Rust as the only
+  authoritative classification, and persist per-limit proxy/exact diagnostics. Strict candle/order
+  crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
-  sees just beyond a decimal tick. Existing CPU bot, backtest, and optimizer paths do not import or
+  sees just beyond a decimal tick. Directional order-target conversion also steps away from rounded
+  float32 integer boundaries before applying ceil/floor, preventing one-tick proxy order drift from
+  compounding over long runs. Existing CPU bot, backtest, and optimizer paths do not import or
   require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot

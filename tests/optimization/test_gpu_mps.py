@@ -96,8 +96,10 @@ def test_mps_ema_anchor_shader_smoke():
     assert "fabs(eq) * ep / balance" in source
     assert "floor(value / step + 0.5f) * step" in source
     assert "rint(value / step)" not in source
-    assert "int(ceil(price_now / price_step - 1.0e-6f))" in source
-    assert "int(floor(price_now / price_step + 1.0e-6f))" in source
+    assert source.count("nearest_ticks(price_now, price_step)") == 4
+    assert "directional_ticks(price_now, price_step" not in source
+    assert "nextafter(tick_value, INFINITY)" in source
+    assert "nextafter(tick_value, -INFINITY)" in source
     assert "(run_peak - eqf) / fmax(fabs(run_peak)" in source
     assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
     assert "if (current_cost_we >= cap" in source

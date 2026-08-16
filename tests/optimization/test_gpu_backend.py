@@ -591,6 +591,55 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
     assert status["halt_reason"] is None
 
 
+def test_drift_monitor_allows_isolated_proxy_front_constraint_mismatches():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            constraint_mismatch=not probe and index < 11,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["constraint_agreement"] == pytest.approx(0.8125)
+    assert status["front_constraint_agreement"] == pytest.approx(0.625)
+    assert status["front_constraint_mismatches"] == 3
+    assert status["halt_reason"] is None
+
+
+def test_drift_monitor_halts_on_low_proxy_front_constraint_agreement():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 64,
+            "drift_min_samples": 16,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(16):
+        probe = index < 8
+        monitor.add(
+            index,
+            index,
+            probe=probe,
+            constraint_mismatch=not probe and index < 12,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["constraint_agreement"] == pytest.approx(0.75)
+    assert status["front_constraint_agreement"] == pytest.approx(0.5)
+    assert "proxy-front constraint agreement fell below" in status["halt_reason"]
+
+
 def test_drift_monitor_halts_on_low_broad_probe_constraint_agreement():
     monitor = _DriftMonitor(
         {
@@ -847,7 +896,7 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
         for index in range(4)
     ]
 
-    recovered, drift_pairs, mismatch = _recover_durable_validations(
+    recovered, drift_pairs = _recover_durable_validations(
         entries,
         start_index=2,
         stop_index=4,
@@ -860,7 +909,6 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
         (2.0, 2.5, False, False),
         (3.0, 3.5, True, False),
     ]
-    assert mismatch is None
 
 
 def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
@@ -899,8 +947,8 @@ def test_resume_fails_closed_when_durable_tail_lacks_drift_evidence():
         )
 
 
-def test_resume_recovers_durable_front_constraint_disagreement():
-    _hashes, pairs, mismatch = _recover_durable_validations(
+def test_resume_recovers_durable_front_constraint_disagreement_as_drift_evidence():
+    _hashes, pairs = _recover_durable_validations(
         [
             {
                 "id": 0,
@@ -922,11 +970,10 @@ def test_resume_recovers_durable_front_constraint_disagreement():
     )
 
     assert pairs == [(0.1, 0.2, False, True)]
-    assert "constraint classification disagreed" in mismatch
 
 
 def test_resume_records_broad_probe_constraint_disagreement_without_immediate_halt():
-    _hashes, pairs, mismatch = _recover_durable_validations(
+    _hashes, pairs = _recover_durable_validations(
         [
             {
                 "id": 0,
@@ -948,4 +995,3 @@ def test_resume_records_broad_probe_constraint_disagreement_without_immediate_ha
     )
 
     assert pairs == [(0.1, 0.2, True, True)]
-    assert mismatch is None
