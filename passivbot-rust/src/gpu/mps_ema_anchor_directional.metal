@@ -332,7 +332,7 @@ inline void passivbot_single_coin_impl(
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
-        const int fo = k * 4;
+        const int fo = k * 6;
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
@@ -342,6 +342,8 @@ inline void passivbot_single_coin_impl(
         const bool can_gen = flags[fo + 1] != 0;
         const int di = flags[fo + 2];
         const bool hour_valid = flags[fo + 3] != 0;
+        const int high_fill_max_tick = flags[fo + 4];
+        const int low_nonfill_max_tick = flags[fo + 5];
         const float kf = float(k);
 
         if (di != cur_day) {
@@ -364,7 +366,7 @@ inline void passivbot_single_coin_impl(
 
         bool long_close_fill = valid && alive && long_enabled
             && long_side.close_qty > 0.0f && long_side.psize > 0.0f
-            && high > float(long_side.close_ticks) * price_step;
+            && long_side.close_ticks <= high_fill_max_tick;
         if (long_close_fill) {
             float cp = float(long_side.close_ticks) * price_step;
             float adj = fmin(round_step(long_side.close_qty, qty_step), long_side.psize);
@@ -386,7 +388,7 @@ inline void passivbot_single_coin_impl(
 
         bool long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
-            && low < float(long_side.entry_ticks) * price_step;
+            && long_side.entry_ticks > low_nonfill_max_tick;
         if (long_entry_fill) {
             float ep = float(long_side.entry_ticks) * price_step;
             float eq = round_step(long_side.entry_qty, qty_step);
@@ -406,7 +408,7 @@ inline void passivbot_single_coin_impl(
 
         bool short_close_fill = valid && alive && short_enabled
             && short_side.close_qty > 0.0f && short_side.psize > 0.0f
-            && low < float(short_side.close_ticks) * price_step;
+            && short_side.close_ticks > low_nonfill_max_tick;
         if (short_close_fill) {
             float cp = float(short_side.close_ticks) * price_step;
             float adj = fmin(round_step(short_side.close_qty, qty_step), short_side.psize);
@@ -428,7 +430,7 @@ inline void passivbot_single_coin_impl(
 
         bool short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
-            && high > float(short_side.entry_ticks) * price_step;
+            && short_side.entry_ticks <= high_fill_max_tick;
         if (short_entry_fill) {
             float ep = float(short_side.entry_ticks) * price_step;
             float eq = round_step(short_side.entry_qty, qty_step);
