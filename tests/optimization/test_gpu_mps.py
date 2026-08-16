@@ -441,6 +441,10 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "min_since_max" in source
     assert "s.entry_retracement_base > 0.0f" in source
     assert "s.close_retracement_base > 0.0f" in source
+    assert "entry_gen_balance" in source
+    assert "for (int rung = 0; rung < 500; ++rung)" in source
+    assert "ladder_side, ladder_balance" in source
+    assert "cooldown_min != 0.0f" in source
     assert "int entry_touch = is_long ? touch_down_ticks : touch_up_ticks" in source
     assert "int raw_reentry_ticks = reentry_target_is_touch" in source
     assert "int cticks = touch_controls ? touch_nearest_ticks : target_ticks" in source
@@ -482,6 +486,104 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert output["day_has_fill"].sum().item() > 0
     assert (output["psize"].item() > 0.0) is long_enabled
     assert (output["short_psize"].item() > 0.0) is short_enabled
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("is_long", [True, False])
+def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if is_long:
+        low[2] = 99.99  # Fill the initial entry generated on the prior bar.
+        low[3] = 90.0  # Strictly cross several pre-generated recursive rungs.
+    else:
+        high[2] = 100.01
+        high[3] = 110.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[4] = 1.5  # entry double-down factor
+    row[6] = 0.05  # initial entry uses 5% of the exposure budget
+    row[11] = 0.0  # recursive entry mode
+    row[16] = 1.0  # keep trailing closes unreachable in this fixture
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=is_long,
+        short_enabled=not is_long,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    position = output["psize" if is_long else "short_psize"].item()
+    # Initial qty is 0.5 and the first reentry is 0.75. Crossing more than
+    # those two orders proves the recursive ladder, not merely one reentry,
+    # was filled in the same candle.
+    assert position > 1.25
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_fills_recursive_entry_ladders_in_hedge_mode():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[2], high[2] = 99.99, 100.01
+    low[3], high[3] = 90.0, 110.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[4], row[6], row[11], row[16] = 1.5, 0.05, 0.0, 1.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=True,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() > 1.25
+    assert output["short_psize"].item() > 1.25
 
 
 @pytest.mark.skipif(
