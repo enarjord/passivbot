@@ -195,6 +195,42 @@ Main config:
   only the selected `coin+side`, including enablement, tier thresholds, cooldown/restart policy,
   orange behavior, and panic execution type. Other coins inherit the main config.
 
+## Composing single-coin configs
+
+Use the offline composition tool to turn a directory of single-coin JSON/HJSON configs into one
+config with minimal inline patches:
+
+```bash
+passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
+```
+
+Each input must validate as a current config, approve exactly one coin across its long/short lists,
+reject the `all` sentinel, and contain no existing `coin_overrides`, including in nested-current
+input. Files and coins are processed deterministically, with the alphabetically first filename
+supplying the master config by default. Pass `--master-config FILE` to select another input as the
+source of master/global values. The tool rejects input aliases that resolve to the same configured
+venue market, combines the per-side approved coin lists, removes approved market aliases from the
+master's ignored lists, and expands `n_positions` to the approved-coin count on active sides.
+Exchange-qualified identifiers contribute their explicit venue to alias resolution. Legal per-coin
+differences become overrides only when they differ from the master; differing account-wide or
+otherwise non-overridable values retain the master value and are listed in the command output.
+Exact market identifiers must resolve unambiguously through cached market metadata; unresolved
+exact approved or ignored identifiers, and identifiers resolving to different contracts across
+configured venues, fail validation instead of falling back to a lossy ticker guess.
+
+When HSL, auto unstuck, or a position/total-exposure enforcer is disabled in every input, parameters
+used only by that disabled feature are normalized before diffing. Optimized numeric fields use the
+lower bound from the master input and fixed fields use schema defaults, so inactive optimized values
+do not create noise in `coin_overrides`. The total-exposure threshold is shared by the TWEL entry
+gate and enforcer, so it is normalized only when both are disabled.
+
+By default the output omits `backtest` and `optimize`, producing a lean live config. Add
+`--include-backtest-optimize` to copy both sections from the master input, which makes the result
+directly usable for backtesting or fine-tuning inherited master parameters while the coin overrides
+remain fixed. A master using the single-coin-only `gpu` optimizer backend is rejected in this mode;
+select a CPU optimizer backend before composing. Existing output files are protected unless
+`--overwrite` is supplied.
+
 ## Common pitfalls
 
 - Bad paths: a missing or unreadable `override_config_path` is fatal.
