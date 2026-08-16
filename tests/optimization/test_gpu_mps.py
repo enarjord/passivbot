@@ -8,9 +8,19 @@ from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
     _build_hourly_log_range,
+    _directional_touch_ticks,
     _strict_fill_tick_boundaries,
     build_mps_data,
 )
+
+
+def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
+    down, up = _directional_touch_ticks(
+        np.array([100.0, 100.006, 0.1 + 0.2]), 0.01
+    )
+
+    assert down.tolist() == [10_000, 10_000, 30]
+    assert up.tolist() == [10_000, 10_001, 30]
 from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
 
 
@@ -96,8 +106,9 @@ def test_mps_ema_anchor_shader_smoke():
     assert "fabs(eq) * ep / balance" in source
     assert "floor(value / step + 0.5f) * step" in source
     assert "rint(value / step)" not in source
-    assert source.count("nearest_ticks(price_now, price_step)") == 4
-    assert "directional_ticks(price_now, price_step" not in source
+    assert source.count("touch_down_ticks") >= 3
+    assert source.count("touch_up_ticks") >= 3
+    assert "nearest_ticks(price_now, price_step)" not in source
     assert "nextafter(" not in source
     assert "(run_peak - eqf) / fmax(fabs(run_peak)" in source
     assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
@@ -191,6 +202,41 @@ def test_mps_ema_anchor_preserves_tick_aligned_computed_target():
     # A 100.00 bid must fill when the following candle trades one tick below.
     # Unconditionally nudging the aligned target down to 99.99 misses this fill.
     assert output["psize"].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_anchor_directionally_rounds_non_aligned_candle_touch():
+    count = 5
+    close = np.full(count, 100.006)
+    high = np.full(count, 100.006)
+    low = np.array([100.006, 100.006, 100.006, 100.005, 100.006])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [0.1, 2.0, 3.0, 0.0, -0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+
+    output = MpsEmaAnchorRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Rust rounds a bid clamped to 100.006 down to 100.00. Nearest snapping
+    # would place 100.01 and incorrectly fill on the 100.005 low.
+    assert output["psize"].item() == 0.0
 
 
 @pytest.mark.skipif(
@@ -371,8 +417,10 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "min_since_max" in source
     assert "s.entry_retracement_base > 0.0f" in source
     assert "s.close_retracement_base > 0.0f" in source
-    assert "int entry_touch = nearest_ticks(price_now, price_step)" in source
-    assert "int raw_reentry_ticks = trailing_entry" in source
+    assert "int entry_touch = is_long ? touch_down_ticks : touch_up_ticks" in source
+    assert "int raw_reentry_ticks = reentry_target_is_touch" in source
+    assert "long_side.entry_raw_touch" in source
+    assert "short_side.close_raw_touch" in source
     assert "nextafter(" not in source
 
     count = 8
@@ -443,6 +491,43 @@ def test_mps_trailing_martingale_preserves_tick_aligned_computed_target():
     ).run(np.array([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
+    assert output["psize"].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_trailing_martingale_preserves_non_aligned_raw_touch():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 5
+    close = np.full(count, 100.006)
+    high = np.full(count, 100.006)
+    low = np.array([100.006, 100.006, 100.006, 100.005, 100.006])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Exact Rust keeps the raw 100.006 bid. The following 100.005 low must
+    # fill it; rounding the touch down to 100.00 would miss the fill.
     assert output["psize"].item() > 0.0
 
 
@@ -538,20 +623,50 @@ def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_trailing_martingale_touch_close_uses_nearest_tick():
+def test_mps_trailing_martingale_touch_close_preserves_raw_price():
     """Match Rust finalization when an off-tick market touch controls a close."""
 
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 
     count = 9
     close = np.array(
-        [100.0, 100.0, 100.004, 100.004, 100.004, 100.004, 100.004, 100.004, 100.0]
+        [
+            100.0,
+            100.0,
+            100.004,
+            100.004,
+            100.004,
+            100.004,
+            100.004,
+            100.004,
+            100.004,
+        ]
     )
     high = np.array(
-        [100.0, 100.0, 100.004, 100.005, 100.005, 100.005, 100.005, 100.005, 100.0]
+        [
+            100.0,
+            100.0,
+            100.004,
+            100.005,
+            100.005,
+            100.005,
+            100.005,
+            100.005,
+            100.004,
+        ]
     )
     low = np.array(
-        [100.0, 100.0, 99.0, 100.003, 100.003, 100.003, 100.003, 100.003, 100.0]
+        [
+            100.0,
+            100.0,
+            99.0,
+            100.003,
+            100.003,
+            100.003,
+            100.004,
+            100.004,
+            100.004,
+        ]
     )
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
@@ -582,6 +697,6 @@ def test_mps_trailing_martingale_touch_close_uses_nearest_tick():
     ).run(np.array([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
-    # The 100.004 touch rounds to 100.00 and fills at the next 100.005 high.
-    # Directionally rounding the touch up to 100.01 would leave the position open.
+    # Exact Rust keeps the raw 100.004 ask, which fills at the next 100.005
+    # high. Rounding the touch up to 100.01 would leave the position open.
     assert output["psize"].item() == 0.0

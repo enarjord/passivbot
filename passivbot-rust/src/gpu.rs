@@ -30,7 +30,9 @@ mod tests {
         assert!(source.contains("const bool hedge_mode"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 6").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 8").count(), 1);
+        assert_eq!(source.matches("const int touch_down_tick").count(), 1);
+        assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert!(!source.contains("nextafter("));
@@ -49,11 +51,16 @@ mod tests {
         assert!(source.contains("s.twel * balance - cost"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
-        assert_eq!(source.matches("const int fo = k * 6").count(), 1);
+        assert_eq!(source.matches("const int fo = k * 8").count(), 1);
+        assert_eq!(source.matches("const int touch_down_tick").count(), 1);
+        assert_eq!(source.matches("const int touch_up_tick").count(), 1);
         assert_eq!(source.matches("high_fill_max_tick").count(), 3);
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert!(!source.contains("nextafter("));
-        assert_eq!(source.matches("int entry_touch = nearest_ticks").count(), 1);
-        assert_eq!(source.matches("? nearest_ticks(price_now").count(), 2);
+        assert!(source.contains("low < long_side.entry_price"));
+        assert!(source.contains("high > short_side.entry_price"));
+        assert!(source.contains("high > long_side.close_price"));
+        assert!(source.contains("low < short_side.close_price"));
+        assert!(!source.contains("nearest_ticks("));
     }
 }

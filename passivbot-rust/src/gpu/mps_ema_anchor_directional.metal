@@ -18,10 +18,6 @@ inline float floor_step(float value, float step) {
     return floor(value / step + 1.0e-6f) * step;
 }
 
-inline int nearest_ticks(float price, float step) {
-    return int(floor(price / step + 0.5f));
-}
-
 inline float min_entry_qty(
     float price, float qty_step, float min_qty, float min_cost, float c_mult
 ) {
@@ -130,6 +126,8 @@ inline void generate_long_orders(
     thread EmaSide& side,
     float balance,
     float price_now,
+    int touch_down_ticks,
+    int touch_up_ticks,
     float qty_step,
     float price_step,
     float min_qty,
@@ -152,7 +150,7 @@ inline void generate_long_orders(
 
     int bid_ticks = min(
         int(floor(lower * (1.0f - eff_off - inv_shift) / price_step + 1.0e-6f)),
-        nearest_ticks(price_now, price_step)
+        touch_down_ticks
     );
     float bid_price = float(bid_ticks) * price_step;
     float min_q = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
@@ -182,7 +180,7 @@ inline void generate_long_orders(
 
     int ask_ticks = max(
         int(ceil(upper * (1.0f + eff_off - inv_shift) / price_step - 1.0e-6f)),
-        nearest_ticks(price_now, price_step)
+        touch_up_ticks
     );
     float ask_price = float(ask_ticks) * price_step;
     float min_cq = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
@@ -202,6 +200,8 @@ inline void generate_short_orders(
     thread EmaSide& side,
     float balance,
     float price_now,
+    int touch_down_ticks,
+    int touch_up_ticks,
     float qty_step,
     float price_step,
     float min_qty,
@@ -223,7 +223,7 @@ inline void generate_short_orders(
 
     int ask_ticks = max(
         int(ceil(upper * (1.0f + eff_off - inv_shift) / price_step - 1.0e-6f)),
-        nearest_ticks(price_now, price_step)
+        touch_up_ticks
     );
     float ask_price = float(ask_ticks) * price_step;
     float min_q = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
@@ -253,7 +253,7 @@ inline void generate_short_orders(
 
     int bid_ticks = min(
         int(floor(lower * (1.0f - eff_off - inv_shift) / price_step + 1.0e-6f)),
-        nearest_ticks(price_now, price_step)
+        touch_down_ticks
     );
     float bid_price = float(bid_ticks) * price_step;
     float min_cq = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
@@ -336,7 +336,7 @@ inline void passivbot_single_coin_impl(
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
-        const int fo = k * 6;
+        const int fo = k * 8;
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
@@ -348,6 +348,8 @@ inline void passivbot_single_coin_impl(
         const bool hour_valid = flags[fo + 3] != 0;
         const int high_fill_max_tick = flags[fo + 4];
         const int low_nonfill_max_tick = flags[fo + 5];
+        const int touch_down_tick = flags[fo + 6];
+        const int touch_up_tick = flags[fo + 7];
         const float kf = float(k);
 
         if (di != cur_day) {
@@ -506,14 +508,16 @@ inline void passivbot_single_coin_impl(
             }
             if (long_enabled) {
                 generate_long_orders(
-                    long_side, balance, close, qty_step, price_step, min_qty,
-                    min_cost, c_mult, kf, block_long_initial
+                    long_side, balance, close, touch_down_tick, touch_up_tick,
+                    qty_step, price_step, min_qty, min_cost, c_mult, kf,
+                    block_long_initial
                 );
             }
             if (short_enabled) {
                 generate_short_orders(
-                    short_side, balance, close, qty_step, price_step, min_qty,
-                    min_cost, c_mult, kf, block_short_initial
+                    short_side, balance, close, touch_down_tick, touch_up_tick,
+                    qty_step, price_step, min_qty, min_cost, c_mult, kf,
+                    block_short_initial
                 );
             }
         }

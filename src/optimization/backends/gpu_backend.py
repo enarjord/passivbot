@@ -492,7 +492,9 @@ class _DriftMonitor:
         self.window = int(options["drift_window"])
         self.minimum = int(options["drift_min_samples"])
         self.halt = float(options["drift_halt"])
-        self.pairs: deque[tuple[float, float, bool, bool]] = deque(maxlen=self.window)
+        self.pairs: deque[tuple[float, float, bool, bool, bool]] = deque(
+            maxlen=self.window
+        )
 
     def add(
         self,
@@ -500,14 +502,21 @@ class _DriftMonitor:
         exact_score: float,
         *,
         probe: bool,
+        proxy_front: bool,
         constraint_mismatch: bool = False,
     ) -> None:
+        if bool(probe) == bool(proxy_front):
+            raise ValueError(
+                "GPU validation evidence must be exactly one of proxy-front "
+                "or broad/off-front"
+            )
         self.pairs.append(
             (
                 float(proxy_score),
                 float(exact_score),
                 bool(probe),
                 bool(constraint_mismatch),
+                bool(proxy_front),
             )
         )
 
@@ -533,14 +542,23 @@ class _DriftMonitor:
         proxy = np.asarray([row[0] for row in self.pairs], dtype=np.float64)
         exact = np.asarray([row[1] for row in self.pairs], dtype=np.float64)
         probes = np.asarray([row[2] for row in self.pairs], dtype=bool)
+        fronts = np.asarray(
+            [row[4] for row in self.pairs],
+            dtype=bool,
+        )
+        if np.any(probes == fronts):
+            raise RuntimeError(
+                "GPU drift evidence contains invalid proxy-front/broad-probe "
+                "classification"
+            )
         constraint_mismatches = np.asarray(
             [row[3] if len(row) > 3 else False for row in self.pairs], dtype=bool
         )
         result["probes"] = int(probes.sum())
-        result["front_samples"] = int((~probes).sum())
+        result["front_samples"] = int(fronts.sum())
         result["rho"] = _spearman(proxy, exact)
         result["probe_rho"] = _spearman(proxy[probes], exact[probes])
-        result["front_rho"] = _spearman(proxy[~probes], exact[~probes])
+        result["front_rho"] = _spearman(proxy[fronts], exact[fronts])
         result["constraint_mismatches"] = int(constraint_mismatches.sum())
         result["constraint_agreement"] = 1.0 - (
             result["constraint_mismatches"] / result["samples"]
@@ -553,7 +571,7 @@ class _DriftMonitor:
                 result["probe_constraint_mismatches"] / result["probes"]
             )
         result["front_constraint_mismatches"] = int(
-            (constraint_mismatches & ~probes).sum()
+            (constraint_mismatches & fronts).sum()
         )
         if result["front_samples"]:
             result["front_constraint_agreement"] = 1.0 - (
@@ -634,7 +652,7 @@ def _select_validation_indices(
     *,
     total: int,
     probes: int,
-) -> list[tuple[int, bool]]:
+) -> list[tuple[int, bool, bool]]:
     from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
     objectives = np.asarray(objectives, dtype=np.float64)
@@ -662,8 +680,8 @@ def _select_validation_indices(
     front_ids = {int(index) for index in front}
     front_count = max(0, total - probes)
     elite_local = _normalized_farthest_indices(objectives[front], front_count)
-    selected = [(int(front[index]), False) for index in elite_local]
-    selected_ids = {index for index, _probe in selected}
+    selected = [(int(front[index]), False, True) for index in elite_local]
+    selected_ids = {index for index, _probe, _front in selected}
 
     broad_pool = np.asarray(
         [
@@ -688,7 +706,7 @@ def _select_validation_indices(
         for position in positions:
             index = int(broad_pool[position])
             if index not in selected_ids:
-                selected.append((index, True))
+                selected.append((index, True, False))
                 selected_ids.add(index)
 
     preferred_order = sorted(
@@ -698,7 +716,8 @@ def _select_validation_indices(
         if len(selected) >= total:
             break
         if index not in selected_ids:
-            selected.append((index, index not in front_ids))
+            is_front = index in front_ids
+            selected.append((index, not is_front, is_front))
             selected_ids.add(index)
 
     # Return a complete preference order. The caller may skip candidates whose
@@ -714,7 +733,8 @@ def _select_validation_indices(
     )
     for index in fallback_order:
         if index not in selected_ids:
-            selected.append((index, index not in front_ids and index in feasible_ids))
+            is_front = index in front_ids
+            selected.append((index, not is_front, is_front))
             selected_ids.add(index)
     return selected
 
@@ -732,16 +752,22 @@ def _select_novel_validations(
     novel = []
     seen = set()
     novel_probe_count = 0
-    for index, is_probe in selections:
+    novel_front_count = 0
+    for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
         if digest in completed_hashes or digest in submitted_hashes or digest in seen:
             continue
         seen.add(digest)
-        item = (index, bool(is_probe), candidate, digest)
+        item = (index, bool(is_probe), bool(is_front), candidate, digest)
         novel.append(item)
         novel_probe_count += int(bool(is_probe))
-        if len(novel) >= total and novel_probe_count >= probes:
+        novel_front_count += int(bool(is_front))
+        if (
+            len(novel) >= total
+            and novel_probe_count >= probes
+            and novel_front_count > 0
+        ):
             break
 
     probe_items = [item for item in novel if item[1]]
@@ -751,14 +777,24 @@ def _select_novel_validations(
             "candidates outside the complete feasible proxy Pareto front: "
             f"requested {probes}, available {len(probe_items)}"
         )
+    front_items = [item for item in novel if item[2]]
+    if not front_items:
+        raise RuntimeError(
+            "GPU validation cannot provide novel proxy-front safety evidence; "
+            "the current proxy front was already evaluated or submitted"
+        )
     chosen = probe_items[:probes]
-    chosen_digests = {item[3] for item in chosen}
+    chosen_digests = {item[4] for item in chosen}
+    first_front = front_items[0]
+    if first_front[4] not in chosen_digests:
+        chosen.append(first_front)
+        chosen_digests.add(first_front[4])
     for item in novel:
         if len(chosen) >= total:
             break
-        if item[3] not in chosen_digests:
+        if item[4] not in chosen_digests:
             chosen.append(item)
-            chosen_digests.add(item[3])
+            chosen_digests.add(item[4])
     return chosen
 
 
@@ -784,7 +820,7 @@ def _checkpoint_signature(active, scoring) -> str:
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 1,
+        "version": 2,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -978,11 +1014,11 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> tuple[set[str], list[tuple[float, float, bool, bool]]]:
+) -> tuple[set[str], list[tuple[float, float, bool, bool, bool]]]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
-    drift_pairs: list[tuple[float, float, bool, bool]] = []
+    drift_pairs: list[tuple[float, float, bool, bool, bool]] = []
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -996,7 +1032,7 @@ def _recover_durable_validations(
                 "GPU resume cannot recover proxy/exact safety evidence from "
                 f"durable result {index}"
             )
-        if metadata.get("schema_version") != 1:
+        if metadata.get("schema_version") != 2:
             raise RuntimeError(
                 "GPU resume found unsupported proxy/exact safety evidence in "
                 f"durable result {index}"
@@ -1005,13 +1041,19 @@ def _recover_durable_validations(
             proxy_score = float(metadata["proxy_score"])
             exact_score = float(metadata["exact_score"])
             probe = metadata["probe"]
+            proxy_front = metadata["proxy_front"]
             classification_mismatch = metadata["constraint_classification_mismatch"]
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(
                 "GPU resume found invalid proxy/exact safety evidence in "
                 f"durable result {index}"
             ) from exc
-        if not isinstance(probe, bool) or not isinstance(classification_mismatch, bool):
+        if (
+            not isinstance(probe, bool)
+            or not isinstance(proxy_front, bool)
+            or probe == proxy_front
+            or not isinstance(classification_mismatch, bool)
+        ):
             raise RuntimeError(
                 "GPU resume found invalid proxy/exact safety evidence in "
                 f"durable result {index}"
@@ -1021,7 +1063,15 @@ def _recover_durable_validations(
                 "GPU resume found non-finite proxy/exact safety evidence in "
                 f"durable result {index}"
             )
-        drift_pairs.append((proxy_score, exact_score, probe, classification_mismatch))
+        drift_pairs.append(
+            (
+                proxy_score,
+                exact_score,
+                probe,
+                classification_mismatch,
+                proxy_front,
+            )
+        )
         consumed += 1
     expected = max(0, stop_index - start_index)
     if consumed != expected:
@@ -1477,6 +1527,7 @@ def run_backend(
                 proxy_violation,
                 proxy_metrics,
                 is_probe,
+                is_proxy_front,
                 digest,
             ) = pending.pop(result)
             payload = result.get()
@@ -1494,10 +1545,11 @@ def run_backend(
                 vector,
                 payload,
                 validation_metadata={
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "proxy_score": float(proxy_score),
                     "exact_score": exact_score,
                     "probe": bool(is_probe),
+                    "proxy_front": bool(is_proxy_front),
                     "constraint_classification_mismatch": classification_mismatch,
                     "constraint_diagnostics": constraint_diagnostics,
                 },
@@ -1516,6 +1568,7 @@ def run_backend(
                 proxy_score,
                 exact_score,
                 probe=is_probe,
+                proxy_front=is_proxy_front,
                 constraint_mismatch=classification_mismatch,
             )
             status = drift_monitor.evaluate()
@@ -1590,7 +1643,7 @@ def run_backend(
                 submitted_hashes=submitted_hashes,
             )
             submitted_this_generation = 0
-            for index, is_probe, vector, digest in novel_selections:
+            for index, is_probe, is_proxy_front, vector, digest in novel_selections:
                 result = pool.apply_async(
                     _evaluate_pymoo_worker_from_globals, (vector,)
                 )
@@ -1600,6 +1653,7 @@ def run_backend(
                     float(proxy_violations[index]),
                     dict(metric_rows[index]),
                     bool(is_probe),
+                    bool(is_proxy_front),
                     digest,
                 )
                 submitted_hashes.add(digest)

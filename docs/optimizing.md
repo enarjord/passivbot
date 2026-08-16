@@ -135,8 +135,10 @@ The backend is hybrid rather than a replacement backtester:
    trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
    trailing, and position state with one shared balance and the exact Rust fill ordering. Python
    also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
-   comparisons preserve Rust's decimal-tick fill decisions. Tick-aligned computed targets remain
-   on their exchange tick; residual float32 target drift is measured by exact validation.
+   comparisons preserve Rust's decimal-tick fill decisions. Candle-derived touches are classified
+   from the original float64 data: EMA uses Rust-compatible directional ticks, while trailing-
+   martingale keeps raw non-aligned touch prices for strict fills. Tick-aligned computed targets
+   remain on their exchange tick; residual float32 target drift is measured by exact validation.
 3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
@@ -189,9 +191,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   eight true proxy-front validations even when the complete feasible proxy front contributes only
   one novel candidate per generation. If that front is smaller than the non-probe quota, remaining
   off-front validations stay truthfully classified as broad probes rather than being relabeled as
-  front evidence. `drift_probes` must remain below `validate_per_generation` so each generation
-  requests proxy-front safety evidence. A partial final validation batch scales its reserved probe
-  count down proportionally.
+  front evidence. Front membership is carried independently through exact-result persistence and
+  resume recovery. A generation fails closed if duplicate filtering leaves no novel proxy-front
+  candidate, so broad probes cannot silently consume the exact budget needed to activate the front
+  gate. `drift_probes` must remain below `validate_per_generation` so each generation requests
+  proxy-front safety evidence. A partial final validation batch scales its reserved probe count down
+  proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
   It must be at least `validate_per_generation` so throttling cannot change the configured

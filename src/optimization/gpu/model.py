@@ -270,6 +270,63 @@ def _strict_fill_tick_boundaries(
     return high_fill_max.astype(np.int32), low_nonfill_max.astype(np.int32)
 
 
+def _directional_touch_ticks(
+    prices, price_step: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode Rust-compatible down/up ticks for candle-derived touch prices."""
+
+    if not np.isfinite(price_step) or price_step <= 0.0:
+        raise ValueError(
+            f"MPS proxy requires a positive finite price_step, got {price_step}"
+        )
+    prices = np.asarray(prices, dtype=np.float64)
+    finite = np.isfinite(prices) & (prices > 0.0)
+    safe = np.where(finite, prices, 0.0)
+    step_counts = safe / price_step
+    nearest_ticks = np.floor(step_counts + 0.5).astype(np.int64)
+
+    decimal_multiplier = None
+    multiplier = 1.0
+    for places in range(16):
+        scaled_step = abs(price_step) * multiplier
+        rounded_step = np.floor(scaled_step + 0.5)
+        if rounded_step >= 1.0 and abs(scaled_step - rounded_step) <= max(
+            abs(scaled_step), 1.0
+        ) * 1e-12:
+            decimal_multiplier = 10.0 ** max(places, 10)
+            break
+        multiplier *= 10.0
+
+    nearest_prices = nearest_ticks.astype(np.float64) * price_step
+    if decimal_multiplier is not None:
+        scaled = nearest_prices * decimal_multiplier
+        nearest_prices = (
+            np.copysign(np.floor(np.abs(scaled) + 0.5), scaled)
+            / decimal_multiplier
+        )
+    tolerance = (
+        np.finfo(np.float64).eps
+        * np.maximum(np.abs(safe), np.abs(nearest_prices))
+        * 4.0
+    )
+    aligned = finite & (np.abs(safe - nearest_prices) <= tolerance)
+    down_ticks = np.where(aligned, nearest_ticks, np.floor(step_counts)).astype(
+        np.int64
+    )
+    up_ticks = np.where(aligned, nearest_ticks, np.ceil(step_counts)).astype(np.int64)
+    down_ticks[~finite] = 0
+    up_ticks[~finite] = 0
+    i32 = np.iinfo(np.int32)
+    if (
+        down_ticks.min(initial=0) < i32.min
+        or down_ticks.max(initial=0) > i32.max
+        or up_ticks.min(initial=0) < i32.min
+        or up_ticks.max(initial=0) > i32.max
+    ):
+        raise ValueError("MPS proxy candle touch ticks exceed signed 32-bit range")
+    return down_ticks.astype(np.int32), up_ticks.astype(np.int32)
+
+
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
@@ -328,6 +385,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     high_fill_max_tick, low_nonfill_max_tick = _strict_fill_tick_boundaries(
         high, low, market.price_step
     )
+    touch_down_tick, touch_up_tick = _directional_touch_ticks(
+        close, market.price_step
+    )
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -344,6 +404,8 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "day_idx": tensor(day_idx),
         "high_fill_max_tick": tensor(high_fill_max_tick),
         "low_nonfill_max_tick": tensor(low_nonfill_max_tick),
+        "touch_down_tick": tensor(touch_down_tick),
+        "touch_up_tick": tensor(touch_up_tick),
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,

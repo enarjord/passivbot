@@ -456,9 +456,9 @@ def test_validation_selection_includes_front_and_broad_probes():
 
     chosen = selected[:5]
     assert len(chosen) == 5
-    assert sum(is_probe for _index, is_probe in chosen) == 1
-    assert all(index == 6 for index, is_probe in chosen if is_probe)
-    assert len({index for index, _is_probe in selected}) == len(objectives)
+    assert sum(is_probe for _index, is_probe, _front in chosen) == 1
+    assert all(index == 6 for index, is_probe, _front in chosen if is_probe)
+    assert len({index for index, _is_probe, _front in selected}) == len(objectives)
 
 
 def test_validation_selection_fails_without_requested_off_front_evidence():
@@ -482,7 +482,7 @@ def test_validation_selection_prefers_feasible_candidates():
         objectives, scores, violations, total=3, probes=1
     )
 
-    assert {index for index, _probe in selected[:3]} == {1, 2, 4}
+    assert {index for index, _probe, _front in selected[:3]} == {1, 2, 4}
 
 
 def test_validation_broad_probes_exclude_the_entire_proxy_front():
@@ -501,11 +501,18 @@ def test_validation_broad_probes_exclude_the_entire_proxy_front():
 
     selected = _select_validation_indices(objectives, scores, total=5, probes=2)
 
-    assert {index for index, is_probe in selected[:5] if is_probe} == {5, 6}
+    assert {
+        index for index, is_probe, _front in selected[:5] if is_probe
+    } == {5, 6}
 
 
 def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
-    selections = [(0, False), (1, True), (2, False), (3, True)]
+    selections = [
+        (0, False, True),
+        (1, True, False),
+        (2, False, True),
+        (3, True, False),
+    ]
 
     chosen = _select_novel_validations(
         selections,
@@ -518,14 +525,17 @@ def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
     )
 
     assert len(chosen) == 2
-    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 1
+    assert sum(
+        is_probe
+        for _index, is_probe, _front, _candidate, _digest in chosen
+    ) == 1
     assert chosen[0][0] == 3
 
 
 def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
     with pytest.raises(RuntimeError, match="replace duplicate broad probes"):
         _select_novel_validations(
-            [(0, False), (1, True)],
+            [(0, False, True), (1, True, False)],
             total=2,
             probes=1,
             candidate_for_index=lambda index: [index],
@@ -557,7 +567,65 @@ def test_validation_batch_preserves_true_front_and_off_front_classification():
     )
 
     assert len(chosen) == 8
-    assert sum(is_probe for _index, is_probe, _candidate, _digest in chosen) == 7
+    assert sum(
+        is_probe
+        for _index, is_probe, _front, _candidate, _digest in chosen
+    ) == 7
+
+
+def test_all_infeasible_validation_fallback_keeps_front_membership_explicit():
+    objectives = np.array(
+        [[float(index), float(index)] for index in range(6)], dtype=np.float64
+    )
+    scores = objectives.mean(axis=1)
+    violations = np.arange(1.0, 7.0)
+
+    selected = _select_validation_indices(
+        objectives, scores, violations, total=4, probes=1
+    )
+
+    assert selected[0] == (0, False, True)
+    assert all(is_probe != is_front for _index, is_probe, is_front in selected)
+    assert all(
+        is_probe and not is_front
+        for index, is_probe, is_front in selected
+        if index != 0
+    )
+
+
+def test_validation_fails_closed_without_novel_proxy_front_evidence():
+    with pytest.raises(RuntimeError, match="novel proxy-front safety evidence"):
+        _select_novel_validations(
+            [(0, False, True), (1, True, False), (2, True, False)],
+            total=2,
+            probes=1,
+            candidate_for_index=lambda index: [index],
+            digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+            completed_hashes={"hash-0"},
+            submitted_hashes=set(),
+        )
+
+
+def test_validation_scans_fallbacks_for_novel_proxy_front_before_failing():
+    chosen = _select_novel_validations(
+        [
+            (0, False, True),
+            (1, True, False),
+            (2, True, False),
+            (3, False, True),
+        ],
+        total=2,
+        probes=1,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes={"hash-0"},
+        submitted_hashes=set(),
+    )
+
+    assert {index for index, _probe, _front, _candidate, _digest in chosen} == {
+        1,
+        3,
+    }
 
 
 def test_true_front_mismatches_halt_even_when_off_front_agreement_is_high():
@@ -573,11 +641,18 @@ def test_true_front_mismatches_halt_even_when_off_front_agreement_is_high():
             generation,
             generation,
             probe=False,
+            proxy_front=True,
             constraint_mismatch=True,
         )
         for probe in range(7):
             score = generation * 7 + probe
-            monitor.add(score, score, probe=True, constraint_mismatch=False)
+            monitor.add(
+                score,
+                score,
+                probe=True,
+                proxy_front=False,
+                constraint_mismatch=False,
+            )
 
     status = monitor.evaluate()
 
@@ -597,14 +672,16 @@ def test_drift_monitor_needs_broad_probe_evidence_before_halting():
     }
     monitor = _DriftMonitor(options)
     for index in range(16):
-        monitor.add(index, -index, probe=index < 4)
+        probe = index < 4
+        monitor.add(index, -index, probe=probe, proxy_front=not probe)
 
     first = monitor.evaluate()
     assert first["halt_reason"] is None
     assert first["warn_reason"]
 
     for index in range(16, 32):
-        monitor.add(index, -index, probe=index < 24)
+        probe = index < 24
+        monitor.add(index, -index, probe=probe, proxy_front=not probe)
     second = monitor.evaluate()
     assert second["probe_rho"] < 0.0
     assert second["halt_reason"]
@@ -619,7 +696,8 @@ def test_drift_monitor_halts_when_proxy_cannot_rank_broad_probes():
         }
     )
     for index in range(16):
-        monitor.add(1.0, float(index), probe=index < 8)
+        probe = index < 8
+        monitor.add(1.0, float(index), probe=probe, proxy_front=not probe)
 
     status = monitor.evaluate()
 
@@ -637,9 +715,9 @@ def test_drift_monitor_probe_failure_cannot_be_masked_by_high_aggregate_rho():
         }
     )
     for index in range(56):
-        monitor.add(index, index, probe=False)
+        monitor.add(index, index, probe=False, proxy_front=True)
     for index in range(56, 64):
-        monitor.add(index, 119 - index, probe=True)
+        monitor.add(index, 119 - index, probe=True, proxy_front=False)
 
     status = monitor.evaluate()
 
@@ -662,6 +740,7 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
             index,
             index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=probe and index < 3,
         )
 
@@ -686,6 +765,7 @@ def test_drift_monitor_allows_isolated_proxy_front_constraint_mismatches():
             index,
             index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=not probe and index < 11,
         )
 
@@ -711,6 +791,7 @@ def test_drift_monitor_halts_on_low_proxy_front_constraint_agreement():
             index,
             index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=not probe and index < 12,
         )
 
@@ -735,6 +816,7 @@ def test_drift_monitor_halts_on_low_broad_probe_constraint_agreement():
             index,
             index,
             probe=probe,
+            proxy_front=not probe,
             constraint_mismatch=probe and index < 4,
         )
 
@@ -966,10 +1048,11 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
             "id": index,
             "metrics": {
                 "gpu_validation": {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "proxy_score": float(index),
                     "exact_score": float(index) + 0.5,
                     "probe": index == 3,
+                    "proxy_front": index != 3,
                     "constraint_classification_mismatch": False,
                 }
             },
@@ -987,8 +1070,8 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
 
     assert recovered == {"hash-2.0", "hash-3.0"}
     assert drift_pairs == [
-        (2.0, 2.5, False, False),
-        (3.0, 3.5, True, False),
+        (2.0, 2.5, False, False, True),
+        (3.0, 3.5, True, False, False),
     ]
 
 
@@ -1000,10 +1083,11 @@ def test_resume_hash_recovery_fails_if_durable_tail_is_missing():
                     "id": index,
                     "metrics": {
                         "gpu_validation": {
-                            "schema_version": 1,
+                            "schema_version": 2,
                             "proxy_score": float(index),
                             "exact_score": float(index),
                             "probe": False,
+                            "proxy_front": True,
                             "constraint_classification_mismatch": False,
                         }
                     },
@@ -1035,10 +1119,11 @@ def test_resume_recovers_durable_front_constraint_disagreement_as_drift_evidence
                 "id": 0,
                 "metrics": {
                     "gpu_validation": {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "proxy_score": 0.1,
                         "exact_score": 0.2,
                         "probe": False,
+                        "proxy_front": True,
                         "constraint_classification_mismatch": True,
                     }
                 },
@@ -1050,7 +1135,7 @@ def test_resume_recovers_durable_front_constraint_disagreement_as_drift_evidence
         hash_vector=lambda vector: f"hash-{vector[0]}",
     )
 
-    assert pairs == [(0.1, 0.2, False, True)]
+    assert pairs == [(0.1, 0.2, False, True, True)]
 
 
 def test_resume_records_broad_probe_constraint_disagreement_without_immediate_halt():
@@ -1060,10 +1145,11 @@ def test_resume_records_broad_probe_constraint_disagreement_without_immediate_ha
                 "id": 0,
                 "metrics": {
                     "gpu_validation": {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "proxy_score": 0.1,
                         "exact_score": 0.2,
                         "probe": True,
+                        "proxy_front": False,
                         "constraint_classification_mismatch": True,
                     }
                 },
@@ -1075,4 +1161,4 @@ def test_resume_records_broad_probe_constraint_disagreement_without_immediate_ha
         hash_vector=lambda vector: f"hash-{vector[0]}",
     )
 
-    assert pairs == [(0.1, 0.2, True, True)]
+    assert pairs == [(0.1, 0.2, True, True, False)]

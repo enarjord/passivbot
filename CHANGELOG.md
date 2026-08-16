@@ -19,11 +19,14 @@ All notable user-facing changes will be documented in this file.
   authoritative classification, and persist per-limit proxy/exact diagnostics. Strict candle/order
   crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
-  sees just beyond a decimal tick. Tick-aligned computed targets remain on their exchange tick, and
-  partial final validation batches scale their reserved broad probes proportionally. True proxy-
-  front evidence remains distinct from off-front fallback probes, with the safety window and exact
-  budget sized for a one-member proxy front. Existing CPU bot, backtest, and optimizer paths do not
-  import or require the optional PyTorch dependency.
+  sees just beyond a decimal tick. Candle-derived EMA touches use Rust-compatible directional ticks,
+  while trailing-martingale keeps non-aligned raw touch prices for strict fills. Tick-aligned targets
+  remain on their exchange tick, and partial final validation batches scale their reserved broad
+  probes proportionally. True proxy-front membership is persisted independently from off-front
+  probe eligibility, with the safety window and exact budget sized for a one-member proxy front; a
+  generation with no novel front candidate fails closed instead of silently consuming that evidence
+  budget. Existing CPU bot, backtest, and optimizer paths do not import or require the optional
+  PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
