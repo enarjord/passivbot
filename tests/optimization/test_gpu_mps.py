@@ -337,6 +337,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "min_since_max" in source
     assert "s.entry_retracement_base > 0.0f" in source
     assert "s.close_retracement_base > 0.0f" in source
+    assert "int entry_touch = nearest_ticks(price_now, price_step)" in source
 
     count = 8
     close = np.full(count, 100.0)

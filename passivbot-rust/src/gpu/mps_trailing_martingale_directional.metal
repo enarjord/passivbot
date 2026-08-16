@@ -185,7 +185,7 @@ inline void generate_orders(
     bool close_up = is_long;
     float band = is_long ? fmin(s.ema0, fmin(s.ema1, s.ema2))
                          : fmax(s.ema0, fmax(s.ema1, s.ema2));
-    int entry_touch = directional_ticks(price_now, price_step, entry_up);
+    int entry_touch = nearest_ticks(price_now, price_step);
     int band_ticks = directional_ticks(
         band * (is_long ? 1.0f - s.initial_ema_dist
                         : 1.0f + s.initial_ema_dist),

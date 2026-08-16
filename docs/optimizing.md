@@ -185,10 +185,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
   proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
   At least eight samples of a validation class are required before its independent low agreement
-  can halt a run, so `drift_window` must be large enough to retain eight probes at the configured
-  `validate_per_generation / drift_probes` ratio. When probes are enabled,
-  `optimize.iters` must also be large enough to reach both that probe budget and
-  `drift_min_samples`.
+  can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
+  eight proxy-front validations and, when enabled, eight broad probes at the configured
+  `validate_per_generation / drift_probes` ratio. `drift_probes` must remain below
+  `validate_per_generation` so each generation contributes proxy-front safety evidence.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact

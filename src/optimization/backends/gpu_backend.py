@@ -273,13 +273,32 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.drift_min_samples must be less than or equal to "
             "optimize.gpu.drift_window"
         )
+    validations = int(options["validate_per_generation"])
+    probes = int(options["drift_probes"])
+    if probes >= validations:
+        raise ValueError(
+            "optimize.gpu.drift_probes must be less than "
+            "optimize.gpu.validate_per_generation so proxy-front safety evidence "
+            "is always collected"
+        )
+    front_samples_per_generation = validations - probes
+    required_front_window = max(
+        MIN_DRIFT_PROBES,
+        math.ceil(MIN_DRIFT_PROBES * validations / front_samples_per_generation),
+    )
+    if int(options["drift_window"]) < required_front_window:
+        raise ValueError(
+            "optimize.gpu.drift_window must be at least "
+            f"{required_front_window} to retain {MIN_DRIFT_PROBES} proxy-front "
+            "validations at the configured "
+            "validate_per_generation/drift_probes ratio"
+        )
+    required_evidence_window = required_front_window
     if int(options["drift_probes"]) > 0:
         required_probe_window = max(
             MIN_DRIFT_PROBES,
             math.ceil(
-                MIN_DRIFT_PROBES
-                * int(options["validate_per_generation"])
-                / int(options["drift_probes"])
+                MIN_DRIFT_PROBES * validations / probes
             ),
         )
         if int(options["drift_window"]) < required_probe_window:
@@ -288,16 +307,19 @@ def _resolve_options(config: dict) -> dict:
                 f"{required_probe_window} to retain {MIN_DRIFT_PROBES} broad probes "
                 "at the configured validate_per_generation/drift_probes ratio"
             )
-        exact_budget = int(config.get("optimize", {}).get("iters", 0))
-        required_exact_budget = max(
-            int(options["drift_min_samples"]), required_probe_window
+        required_evidence_window = max(
+            required_evidence_window, required_probe_window
         )
-        if exact_budget < required_exact_budget:
-            raise ValueError(
-                "optimize.iters must be at least "
-                f"{required_exact_budget} to activate the configured GPU drift gate; "
-                f"got {exact_budget}"
-            )
+    exact_budget = int(config.get("optimize", {}).get("iters", 0))
+    required_exact_budget = max(
+        int(options["drift_min_samples"]), required_evidence_window
+    )
+    if exact_budget < required_exact_budget:
+        raise ValueError(
+            "optimize.iters must be at least "
+            f"{required_exact_budget} to activate the configured GPU drift gate; "
+            f"got {exact_budget}"
+        )
     return options
 
 

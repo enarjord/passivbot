@@ -106,8 +106,8 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_window"] = 7
     config["optimize"]["gpu"]["drift_min_samples"] = 7
     config["optimize"]["gpu"]["drift_probes"] = 1
-    config["optimize"]["gpu"]["validate_per_generation"] = 1
-    with pytest.raises(ValueError, match="at least 8"):
+    config["optimize"]["gpu"]["validate_per_generation"] = 2
+    with pytest.raises(ValueError, match="at least 16"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
@@ -119,12 +119,27 @@ def test_gpu_options_are_additive_and_validate_ranges():
         _resolve_options(config)
 
     config = _long_only_ema_config()
-    config["optimize"]["gpu"]["validate_per_generation"] = 1
-    config["optimize"]["gpu"]["drift_probes"] = 1
+    config["optimize"]["gpu"]["validate_per_generation"] = 2
+    config["optimize"]["gpu"]["drift_probes"] = 0
     config["optimize"]["gpu"]["drift_window"] = 16
     config["optimize"]["gpu"]["drift_min_samples"] = 16
     config["optimize"]["iters"] = 15
     with pytest.raises(ValueError, match="optimize.iters must be at least 16"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 7
+    config["optimize"]["gpu"]["drift_window"] = 32
+    config["optimize"]["gpu"]["drift_min_samples"] = 32
+    config["optimize"]["iters"] = 32
+    with pytest.raises(ValueError, match="retain 8 proxy-front validations"):
+        _resolve_options(config)
+
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["validate_per_generation"] = 8
+    config["optimize"]["gpu"]["drift_probes"] = 8
+    with pytest.raises(ValueError, match="must be less than"):
         _resolve_options(config)
 
     config = _long_only_ema_config()
@@ -139,7 +154,7 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_probes"] = 4
     config["optimize"]["gpu"]["drift_window"] = 7
     config["optimize"]["gpu"]["drift_min_samples"] = 7
-    with pytest.raises(ValueError, match="at least 8"):
+    with pytest.raises(ValueError, match="must be less than"):
         _resolve_options(config)
 
 

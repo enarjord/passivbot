@@ -55,5 +55,6 @@ mod tests {
         assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
         assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
         assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
+        assert_eq!(source.matches("int entry_touch = nearest_ticks").count(), 1);
     }
 }
