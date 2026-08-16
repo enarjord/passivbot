@@ -21,6 +21,7 @@ from optimization.backends.gpu_backend import (
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
+    _ready_submission_prefix,
     _update_novelty_stall,
     _validation_probe_count,
     _spearman,
@@ -169,6 +170,27 @@ def test_partial_validation_batch_preserves_front_evidence_ratio():
     assert _validation_probe_count(10, 10, 7) == 7
     assert _validation_probe_count(7, 10, 7) == 4
     assert _validation_probe_count(1, 10, 7) == 0
+
+
+class _PendingResult:
+    def __init__(self, ready):
+        self._ready = ready
+
+    def ready(self):
+        return self._ready
+
+
+def test_exact_results_are_consumed_only_as_ready_submission_prefix():
+    first = _PendingResult(False)
+    second = _PendingResult(True)
+    assert _ready_submission_prefix({first: None, second: None}) == []
+
+    first._ready = True
+    second._ready = False
+    third = _PendingResult(True)
+    assert _ready_submission_prefix({first: None, second: None, third: None}) == [
+        first
+    ]
 
 
 def _drift_pair(*, front: bool):
@@ -791,7 +813,7 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
         probe = index < 8
         monitor.add(
             index,
-            index,
+            1000 - index if probe and index < 3 else index,
             probe=probe,
             proxy_front=not probe,
             constraint_mismatch=probe and index < 3,
@@ -801,6 +823,36 @@ def test_drift_monitor_allows_isolated_broad_probe_constraint_mismatches():
 
     assert status["probe_constraint_agreement"] == pytest.approx(0.625)
     assert status["probe_constraint_mismatches"] == 3
+    assert status["probe_rank_samples"] == 5
+    assert status["rho"] == pytest.approx(1.0)
+    assert status["halt_reason"] is None
+
+
+def test_drift_monitor_ranks_only_classification_agreeing_broad_probes():
+    monitor = _DriftMonitor(
+        {
+            "drift_window": 128,
+            "drift_min_samples": 32,
+            "drift_halt": 0.6,
+        }
+    )
+    for index in range(33):
+        probe = index % 2 == 0
+        mismatch = probe and index in (16, 32)
+        monitor.add(
+            float(index),
+            float(1000 - index if mismatch else index),
+            probe=probe,
+            proxy_front=not probe,
+            constraint_mismatch=mismatch,
+        )
+
+    status = monitor.evaluate()
+
+    assert status["probes"] == 17
+    assert status["probe_rank_samples"] == 15
+    assert status["probe_rho"] == pytest.approx(1.0)
+    assert status["probe_constraint_agreement"] == pytest.approx(15 / 17)
     assert status["halt_reason"] is None
 
 

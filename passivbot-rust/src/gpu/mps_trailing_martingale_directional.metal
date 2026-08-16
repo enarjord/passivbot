@@ -339,10 +339,12 @@ inline void generate_orders(
         }
     }
     int target_ticks = directional_ticks(close_target, price_step, close_up);
-    float rounded_target = float(target_ticks) * price_step;
-    bool touch_controls = (trailing_close && ct <= 0.0f) || (close_up
-        ? price_now > rounded_target : price_now < rounded_target);
     int close_touch = close_up ? touch_up_ticks : touch_down_ticks;
+    // Compare the float64-derived directional touch ticks before choosing the
+    // raw touch. Nearby raw and tick prices may be equal after float32
+    // conversion even though exact Rust's max/min selects the raw value.
+    bool touch_controls = (trailing_close && ct <= 0.0f) || (close_up
+        ? close_touch > target_ticks : close_touch < target_ticks);
     int cticks = touch_controls ? close_touch : target_ticks;
     bool close_raw_touch = touch_controls && touch_is_raw;
     float close_price = close_raw_touch

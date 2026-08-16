@@ -148,6 +148,9 @@ The backend is hybrid rather than a replacement backtester:
    all validations and independently for proxy-front candidates and broad probes. An isolated
    disagreement is retained as drift evidence rather than aborting immediately; the exact Rust
    result remains authoritative and an exact-infeasible candidate cannot enter the Pareto front.
+   Feasibility disagreements are not rank-comparable and already count against the constraint
+   gates, so rank correlation uses only classification-agreeing samples and requires at least eight
+   comparable broad probes.
 
 `optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
 are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
@@ -205,12 +208,13 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
   screening another generation.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
-  result batches are checkpointed immediately, and each durable result carries the proxy/exact
-  safety evidence needed to recover if its flush outruns the companion checkpoint. A final
-  resume-budget check includes recovered class membership, the rolling-window suffix, discarded
-  pending work, and the remaining full or partial validation batches; resume fails closed if either
-  class-specific gate can no longer reach its minimum sample count. A final checkpoint is always
-  written on successful completion.
+   result batches are checkpointed immediately, and each durable result carries the proxy/exact
+   safety evidence needed to recover if its flush outruns the companion checkpoint. A final
+   resume-budget check includes recovered class membership, the rolling-window suffix, discarded
+   pending work, and the remaining full or partial validation batches. Exact worker results are
+   consumed in submission order even if workers finish out of order, preserving the modeled batch
+   sequence; resume fails closed if either class-specific gate can no longer reach its minimum
+   sample count. A final checkpoint is always written on successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the

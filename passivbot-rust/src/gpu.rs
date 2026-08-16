@@ -61,6 +61,10 @@ mod tests {
         assert!(source.contains("positive_f64_words_greater"));
         assert!(source.contains("long_side.entry_raw_hi"));
         assert!(source.contains("short_side.close_raw_hi"));
+        assert!(source.contains("close_touch > target_ticks"));
+        assert!(source.contains("close_touch < target_ticks"));
+        assert!(!source.contains("price_now > rounded_target"));
+        assert!(!source.contains("price_now < rounded_target"));
         assert!(!source.contains("nearest_ticks("));
     }
 }

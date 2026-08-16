@@ -587,6 +587,53 @@ def test_mps_trailing_raw_touch_keeps_float64_strict_ordering():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_trailing_chooses_raw_close_before_float32_collapse():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 6
+    close = np.full(count, 100.000003, dtype=np.float64)
+    high = np.array(
+        [100.000003, 100.000003, 100.000003, 100.000003, 100.000002, 100.000003],
+        dtype=np.float64,
+    )
+    low = np.array(
+        [100.000003, 100.000003, 100.000003, 100.000001, 100.000003, 100.000003],
+        dtype=np.float64,
+    )
+    assert np.float32(close[3]) == np.float32(high[4])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row[16] = 0.0  # tick-aligned close target at the float32 position price
+    row[20] = 0.0  # disable trailing-close touch override
+
+    output = MpsTrailingMartingaleRunner(
+        market, run, data, long_enabled=True, short_enabled=False
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Exact Rust chooses the raw 100.000003 ask over the 100.00 target. The
+    # following 100.000002 high must not close it. A float32 pre-comparison
+    # incorrectly chose 100.00 and filled.
+    assert output["psize"].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_trailing_martingale_one_way_arbitrates_initial_entry():
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 

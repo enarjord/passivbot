@@ -345,6 +345,17 @@ def _validation_probe_count(
     )
 
 
+def _ready_submission_prefix(pending) -> list:
+    """Return only the contiguous ready prefix in submission order."""
+
+    ready = []
+    for result in pending:
+        if not result.ready():
+            break
+        ready.append(result)
+    return ready
+
+
 def _validate_resume_evidence_budget(
     pairs,
     *,
@@ -359,9 +370,10 @@ def _validate_resume_evidence_budget(
     validations = int(options["validate_per_generation"])
     configured_probes = int(options["drift_probes"])
 
-    # Model exact recovered samples individually, then future validation
-    # generations as segments. A partially retained future segment may lose
-    # any evidence samples first, which is the conservative completion order.
+    # Recovered samples already have a durable order. Future exact results are
+    # consumed strictly in submission order, so each validation generation is
+    # a contiguous segment. A partially retained future segment may lose any
+    # evidence samples first, which is the conservative within-batch order.
     segments = [
         (1, int(bool(row[4])), int(bool(row[2])))
         for row in pairs
@@ -589,6 +601,9 @@ class _DriftMonitor:
             "samples": len(self.pairs),
             "probes": 0,
             "front_samples": 0,
+            "rank_samples": 0,
+            "probe_rank_samples": 0,
+            "front_rank_samples": 0,
             "constraint_agreement": float("nan"),
             "constraint_mismatches": 0,
             "probe_constraint_agreement": float("nan"),
@@ -615,12 +630,26 @@ class _DriftMonitor:
         constraint_mismatches = np.asarray(
             [row[3] if len(row) > 3 else False for row in self.pairs], dtype=bool
         )
+        result["constraint_mismatches"] = int(constraint_mismatches.sum())
         result["probes"] = int(probes.sum())
         result["front_samples"] = int(fronts.sum())
-        result["rho"] = _spearman(proxy, exact)
-        result["probe_rho"] = _spearman(proxy[probes], exact[probes])
-        result["front_rho"] = _spearman(proxy[fronts], exact[fronts])
-        result["constraint_mismatches"] = int(constraint_mismatches.sum())
+        # Feasibility disagreements have their own independent fail-closed
+        # gates below. They are not rank-comparable: including them in
+        # Spearman both double-counts the same failure and can turn otherwise
+        # exact near-ties into arbitrary rank inversions.
+        rank_eligible = ~constraint_mismatches
+        probe_rank_eligible = probes & rank_eligible
+        front_rank_eligible = fronts & rank_eligible
+        result["rank_samples"] = int(rank_eligible.sum())
+        result["probe_rank_samples"] = int(probe_rank_eligible.sum())
+        result["front_rank_samples"] = int(front_rank_eligible.sum())
+        result["rho"] = _spearman(proxy[rank_eligible], exact[rank_eligible])
+        result["probe_rho"] = _spearman(
+            proxy[probe_rank_eligible], exact[probe_rank_eligible]
+        )
+        result["front_rho"] = _spearman(
+            proxy[front_rank_eligible], exact[front_rank_eligible]
+        )
         result["constraint_agreement"] = 1.0 - (
             result["constraint_mismatches"] / result["samples"]
         )
@@ -643,8 +672,10 @@ class _DriftMonitor:
             f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
             f"constraint_agreement={result['constraint_agreement']:.3f}, "
             f"probes={result['probes']}, "
+            f"probe_rank_samples={result['probe_rank_samples']}, "
             f"probe_constraint_agreement={result['probe_constraint_agreement']:.3f}, "
             f"front_samples={result['front_samples']}, "
+            f"front_rank_samples={result['front_rank_samples']}, "
             f"front_constraint_agreement={result['front_constraint_agreement']:.3f}"
         )
         if result["constraint_agreement"] < self.halt:
@@ -666,7 +697,7 @@ class _DriftMonitor:
                 "GPU proxy/exact proxy-front constraint agreement fell below "
                 f"safety threshold ({detail})"
             )
-        elif result["probes"] >= self.MIN_PROBES and (
+        elif result["probe_rank_samples"] >= self.MIN_PROBES and (
             not np.isfinite(result["probe_rho"])
             or result["probe_rho"] < self.halt
         ):
@@ -675,9 +706,10 @@ class _DriftMonitor:
             )
         elif np.isfinite(result["rho"]) and result["rho"] >= self.halt:
             return result
-        elif result["probes"] < self.MIN_PROBES:
+        elif result["probe_rank_samples"] < self.MIN_PROBES:
             result["warn_reason"] = (
-                f"GPU drift below threshold without enough broad probes ({detail})"
+                "GPU drift below threshold without enough rank-comparable broad "
+                f"probes ({detail})"
             )
         else:
             result["warn_reason"] = (
@@ -1583,7 +1615,11 @@ def run_backend(
     def consume_ready(*, wait_for_one: bool = False) -> None:
         nonlocal exact_done, last_warning, persisted_halt_reason
         while True:
-            ready = [result for result in pending if result.ready()]
+            # Preserve submission/generation order in the durable evidence
+            # stream. Workers may finish out of order, but later completions
+            # wait behind the oldest pending result so resume guarantees match
+            # the class allocation modeled above.
+            ready = _ready_submission_prefix(pending)
             if ready:
                 break
             if not wait_for_one or not pending:

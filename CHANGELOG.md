@@ -27,8 +27,12 @@ All notable user-facing changes will be documented in this file.
   front probe eligibility, with the safety window and exact budget sized for a one-member proxy
   front; a generation with no novel front candidate fails closed instead of silently consuming that
   evidence budget. Resume also proves that its recovered evidence plus remaining exact budget can
-  still activate both class-specific gates. Existing CPU bot, backtest, and optimizer paths do not
-  import or require the optional PyTorch dependency.
+  still activate both class-specific gates; exact worker completions are durably consumed in
+  submission order so that proof remains valid when workers finish out of order. Feasibility
+  disagreements are evaluated by the independent constraint-agreement gates and excluded from rank
+  correlation, preventing the same disagreement from being double-counted as arbitrary ordering of
+  otherwise exact near-ties. Existing CPU bot, backtest, and optimizer paths do not import or
+  require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable
