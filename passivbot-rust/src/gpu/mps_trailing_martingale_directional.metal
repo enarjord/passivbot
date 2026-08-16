@@ -245,9 +245,10 @@ inline void generate_orders(
             );
         }
     }
-    int reentry_ticks = touch_clamp(
-        directional_ticks(reentry_target, price_step, entry_up), entry_touch, entry_up
-    );
+    int raw_reentry_ticks = trailing_entry && threshold <= 0.0f
+        ? nearest_ticks(price_now, price_step)
+        : directional_ticks(reentry_target, price_step, entry_up);
+    int reentry_ticks = touch_clamp(raw_reentry_ticks, entry_touch, entry_up);
     if (s.gate_reentry)
         reentry_ticks = touch_clamp(band_ticks, reentry_ticks, entry_up);
     float reentry_price = float(reentry_ticks) * price_step;

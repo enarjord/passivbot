@@ -56,5 +56,6 @@ mod tests {
         assert_eq!(source.matches("nextafter(tick_value, INFINITY)").count(), 1);
         assert_eq!(source.matches("nextafter(tick_value, -INFINITY)").count(), 1);
         assert_eq!(source.matches("int entry_touch = nearest_ticks").count(), 1);
+        assert_eq!(source.matches("? nearest_ticks(price_now").count(), 2);
     }
 }

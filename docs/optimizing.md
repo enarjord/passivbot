@@ -191,6 +191,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   `validate_per_generation` so each generation contributes proxy-front safety evidence.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
+  It must be at least `validate_per_generation` so throttling cannot change the configured
+  proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
+  screening another generation.
 - `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
   result batches are checkpointed immediately, and each durable result carries the proxy/exact
   safety evidence needed to recover if its flush outruns the companion checkpoint. A final

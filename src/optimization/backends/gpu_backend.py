@@ -281,6 +281,16 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.validate_per_generation so proxy-front safety evidence "
             "is always collected"
         )
+    exact_workers = int(options["exact_workers"]) or int(
+        config.get("optimize", {}).get("n_cpus", 0)
+    )
+    effective_pending = int(options["max_pending_exact"]) or exact_workers * 2
+    if effective_pending < validations:
+        raise ValueError(
+            "optimize.gpu.max_pending_exact (or its exact-worker default) must be "
+            "at least optimize.gpu.validate_per_generation so each full validation "
+            "batch retains its configured proxy-front/broad-probe allocation"
+        )
     front_samples_per_generation = validations - probes
     required_front_window = max(
         MIN_DRIFT_PROBES,
@@ -1518,6 +1528,13 @@ def run_backend(
             if exact_done + len(pending) >= budget:
                 consume_ready(wait_for_one=True)
                 continue
+            validation_count = min(
+                int(options["validate_per_generation"]),
+                budget - exact_done - len(pending),
+            )
+            if max_pending - len(pending) < validation_count:
+                consume_ready(wait_for_one=True)
+                continue
 
             population = algorithm.ask()
             rows = np.asarray(population.get("X"), dtype=np.float64)
@@ -1539,12 +1556,9 @@ def run_backend(
             algorithm.tell(infills=population)
             generation += 1
 
-            capacity = min(
-                max_pending - len(pending),
-                budget - exact_done - len(pending),
+            probe_count = min(
+                int(options["drift_probes"]), max(0, validation_count - 1)
             )
-            validation_count = min(int(options["validate_per_generation"]), capacity)
-            probe_count = min(int(options["drift_probes"]), validation_count)
             selections = _select_validation_indices(
                 proxy_objectives,
                 proxy_scores,
