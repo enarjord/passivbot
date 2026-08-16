@@ -8,6 +8,7 @@ import numpy as np
 
 GAP_BINS = 128
 GAP_MAX_MINUTES = 4_000_000.0
+MPS_MULTICOIN_MAX_COINS = 64
 
 EMA_ANCHOR_PARAM_KEYS = (
     "base_qty_pct",
@@ -22,6 +23,17 @@ EMA_ANCHOR_PARAM_KEYS = (
     "offset_volatility_ema_span_1m",
     "entry_cooldown_minutes",
     "total_wallet_exposure_limit",
+)
+
+EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
+    *EMA_ANCHOR_PARAM_KEYS,
+    "forager_volume_ema_span_1m",
+    "forager_volatility_ema_span_1m",
+    "forager_volume_drop_pct",
+    "forager_score_weights_volume",
+    "forager_score_weights_ema_readiness",
+    "forager_score_weights_volatility",
+    "n_positions",
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -473,4 +485,132 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "ts0": int(timestamps[0]),
         "times_relative": True,
         "n": n,
+    }
+
+
+def build_mps_multicoin_data(
+    hlcvs,
+    timestamps_ms,
+    runs: list[ProxyRun],
+    markets: list[ProxyMarket],
+):
+    """Pack compact multicoin inputs for the persistent Apple MPS kernel.
+
+    Raw OHLCV stays float32 for unified-memory efficiency. Strict fill and
+    order-book touch comparisons are encoded from the original float64 data as
+    integer ticks, avoiding the most consequential float32 boundary collapse.
+    """
+
+    try:
+        import torch
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        raise ModuleNotFoundError(
+            "Apple MPS optimization requires the optional 'gpu-mps' dependencies; "
+            "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+        ) from exc
+
+    values = np.asarray(hlcvs)
+    if values.ndim != 3 or values.shape[2] < 4:
+        raise ValueError(
+            "MPS multicoin proxy expects HLCVs shaped (candles, coins, >=4); "
+            f"got {values.shape}"
+        )
+    candle_count, coin_count, _channels = values.shape
+    if not 2 <= coin_count <= MPS_MULTICOIN_MAX_COINS:
+        raise ValueError(
+            "MPS multicoin proxy supports 2.."
+            f"{MPS_MULTICOIN_MAX_COINS} coins; got {coin_count}"
+        )
+    if len(runs) != coin_count or len(markets) != coin_count:
+        raise ValueError(
+            "MPS multicoin run/market settings must match the prepared coin count"
+        )
+    timestamps = np.asarray(timestamps_ms, dtype=np.int64)
+    if len(timestamps) != candle_count:
+        raise ValueError(
+            f"MPS multicoin timestamps length {len(timestamps)} != {candle_count} candles"
+        )
+    if candle_count < 3:
+        raise ValueError("MPS multicoin proxy requires at least three candles")
+    intervals = np.diff(timestamps)
+    interval_ms = int(runs[0].interval_ms)
+    if np.any(intervals != interval_ms):
+        raise ValueError("MPS multicoin proxy requires a continuous candle timeline")
+    if interval_ms != 60_000:
+        raise ValueError("MPS multicoin proxy currently supports one-minute candles only")
+
+    bars = np.ascontiguousarray(values[:, :, :4], dtype=np.float32)
+    bars[~np.isfinite(bars)] = 0.0
+    fill_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
+    touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
+    coin_settings = np.empty((coin_count, 11), dtype=np.float32)
+    for coin, (run, market) in enumerate(zip(runs, markets)):
+        if run.interval_ms != interval_ms:
+            raise ValueError("MPS multicoin runs must use one shared candle interval")
+        high = values[:, coin, 0].astype(np.float64, copy=False)
+        low = values[:, coin, 1].astype(np.float64, copy=False)
+        close = values[:, coin, 2].astype(np.float64, copy=False)
+        high_fill, low_nonfill = _strict_fill_tick_boundaries(
+            high, low, market.price_step
+        )
+        touch_down, touch_up, _touch_nearest = _directional_touch_ticks(
+            close, market.price_step
+        )
+        fill_ticks[:, coin, 0] = high_fill
+        fill_ticks[:, coin, 1] = low_nonfill
+        touch_ticks[:, coin, 0] = touch_down
+        touch_ticks[:, coin, 1] = touch_up
+        seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
+        seed_close = float(close[seed_index])
+        high_seed = float(values[seed_index, coin, 0])
+        low_seed = float(values[seed_index, coin, 1])
+        volume_seed = max(float(values[seed_index, coin, 3]), 0.0)
+        typical_seed = (
+            (high_seed + low_seed + seed_close) / 3.0
+            if high_seed > 0.0 and low_seed > 0.0 and seed_close > 0.0
+            else max(seed_close, 1.0)
+        )
+        coin_settings[coin] = (
+            market.qty_step,
+            market.price_step,
+            market.min_qty,
+            market.min_cost,
+            market.c_mult,
+            market.maker_fee,
+            run.first_valid_idx,
+            run.last_valid_idx,
+            run.trade_start_idx,
+            seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
+            volume_seed * typical_seed,
+        )
+
+    invariant_bytes = bars.nbytes + fill_ticks.nbytes + touch_ticks.nbytes
+    recommended = None
+    recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
+    if callable(recommended_fn):
+        recommended = int(recommended_fn())
+    if recommended and invariant_bytes > int(recommended * 0.45):
+        raise MemoryError(
+            "MPS multicoin invariant tensors would consume "
+            f"{invariant_bytes / 2**30:.2f} GiB, above the 45% safety limit of "
+            f"the device's {recommended / 2**30:.2f} GiB recommended working set"
+        )
+
+    def tensor(array, *, dtype=None):
+        return torch.as_tensor(array, dtype=dtype, device="mps").contiguous()
+
+    first_day = int(timestamps[0] // 86_400_000)
+    last_day = int(timestamps[-1] // 86_400_000)
+    return {
+        "bars": tensor(bars, dtype=torch.float32),
+        "fill_ticks": tensor(fill_ticks, dtype=torch.int32),
+        "touch_ticks": tensor(touch_ticks, dtype=torch.int32),
+        "coin_settings": tensor(coin_settings, dtype=torch.float32),
+        "n": candle_count,
+        "n_coins": coin_count,
+        "n_days": last_day - first_day + 1,
+        "ts0": int(timestamps[0]),
+        "start_minute_of_day": int((timestamps[0] // 60_000) % 1440),
+        "start_minute_of_hour": int((timestamps[0] // 60_000) % 60),
+        "invariant_bytes": invariant_bytes,
     }

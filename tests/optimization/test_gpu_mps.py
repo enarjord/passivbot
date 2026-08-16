@@ -12,6 +12,7 @@ from optimization.gpu.model import (
     _minimum_entry_qty_encoding,
     _strict_fill_tick_boundaries,
     build_mps_data,
+    build_mps_multicoin_data,
 )
 
 
@@ -45,7 +46,10 @@ def test_minimum_entry_qty_encoding_preserves_just_above_aligned_minimum():
     assert relation.tolist() == [1]
 
 
-from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
+from optimization.gpu.mps_kernel import (
+    MpsEmaAnchorMulticoinLongRunner,
+    MpsEmaAnchorRunner,
+)
 
 
 def test_strict_fill_tick_boundaries_preserve_float32_candle_crossing():
@@ -191,6 +195,79 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_anchor_multicoin_long_shader_smoke():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_ema_anchor_multicoin_long_source_py()
+    assert "kernel void passivbot_ema_anchor_multicoin_long" in source
+    count = 512
+    coin_count = 3
+    phase = np.linspace(0.0, 12.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * (4.0 + coin)
+        hlcvs[:, coin, 0] = close * 1.01
+        hlcvs[:, coin, 1] = close * 0.99
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    row = [
+        0.1,
+        10.0,
+        30.0,
+        1.5,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        2.0,
+    ]
+
+    output = MpsEmaAnchorMulticoinLongRunner(runs[0], data).run(
+        np.array([row, row], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    assert output["balance"].device.type == "mps"
+    assert output["balance"].shape == (2,)
+    assert torch.isfinite(output["balance"]).all()
+    assert output["day_has_fill"].sum().item() > 0
+    assert (output["open_positions"] <= 2.0).all()
 
 
 @pytest.mark.skipif(

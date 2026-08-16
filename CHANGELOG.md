@@ -9,22 +9,30 @@ All notable user-facing changes will be documented in this file.
   parameters belonging only to features disabled in every input, reports account-wide conflicts,
   merges approved coins with fail-closed resolved-market and cross-venue contract identity
   validation, supports selecting the master input, and can optionally retain that input's
-  backtest and optimizer sections for fixed-override fine-tuning. Full output rejects the
-  single-coin-only GPU optimizer backend.
+  backtest and optimizer sections for fixed-override fine-tuning. Full output with coin overrides
+  remains unsupported by the GPU optimizer backend.
 - Add an experimental, purely additive Apple Silicon MPS optimizer backend for single-coin,
   EMA-anchor and trailing-martingale searches in long-only, short-only, and long+short modes.
+  Long-only multi-coin EMA-anchor searches are also supported for up to 64 coins with shared
+  balance, per-coin market and indicator state, dynamic wallet-exposure allocation, Forager
+  selection, searchable Forager parameters and position count, strict tick-boundary fills, and
+  compact unified-memory inputs guarded against excessive MPS allocation.
   Large NSGA-II populations run through strategy-specific Rust-owned Metal screening programs and
   feed feasible, diverse candidates into the unchanged exact Rust backtester; only exact results
   reach the Pareto store, and independent broad-probe rank checks halt on proxy drift. Dual-side
   screening preserves separate indicator/trailing/position state, a shared balance, Rust fill
-  ordering, and hedge/one-way initial-side semantics. Recursive trailing-martingale entry and close
-  ladders use immutable generation snapshots, merge equal-price closes, and fill every strictly
-  crossed rung in Rust's canonical order. Other strategies, suites, multi-coin, HSL, auto-unstuck,
+  ordering, and hedge/one-way initial-side semantics. Multi-coin selection deliberately omits
+  Forager score hysteresis and reselects on fills or effective position-count growth; exact Rust
+  validation and rolling drift gates remain authoritative for this screening approximation.
+  Recursive trailing-martingale entry and close ladders use immutable generation snapshots, merge
+  equal-price closes, and fill every strictly crossed rung in Rust's canonical order. Other
+  strategies, suites, multi-coin short/hedged or trailing-martingale runs, HSL, auto-unstuck,
   collateral, minimum-effective-cost filtering, market-order execution, incomplete candle tails,
   non-inert fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal
   EMA updates reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements
-  feed aggregate, proxy-front, and broad-probe rolling constraint-agreement gates, retain exact Rust as the only
-  authoritative classification, and persist per-limit proxy/exact diagnostics. Strict candle/order
+  feed aggregate, proxy-front, and broad-probe rolling constraint-agreement gates, retain exact
+  Rust as the only authoritative classification, and persist per-limit proxy/exact diagnostics.
+  Strict candle/order
   crossing comparisons are precomputed as
   integer price-tick boundaries, preventing float32 Metal prices from missing fills that exact Rust
   sees just beyond a decimal tick. Candle-derived EMA touches use Rust-compatible directional ticks.
