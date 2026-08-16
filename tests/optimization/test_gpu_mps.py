@@ -31,6 +31,22 @@ def test_strict_fill_tick_boundaries_preserve_float32_candle_crossing():
     assert low_nonfill_max.tolist() == [order_tick, order_tick]
 
 
+def test_strict_fill_tick_boundaries_preserve_rust_step_decimal_rounding():
+    step = 0.1
+    order_tick = 371_177
+    rust_order_price = 37_117.7
+    assert order_tick * step > rust_order_price
+
+    high_fill_max, low_nonfill_max = _strict_fill_tick_boundaries(
+        np.array([rust_order_price]),
+        np.array([rust_order_price]),
+        step,
+    )
+
+    assert high_fill_max.tolist() == [order_tick - 1]
+    assert low_nonfill_max.tolist() == [order_tick]
+
+
 def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
     timestamps = 3_540_000 + np.arange(62, dtype=np.int64) * 60_000
     high = np.full(62, 105.0)

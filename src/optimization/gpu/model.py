@@ -219,20 +219,42 @@ def _strict_fill_tick_boundaries(
     high_fill_max = np.floor(safe_high / price_step).astype(np.int64)
     low_nonfill_max = np.floor(safe_low / price_step).astype(np.int64)
 
+    decimal_multiplier = None
+    multiplier = 1.0
+    for places in range(16):
+        scaled_step = abs(price_step) * multiplier
+        rounded_step = np.floor(scaled_step + 0.5)
+        if rounded_step >= 1.0 and abs(scaled_step - rounded_step) <= max(
+            abs(scaled_step), 1.0
+        ) * 1e-12:
+            decimal_multiplier = 10.0 ** max(places, 10)
+            break
+        multiplier *= 10.0
+
+    def rust_tick_prices(ticks):
+        prices = ticks.astype(np.float64) * price_step
+        if decimal_multiplier is None:
+            return prices
+        scaled = prices * decimal_multiplier
+        return (
+            np.copysign(np.floor(np.abs(scaled) + 0.5), scaled)
+            / decimal_multiplier
+        )
+
     # Division can land one tick to either side near an exact boundary. Repair
-    # against the same float64 multiplication used by Rust order prices.
+    # against Rust's step-decimal-preserving order-price rounding contract.
     for _ in range(2):
-        high_fill_max -= (
-            high_fill_max.astype(np.float64) * price_step >= safe_high
-        ).astype(np.int64)
-        high_fill_max += (
-            (high_fill_max + 1).astype(np.float64) * price_step < safe_high
-        ).astype(np.int64)
-        low_nonfill_max -= (
-            low_nonfill_max.astype(np.float64) * price_step > safe_low
-        ).astype(np.int64)
+        high_fill_max -= (rust_tick_prices(high_fill_max) >= safe_high).astype(
+            np.int64
+        )
+        high_fill_max += (rust_tick_prices(high_fill_max + 1) < safe_high).astype(
+            np.int64
+        )
+        low_nonfill_max -= (rust_tick_prices(low_nonfill_max) > safe_low).astype(
+            np.int64
+        )
         low_nonfill_max += (
-            (low_nonfill_max + 1).astype(np.float64) * price_step <= safe_low
+            rust_tick_prices(low_nonfill_max + 1) <= safe_low
         ).astype(np.int64)
 
     high_fill_max[~finite] = 0
