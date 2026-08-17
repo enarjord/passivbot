@@ -189,8 +189,11 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves at least part of that validation budget for candidates away from the
   proxy front.
-  A generation fails closed if its complete feasible proxy front leaves too few independent
-  off-front candidates for the requested probe count.
+  If the complete feasible proxy front occupies nearly the whole population, the optimizer uses
+  every genuinely off-front candidate available and fills the remaining exact quota with diverse
+  true-front candidates. Front members are never relabeled as broad probes. The separate broad-
+  probe gates activate only after enough truthful off-front evidence has accumulated; allocation
+  shortfalls and recovery are logged.
 - `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
   limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
   proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
@@ -198,14 +201,14 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   At least eight samples of a validation class are required before its independent low agreement
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
   eight true proxy-front validations even when the complete feasible proxy front contributes only
-  one novel candidate per generation. If that front is smaller than the non-probe quota, remaining
-  off-front validations stay truthfully classified as broad probes rather than being relabeled as
-  front evidence. Front membership is carried independently through exact-result persistence and
-  resume recovery. A generation fails closed if duplicate filtering leaves no novel proxy-front
-  candidate, so broad probes cannot silently consume the exact budget needed to activate the front
-  gate. `drift_probes` must remain below `validate_per_generation` so each generation requests
-  proxy-front safety evidence. A partial final validation batch scales its reserved probe count down
-  proportionally.
+  one novel candidate per generation. Off-front validations stay truthfully classified as broad
+  probes rather than being relabeled as front evidence, and scarce or duplicate probes give their
+  unused exact slots back to true-front candidates. Front membership is carried independently
+  through exact-result persistence and resume recovery. A generation still fails closed if
+  duplicate filtering leaves no novel proxy-front candidate, so broad probes cannot silently
+  consume the exact budget needed to activate the front gate. `drift_probes` must remain below
+  `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
+  final validation batch scales its reserved probe count down proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
 - `max_pending_exact: 0` defaults to twice the exact-worker count.
   It must be at least `validate_per_generation` so throttling cannot change the configured
@@ -217,9 +220,11 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
    evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
    the rolling-window suffix, discarded pending work, and all full or partial validation batches.
    Exact worker results are consumed in submission order even if workers finish out of order,
-   preserving the modeled batch sequence; resume fails closed if either class-specific gate can no
-   longer reach its minimum sample count. A final checkpoint is always written on successful
-   completion.
+   preserving the modeled batch sequence. Resume fails closed if the mandatory proxy-front gate can
+   no longer reach its minimum sample count. Broad probes remain opportunistic across restart, just
+   as in an uninterrupted run: recovered truthful probes are retained, and their independent gates
+   activate only after enough off-front evidence exists. A final checkpoint is always written on
+   successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the

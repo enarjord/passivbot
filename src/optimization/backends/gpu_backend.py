@@ -396,46 +396,42 @@ def _validate_resume_evidence_budget(
     context: str = "resume",
     error_type: type[Exception] = RuntimeError,
 ) -> None:
-    """Fail closed if a resumed run cannot still activate each drift gate."""
+    """Fail closed if a resumed run cannot retain mandatory front evidence.
+
+    Broad probes are opportunistic because a complete feasible proxy front can
+    truthfully leave no off-front candidates. An uninterrupted run accepts
+    that geometry and keeps its independent broad-probe gates inactive until
+    enough evidence exists, so resume must not invent a stronger guarantee for
+    future generations. Durable probe evidence remains in ``pairs`` and is
+    evaluated by ``_DriftMonitor`` exactly as it is without a restart.
+    """
 
     remaining = max(0, int(exact_budget) - int(exact_done))
     window = int(options["drift_window"])
     validations = int(options["validate_per_generation"])
-    configured_probes = int(options["drift_probes"])
-    required_probes = _minimum_rank_evidence_samples(
-        float(options.get("drift_halt", GPU_DEFAULTS["drift_halt"]))
-    )
 
     # Recovered samples already have a durable order. Future exact results are
     # consumed strictly in submission order, so each validation generation is
-    # a contiguous segment. A partially retained future segment may lose any
-    # evidence samples first, which is the conservative within-batch order.
-    segments = [
-        (1, int(bool(row[4])), int(bool(row[2])))
-        for row in pairs
-    ]
+    # a contiguous segment. Each future generation requests at least one true-
+    # front validation, while broad probes depend on the population geometry
+    # and therefore cannot be guaranteed before selection. A partially retained
+    # future segment may lose its front sample first, which is the conservative
+    # within-batch order.
+    segments = [(1, int(bool(row[4]))) for row in pairs]
     future = remaining
     while future > 0:
         count = min(validations, future)
-        segments.append(
-            (
-                count,
-                1,
-                _validation_probe_count(count, validations, configured_probes),
-            )
-        )
+        segments.append((count, 1))
         future -= count
 
     kept = 0
     guaranteed_front = 0
-    guaranteed_probes = 0
-    for length, front_count, probe_count in reversed(segments):
+    for length, front_count in reversed(segments):
         if kept >= window:
             break
         included = min(length, window - kept)
         excluded = length - included
         guaranteed_front += max(0, front_count - excluded)
-        guaranteed_probes += max(0, probe_count - excluded)
         kept += included
 
     if guaranteed_front < MIN_DRIFT_PROBES:
@@ -443,13 +439,6 @@ def _validate_resume_evidence_budget(
             f"GPU {context} has insufficient exact budget to retain "
             f"{MIN_DRIFT_PROBES} proxy-front safety samples in the drift window: "
             f"guaranteed={guaranteed_front}, exact_done={exact_done}, "
-            f"remaining={remaining}"
-        )
-    if configured_probes > 0 and guaranteed_probes < required_probes:
-        raise error_type(
-            f"GPU {context} has insufficient exact budget to retain "
-            f"{required_probes} broad-probe safety samples in the drift window: "
-            f"guaranteed={guaranteed_probes}, exact_done={exact_done}, "
             f"remaining={remaining}"
         )
 
@@ -837,11 +826,6 @@ def _select_validation_indices(
     )
     front = primary[front_local]
     front_ids = {int(index) for index in front}
-    front_count = max(0, total - probes)
-    elite_local = _normalized_farthest_indices(objectives[front], front_count)
-    selected = [(int(front[index]), False, True) for index in elite_local]
-    selected_ids = {index for index, _probe, _front in selected}
-
     broad_pool = np.asarray(
         [
             int(index)
@@ -850,14 +834,17 @@ def _select_validation_indices(
         ],
         dtype=np.int64,
     )
-    requested_probes = min(max(0, probes), max(0, total - len(selected)))
-    if len(broad_pool) < requested_probes:
-        raise RuntimeError(
-            "GPU validation cannot provide the requested independent broad-probe "
-            f"evidence: requested {requested_probes}, available {len(broad_pool)} "
-            "outside the complete feasible proxy Pareto front"
-        )
-    probe_count = requested_probes
+    requested_probes = min(max(0, probes), max(0, total - 1))
+    # With several competing objectives the complete feasible proxy Pareto
+    # front may legitimately contain nearly the entire population. Use every
+    # truthful off-front probe available, then let diverse true-front members
+    # fill the remaining exact quota. Never relabel a front member as a broad
+    # probe merely to satisfy the configured per-generation target.
+    probe_count = min(requested_probes, len(broad_pool))
+    front_count = max(0, total - probe_count)
+    elite_local = _normalized_farthest_indices(objectives[front], front_count)
+    selected = [(int(front[index]), False, True) for index in elite_local]
+    selected_ids = {index for index, _probe, _front in selected}
     if probe_count:
         positions = np.round(
             np.linspace(0, len(broad_pool) - 1, num=probe_count)
@@ -902,7 +889,6 @@ def _select_novel_validations(
     selections,
     *,
     total: int,
-    probes: int,
     candidate_for_index,
     digest_for_candidate,
     completed_hashes,
@@ -912,6 +898,16 @@ def _select_novel_validations(
     seen = set()
     novel_probe_count = 0
     novel_front_count = 0
+    # The first ``total`` preferences are the selector's truthful allocation.
+    # Later items replace duplicate hashes but must not change that class mix.
+    target_probe_count = min(
+        max(0, total - 1),
+        sum(
+            bool(is_probe)
+            for _index, is_probe, _is_front in selections[:total]
+        ),
+    )
+    target_front_count = max(1, total - target_probe_count)
     for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
@@ -923,38 +919,56 @@ def _select_novel_validations(
         novel_probe_count += int(bool(is_probe))
         novel_front_count += int(bool(is_front))
         if (
-            len(novel) >= total
-            and novel_probe_count >= probes
-            and novel_front_count > 0
+            novel_probe_count >= target_probe_count
+            and novel_front_count >= target_front_count
         ):
             break
 
     probe_items = [item for item in novel if item[1]]
-    if len(probe_items) < probes:
-        raise RuntimeError(
-            "GPU validation cannot replace duplicate broad probes with novel "
-            "candidates outside the complete feasible proxy Pareto front: "
-            f"requested {probes}, available {len(probe_items)}"
-        )
     front_items = [item for item in novel if item[2]]
     if not front_items:
         raise RuntimeError(
             "GPU validation cannot provide novel proxy-front safety evidence; "
             "the current proxy front was already evaluated or submitted"
         )
-    chosen = probe_items[:probes]
+    chosen = probe_items[:target_probe_count]
     chosen_digests = {item[4] for item in chosen}
-    first_front = front_items[0]
-    if first_front[4] not in chosen_digests:
-        chosen.append(first_front)
-        chosen_digests.add(first_front[4])
-    for item in novel:
+    for item in front_items:
         if len(chosen) >= total:
             break
         if item[4] not in chosen_digests:
             chosen.append(item)
             chosen_digests.add(item[4])
     return chosen
+
+
+def _update_probe_shortfall_log(
+    previous: tuple[int, int] | None,
+    *,
+    requested: int,
+    actual: int,
+) -> tuple[int, int] | None:
+    current = (requested, actual) if actual < requested else None
+    if current == previous:
+        return previous
+    if current is None:
+        if previous is not None:
+            logging.info(
+                "GPU validation broad-probe allocation recovered | "
+                "requested=%d available=%d",
+                requested,
+                actual,
+            )
+    else:
+        logging.warning(
+            "GPU validation has fewer novel candidates outside the complete feasible "
+            "proxy Pareto front than requested | requested=%d available=%d | "
+            "filling the exact quota with diverse true-front candidates; broad-probe "
+            "gates use only truthful accumulated off-front evidence",
+            requested,
+            actual,
+        )
+    return current
 
 
 def _update_novelty_stall(
@@ -1644,6 +1658,7 @@ def run_backend(
     proxy_evaluations = 0
     novelty_stall_generations = 0
     last_warning = None
+    last_probe_shortfall = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = exact_done
 
@@ -1831,11 +1846,16 @@ def run_backend(
             novel_selections = _select_novel_validations(
                 selections,
                 total=validation_count,
-                probes=probe_count,
                 candidate_for_index=lambda index: full_vector(rows[index]),
                 digest_for_candidate=vector_hash,
                 completed_hashes=completed_hashes,
                 submitted_hashes=submitted_hashes,
+            )
+            actual_probe_count = sum(bool(item[1]) for item in novel_selections)
+            last_probe_shortfall = _update_probe_shortfall_log(
+                last_probe_shortfall,
+                requested=probe_count,
+                actual=actual_probe_count,
             )
             submitted_this_generation = 0
             for index, is_probe, is_proxy_front, vector, digest in novel_selections:
