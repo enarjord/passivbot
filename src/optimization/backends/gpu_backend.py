@@ -889,7 +889,6 @@ def _select_novel_validations(
     selections,
     *,
     total: int,
-    probes: int,
     candidate_for_index,
     digest_for_candidate,
     completed_hashes,
@@ -899,13 +898,16 @@ def _select_novel_validations(
     seen = set()
     novel_probe_count = 0
     novel_front_count = 0
+    # The first ``total`` preferences are the selector's truthful allocation.
+    # Later items replace duplicate hashes but must not change that class mix.
     target_probe_count = min(
-        probes,
+        max(0, total - 1),
         sum(
             bool(is_probe)
             for _index, is_probe, _is_front in selections[:total]
         ),
     )
+    target_front_count = max(1, total - target_probe_count)
     for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
@@ -917,9 +919,8 @@ def _select_novel_validations(
         novel_probe_count += int(bool(is_probe))
         novel_front_count += int(bool(is_front))
         if (
-            len(novel) >= total
-            and novel_probe_count >= target_probe_count
-            and novel_front_count > 0
+            novel_probe_count >= target_probe_count
+            and novel_front_count >= target_front_count
         ):
             break
 
@@ -930,13 +931,9 @@ def _select_novel_validations(
             "GPU validation cannot provide novel proxy-front safety evidence; "
             "the current proxy front was already evaluated or submitted"
         )
-    chosen = probe_items[:probes]
+    chosen = probe_items[:target_probe_count]
     chosen_digests = {item[4] for item in chosen}
-    first_front = front_items[0]
-    if first_front[4] not in chosen_digests:
-        chosen.append(first_front)
-        chosen_digests.add(first_front[4])
-    for item in novel:
+    for item in front_items:
         if len(chosen) >= total:
             break
         if item[4] not in chosen_digests:
@@ -1849,7 +1846,6 @@ def run_backend(
             novel_selections = _select_novel_validations(
                 selections,
                 total=validation_count,
-                probes=probe_count,
                 candidate_for_index=lambda index: full_vector(rows[index]),
                 digest_for_candidate=vector_hash,
                 completed_hashes=completed_hashes,

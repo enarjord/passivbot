@@ -735,7 +735,6 @@ def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
     chosen = _select_novel_validations(
         selections,
         total=2,
-        probes=1,
         candidate_for_index=lambda index: [index],
         digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
         completed_hashes={"hash-1"},
@@ -754,7 +753,6 @@ def test_duplicate_broad_probe_falls_back_to_novel_true_front_candidates():
     chosen = _select_novel_validations(
         [(0, False, True), (1, True, False), (2, False, True)],
         total=2,
-        probes=1,
         candidate_for_index=lambda index: [index],
         digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
         completed_hashes={"hash-1"},
@@ -791,7 +789,6 @@ def test_unallocated_infeasible_fallback_does_not_restore_probe_quota():
     chosen = _select_novel_validations(
         selections,
         total=3,
-        probes=1,
         candidate_for_index=lambda index: [index],
         digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
         completed_hashes=set(),
@@ -800,6 +797,30 @@ def test_unallocated_infeasible_fallback_does_not_restore_probe_quota():
 
     assert len(chosen) == 3
     assert all(not is_probe and is_front for _index, is_probe, is_front, *_ in chosen)
+
+
+def test_duplicate_fronts_do_not_expand_adaptive_probe_allocation():
+    selections = [
+        *((index, False, True) for index in range(6)),
+        (6, True, False),
+        (7, True, False),
+        *((index, True, False) for index in range(8, 12)),
+        *((index, False, True) for index in range(12, 17)),
+    ]
+
+    chosen = _select_novel_validations(
+        selections,
+        total=8,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes={f"hash-{index}" for index in range(1, 6)},
+        submitted_hashes=set(),
+    )
+
+    assert len(chosen) == 8
+    assert sum(is_probe for _index, is_probe, _front, *_rest in chosen) == 2
+    assert sum(is_front for _index, _is_probe, is_front, *_rest in chosen) == 6
+    assert {item[0] for item in chosen if item[2]} == {0, 12, 13, 14, 15, 16}
 
 
 def test_probe_shortfall_logging_is_bounded_and_reports_recovery(caplog):
@@ -828,7 +849,6 @@ def test_validation_batch_preserves_true_front_and_off_front_classification():
     chosen = _select_novel_validations(
         selections,
         total=8,
-        probes=4,
         candidate_for_index=lambda index: [index],
         digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
         completed_hashes=set(),
@@ -867,7 +887,6 @@ def test_validation_fails_closed_without_novel_proxy_front_evidence():
         _select_novel_validations(
             [(0, False, True), (1, True, False), (2, True, False)],
             total=2,
-            probes=1,
             candidate_for_index=lambda index: [index],
             digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
             completed_hashes={"hash-0"},
@@ -884,7 +903,6 @@ def test_validation_scans_fallbacks_for_novel_proxy_front_before_failing():
             (3, False, True),
         ],
         total=2,
-        probes=1,
         candidate_for_index=lambda index: [index],
         digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
         completed_hashes={"hash-0"},
