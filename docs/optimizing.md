@@ -220,9 +220,11 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
    evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
    the rolling-window suffix, discarded pending work, and all full or partial validation batches.
    Exact worker results are consumed in submission order even if workers finish out of order,
-   preserving the modeled batch sequence; resume fails closed if either class-specific gate can no
-   longer reach its minimum sample count. A final checkpoint is always written on successful
-   completion.
+   preserving the modeled batch sequence. Resume fails closed if the mandatory proxy-front gate can
+   no longer reach its minimum sample count. Broad probes remain opportunistic across restart, just
+   as in an uninterrupted run: recovered truthful probes are retained, and their independent gates
+   activate only after enough off-front evidence exists. A final checkpoint is always written on
+   successful completion.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the

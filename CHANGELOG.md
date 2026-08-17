@@ -46,8 +46,9 @@ All notable user-facing changes will be documented in this file.
   membership is persisted independently from off-front probe eligibility, with the safety window
   and exact budget sized for a one-member proxy front; a generation with no novel front candidate
   fails closed instead of silently consuming that evidence budget. Resume also proves that its
-  recovered evidence plus remaining exact budget can
-  still activate both class-specific gates; exact worker completions are durably consumed in
+  recovered evidence plus remaining exact budget can still activate the mandatory proxy-front
+  gate, while truthful broad-probe scarcity remains admissible across restart and recovered probes
+  continue feeding their independent gates; exact worker completions are durably consumed in
   submission order so that proof remains valid when workers finish out of order. Feasibility
   disagreements are evaluated by the independent constraint-agreement gates and excluded from rank
   correlation, preventing the same disagreement from being double-counted as arbitrary ordering of

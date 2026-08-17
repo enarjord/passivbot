@@ -178,15 +178,16 @@ def test_gpu_options_are_additive_and_validate_ranges():
         _resolve_options(config)
 
 
-def test_fresh_run_rejects_partial_suffix_without_rank_probe_budget():
+def test_fresh_run_accepts_partial_suffix_with_opportunistic_probes():
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["validate_per_generation"] = 8
     config["optimize"]["gpu"]["drift_probes"] = 1
     config["optimize"]["gpu"]["drift_window"] = 96
     config["optimize"]["iters"] = 97
 
-    with pytest.raises(ValueError, match="GPU fresh run.*broad-probe"):
-        _resolve_options(config)
+    options = _resolve_options(config)
+
+    assert options["drift_probes"] == 1
 
 
 def test_partial_validation_batch_preserves_front_evidence_ratio():
@@ -252,20 +253,19 @@ def test_resume_budget_accepts_sufficient_recovered_and_future_evidence():
     )
 
 
-def test_resume_budget_rejects_too_few_remaining_broad_probes():
-    pairs = [_drift_pair(front=index >= 3) for index in range(57)]
+def test_resume_budget_accepts_truthful_broad_probe_scarcity():
+    pairs = [_drift_pair(front=True) for _ in range(57)]
 
-    with pytest.raises(RuntimeError, match="broad-probe safety samples"):
-        _validate_resume_evidence_budget(
-            pairs,
-            exact_done=57,
-            exact_budget=64,
-            options={
-                "drift_window": 128,
-                "validate_per_generation": 8,
-                "drift_probes": 4,
-            },
-        )
+    _validate_resume_evidence_budget(
+        pairs,
+        exact_done=57,
+        exact_budget=64,
+        options={
+            "drift_window": 128,
+            "validate_per_generation": 8,
+            "drift_probes": 4,
+        },
+    )
 
 
 def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
