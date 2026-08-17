@@ -647,9 +647,13 @@ def test_validation_selection_uses_true_front_when_no_off_front_evidence_exists(
     scores = objectives.mean(axis=1)
 
     selected = _select_validation_indices(objectives, scores, total=3, probes=1)
+    diversity_baseline = _select_validation_indices(
+        objectives, scores, total=3, probes=0
+    )
 
     assert len(selected) == len(objectives)
     assert all(not is_probe and is_front for _index, is_probe, is_front in selected)
+    assert selected[:3] == diversity_baseline[:3]
 
 
 def test_validation_selection_uses_all_available_off_front_probes():
@@ -670,6 +674,9 @@ def test_validation_selection_uses_all_available_off_front_probes():
     scores = objectives.mean(axis=1)
 
     selected = _select_validation_indices(objectives, scores, total=8, probes=4)
+    diversity_baseline = _select_validation_indices(
+        objectives, scores, total=6, probes=0
+    )
 
     chosen = selected[:8]
     assert sum(is_probe for _index, is_probe, _front in chosen) == 2
@@ -677,6 +684,9 @@ def test_validation_selection_uses_all_available_off_front_probes():
     assert {
         index for index, is_probe, _front in chosen if is_probe
     } == {8, 9}
+    assert {
+        index for index, _is_probe, is_front in chosen if is_front
+    } == {index for index, _is_probe, _front in diversity_baseline[:6]}
 
 
 def test_validation_selection_prefers_feasible_candidates():
@@ -756,6 +766,40 @@ def test_duplicate_broad_probe_falls_back_to_novel_true_front_candidates():
         not is_probe and is_front
         for _index, is_probe, is_front, *_rest in chosen
     )
+
+
+def test_unallocated_infeasible_fallback_does_not_restore_probe_quota():
+    objectives = np.array(
+        [
+            [0.0, 3.0],
+            [1.0, 2.0],
+            [2.0, 1.0],
+            [3.0, 0.0],
+            [8.0, 8.0],
+        ]
+    )
+    scores = objectives.mean(axis=1)
+    selections = _select_validation_indices(
+        objectives,
+        scores,
+        violations=np.array([0.0, 0.0, 0.0, 0.0, 1.0]),
+        total=3,
+        probes=1,
+    )
+
+    assert selections[-1] == (4, True, False)
+    chosen = _select_novel_validations(
+        selections,
+        total=3,
+        probes=1,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes=set(),
+        submitted_hashes=set(),
+    )
+
+    assert len(chosen) == 3
+    assert all(not is_probe and is_front for _index, is_probe, is_front, *_ in chosen)
 
 
 def test_probe_shortfall_logging_is_bounded_and_reports_recovery(caplog):

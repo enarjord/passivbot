@@ -837,11 +837,6 @@ def _select_validation_indices(
     )
     front = primary[front_local]
     front_ids = {int(index) for index in front}
-    front_count = max(0, total - probes)
-    elite_local = _normalized_farthest_indices(objectives[front], front_count)
-    selected = [(int(front[index]), False, True) for index in elite_local]
-    selected_ids = {index for index, _probe, _front in selected}
-
     broad_pool = np.asarray(
         [
             int(index)
@@ -850,13 +845,17 @@ def _select_validation_indices(
         ],
         dtype=np.int64,
     )
-    requested_probes = min(max(0, probes), max(0, total - len(selected)))
+    requested_probes = min(max(0, probes), max(0, total - 1))
     # With several competing objectives the complete feasible proxy Pareto
     # front may legitimately contain nearly the entire population. Use every
     # truthful off-front probe available, then let diverse true-front members
     # fill the remaining exact quota. Never relabel a front member as a broad
     # probe merely to satisfy the configured per-generation target.
     probe_count = min(requested_probes, len(broad_pool))
+    front_count = max(0, total - probe_count)
+    elite_local = _normalized_farthest_indices(objectives[front], front_count)
+    selected = [(int(front[index]), False, True) for index in elite_local]
+    selected_ids = {index for index, _probe, _front in selected}
     if probe_count:
         positions = np.round(
             np.linspace(0, len(broad_pool) - 1, num=probe_count)
@@ -912,7 +911,11 @@ def _select_novel_validations(
     novel_probe_count = 0
     novel_front_count = 0
     target_probe_count = min(
-        probes, sum(bool(is_probe) for _index, is_probe, _is_front in selections)
+        probes,
+        sum(
+            bool(is_probe)
+            for _index, is_probe, _is_front in selections[:total]
+        ),
     )
     for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
