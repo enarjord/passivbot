@@ -851,13 +851,12 @@ def _select_validation_indices(
         dtype=np.int64,
     )
     requested_probes = min(max(0, probes), max(0, total - len(selected)))
-    if len(broad_pool) < requested_probes:
-        raise RuntimeError(
-            "GPU validation cannot provide the requested independent broad-probe "
-            f"evidence: requested {requested_probes}, available {len(broad_pool)} "
-            "outside the complete feasible proxy Pareto front"
-        )
-    probe_count = requested_probes
+    # With several competing objectives the complete feasible proxy Pareto
+    # front may legitimately contain nearly the entire population. Use every
+    # truthful off-front probe available, then let diverse true-front members
+    # fill the remaining exact quota. Never relabel a front member as a broad
+    # probe merely to satisfy the configured per-generation target.
+    probe_count = min(requested_probes, len(broad_pool))
     if probe_count:
         positions = np.round(
             np.linspace(0, len(broad_pool) - 1, num=probe_count)
@@ -912,6 +911,9 @@ def _select_novel_validations(
     seen = set()
     novel_probe_count = 0
     novel_front_count = 0
+    target_probe_count = min(
+        probes, sum(bool(is_probe) for _index, is_probe, _is_front in selections)
+    )
     for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
@@ -924,18 +926,12 @@ def _select_novel_validations(
         novel_front_count += int(bool(is_front))
         if (
             len(novel) >= total
-            and novel_probe_count >= probes
+            and novel_probe_count >= target_probe_count
             and novel_front_count > 0
         ):
             break
 
     probe_items = [item for item in novel if item[1]]
-    if len(probe_items) < probes:
-        raise RuntimeError(
-            "GPU validation cannot replace duplicate broad probes with novel "
-            "candidates outside the complete feasible proxy Pareto front: "
-            f"requested {probes}, available {len(probe_items)}"
-        )
     front_items = [item for item in novel if item[2]]
     if not front_items:
         raise RuntimeError(
@@ -955,6 +951,35 @@ def _select_novel_validations(
             chosen.append(item)
             chosen_digests.add(item[4])
     return chosen
+
+
+def _update_probe_shortfall_log(
+    previous: tuple[int, int] | None,
+    *,
+    requested: int,
+    actual: int,
+) -> tuple[int, int] | None:
+    current = (requested, actual) if actual < requested else None
+    if current == previous:
+        return previous
+    if current is None:
+        if previous is not None:
+            logging.info(
+                "GPU validation broad-probe allocation recovered | "
+                "requested=%d available=%d",
+                requested,
+                actual,
+            )
+    else:
+        logging.warning(
+            "GPU validation has fewer novel candidates outside the complete feasible "
+            "proxy Pareto front than requested | requested=%d available=%d | "
+            "filling the exact quota with diverse true-front candidates; broad-probe "
+            "gates use only truthful accumulated off-front evidence",
+            requested,
+            actual,
+        )
+    return current
 
 
 def _update_novelty_stall(
@@ -1644,6 +1669,7 @@ def run_backend(
     proxy_evaluations = 0
     novelty_stall_generations = 0
     last_warning = None
+    last_probe_shortfall = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = exact_done
 
@@ -1836,6 +1862,12 @@ def run_backend(
                 digest_for_candidate=vector_hash,
                 completed_hashes=completed_hashes,
                 submitted_hashes=submitted_hashes,
+            )
+            actual_probe_count = sum(bool(item[1]) for item in novel_selections)
+            last_probe_shortfall = _update_probe_shortfall_log(
+                last_probe_shortfall,
+                requested=probe_count,
+                actual=actual_probe_count,
             )
             submitted_this_generation = 0
             for index, is_probe, is_proxy_front, vector, digest in novel_selections:

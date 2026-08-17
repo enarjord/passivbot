@@ -52,9 +52,12 @@ All notable user-facing changes will be documented in this file.
   disagreements are evaluated by the independent constraint-agreement gates and excluded from rank
   correlation, preventing the same disagreement from being double-counted as arbitrary ordering of
   otherwise exact near-ties. Window, exact-budget, and fresh/resumed suffix checks reserve enough
-  total broad probes to retain eight rank-comparable samples whenever their constraint gate has not
-  already failed. Existing CPU bot, backtest, and optimizer paths do not import or require the
-  optional PyTorch dependency.
+  broad-probe capacity to retain eight rank-comparable samples whenever the current generations
+  contain that many truthful off-front candidates. When a many-objective generation has fewer
+  off-front candidates than requested, all available probes keep their true classification and
+  diverse true-front candidates fill the unused exact slots; allocation shortfalls and recovery are
+  logged instead of aborting the run. Existing CPU bot, backtest, and optimizer paths do not import
+  or require the optional PyTorch dependency.
 - Keep side-specific `approved_coins` authoritative in backtests and optimization so a coin
   approved only for long cannot open short entries, and a coin approved only for short cannot
   open long entries. Per-coin zero wallet-exposure overrides now retain the same entry-disable

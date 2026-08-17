@@ -30,6 +30,7 @@ from optimization.backends.gpu_backend import (
     _single_scenario_metric_surface,
     _select_novel_validations,
     _select_validation_indices,
+    _update_probe_shortfall_log,
     _validate_directional_search_space,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
@@ -639,14 +640,43 @@ def test_validation_selection_includes_front_and_broad_probes():
     assert len({index for index, _is_probe, _front in selected}) == len(objectives)
 
 
-def test_validation_selection_fails_without_requested_off_front_evidence():
+def test_validation_selection_uses_true_front_when_no_off_front_evidence_exists():
     objectives = np.array(
         [[0.0, 3.0], [1.0, 2.0], [2.0, 1.0], [3.0, 0.0]]
     )
     scores = objectives.mean(axis=1)
 
-    with pytest.raises(RuntimeError, match="independent broad-probe evidence"):
-        _select_validation_indices(objectives, scores, total=3, probes=1)
+    selected = _select_validation_indices(objectives, scores, total=3, probes=1)
+
+    assert len(selected) == len(objectives)
+    assert all(not is_probe and is_front for _index, is_probe, is_front in selected)
+
+
+def test_validation_selection_uses_all_available_off_front_probes():
+    objectives = np.array(
+        [
+            [0.0, 7.0],
+            [1.0, 6.0],
+            [2.0, 5.0],
+            [3.0, 4.0],
+            [4.0, 3.0],
+            [5.0, 2.0],
+            [6.0, 1.0],
+            [7.0, 0.0],
+            [8.0, 8.0],
+            [9.0, 9.0],
+        ]
+    )
+    scores = objectives.mean(axis=1)
+
+    selected = _select_validation_indices(objectives, scores, total=8, probes=4)
+
+    chosen = selected[:8]
+    assert sum(is_probe for _index, is_probe, _front in chosen) == 2
+    assert sum(is_front for _index, _probe, is_front in chosen) == 6
+    assert {
+        index for index, is_probe, _front in chosen if is_probe
+    } == {8, 9}
 
 
 def test_validation_selection_prefers_feasible_candidates():
@@ -710,17 +740,34 @@ def test_duplicate_broad_probe_is_replaced_by_novel_off_front_candidate():
     assert chosen[0][0] == 3
 
 
-def test_duplicate_broad_probes_fail_closed_when_no_novel_replacement_exists():
-    with pytest.raises(RuntimeError, match="replace duplicate broad probes"):
-        _select_novel_validations(
-            [(0, False, True), (1, True, False)],
-            total=2,
-            probes=1,
-            candidate_for_index=lambda index: [index],
-            digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
-            completed_hashes={"hash-1"},
-            submitted_hashes=set(),
-        )
+def test_duplicate_broad_probe_falls_back_to_novel_true_front_candidates():
+    chosen = _select_novel_validations(
+        [(0, False, True), (1, True, False), (2, False, True)],
+        total=2,
+        probes=1,
+        candidate_for_index=lambda index: [index],
+        digest_for_candidate=lambda candidate: f"hash-{candidate[0]}",
+        completed_hashes={"hash-1"},
+        submitted_hashes=set(),
+    )
+
+    assert [item[0] for item in chosen] == [0, 2]
+    assert all(
+        not is_probe and is_front
+        for _index, is_probe, is_front, *_rest in chosen
+    )
+
+
+def test_probe_shortfall_logging_is_bounded_and_reports_recovery(caplog):
+    with caplog.at_level("INFO"):
+        state = _update_probe_shortfall_log(None, requested=4, actual=2)
+        state = _update_probe_shortfall_log(state, requested=4, actual=2)
+        state = _update_probe_shortfall_log(state, requested=4, actual=4)
+
+    assert state is None
+    assert caplog.text.count("fewer novel candidates") == 1
+    assert "requested=4 available=2" in caplog.text
+    assert caplog.text.count("allocation recovered") == 1
 
 
 def test_validation_batch_preserves_true_front_and_off_front_classification():
