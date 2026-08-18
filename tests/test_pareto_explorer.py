@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -996,6 +999,38 @@ def test_selected_output_preserves_existing_file_metadata(
         assert os.getxattr(selected_output, xattr_name) == b"preserve"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS ACL tools")
+def test_selected_output_preserves_macos_access_acl(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"old": true}\n')
+    added = subprocess.run(
+        ["/bin/chmod", "+a", "everyone allow read", str(selected_output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if added.returncode != 0:
+        pytest.skip(f"could not create test ACL: {added.stderr.strip()}")
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+    listed = subprocess.run(
+        ["/bin/ls", "-le", str(selected_output)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert " allow read" in listed.stdout
+
+
 def test_selected_output_overwrite_uses_fresh_modification_time(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1044,6 +1079,62 @@ def test_selected_staging_uses_normal_exclusive_file_creation(
     assert flags & os.O_CREAT
     assert flags & os.O_EXCL
     assert mode == 0o666
+
+
+def test_selected_output_falls_back_when_hard_links_are_unsupported(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+
+    def reject_hard_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    result = run_from_args(args)
+    capsys.readouterr()
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+
+
+def test_selected_overwrite_detects_replacement_before_commit(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    real_replace = os.replace
+    raced = False
+
+    def replace_destination_before_move(source, destination):
+        nonlocal raced
+        source = Path(source)
+        destination = Path(destination)
+        if source == selected_output and destination.suffix == ".backup" and not raced:
+            newer = tmp_path / "newer.json"
+            newer.write_text('{"selected": "newer"}\n')
+            real_replace(newer, selected_output)
+            raced = True
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", replace_destination_before_move)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently; refusing install"):
+        run_from_args(args)
+
+    assert raced
+    assert json.loads(selected_output.read_text()) == {"selected": "newer"}
+    assert not [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
 
 
 def test_selected_output_supports_name_max_destination(
@@ -1536,14 +1627,14 @@ def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupte
     selected_output = tmp_path / "selected.json"
     selected_output.write_text('{"selected": "old"}\n')
     filtered_output = tmp_path / "filtered"
-    real_replace = os.replace
+    real_link = os.link
     interrupted = False
 
-    def interrupt_after_selected_commit(source, destination):
+    def interrupt_after_selected_commit(source, destination, *args, **kwargs):
         nonlocal interrupted
         source = Path(source)
         destination = Path(destination)
-        result = real_replace(source, destination)
+        result = real_link(source, destination, *args, **kwargs)
         if (
             not interrupted
             and source.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX)
@@ -1554,7 +1645,7 @@ def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupte
             raise KeyboardInterrupt()
         return result
 
-    monkeypatch.setattr(os, "replace", interrupt_after_selected_commit)
+    monkeypatch.setattr(os, "link", interrupt_after_selected_commit)
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
@@ -2111,6 +2202,34 @@ def test_save_outputs_refuse_source_pareto_directory(
     )
     with pytest.raises(ValueError, match="inside the source Pareto directory"):
         run_from_args(filtered_args)
+
+
+def test_save_filtered_refuses_filesystem_identity_alias_of_source_directory(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_alias = tmp_path / "source_alias"
+    output_alias.mkdir()
+    source_files = sorted(path.name for path in sample_pareto_dir.iterdir())
+    real_samefile = os.path.samefile
+
+    def report_bind_mount_alias(left, right):
+        pair = {Path(left).resolve(), Path(right).resolve()}
+        if pair == {output_alias.resolve(), sample_pareto_dir.resolve()}:
+            return True
+        return real_samefile(left, right)
+
+    monkeypatch.setattr(os.path, "samefile", report_bind_mount_alias)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_alias), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="inside the source Pareto directory"):
+        run_from_args(args)
+
+    assert sorted(path.name for path in sample_pareto_dir.iterdir()) == source_files
+    assert not list(output_alias.iterdir())
 
 
 def test_single_file_input_allows_sibling_outputs(

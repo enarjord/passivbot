@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import json
 import math
 import os
@@ -1584,14 +1586,22 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
+def _same_existing_filesystem_object(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return False
+
+
 def _validate_output_outside_source(
     path: Path,
     protected_source_dir: Path | None,
     *,
     label: str,
 ) -> None:
-    if protected_source_dir is not None and _is_within(
-        path, protected_source_dir.resolve()
+    if protected_source_dir is not None and (
+        _is_within(path, protected_source_dir.resolve())
+        or _same_existing_filesystem_object(path, protected_source_dir)
     ):
         raise ValueError(
             f"Refusing to write {label} inside the source Pareto directory: {path}"
@@ -1733,6 +1743,29 @@ def _create_selected_staging_file(parent: Path) -> Path:
     raise FileExistsError(f"Could not reserve selected staging file in {parent}")
 
 
+def _copy_platform_acl(source: Path, destination: Path) -> None:
+    if sys.platform != "darwin":
+        return
+    copyfile = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).copyfile
+    copyfile.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+    ]
+    copyfile.restype = ctypes.c_int
+    copyfile_acl = 0x00000001
+    if copyfile(
+        os.fsencode(source), os.fsencode(destination), None, copyfile_acl
+    ) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(
+            error_number,
+            f"Could not preserve ACL from {source} to {destination}: "
+            f"{os.strerror(error_number)}",
+        )
+
+
 def _copy_file_metadata(source: Path, destination: Path) -> None:
     source_stat = source.stat(follow_symlinks=False)
     destination_stat = destination.stat(follow_symlinks=False)
@@ -1744,6 +1777,7 @@ def _copy_file_metadata(source: Path, destination: Path) -> None:
             follow_symlinks=False,
         )
     shutil.copystat(source, destination, follow_symlinks=False)
+    _copy_platform_acl(source, destination)
     os.utime(
         destination,
         ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
@@ -1759,6 +1793,52 @@ def _warn_post_commit_cleanup_failure(
         f"{path} ({exc})",
         file=sys.stderr,
     )
+
+
+def _install_selected_without_overwrite(
+    staging_path: Path,
+    output: Path,
+    source_bytes: bytes,
+    *,
+    metadata_source: Path | None = None,
+) -> tuple[int, int]:
+    staging_stat = staging_path.stat(follow_symlinks=False)
+    try:
+        os.link(staging_path, output)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"Selected output already exists: {output} "
+            "(use --overwrite to replace it)"
+        ) from exc
+    except OSError as exc:
+        unsupported = {errno.EPERM, errno.ENOSYS, errno.EXDEV}
+        if hasattr(errno, "EOPNOTSUPP"):
+            unsupported.add(errno.EOPNOTSUPP)
+        if hasattr(errno, "ENOTSUP"):
+            unsupported.add(errno.ENOTSUP)
+        if exc.errno not in unsupported:
+            raise
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        try:
+            file_descriptor = os.open(output, flags, 0o666)
+        except FileExistsError as conflict:
+            raise FileExistsError(
+                f"Selected output already exists: {output} "
+                "(use --overwrite to replace it)"
+            ) from conflict
+        try:
+            with os.fdopen(file_descriptor, "wb") as output_file:
+                output_file.write(source_bytes)
+            if metadata_source is not None:
+                _copy_file_metadata(metadata_source, output)
+        except BaseException:
+            output.unlink(missing_ok=True)
+            raise
+        output_stat = output.stat(follow_symlinks=False)
+        return output_stat.st_dev, output_stat.st_ino
+    return staging_stat.st_dev, staging_stat.st_ino
 
 
 def _write_selected_output(
@@ -1778,13 +1858,9 @@ def _write_selected_output(
         if not overwrite:
             staging_stat = staging_path.stat(follow_symlinks=False)
             installed_identity = staging_stat.st_dev, staging_stat.st_ino
-            try:
-                os.link(staging_path, output)
-            except FileExistsError as exc:
-                raise FileExistsError(
-                    f"Selected output already exists: {output} "
-                    "(use --overwrite to replace it)"
-                ) from exc
+            installed_identity = _install_selected_without_overwrite(
+                staging_path, output, candidate.source_bytes
+            )
             staging_cleanup_attempted = True
             try:
                 staging_path.unlink()
@@ -1795,25 +1871,49 @@ def _write_selected_output(
             return _SelectedOutputInstall(
                 None, installed_identity, candidate.source_bytes
             )
+        observed_identity: tuple[int, int] | None = None
         if output.exists():
             if not output.is_file():
                 raise ValueError(f"Selected output must be a regular file: {output}")
-            if keep_backup:
-                backup_descriptor, backup_name = tempfile.mkstemp(
-                    prefix=SELECTED_BACKUP_PREFIX,
-                    suffix=".backup",
-                    dir=output.parent,
-                )
-                os.close(backup_descriptor)
-                backup_path = Path(backup_name)
-                backup_path.unlink()
-                os.link(output, backup_path)
+            observed_stat = output.stat(follow_symlinks=False)
+            observed_identity = observed_stat.st_dev, observed_stat.st_ino
             _copy_file_metadata(output, staging_path)
+            backup_descriptor, backup_name = tempfile.mkstemp(
+                prefix=SELECTED_BACKUP_PREFIX,
+                suffix=".backup",
+                dir=output.parent,
+            )
+            os.close(backup_descriptor)
+            backup_path = Path(backup_name)
+            backup_path.unlink()
+            os.replace(output, backup_path)
+            moved_stat = backup_path.stat(follow_symlinks=False)
+            if (moved_stat.st_dev, moved_stat.st_ino) != observed_identity:
+                if output.exists():
+                    raise RuntimeError(
+                        f"Selected output changed concurrently; moved file retained at "
+                        f"{backup_path}"
+                    )
+                os.replace(backup_path, output)
+                backup_path = None
+                raise RuntimeError(
+                    f"Selected output changed concurrently; refusing install: {output}"
+                )
         staging_stat = staging_path.stat(follow_symlinks=False)
         installed_identity = staging_stat.st_dev, staging_stat.st_ino
-        os.replace(staging_path, output)
+        installed_identity = _install_selected_without_overwrite(
+            staging_path,
+            output,
+            candidate.source_bytes,
+            metadata_source=backup_path,
+        )
+        staging_cleanup_attempted = True
+        try:
+            staging_path.unlink()
+        except OSError as exc:
+            _warn_post_commit_cleanup_failure("selected output", staging_path, exc)
         if backup_path is not None and not keep_backup:
-            backup_path.unlink()
+            _remove_selected_backup_after_commit(backup_path)
             backup_path = None
         return _SelectedOutputInstall(
             backup_path, installed_identity, candidate.source_bytes
@@ -1837,7 +1937,13 @@ def _write_selected_output(
                     backup_path, installed_identity, candidate.source_bytes
                 )
         if backup_path is not None:
-            backup_path.unlink(missing_ok=True)
+            if output.exists():
+                raise RuntimeError(
+                    f"Selected output changed concurrently; original file retained at "
+                    f"{backup_path}"
+                ) from exc
+            os.replace(backup_path, output)
+            backup_path = None
         raise
     finally:
         if not staging_cleanup_attempted:
@@ -1907,6 +2013,7 @@ def _copy_directory_metadata(source: Path, destination: Path) -> None:
             follow_symlinks=False,
         )
     shutil.copystat(source, destination, follow_symlinks=False)
+    _copy_platform_acl(source, destination)
     os.utime(
         destination,
         ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
