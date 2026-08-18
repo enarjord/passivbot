@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add static per-coin overrides to experimental Apple MPS multi-coin EMA-anchor optimization.
+  The enabled side may override EMA-anchor parameters, entry cooldown, and an explicit per-coin
+  wallet-exposure limit. Metal applies those values after every candidate gene, matching exact
+  Rust precedence; unsupported override leaves still fail closed, and checkpoint identity now
+  includes the prepared effective override table.
+
 - Add experimental Apple MPS optimization suites for the existing single-coin EMA-anchor and
   trailing-martingale scopes. Metal screens every candidate against each prepared scenario, while
   the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and

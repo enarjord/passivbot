@@ -57,6 +57,8 @@ mod tests {
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 19"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 12"));
+        assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));

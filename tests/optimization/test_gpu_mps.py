@@ -208,6 +208,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
+    assert "constant int OVERRIDE_COLS = 12" in source
+    assert "coin_override_or" in source
     count = 512
     coin_count = 3
     phase = np.linspace(0.0, 12.0 * np.pi, count)
@@ -274,6 +276,42 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
 
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"
+
+    disabled = np.full((coin_count, 12), np.nan, dtype=np.float32)
+    disabled[:, 11] = 0.0
+    disabled_output = MpsEmaAnchorMulticoinRunner(
+        runs[0], data, side=side, coin_overrides=disabled
+    ).run(np.array([row], dtype=np.float64))
+    torch.mps.synchronize()
+    assert disabled_output["day_has_fill"].sum().item() == 0
+    assert disabled_output["open_positions"].item() == 0.0
+
+    exact_last = np.full((coin_count, 12), np.nan, dtype=np.float32)
+    exact_last[:, :11] = np.asarray(row[:11], dtype=np.float32)
+    changed_candidate = list(row)
+    changed_candidate[:11] = [
+        0.01,
+        200.0,
+        400.0,
+        0.0,
+        0.05,
+        2.0,
+        5.0,
+        5.0,
+        10.0,
+        10.0,
+        30.0,
+    ]
+    exact_last_output = MpsEmaAnchorMulticoinRunner(
+        runs[0], data, side=side, coin_overrides=exact_last
+    ).run(np.array([row, changed_candidate], dtype=np.float64))
+    torch.mps.synchronize()
+    assert torch.equal(
+        exact_last_output["day_has_fill"][0], exact_last_output["day_has_fill"][1]
+    )
+    assert torch.equal(
+        exact_last_output["day_end_eq"][0], exact_last_output["day_end_eq"][1]
+    )
 
 
 @pytest.mark.skipif(

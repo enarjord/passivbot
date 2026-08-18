@@ -51,6 +51,7 @@ from optimization.backends.gpu_backend import (
     _update_probe_shortfall_log,
     _validate_directional_search_space,
     _validate_gpu_optimizer_overrides,
+    _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
@@ -952,6 +953,59 @@ def test_gpu_foundation_accepts_ema_single_side_multicoin(side):
     config["bot"][side]["risk"]["n_positions"] = 2
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
+    config = _directional_ema_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                side: {
+                    "strategy": {"ema_anchor": {"offset": 0.02, "ema_span_0": 90}},
+                    "risk": {"entry_cooldown_minutes": 15},
+                    "wallet_exposure_limit": 0.4,
+                }
+            }
+        }
+    }
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"live": {"leverage": 3}},
+        {"bot": {"long": {"risk": {"n_positions": 2}}}},
+        {"bot": {"long": {"unstuck": {"enabled": True}}}},
+        {"bot": {"short": {"strategy": {"ema_anchor": {"offset": 0.02}}}}},
+    ],
+)
+def test_gpu_multicoin_coin_overrides_reject_unmodeled_leaves(patch):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {"ETH": patch}
+
+    with pytest.raises(ValueError, match="do not model these paths yet"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
+def test_gpu_coin_overrides_reject_single_coin_scope():
+    config = _long_only_ema_config()
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+    }
+
+    with pytest.raises(ValueError, match="require multi-coin EMA Anchor"):
+        _validate_scope(config, _Evaluator())
 
 
 @pytest.mark.parametrize(
@@ -2505,6 +2559,28 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
     )
 
 
+def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    contract = {
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "side": "long",
+        "values": [[None] * 12, [None] * 11 + [0.4]],
+    }
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=contract
+    )
+    edited = copy.deepcopy(contract)
+    edited["values"][1][11] = 0.5
+
+    assert _checkpoint_signature(active, scoring) != original
+    assert (
+        _checkpoint_signature(active, scoring, runtime_contract=edited)
+        != original
+    )
+
+
 def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     item = {
@@ -2529,6 +2605,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
+            "coin_overrides": {},
         }
     ]
 
