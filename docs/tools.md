@@ -34,7 +34,7 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0' \
-  --save-selected configs/promoted_candidate.json
+  --save-selected configs/promoted_candidate.local.json
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0' \

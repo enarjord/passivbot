@@ -855,6 +855,34 @@ def test_run_from_args_saves_post_limit_members_and_manifest(
     assert "Saved filtered members: 2" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+def test_filtered_output_preserves_source_or_existing_modes(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "filtered"
+    sample_pareto_dir.chmod(0o751)
+    (sample_pareto_dir / "balanced.json").chmod(0o640)
+
+    run_from_args(
+        build_parser().parse_args([str(sample_pareto_dir), "-f", str(output)])
+    )
+    capsys.readouterr()
+    assert output.stat().st_mode & 0o777 == 0o751
+    assert (output / "balanced.json").stat().st_mode & 0o777 == 0o640
+
+    output.chmod(0o750)
+    sample_pareto_dir.chmod(0o700)
+    run_from_args(
+        build_parser().parse_args(
+            [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
+        )
+    )
+    capsys.readouterr()
+    assert output.stat().st_mode & 0o777 == 0o750
+
+
 def test_saved_outputs_are_reported_in_json(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -984,6 +1012,38 @@ def test_save_outputs_refuse_source_overlap(
     )
     with pytest.raises(ValueError, match="must not overlap"):
         run_from_args(filtered_args)
+
+
+def test_combined_outputs_refuse_overlap_in_either_direction(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    filtered = tmp_path / "filtered"
+    selected_inside = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(filtered / "selected.json"),
+            "-f",
+            str(filtered),
+        ]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(selected_inside)
+
+    selected = tmp_path / "selected.json"
+    filtered_inside = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected),
+            "-f",
+            str(selected / "filtered"),
+        ]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(filtered_inside)
+    assert not selected.exists()
 
 
 def test_filtered_copy_failure_preserves_existing_output(

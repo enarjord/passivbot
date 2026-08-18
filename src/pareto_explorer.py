@@ -1674,12 +1674,15 @@ def _stage_filtered(
     active_limits: Sequence[Mapping[str, Any]],
     scenario: str | None,
     selected: ParetoCandidate,
+    overwrite: bool,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=f".{output.name}.tmp-"))
     try:
         for candidate in candidates:
-            shutil.copyfile(candidate.path, stage / candidate.path.name)
+            destination = stage / candidate.path.name
+            shutil.copyfile(candidate.path, destination)
+            shutil.copymode(candidate.path, destination)
         manifest = {
             "tool": "passivbot tool pareto",
             "pareto_dir": str(pareto_dir),
@@ -1694,6 +1697,8 @@ def _stage_filtered(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        mode_source = output if overwrite and output.exists() else pareto_dir
+        shutil.copymode(mode_source, stage)
         return stage
     except Exception:
         shutil.rmtree(stage)
@@ -1782,9 +1787,12 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     if (
         selected_output is not None
         and filtered_output is not None
-        and _is_within(selected_output, filtered_output)
+        and (
+            _is_within(selected_output, filtered_output)
+            or _is_within(filtered_output, selected_output)
+        )
     ):
-        raise ValueError("Selected output must be outside the filtered output directory.")
+        raise ValueError("Selected and filtered output paths must not overlap.")
     selected_stage: Path | None = None
     filtered_stage: Path | None = None
     filtered_manifest: Path | None = None
@@ -1804,6 +1812,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 active_limits=active_limits,
                 scenario=scenario,
                 selected=result.candidate,
+                overwrite=overwrite,
             )
         if selected_output is not None and selected_stage is not None:
             _install_selected(selected_stage, selected_output, overwrite=overwrite)
