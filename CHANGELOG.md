@@ -8,6 +8,17 @@ All notable user-facing changes will be documented in this file.
   selected member or the post-limit member set, with explicit overwrite handling and a filtered
   export manifest.
 
+- Add experimental Apple MPS optimization suites for the existing single-coin EMA-anchor and
+  trailing-martingale scopes. Metal screens every candidate against each prepared scenario, while
+  the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and
+  unchanged exact Rust suite evaluations remain authoritative. This slice supports scenario date,
+  coin, ignored-coin, and single-exchange selection. Scenario `bot.long`/`bot.short` overrides now
+  retain exact last-write precedence by shadowing affected Metal candidate parameters per scenario
+  and revalidating each effective scenario against the GPU scope; non-bot override paths,
+  multi-exchange suites, multi-coin scenarios, and per-coin source assignments still fail closed.
+  Effective external suite definitions, scenario filters, overrides, and resolved date windows are
+  persisted and checked on resume.
+
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
   durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the

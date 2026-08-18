@@ -797,6 +797,156 @@ def test_active_suite_scenario_labels_use_canonical_fallbacks():
     ) is None
 
 
+def test_materialize_gpu_suite_run_contract_persists_external_and_filtered_suite():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = False
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [{"label": "stress", "coins": ["ETH"]}],
+        "reducer": {"default": "max"},
+        "exchanges": ["bybit"],
+        "volume_normalization": False,
+    }
+
+    optimize._materialize_gpu_suite_run_contract(config, suite_cfg)
+
+    assert config["backtest"]["suite_enabled"] is True
+    assert config["backtest"]["scenarios"] == suite_cfg["scenarios"]
+    assert config["backtest"]["reducer"] == suite_cfg["reducer"]
+    assert config["backtest"]["exchanges"] == ["bybit"]
+    assert config["backtest"]["volume_normalization"] is False
+    suite_cfg["scenarios"][0]["coins"] = ["BTC"]
+    assert config["backtest"]["scenarios"][0]["coins"] == ["ETH"]
+
+
+def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "pymoo"
+    before = deepcopy(config["backtest"])
+
+    optimize._materialize_gpu_suite_run_contract(
+        config,
+        {
+            "enabled": True,
+            "scenarios": [{"label": "stress", "coins": ["ETH"]}],
+            "reducer": {"default": "max"},
+            "exchanges": ["bybit"],
+            "volume_normalization": False,
+        },
+    )
+
+    assert config["backtest"] == before
+
+
+def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [
+        {"label": "rolling", "start_date": "2026-01-01", "end_date": "now"}
+    ]
+    context = Mock(
+        label="rolling",
+        config={
+            "backtest": {
+                "start_date": "now",
+                "end_date": "today",
+            }
+        },
+        msss={
+            "bybit": {
+                "__meta__": {
+                    "requested_start_date": "2026-08-17T00:00:00",
+                    "requested_end_date": "2026-08-18T00:00:00",
+                }
+            }
+        },
+    )
+
+    optimize._materialize_resolved_gpu_suite_dates(config, [context])
+
+    assert config["backtest"]["scenarios"] == [
+        {
+            "label": "rolling",
+            "start_date": "2026-08-17T00:00:00",
+            "end_date": "2026-08-18T00:00:00",
+        }
+    ]
+
+
+def test_materialize_resolved_gpu_suite_dates_rejects_inconsistent_prepared_dates():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [{"label": "rolling"}]
+    context = Mock(
+        label="rolling",
+        msss={
+            "bybit": {
+                "__meta__": {
+                    "requested_start_date": "2026-08-16T00:00:00",
+                    "requested_end_date": "2026-08-18T00:00:00",
+                }
+            },
+            "binance": {
+                "__meta__": {
+                    "requested_start_date": "2026-08-17T00:00:00",
+                    "requested_end_date": "2026-08-18T00:00:00",
+                }
+            },
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="inconsistent prepared requested_start_date"):
+        optimize._materialize_resolved_gpu_suite_dates(config, [context])
+
+
+def test_materialized_gpu_suite_dates_make_rollover_resume_incompatible():
+    previous = optimize.get_template_config()
+    previous["optimize"]["backend"] = "gpu"
+    previous["backtest"]["suite_enabled"] = True
+    previous["backtest"]["scenarios"] = [
+        {"label": "rolling", "start_date": "now", "end_date": "2026-08-20"}
+    ]
+    current = deepcopy(previous)
+
+    def prepared_context(requested_start_date):
+        return Mock(
+            label="rolling",
+            msss={
+                "bybit": {
+                    "__meta__": {
+                        "requested_start_date": requested_start_date,
+                        "requested_end_date": "2026-08-20T00:00:00",
+                    }
+                }
+            },
+        )
+
+    optimize._materialize_resolved_gpu_suite_dates(
+        previous, [prepared_context("2026-08-17T00:00:00")]
+    )
+    optimize._materialize_resolved_gpu_suite_dates(
+        current, [prepared_context("2026-08-18T00:00:00")]
+    )
+    previous["suite_metrics"] = {"scenario_labels": ["rolling"]}
+
+    mismatches = optimize._resume_config_mismatches(previous, current)
+
+    assert any("backtest.scenarios" in mismatch for mismatch in mismatches)
+
+
+def test_materialize_resolved_gpu_suite_dates_rejects_context_count_mismatch():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [{"label": "base"}]
+
+    with pytest.raises(RuntimeError, match="prepared scenario count"):
+        optimize._materialize_resolved_gpu_suite_dates(config, [])
+
+
 def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
     config = optimize.get_template_config()
     config["optimize"]["limits"] = [
