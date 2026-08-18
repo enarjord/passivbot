@@ -4,6 +4,7 @@ import argparse
 import errno
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -1184,6 +1185,40 @@ def test_selected_overwrite_detects_replacement_before_commit(
     assert not [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
 
 
+def test_selected_overwrite_detects_in_place_edit_before_commit(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    original_inode = selected_output.stat().st_ino
+    real_replace = os.replace
+    edited = False
+
+    def edit_destination_before_move(source, destination):
+        nonlocal edited
+        source = Path(source)
+        destination = Path(destination)
+        if source == selected_output and destination.suffix == ".backup" and not edited:
+            selected_output.write_text('{"selected": "newer"}\n')
+            edited = True
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", edit_destination_before_move)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently; refusing install"):
+        run_from_args(args)
+
+    assert edited
+    assert selected_output.stat().st_ino == original_inode
+    assert json.loads(selected_output.read_text()) == {"selected": "newer"}
+    assert not [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+
+
 def test_selected_output_supports_name_max_destination(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1404,6 +1439,48 @@ def test_filtered_overwrite_revalidates_contents_after_move_aside(
     ]
 
 
+def test_filtered_overwrite_rejects_concurrent_directory_replacement(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    stale = output_dir / "stale.json"
+    stale.write_text('{"stale": true}\n')
+    detached_old = tmp_path / "detached-old"
+    real_replace = os.replace
+    replaced = False
+
+    def replace_destination_before_move_aside(source, destination):
+        nonlocal replaced
+        source = Path(source)
+        destination = Path(destination)
+        if (
+            source == output_dir
+            and destination.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX)
+            and not replaced
+        ):
+            real_replace(output_dir, detached_old)
+            output_dir.mkdir()
+            (output_dir / "newer.json").write_text('{"newer": true}\n')
+            replaced = True
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", replace_destination_before_move_aside)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently; refusing install"):
+        run_from_args(args)
+
+    assert replaced
+    assert json.loads((output_dir / "newer.json").read_text()) == {"newer": True}
+    assert sorted(path.name for path in output_dir.iterdir()) == ["newer.json"]
+    assert json.loads((detached_old / "stale.json").read_text()) == {"stale": True}
+
+
 def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1536,6 +1613,52 @@ def test_combined_outputs_restore_both_destinations_when_interrupted(
     with pytest.raises(KeyboardInterrupt):
         run_from_args(args)
 
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_ino == selected_inode
+    assert json.loads(stale.read_text()) == {"filtered": "old"}
+    assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_restore_selected_when_install_return_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_inode = selected_output.stat().st_ino
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    stale = filtered_output / "stale.json"
+    stale.write_text('{"filtered": "old"}\n')
+    real_write_selected = pareto_explorer._write_selected_output
+    interrupted = False
+
+    def interrupt_after_selected_return(*args, **kwargs):
+        nonlocal interrupted
+        real_write_selected(*args, **kwargs)
+        interrupted = True
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_selected_output", interrupt_after_selected_return
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
     assert json.loads(selected_output.read_text()) == {"selected": "old"}
     assert selected_output.stat().st_ino == selected_inode
     assert json.loads(stale.read_text()) == {"filtered": "old"}
@@ -1682,30 +1805,34 @@ def test_combined_outputs_keep_committed_pair_when_filtered_rename_is_interrupte
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
 
 
-def test_combined_outputs_keep_committed_pair_when_filtered_staging_cleanup_is_interrupted(
+def test_combined_outputs_do_not_delete_reused_filtered_staging_path_after_commit(
     sample_pareto_dir: Path,
     tmp_path: Path,
     monkeypatch,
-    capsys,
 ):
     selected_output = tmp_path / "selected.json"
     selected_output.write_text('{"selected": "old"}\n')
     filtered_output = tmp_path / "filtered"
     filtered_output.mkdir()
     (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
-    real_remove = pareto_explorer._remove_output_tree
-    interrupted = False
+    real_replace = os.replace
+    reused_staging: Path | None = None
 
-    def interrupt_staging_cleanup(path: Path):
-        nonlocal interrupted
-        if path.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
-            interrupted = True
-            raise KeyboardInterrupt()
-        return real_remove(path)
+    def reuse_staging_path_after_commit(source, destination):
+        nonlocal reused_staging
+        source = Path(source)
+        destination = Path(destination)
+        result = real_replace(source, destination)
+        if (
+            source.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX)
+            and destination == filtered_output
+        ):
+            source.mkdir()
+            (source / "foreign.txt").write_text("preserve me\n")
+            reused_staging = source
+        return result
 
-    monkeypatch.setattr(
-        pareto_explorer, "_remove_output_tree", interrupt_staging_cleanup
-    )
+    monkeypatch.setattr(os, "replace", reuse_staging_path_after_commit)
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
@@ -1719,13 +1846,12 @@ def test_combined_outputs_keep_committed_pair_when_filtered_staging_cleanup_is_i
 
     result = run_from_args(args)
 
-    assert interrupted
+    assert reused_staging is not None
     assert selected_output.read_bytes() == result.candidate.source_bytes
     assert not (filtered_output / "stale.json").exists()
     assert (filtered_output / "selection.json").exists()
-    assert "filtered output installed, but temporary path could not be removed" in (
-        capsys.readouterr().err
-    )
+    assert (reused_staging / "foreign.txt").read_text() == "preserve me\n"
+    shutil.rmtree(reused_staging)
 
 
 def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupted(

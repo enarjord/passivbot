@@ -97,6 +97,12 @@ class _SelectedOutputInstall:
 
 
 @dataclass(frozen=True)
+class _FilteredOutputSnapshot:
+    identity: tuple[int, int]
+    members: tuple[tuple[str, bytes], ...]
+
+
+@dataclass(frozen=True)
 class SelectionResult:
     candidate: ParetoCandidate
     method: str
@@ -1898,7 +1904,13 @@ def _write_selected_output(
     *,
     keep_backup: bool,
     overwrite: bool,
+    install_sink: List[_SelectedOutputInstall] | None = None,
 ) -> _SelectedOutputInstall:
+    def record_install(install: _SelectedOutputInstall) -> _SelectedOutputInstall:
+        if install_sink is not None and not install_sink:
+            install_sink.append(install)
+        return install
+
     output.parent.mkdir(parents=True, exist_ok=True)
     staging_path, staging_descriptor = _create_selected_staging_file(output.parent)
     backup_path: Path | None = None
@@ -1919,15 +1931,17 @@ def _write_selected_output(
                 _warn_post_commit_cleanup_failure(
                     "selected output", staging_path, exc
                 )
-            return _SelectedOutputInstall(
-                None, installed_identity, candidate.source_bytes
+            return record_install(
+                _SelectedOutputInstall(None, installed_identity, candidate.source_bytes)
             )
         observed_identity: tuple[int, int] | None = None
+        observed_bytes: bytes | None = None
         if output.exists():
             if not output.is_file():
                 raise ValueError(f"Selected output must be a regular file: {output}")
             observed_stat = output.stat(follow_symlinks=False)
             observed_identity = observed_stat.st_dev, observed_stat.st_ino
+            observed_bytes = output.read_bytes()
             _copy_file_metadata(output, staging_path)
             backup_descriptor, backup_name = tempfile.mkstemp(
                 prefix=SELECTED_BACKUP_PREFIX,
@@ -1939,7 +1953,11 @@ def _write_selected_output(
             backup_path.unlink()
             os.replace(output, backup_path)
             moved_stat = backup_path.stat(follow_symlinks=False)
-            if (moved_stat.st_dev, moved_stat.st_ino) != observed_identity:
+            moved_bytes = backup_path.read_bytes()
+            if (
+                (moved_stat.st_dev, moved_stat.st_ino) != observed_identity
+                or moved_bytes != observed_bytes
+            ):
                 if output.exists():
                     raise RuntimeError(
                         f"Selected output changed concurrently; moved file retained at "
@@ -1966,8 +1984,10 @@ def _write_selected_output(
         if backup_path is not None and not keep_backup:
             _remove_selected_backup_after_commit(backup_path)
             backup_path = None
-        return _SelectedOutputInstall(
-            backup_path, installed_identity, candidate.source_bytes
+        return record_install(
+            _SelectedOutputInstall(
+                backup_path, installed_identity, candidate.source_bytes
+            )
         )
     except BaseException as exc:
         if installed_identity is not None:
@@ -1984,8 +2004,10 @@ def _write_selected_output(
                     f"keeping installed output: {output} ({exc})",
                     file=sys.stderr,
                 )
-                return _SelectedOutputInstall(
-                    backup_path, installed_identity, candidate.source_bytes
+                return record_install(
+                    _SelectedOutputInstall(
+                        backup_path, installed_identity, candidate.source_bytes
+                    )
                 )
         if backup_path is not None:
             if output.exists():
@@ -2002,13 +2024,43 @@ def _write_selected_output(
 
 
 def _restore_selected_output(output: Path, install: _SelectedOutputInstall) -> None:
+    rollback_descriptor, rollback_name = tempfile.mkstemp(
+        prefix=SELECTED_BACKUP_PREFIX,
+        suffix=".rollback",
+        dir=output.parent,
+    )
+    os.close(rollback_descriptor)
+    rollback_path = Path(rollback_name)
+    rollback_path.unlink()
     try:
-        output_stat = output.stat(follow_symlinks=False)
+        os.replace(output, rollback_path)
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"Selected output changed concurrently; refusing rollback: {output}"
         ) from exc
-    if (output_stat.st_dev, output_stat.st_ino) != install.installed_identity:
+    rollback_stat = rollback_path.stat(follow_symlinks=False)
+    rollback_bytes = rollback_path.read_bytes()
+    if (
+        (rollback_stat.st_dev, rollback_stat.st_ino) != install.installed_identity
+        or rollback_bytes != install.installed_bytes
+    ):
+        try:
+            _install_selected_without_overwrite(
+                rollback_path,
+                output,
+                rollback_bytes,
+                metadata_source=rollback_path,
+            )
+        except BaseException as restore_exc:
+            backup_note = (
+                f" Original backup retained at {install.backup_path}."
+                if install.backup_path is not None
+                else ""
+            )
+            raise RuntimeError(
+                f"Selected output changed concurrently; moved file retained at "
+                f"{rollback_path}.{backup_note}"
+            ) from restore_exc
         backup_note = (
             f" Original backup retained at {install.backup_path}."
             if install.backup_path is not None
@@ -2016,28 +2068,20 @@ def _restore_selected_output(output: Path, install: _SelectedOutputInstall) -> N
         )
         raise RuntimeError(
             f"Selected output changed concurrently; refusing rollback: {output}."
-            f"{backup_note}"
-        )
-    try:
-        output_bytes = output.read_bytes()
-    except OSError as exc:
-        raise RuntimeError(
-            f"Selected output could not be verified; refusing rollback: {output}"
-        ) from exc
-    if output_bytes != install.installed_bytes:
-        backup_note = (
-            f" Original backup retained at {install.backup_path}."
-            if install.backup_path is not None
-            else ""
-        )
-        raise RuntimeError(
-            f"Selected output changed concurrently; refusing rollback: {output}."
-            f"{backup_note}"
+            f" Moved file retained at {rollback_path}.{backup_note}"
         )
     if install.backup_path is None:
-        output.unlink(missing_ok=True)
+        rollback_path.unlink()
     else:
-        os.replace(install.backup_path, output)
+        backup_bytes = install.backup_path.read_bytes()
+        _install_selected_without_overwrite(
+            install.backup_path,
+            output,
+            backup_bytes,
+            metadata_source=install.backup_path,
+        )
+        rollback_path.unlink()
+        install.backup_path.unlink()
 
 
 def _remove_selected_backup_after_commit(backup_path: Path) -> None:
@@ -2072,11 +2116,23 @@ def _copy_directory_metadata(source: Path, destination: Path) -> None:
     )
 
 
+def _snapshot_filtered_output_dir(output_dir: Path) -> _FilteredOutputSnapshot:
+    output_stat = output_dir.stat(follow_symlinks=False)
+    members = tuple(
+        (path.name, path.read_bytes())
+        for path in sorted(output_dir.iterdir(), key=lambda item: item.name)
+    )
+    return _FilteredOutputSnapshot(
+        (output_stat.st_dev, output_stat.st_ino), members
+    )
+
+
 def _replace_filtered_output_dir(
     staging_dir: Path,
     output_dir: Path,
     *,
     overwrite: bool,
+    observed_output: _FilteredOutputSnapshot,
 ) -> None:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
 
@@ -2090,6 +2146,17 @@ def _replace_filtered_output_dir(
     try:
         os.replace(output_dir, backup_dir)
         _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
+        moved_output = _snapshot_filtered_output_dir(backup_dir)
+        if moved_output != observed_output:
+            if output_dir.exists():
+                raise RuntimeError(
+                    f"Filtered output changed concurrently; moved directory retained at "
+                    f"{backup_dir}"
+                )
+            os.replace(backup_dir, output_dir)
+            raise RuntimeError(
+                f"Filtered output changed concurrently; refusing install: {output_dir}"
+            )
         _copy_directory_metadata(backup_dir, staging_dir)
         os.replace(staging_dir, output_dir)
     except BaseException as exc:
@@ -2138,17 +2205,18 @@ def _ensure_filtered_output_dir(
     output_dir: Path,
     *,
     overwrite: bool,
-) -> tuple[int, int] | None:
+) -> tuple[tuple[int, int] | None, _FilteredOutputSnapshot]:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if output_dir.exists():
-        return None
+        return None, _snapshot_filtered_output_dir(output_dir)
     try:
         output_dir.mkdir(mode=0o777)
     except FileExistsError:
         _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
-        return None
+        return None, _snapshot_filtered_output_dir(output_dir)
     output_stat = output_dir.stat(follow_symlinks=False)
-    return output_stat.st_dev, output_stat.st_ino
+    identity = output_stat.st_dev, output_stat.st_ino
+    return identity, _FilteredOutputSnapshot(identity, ())
 
 
 def _remove_filtered_reservation(
@@ -2199,7 +2267,7 @@ def _write_filtered_outputs(
     overwrite: bool,
 ) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    reservation_identity = _ensure_filtered_output_dir(
+    reservation_identity, observed_output = _ensure_filtered_output_dir(
         output_dir,
         overwrite=overwrite,
     )
@@ -2274,6 +2342,7 @@ def _write_filtered_outputs(
             staging_dir,
             output_dir,
             overwrite=overwrite,
+            observed_output=observed_output,
         )
         committed = True
     finally:
@@ -2288,13 +2357,6 @@ def _write_filtered_outputs(
             ) == staging_identity:
                 committed = True
         if committed:
-            if staging_dir is not None:
-                try:
-                    _remove_output_tree(staging_dir)
-                except BaseException as exc:
-                    _warn_post_commit_cleanup_failure(
-                        "filtered output", staging_dir, exc
-                    )
             try:
                 _remove_filtered_reservation(output_dir, reservation_identity)
             except BaseException as exc:
@@ -2377,16 +2439,19 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         raise ValueError(
             "Selected and filtered output paths must not overlap when both are saved."
         )
+    selected_installs: List[_SelectedOutputInstall] = []
     selected_install: _SelectedOutputInstall | None = None
-    if selected_output is not None:
-        selected_install = _write_selected_output(
-            result.candidate,
-            selected_output,
-            keep_backup=filtered_output_dir is not None,
-            overwrite=overwrite,
-        )
     filtered_manifest: Path | None = None
     try:
+        if selected_output is not None:
+            _write_selected_output(
+                result.candidate,
+                selected_output,
+                keep_backup=filtered_output_dir is not None,
+                overwrite=overwrite,
+                install_sink=selected_installs,
+            )
+            selected_install = selected_installs[0]
         if filtered_output_dir is not None:
             filtered_manifest = _write_filtered_outputs(
                 filtered_output_dir,
@@ -2400,9 +2465,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 overwrite=overwrite,
             )
     except BaseException:
-        if selected_output is not None:
-            assert selected_install is not None
-            _restore_selected_output(selected_output, selected_install)
+        if selected_output is not None and selected_installs:
+            _restore_selected_output(selected_output, selected_installs[0])
         raise
     else:
         if selected_install is not None and selected_install.backup_path is not None:
