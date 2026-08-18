@@ -1293,11 +1293,13 @@ def config_to_individual(
 def _optimizer_anchor_id(config: dict) -> int | None:
     anchor_meta = config.get("_optimizer_anchor")
     if not isinstance(anchor_meta, dict):
+        anchor_meta = config.get("optimizer_anchor")
+    if not isinstance(anchor_meta, dict):
         return None
-    try:
-        return int(anchor_meta["id"])
-    except (KeyError, TypeError, ValueError):
+    anchor_id = anchor_meta.get("id")
+    if isinstance(anchor_id, bool) or not isinstance(anchor_id, int):
         return None
+    return anchor_id
 
 
 def _canonicalize_optimizer_individual(
@@ -2982,13 +2984,29 @@ def configs_to_individuals_streaming(
         raw_count += 1
         try:
             fcfg = _build_starting_seed_config(cfg)
+            resolved_anchor_id = None
+            if anchored_shape:
+                has_persisted_anchor = isinstance(cfg, dict) and any(
+                    key in cfg for key in ("_optimizer_anchor", "optimizer_anchor")
+                )
+                resolved_anchor_id = (
+                    _optimizer_anchor_id(cfg) if has_persisted_anchor else anchor_idx
+                )
+                if resolved_anchor_id is None:
+                    raise ValueError("invalid persisted optimizer anchor id")
+                anchor_high = int(bounds[0].high)
+                if not 0 <= resolved_anchor_id <= anchor_high:
+                    raise ValueError(
+                        "persisted optimizer anchor id is outside the optimization "
+                        f"shape: id={resolved_anchor_id}, allowed=0..{anchor_high}"
+                    )
             individual = config_to_individual(
                 fcfg,
                 bounds,
                 sig_digits,
                 key_paths=key_paths,
                 optimization_shape=optimization_shape,
-                anchor_id=anchor_idx if anchored_shape else None,
+                anchor_id=resolved_anchor_id,
                 clamp_context="starting config",
                 source=cfg.get("_starting_config_source", "<memory>")
                 if isinstance(cfg, dict)

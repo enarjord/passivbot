@@ -100,12 +100,15 @@ and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 The supported slice is intentionally narrow:
 
 - Apple Silicon with `torch.backends.mps.is_available()`
-- one exchange and one coin, using one-minute candles
+- one exchange using one-minute candles
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
-  long+short enabled
-- trailing-martingale entry and close `retracement_base_pct` optimizer bounds strictly above zero;
-  zero or negative values select recursive grid ladders that this screening slice does not model
+  long+short enabled for one coin
+- long-only or short-only multi-coin EMA-anchor runs for up to 64 coins, with dynamic wallet-
+  exposure allocation and Forager selection; multi-coin runs require
+  `backtest.dynamic_wel_by_tradability: true` and `live.forager_score_hysteresis_pct: 0`
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
+  for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
+  prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode disabled
 - HSL and auto-unstuck disabled
@@ -115,9 +118,17 @@ The supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Recursive trailing-martingale grid
-modes, multi-coin, suites, HSL, auto-unstuck, and forager-dependent selection are not silently
-approximated by this release.
+Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
+long+short runs, suites, HSL, and auto-unstuck are not silently approximated by this release.
+
+Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
+shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
+discrete anchor id alongside the selected tunable bounds. Anchor-fixed values are supplied to the
+screening proxy before each candidate's tunable values, while the unchanged exact Rust path
+materializes the same anchor and tunable vector. The complete range across all anchors is checked
+against the GPU scope: an anchor cannot change enabled sides or introduce unsupported risk
+behavior. Base-config runtime policy fields still win over anchor configs as described in
+[Fine-Tuning Specific Parameters](#fine-tuning-specific-parameters).
 
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Extend the experimental Apple MPS optimizer to anchored fine-tuning with `--start` plus
+  `--fine-tune-params` for supported EMA-anchor and trailing-martingale scopes. The Metal proxy
+  evolves the same discrete anchor id as exact Rust, applies each anchor's fixed optimizer-bound
+  values before candidate tunables, and validates the full cross-anchor range so side enablement
+  or unsupported risk behavior cannot be introduced silently.
+
 - KuCoin private futures order websockets now discard the exact cached negotiated URL when the
   exchange expires its token, allowing `watch_orders` to obtain a fresh token instead of reusing
   the rejected URL indefinitely. The expected callback exception is reduced to a throttled warning

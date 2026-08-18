@@ -13,8 +13,10 @@ from optimization.bounds import Bound
 from optimization.backends.gpu_backend import (
     _canonical_candidate_values,
     _canonical_vector_hash,
+    _build_anchor_parameter_context,
     _build_gpu_nsga2,
     _build_proxy_parameter_dicts,
+    _checkpoint_signature,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _format_constraint_diagnostics,
@@ -40,6 +42,8 @@ from optimization.backends.gpu_backend import (
     EMA_MULTICOIN_SHORT_BOUND_MAP,
     TRAILING_MARTINGALE_BOUND_MAP,
 )
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
+from optimization.warmup import build_optimizer_vector_config
 
 
 class _Evaluator:
@@ -1230,6 +1234,295 @@ def test_proxy_parameters_keep_directional_names_distinct():
     assert parameters == [{"long_offset": 0.75, "short_offset": 0.125}]
 
 
+def test_gpu_anchor_context_maps_fixed_values_and_preserves_ranges():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": [
+                "long_base_qty_pct",
+                "long_risk_we_excess_allowance_pct",
+            ],
+            "anchors": [
+                {
+                    "fixed_values": [
+                        {"key": "long_base_qty_pct", "value": 0.1},
+                        {
+                            "key": "long_risk_we_excess_allowance_pct",
+                            "value": 0.0,
+                        },
+                    ]
+                },
+                {
+                    "fixed_values": [
+                        {"key": "long_base_qty_pct", "value": 0.3},
+                        {
+                            "key": "long_risk_we_excess_allowance_pct",
+                            "value": 0.0,
+                        },
+                    ]
+                },
+            ],
+        }
+    }
+
+    overrides, fixed_bounds = _build_anchor_parameter_context(
+        config, {"long_base_qty_pct": "long_base_qty_pct"}
+    )
+
+    assert overrides == [
+        {"long_base_qty_pct": 0.1},
+        {"long_base_qty_pct": 0.3},
+    ]
+    assert fixed_bounds["long_base_qty_pct"] == Bound(0.1, 0.3)
+    assert fixed_bounds["long_risk_we_excess_allowance_pct"] == Bound(0.0, 0.0)
+
+
+def test_gpu_anchor_proxy_parameters_select_fixed_values_before_tunables():
+    mapped = {"long_offset": (1, Bound(0.0, 1.0))}
+    active = [
+        (ANCHOR_GENE_KEY, 0, Bound(0.0, 1.0, 1.0)),
+        ("long_offset", 1, mapped["long_offset"][1]),
+    ]
+
+    parameters = _build_proxy_parameter_dicts(
+        [0.0, 0.5],
+        mapped,
+        active,
+        np.array([[0.0, 0.75], [1.0, 0.125]]),
+        anchor_parameter_overrides=[
+            {"long_base_qty_pct": 0.1, "long_offset": 0.9},
+            {"long_base_qty_pct": 0.3, "long_offset": 0.8},
+        ],
+    )
+
+    assert parameters == [
+        {"long_base_qty_pct": 0.1, "long_offset": 0.75},
+        {"long_base_qty_pct": 0.3, "long_offset": 0.125},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "fixed_key", "fixed_path", "tunable_key", "tunable_path"),
+    [
+        (
+            "ema_anchor",
+            "long_base_qty_pct",
+            ("bot", "long", "strategy", "ema_anchor", "base_qty_pct"),
+            "long_offset",
+            ("bot", "long", "strategy", "ema_anchor", "offset"),
+        ),
+        (
+            "trailing_martingale",
+            "long_entry_retracement_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "entry",
+                "retracement_base_pct",
+            ),
+            "long_entry_initial_qty_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "entry",
+                "initial_qty_pct",
+            ),
+        ),
+    ],
+)
+def test_gpu_anchor_proxy_values_match_exact_candidate_materialization(
+    strategy_kind, fixed_key, fixed_path, tunable_key, tunable_path
+):
+    config = (
+        _long_only_ema_config()
+        if strategy_kind == "ema_anchor"
+        else _directional_tm_config(long_enabled=True, short_enabled=False)
+    )
+    config[ANCHOR_PLAN_KEY] = {
+        "fixed_keys": [fixed_key],
+        "tunable_keys": [tunable_key],
+        "key_paths": [list(tunable_path)],
+        "anchors": [
+            {
+                "source": "anchor-a.json",
+                "fixed_values": [
+                    {"key": fixed_key, "path": list(fixed_path), "value": 0.1}
+                ],
+            },
+            {
+                "source": "anchor-b.json",
+                "fixed_values": [
+                    {"key": fixed_key, "path": list(fixed_path), "value": 0.3}
+                ],
+            },
+        ],
+    }
+    bound_map = (
+        EMA_MULTICOIN_LONG_BOUND_MAP
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_BOUND_MAP
+    )
+    anchor_overrides, _fixed_bounds = _build_anchor_parameter_context(
+        config, bound_map
+    )
+    proxy_tunable_key = bound_map[tunable_key]
+    active = [
+        (ANCHOR_GENE_KEY, 0, Bound(0.0, 1.0, 1.0)),
+        (proxy_tunable_key, 1, Bound(0.0, 1.0)),
+    ]
+    vectors = [[0.0, 0.75], [1.0, 0.125]]
+
+    proxy_parameters = _build_proxy_parameter_dicts(
+        [0.0, 0.0],
+        {proxy_tunable_key: (1, Bound(0.0, 1.0))},
+        active,
+        np.asarray(vectors),
+        anchor_parameter_overrides=anchor_overrides,
+    )
+    exact_configs = [build_optimizer_vector_config(vector, config) for vector in vectors]
+
+    for proxy, exact, expected_fixed, expected_tunable in zip(
+        proxy_parameters,
+        exact_configs,
+        (0.1, 0.3),
+        (0.75, 0.125),
+    ):
+        fixed = exact
+        for part in fixed_path:
+            fixed = fixed[part]
+        tunable = exact
+        for part in tunable_path:
+            tunable = tunable[part]
+        assert proxy[bound_map[fixed_key]] == fixed == expected_fixed
+        assert proxy[proxy_tunable_key] == tunable == expected_tunable
+
+
+def test_gpu_anchor_context_fails_closed_on_missing_fixed_values():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": ["long_base_qty_pct", "long_offset"],
+            "anchors": [
+                {"fixed_values": [{"key": "long_base_qty_pct", "value": 0.1}]}
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="missing fixed optimizer values"):
+        _build_anchor_parameter_context(config, {})
+
+
+def test_gpu_anchor_ranges_preserve_pinned_scope_validation():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": ["long_risk_we_excess_allowance_pct"],
+            "anchors": [
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_we_excess_allowance_pct",
+                            "value": 0.0,
+                        }
+                    ]
+                },
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_we_excess_allowance_pct",
+                            "value": 0.2,
+                        }
+                    ]
+                },
+            ],
+        }
+    }
+
+    _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
+
+    with pytest.raises(ValueError, match="we_excess_allowance_pct"):
+        _validate_pinned_scope_bounds(fixed_bounds, {}, {"long"})
+
+
+def test_gpu_anchor_ranges_cannot_change_side_enablement():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": [
+                "long_n_positions",
+                "long_total_wallet_exposure_limit",
+            ],
+            "anchors": [
+                {
+                    "fixed_values": [
+                        {"key": "long_n_positions", "value": 1.0},
+                        {
+                            "key": "long_total_wallet_exposure_limit",
+                            "value": 1.0,
+                        },
+                    ]
+                },
+                {
+                    "fixed_values": [
+                        {"key": "long_n_positions", "value": 1.0},
+                        {
+                            "key": "long_total_wallet_exposure_limit",
+                            "value": 0.0,
+                        },
+                    ]
+                },
+            ],
+        }
+    }
+    _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
+
+    with pytest.raises(ValueError, match="remain positive"):
+        _validate_directional_search_space(
+            fixed_bounds,
+            {},
+            {"long": ["BTC"], "short": []},
+            {"long"},
+        )
+
+
+def test_gpu_anchor_checkpoint_signature_tracks_ordered_fixed_values():
+    active = [(ANCHOR_GENE_KEY, 0, Bound(0.0, 1.0, 1.0))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    plan = {
+        "fixed_keys": ["long_base_qty_pct", "long_offset_psize_weight"],
+        "tunable_keys": ["long_offset"],
+        "anchors": [
+            {
+                "fixed_values": [
+                    {"key": "long_base_qty_pct", "value": 0.1},
+                    {"key": "long_offset_psize_weight", "value": 0.2},
+                ]
+            },
+            {
+                "fixed_values": [
+                    {"key": "long_base_qty_pct", "value": 0.3},
+                    {"key": "long_offset_psize_weight", "value": 0.4},
+                ]
+            },
+        ],
+    }
+    original = _checkpoint_signature(active, scoring, anchor_plan=plan)
+
+    edited = copy.deepcopy(plan)
+    edited["anchors"][1]["fixed_values"][0]["value"] = 0.31
+    reordered_anchors = copy.deepcopy(plan)
+    reordered_anchors["anchors"].reverse()
+    reordered_items = copy.deepcopy(plan)
+    reordered_items["anchors"][0]["fixed_values"].reverse()
+
+    assert _checkpoint_signature(active, scoring, anchor_plan=edited) != original
+    assert (
+        _checkpoint_signature(active, scoring, anchor_plan=reordered_anchors)
+        != original
+    )
+    assert _checkpoint_signature(active, scoring, anchor_plan=reordered_items) == original
+
+
 def test_gpu_rejects_pinned_unsupported_risk_behavior():
     from optimization.bounds import Bound
 
@@ -1239,11 +1532,41 @@ def test_gpu_rejects_pinned_unsupported_risk_behavior():
             {"long_risk_we_excess_allowance_pct": 0.2},
         )
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_threshold"):
+    with pytest.raises(ValueError, match="twel_enforcer_threshold"):
         _validate_pinned_scope_bounds(
-            {"long_risk_total_exposure_enforcer_threshold": Bound(0.8, 0.8, None)},
-            {"long_risk_total_exposure_enforcer_threshold": 0.8},
+            {"long_risk_twel_enforcer_threshold": Bound(0.8, 0.8, None)},
+            {"long_risk_twel_enforcer_threshold": 0.8},
         )
+
+def test_gpu_anchor_constant_twel_threshold_fails_closed():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": ["long_risk_twel_enforcer_threshold"],
+            "anchors": [
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_twel_enforcer_threshold",
+                            "value": 0.8,
+                        }
+                    ]
+                },
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_twel_enforcer_threshold",
+                            "value": 0.8,
+                        }
+                    ]
+                },
+            ],
+        }
+    }
+
+    _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
+
+    with pytest.raises(ValueError, match="twel_enforcer_threshold"):
+        _validate_pinned_scope_bounds(fixed_bounds, {}, {"long"})
 
 
 def test_gpu_directional_search_space_keeps_side_enablement_fixed():
