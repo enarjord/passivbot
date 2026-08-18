@@ -996,6 +996,25 @@ def test_selected_output_preserves_existing_file_metadata(
         assert os.getxattr(selected_output, xattr_name) == b"preserve"
 
 
+def test_selected_output_overwrite_uses_fresh_modification_time(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"old": true}\n')
+    old_timestamp_ns = 946684800_000_000_000
+    os.utime(selected_output, ns=(old_timestamp_ns, old_timestamp_ns))
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert selected_output.stat().st_mtime_ns > old_timestamp_ns
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_selected_output_refuses_existing_special_node(
     sample_pareto_dir: Path,
@@ -1417,6 +1436,108 @@ def test_combined_outputs_keep_committed_pair_when_filtered_rename_is_interrupte
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
 
 
+def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    real_replace = os.replace
+    interrupted = False
+
+    def interrupt_after_selected_commit(source, destination):
+        nonlocal interrupted
+        source = Path(source)
+        destination = Path(destination)
+        result = real_replace(source, destination)
+        if (
+            not interrupted
+            and source.name.startswith(".selected.json.")
+            and source.name.endswith(".tmp")
+            and destination == selected_output
+        ):
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(os, "replace", interrupt_after_selected_commit)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert interrupted
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert (filtered_output / "selection.json").exists()
+    assert "selected output install committed before interruption" in (
+        capsys.readouterr().err
+    )
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_restore_both_when_filtered_move_aside_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_inode = selected_output.stat().st_ino
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    stale = filtered_output / "stale.json"
+    stale.write_text('{"filtered": "old"}\n')
+    real_replace = os.replace
+    interrupted = False
+
+    def interrupt_after_filtered_move_aside(source, destination):
+        nonlocal interrupted
+        source = Path(source)
+        destination = Path(destination)
+        result = real_replace(source, destination)
+        if (
+            not interrupted
+            and source == filtered_output
+            and ".backup-" in destination.name
+        ):
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(os, "replace", interrupt_after_filtered_move_aside)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_ino == selected_inode
+    assert json.loads(stale.read_text()) == {"filtered": "old"}
+    assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
 def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1598,6 +1719,26 @@ def test_filtered_output_preserves_existing_directory_metadata(
     assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
     if xattr_supported:
         assert os.getxattr(output_dir, xattr_name) == b"preserve"
+
+
+def test_filtered_output_overwrite_uses_fresh_modification_time(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    (output_dir / "stale.json").write_text('{"stale": true}\n')
+    old_timestamp_ns = 946684800_000_000_000
+    os.utime(output_dir, ns=(old_timestamp_ns, old_timestamp_ns))
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert output_dir.stat().st_mtime_ns > old_timestamp_ns
 
 
 def test_filtered_output_applies_directory_metadata_before_writing_members(

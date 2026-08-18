@@ -1721,6 +1721,7 @@ def _default_file_mode() -> int:
 
 def _copy_file_metadata(source: Path, destination: Path) -> None:
     source_stat = source.stat(follow_symlinks=False)
+    destination_stat = destination.stat(follow_symlinks=False)
     if hasattr(os, "chown"):
         os.chown(
             destination,
@@ -1729,6 +1730,11 @@ def _copy_file_metadata(source: Path, destination: Path) -> None:
             follow_symlinks=False,
         )
     shutil.copystat(source, destination, follow_symlinks=False)
+    os.utime(
+        destination,
+        ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
+        follow_symlinks=False,
+    )
 
 
 def _warn_post_commit_cleanup_failure(
@@ -1756,6 +1762,7 @@ def _write_selected_output(
     staging_path = Path(staging_name)
     backup_path: Path | None = None
     staging_cleanup_attempted = False
+    installed_identity: tuple[int, int] | None = None
     try:
         _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
@@ -1802,7 +1809,24 @@ def _write_selected_output(
         return _SelectedOutputInstall(
             backup_path, installed_identity, candidate.source_bytes
         )
-    except BaseException:
+    except BaseException as exc:
+        if installed_identity is not None:
+            try:
+                output_stat = output.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                output_stat = None
+            if output_stat is not None and (
+                output_stat.st_dev,
+                output_stat.st_ino,
+            ) == installed_identity:
+                print(
+                    f"Warning: selected output install committed before interruption; "
+                    f"keeping installed output: {output} ({exc})",
+                    file=sys.stderr,
+                )
+                return _SelectedOutputInstall(
+                    backup_path, installed_identity, candidate.source_bytes
+                )
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
         raise
@@ -1865,6 +1889,7 @@ def _remove_output_tree(path: Path) -> None:
 
 def _copy_directory_metadata(source: Path, destination: Path) -> None:
     source_stat = source.stat(follow_symlinks=False)
+    destination_stat = destination.stat(follow_symlinks=False)
     if hasattr(os, "chown"):
         os.chown(
             destination,
@@ -1873,6 +1898,11 @@ def _copy_directory_metadata(source: Path, destination: Path) -> None:
             follow_symlinks=False,
         )
     shutil.copystat(source, destination, follow_symlinks=False)
+    os.utime(
+        destination,
+        ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
+        follow_symlinks=False,
+    )
 
 
 def _replace_filtered_output_dir(
@@ -1888,10 +1918,10 @@ def _replace_filtered_output_dir(
     )
     backup_dir = Path(backup_name)
     backup_dir.rmdir()
-    os.replace(output_dir, backup_dir)
     staging_stat = staging_dir.stat(follow_symlinks=False)
     staging_identity = staging_stat.st_dev, staging_stat.st_ino
     try:
+        os.replace(output_dir, backup_dir)
         _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
         _copy_directory_metadata(backup_dir, staging_dir)
         os.replace(staging_dir, output_dir)
@@ -1918,7 +1948,13 @@ def _replace_filtered_output_dir(
                     file=sys.stderr,
                 )
             return
-        os.replace(backup_dir, output_dir)
+        if backup_dir.exists():
+            if output_dir.exists():
+                raise RuntimeError(
+                    f"Filtered output changed concurrently; original backup retained at "
+                    f"{backup_dir}"
+                ) from exc
+            os.replace(backup_dir, output_dir)
         raise
     else:
         try:
