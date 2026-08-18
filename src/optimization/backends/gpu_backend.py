@@ -19,8 +19,9 @@ from config.metrics import resolve_metric_value
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import load_starting_individuals
-from optimization.bounds import enforce_bounds
+from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import gpu_side_enabled
 from optimization.problem import (
     PymooAsyncRecordingRunner,
@@ -1033,23 +1034,107 @@ def _canonical_vector_hash(vector, bounds, sig_digits: int) -> str:
     return hashlib.sha256(json.dumps(canonical).encode()).hexdigest()
 
 
-def _build_proxy_parameter_dicts(base_vector, mapped, active, active_values) -> list[dict]:
+def _build_proxy_parameter_dicts(
+    base_vector,
+    mapped,
+    active,
+    active_values,
+    *,
+    anchor_parameter_overrides: list[dict[str, float]] | None = None,
+) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
     base_parameters = {
         name: float(base_vector[index]) for name, (index, _bound) in mapped.items()
     }
+    anchor_columns = [
+        column
+        for column, (name, _index, _bound) in enumerate(active)
+        if name == ANCHOR_GENE_KEY
+    ]
+    if len(anchor_columns) > 1:
+        raise ValueError("GPU anchored fine-tune has multiple anchor genes")
     result = []
     for row in active_values:
         parameters = dict(base_parameters)
+        if anchor_parameter_overrides is not None:
+            anchor_id = (
+                int(round(float(row[anchor_columns[0]]))) if anchor_columns else 0
+            )
+            if anchor_id < 0 or anchor_id >= len(anchor_parameter_overrides):
+                raise ValueError(
+                    "GPU anchored fine-tune selected invalid anchor id "
+                    f"{anchor_id}; available={len(anchor_parameter_overrides)}"
+                )
+            parameters.update(anchor_parameter_overrides[anchor_id])
+        elif anchor_columns:
+            raise ValueError("GPU anchor gene is present without an anchored fine-tune plan")
         parameters.update(
             {
                 name: float(row[column])
                 for column, (name, _index, _bound) in enumerate(active)
+                if name != ANCHOR_GENE_KEY
             }
         )
         result.append(parameters)
     return result
+
+
+def _build_anchor_parameter_context(
+    config: dict, bound_map: dict[str, str]
+) -> tuple[list[dict[str, float]] | None, dict[str, Bound]]:
+    """Resolve anchor-fixed optimizer values without materializing every candidate config."""
+
+    plan = get_anchor_plan(config)
+    if plan is None:
+        return None, {}
+    fixed_keys = set(plan.get("fixed_keys") or [])
+    parameter_overrides: list[dict[str, float]] = []
+    values_by_key: dict[str, list[float]] = {}
+    for anchor_index, anchor in enumerate(plan.get("anchors") or []):
+        seen = set()
+        overrides = {}
+        for item in anchor.get("fixed_values") or []:
+            key = item.get("key")
+            if not isinstance(key, str) or key not in fixed_keys:
+                raise ValueError(
+                    "GPU anchored fine-tune contains an invalid fixed optimizer key "
+                    f"for anchor {anchor_index}: {key!r}"
+                )
+            if key in seen:
+                raise ValueError(
+                    "GPU anchored fine-tune contains duplicate fixed optimizer key "
+                    f"{key!r} for anchor {anchor_index}"
+                )
+            seen.add(key)
+            try:
+                value = float(item["value"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "GPU anchored fine-tune contains a non-numeric fixed value "
+                    f"for {key!r} in anchor {anchor_index}"
+                ) from exc
+            if not math.isfinite(value):
+                raise ValueError(
+                    "GPU anchored fine-tune contains a non-finite fixed value "
+                    f"for {key!r} in anchor {anchor_index}"
+                )
+            values_by_key.setdefault(key, []).append(value)
+            if key in bound_map:
+                overrides[bound_map[key]] = value
+        missing = sorted(fixed_keys - seen)
+        if missing:
+            raise ValueError(
+                "GPU anchored fine-tune is missing fixed optimizer values for "
+                f"anchor {anchor_index}: {missing}"
+            )
+        parameter_overrides.append(overrides)
+    if not parameter_overrides:
+        raise ValueError("GPU anchored fine-tune requires at least one anchor")
+    fixed_bounds = {
+        key: Bound(min(values), max(values)) for key, values in values_by_key.items()
+    }
+    return parameter_overrides, fixed_bounds
 
 
 def _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides=None) -> None:
@@ -1333,43 +1418,64 @@ def run_backend(
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
+    anchor_parameter_overrides, anchor_fixed_bounds = (
+        _build_anchor_parameter_context(config, bound_map)
+    )
     mapped_all = {
         bound_map[bound_key]: (index, bounds[index])
         for index, (bound_key, _path) in enumerate(key_paths)
         if bound_key in bound_map
     }
     missing = sorted(set(bound_map.values()) - set(mapped_all))
-    if missing:
+    if anchor_parameter_overrides is None and missing:
         raise ValueError(
             f"GPU backend could not locate {strategy_kind} bounds for {missing}"
         )
+    if anchor_parameter_overrides is not None:
+        missing_from_anchors = sorted(
+            name
+            for name in missing
+            if any(name not in overrides for overrides in anchor_parameter_overrides)
+        )
+        if missing_from_anchors:
+            raise ValueError(
+                "GPU anchored fine-tune could not resolve fixed proxy parameters "
+                f"for {missing_from_anchors}"
+            )
     approved = config.get("live", {}).get("approved_coins", {})
 
     def side_approved(side: str) -> bool:
         return bool(approved.get(side, [])) if isinstance(approved, dict) else True
 
-    side_values = {}
-    for index, (bound_key, _path) in enumerate(key_paths):
-        if bound_key in {
-            "long_total_wallet_exposure_limit",
-            "long_n_positions",
-            "short_total_wallet_exposure_limit",
-            "short_n_positions",
-        }:
-            side_values[bound_key] = float(base_vector[index])
-
-    def vector_side_enabled(side: str) -> bool:
-        return (
-            side_approved(side)
-            and side_values.get(f"{side}_total_wallet_exposure_limit", 0.0) > 0.0
-            and side_values.get(f"{side}_n_positions", 0.0) > 0.0
-        )
-
-    enabled_sides = {side for side in ("long", "short") if vector_side_enabled(side)}
     config_enabled_sides = {
         side for side in ("long", "short") if gpu_side_enabled(config, side)
     }
-    _validate_seed_side_match(config_enabled_sides, enabled_sides)
+    if anchor_parameter_overrides is not None:
+        enabled_sides = set(config_enabled_sides)
+        side_values = {}
+    else:
+        side_values = {}
+        for index, (bound_key, _path) in enumerate(key_paths):
+            if bound_key in {
+                "long_total_wallet_exposure_limit",
+                "long_n_positions",
+                "short_total_wallet_exposure_limit",
+                "short_n_positions",
+            }:
+                side_values[bound_key] = float(base_vector[index])
+
+        def vector_side_enabled(side: str) -> bool:
+            return (
+                side_approved(side)
+                and side_values.get(f"{side}_total_wallet_exposure_limit", 0.0)
+                > 0.0
+                and side_values.get(f"{side}_n_positions", 0.0) > 0.0
+            )
+
+        enabled_sides = {
+            side for side in ("long", "short") if vector_side_enabled(side)
+        }
+        _validate_seed_side_match(config_enabled_sides, enabled_sides)
     if not enabled_sides:
         raise ValueError(
             "GPU bounds would disable both sides for exact validation; "
@@ -1385,6 +1491,12 @@ def run_backend(
         for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
         if bound.high > bound.low
     ]
+    active.extend(
+        (ANCHOR_GENE_KEY, index, bounds[index])
+        for index, (bound_key, _path) in enumerate(key_paths)
+        if bound_key == ANCHOR_GENE_KEY and bounds[index].high > bounds[index].low
+    )
+    active.sort(key=lambda item: item[1])
     if not active:
         raise ValueError(
             f"GPU backend found no free {strategy_kind} dimensions"
@@ -1393,6 +1505,13 @@ def run_backend(
     bound_by_key = {
         bound_key: bounds[index] for index, (bound_key, _path) in enumerate(key_paths)
     }
+    overlap = sorted(set(bound_by_key) & set(anchor_fixed_bounds))
+    if overlap:
+        raise ValueError(
+            "GPU anchored fine-tune marks optimizer keys as both tunable and fixed: "
+            f"{overlap}"
+        )
+    bound_by_key.update(anchor_fixed_bounds)
     base_by_key = {
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
@@ -1407,8 +1526,8 @@ def run_backend(
         coin_count=coin_count,
     )
 
-    for index, (bound_key, _path) in enumerate(key_paths):
-        if bounds[index].high <= bounds[index].low:
+    for bound_key, bound in bound_by_key.items():
+        if bound_key == ANCHOR_GENE_KEY or bound.high <= bound.low:
             continue
         side = bound_key.split("_", 1)[0]
         if side in {"long", "short"} and side not in enabled_sides:
@@ -1480,7 +1599,13 @@ def run_backend(
 
     def parameter_dicts(rows: np.ndarray) -> list[dict]:
         values = normalized_to_values(rows)
-        return _build_proxy_parameter_dicts(base_vector, mapped, active, values)
+        return _build_proxy_parameter_dicts(
+            base_vector,
+            mapped,
+            active,
+            values,
+            anchor_parameter_overrides=anchor_parameter_overrides,
+        )
 
     def full_vector(row: np.ndarray) -> list[float]:
         result = list(base_vector)
