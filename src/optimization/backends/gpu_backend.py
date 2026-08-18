@@ -994,8 +994,10 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
     return prepared
 
 
-def _gpu_suite_search_context(suite_inputs: list[dict]) -> tuple[int, int, str | None]:
-    """Return the common candidate-space coin range and multicoin side."""
+def _gpu_suite_search_context(
+    suite_inputs: list[dict],
+) -> tuple[int, int, tuple[str, ...] | None]:
+    """Return the common candidate-space coin range and multicoin side topology."""
 
     if not suite_inputs:
         raise ValueError("GPU suite mode requires at least one prepared scenario")
@@ -1024,21 +1026,22 @@ def _gpu_suite_search_context(suite_inputs: list[dict]) -> tuple[int, int, str |
             if gpu_side_enabled(item["config"], side)
         )
         sides_by_label[item["ctx"].label] = sides
-        if len(sides) != 1:
+        if len(sides) not in (1, 2):
             raise ValueError(
-                "GPU multicoin suites require exactly one enabled side in every "
+                "GPU multicoin suites require one or two enabled sides in every "
                 f"scenario; {item['ctx'].label!r} has {list(sides)}"
             )
-    common_sides = {sides[0] for sides in sides_by_label.values()}
-    if len(common_sides) != 1:
+    common_topologies = set(sides_by_label.values())
+    if len(common_topologies) != 1:
         details = ", ".join(
-            f"{label}={sides[0]}" for label, sides in sides_by_label.items()
+            f"{label}={list(sides)}" for label, sides in sides_by_label.items()
         )
         raise ValueError(
-            "GPU multicoin suites require the same enabled side in every scenario; "
+            "GPU multicoin suites require the same enabled-side topology in every "
+            "scenario; "
             f"got {details}"
         )
-    return min_coin_count, max_coin_count, common_sides.pop()
+    return min_coin_count, max_coin_count, common_topologies.pop()
 
 
 def _gpu_suite_scenario_override_context(
@@ -2168,26 +2171,26 @@ def run_backend(
     )
     if suite_enabled:
         exchange = suite_inputs[0]["exchange"]
-        min_coin_count, max_coin_count, suite_multicoin_side = (
+        min_coin_count, max_coin_count, suite_multicoin_sides = (
             _gpu_suite_search_context(suite_inputs)
         )
         logging.info(
-            "GPU suite prepared %d scenarios | coins=%d..%d | multicoin_side=%s",
+            "GPU suite prepared %d scenarios | coins=%d..%d | multicoin_sides=%s",
             len(suite_inputs),
             min_coin_count,
             max_coin_count,
-            suite_multicoin_side or "n/a",
+            ",".join(suite_multicoin_sides or ()) or "n/a",
         )
     else:
         exchange = _validate_scope(proxy_config, evaluator)
         min_coin_count = max_coin_count = int(
             evaluator.shared_hlcvs_np[exchange].shape[1]
         )
-        suite_multicoin_side = None
+        suite_multicoin_sides = None
     if strategy_kind == "ema_anchor" and max_coin_count > 1:
         multicoin_sides = (
-            [suite_multicoin_side]
-            if suite_multicoin_side is not None
+            list(suite_multicoin_sides)
+            if suite_multicoin_sides is not None
             else [
                 side
                 for side in ("long", "short")
@@ -2248,8 +2251,8 @@ def run_backend(
         side for side in ("long", "short") if gpu_side_enabled(proxy_config, side)
     }
     config_enabled_sides = (
-        {suite_multicoin_side}
-        if suite_multicoin_side is not None
+        set(suite_multicoin_sides)
+        if suite_multicoin_sides is not None
         else base_config_enabled_sides
     )
     base_by_key = {
@@ -2284,13 +2287,13 @@ def run_backend(
         enabled_sides = {
             side for side in ("long", "short") if vector_side_enabled(side)
         }
-        if suite_multicoin_side is None:
+        if suite_multicoin_sides is None:
             _validate_seed_side_match(config_enabled_sides, enabled_sides)
         else:
             # CPU suite setup requires symmetric approved coin lists. Effective
-            # scenario overrides establish the common single-side topology and
+            # scenario overrides establish the common side topology and
             # are validated below after shadowing candidate bounds.
-            enabled_sides = {suite_multicoin_side}
+            enabled_sides = set(suite_multicoin_sides)
     if not enabled_sides:
         raise ValueError(
             "GPU bounds would disable both sides for exact validation; "
@@ -2345,7 +2348,7 @@ def run_backend(
         _mirror_short_mapping(bound_by_key)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
-    if suite_multicoin_side is None:
+    if suite_multicoin_sides is None:
         _validate_directional_search_space(
             bound_by_key,
             base_by_key,

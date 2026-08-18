@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS optimizer suite support for dual-side hedge-mode multi-coin EMA Anchor scenarios
+  sharing one exchange and a consistent long/short topology.
+
 - Added Apple MPS multi-coin EMA Anchor optimizer support for Forager score hysteresis, retaining
   flat incumbent candidates when challenger scores are only marginally better.
 

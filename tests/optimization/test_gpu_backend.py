@@ -490,6 +490,54 @@ def test_gpu_suite_inputs_materialize_multicoin_subset():
     assert np.array_equal(prepared[0]["hlcvs"][:, 1], master[:, 2])
 
 
+def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.02
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    config["bot"]["short"]["risk"]["n_positions"] = 2
+    master = np.zeros((10, 3, 4), dtype=np.float64)
+    ctx = SimpleNamespace(
+        label="dual",
+        overrides={},
+        exchanges=["bybit"],
+        msss={
+            "bybit": {
+                "BTC": {},
+                "ETH": {},
+                "SOL": {},
+                "__meta__": {},
+            }
+        },
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return master, np.ones(10), [0, 1, 2]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert _gpu_suite_search_context(prepared) == (
+        3,
+        3,
+        ("long", "short"),
+    )
+
+
 @pytest.mark.parametrize(
     ("overrides", "exchanges", "coin_indices", "message"),
     [
@@ -542,7 +590,7 @@ def test_gpu_suite_search_context_reports_coin_count_range():
             _suite_search_input("broad", config, 4),
             _suite_search_input("narrow", config, 2),
         ]
-    ) == (2, 4, "long")
+    ) == (2, 4, ("long",))
 
 
 def test_gpu_suite_search_context_allows_legacy_single_coin_topologies():
@@ -563,22 +611,41 @@ def test_gpu_suite_search_context_rejects_multicoin_trailing_martingale():
         _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
 
 
-def test_gpu_suite_search_context_rejects_multicoin_dual_side_scenario():
+def test_gpu_suite_search_context_accepts_multicoin_dual_side_scenarios():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = True
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
-        _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("broad", config, 4),
+            _suite_search_input("narrow", config, 2),
+        ]
+    ) == (2, 4, ("long", "short"))
 
 
-def test_gpu_suite_search_context_rejects_different_sides():
+def test_gpu_suite_search_context_rejects_different_side_topologies():
     long_config = _directional_ema_config(long_enabled=True, short_enabled=False)
     short_config = _directional_ema_config(long_enabled=False, short_enabled=True)
 
-    with pytest.raises(ValueError, match="same enabled side"):
+    with pytest.raises(ValueError, match="same enabled-side topology"):
         _gpu_suite_search_context(
             [
                 _suite_search_input("long", long_config, 3),
                 _suite_search_input("short", short_config, 2),
+            ]
+        )
+
+
+def test_gpu_suite_search_context_rejects_single_vs_dual_side_topology():
+    long_config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    dual_config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    dual_config["live"]["hedge_mode"] = True
+
+    with pytest.raises(ValueError, match="same enabled-side topology"):
+        _gpu_suite_search_context(
+            [
+                _suite_search_input("long", long_config, 3),
+                _suite_search_input("dual", dual_config, 3),
             ]
         )
 

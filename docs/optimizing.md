@@ -115,7 +115,8 @@ The supported slice is intentionally narrow:
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode on one shared exchange; single-coin EMA-anchor and trailing-martingale scenarios keep
   their existing directional support, while EMA-anchor suites may also use different multi-coin
-  subsets of up to 64 coins when every effective scenario shares exactly one enabled side;
+  subsets of up to 64 coins when every effective scenario shares the same one-side or dual-side
+  hedge-mode topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported, while non-bot override paths and per-coin source assignments
   remain unsupported
@@ -132,7 +133,7 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, dual-side multi-coin suites and coin overrides, multi-coin
+Dual-side one-way arbitration, dual-side multi-coin coin overrides, multi-coin
 trailing-martingale, multi-exchange suites, non-bot suite scenario overrides, per-coin source
 assignments, HSL, and auto-unstuck are not silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
