@@ -446,9 +446,14 @@ def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -
 
     from suite_runner import ScenarioResult, SuiteScenario
 
-    scenario_rows = [
-        (ctx, proxy.evaluate(candidates)) for ctx, proxy in scenario_proxies
-    ]
+    scenario_rows = []
+    for ctx, proxy, parameter_overrides in scenario_proxies:
+        scenario_candidates = (
+            [dict(candidate, **parameter_overrides) for candidate in candidates]
+            if parameter_overrides
+            else candidates
+        )
+        scenario_rows.append((ctx, proxy.evaluate(scenario_candidates)))
     results = []
     for index in range(len(candidates)):
         scenario_results = [
@@ -809,6 +814,8 @@ def _validate_scope(
 def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict]:
     """Materialize fail-closed single-coin suite inputs for MPS screening."""
 
+    from config.param_paths import require_existing_config_path
+
     contexts = getattr(suite_evaluator, "contexts", None)
     get_data = getattr(suite_evaluator, "get_prepared_context_data", None)
     build_config = getattr(suite_evaluator, "build_scenario_candidate_config", None)
@@ -820,11 +827,17 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
     prepared = []
     expected_exchange = None
     for ctx in contexts:
-        if ctx.overrides:
-            raise ValueError(
-                f"GPU suite scenario {ctx.label!r} uses config overrides; this slice "
-                "supports scenario dates, coins, ignored coins, and exchange selection only"
-            )
+        overrides = getattr(ctx, "overrides", {}) or {}
+        for dotted_path in overrides:
+            resolved = require_existing_config_path(proxy_config, dotted_path)
+            if len(resolved) < 3 or resolved[0] != "bot" or resolved[1] not in {
+                "long",
+                "short",
+            }:
+                raise ValueError(
+                    f"GPU suite scenario {ctx.label!r} override {dotted_path!r} is "
+                    "outside the supported bot.long/bot.short scope"
+                )
         coin_sources = (
             getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources") or {}
         )
@@ -874,6 +887,7 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             {
                 "ctx": ctx,
                 "config": scenario_config,
+                "overrides": deepcopy(overrides),
                 "exchange": exchange,
                 "hlcvs": values,
                 "mss": ctx.msss[exchange],
@@ -882,6 +896,73 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             }
         )
     return prepared
+
+
+def _gpu_suite_scenario_override_context(
+    base_config: dict,
+    scenario_config: dict,
+    overrides: dict,
+    bound_keys,
+    bound_map: dict[str, str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Resolve exact-last scenario overrides into candidate and proxy shadows."""
+
+    if not overrides:
+        return {}, {}
+
+    from config.param_paths import (
+        require_existing_config_path,
+        resolve_optimizer_key_path,
+    )
+
+    override_paths = [
+        require_existing_config_path(base_config, dotted_path)
+        for dotted_path in overrides
+    ]
+
+    def is_shadowed(path: tuple[str, ...]) -> bool:
+        return any(
+            path[: len(override_path)] == override_path
+            for override_path in override_paths
+        )
+
+    def value_at(path: tuple[str, ...]):
+        value = scenario_config
+        for part in path:
+            value = value[part]
+        return value
+
+    fixed_bound_values: dict[str, float] = {}
+    fixed_parameters: dict[str, float] = {}
+    for bound_key in bound_keys:
+        path = resolve_optimizer_key_path(base_config, bound_key)
+        if path is None or not is_shadowed(path):
+            continue
+        try:
+            value = float(value_at(path))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "GPU suite scenario override for optimizer bound "
+                f"{bound_key!r} must resolve to a numeric value"
+            ) from exc
+        if not math.isfinite(value):
+            raise ValueError(
+                "GPU suite scenario override for optimizer bound "
+                f"{bound_key!r} must resolve to a finite value"
+            )
+        fixed_bound_values[bound_key] = value
+        parameter = bound_map.get(bound_key)
+        if parameter is not None:
+            previous = fixed_parameters.get(parameter)
+            if previous is not None and not math.isclose(
+                previous, value, rel_tol=0.0, abs_tol=1.0e-12
+            ):
+                raise ValueError(
+                    "GPU suite scenario overrides resolve conflicting values for "
+                    f"proxy parameter {parameter!r}"
+                )
+            fixed_parameters[parameter] = value
+    return fixed_bound_values, fixed_parameters
 
 
 def _gpu_suite_enabled(config: dict, evaluator, evaluator_for_pool) -> bool:
@@ -2055,6 +2136,40 @@ def run_backend(
         coin_count=coin_count,
     )
 
+    for item in suite_inputs:
+        fixed_scenario_bounds, parameter_overrides = (
+            _gpu_suite_scenario_override_context(
+                proxy_config,
+                item["config"],
+                item["overrides"],
+                bound_by_key,
+                bound_map,
+            )
+        )
+        scenario_bound_by_key = dict(bound_by_key)
+        scenario_base_by_key = dict(base_by_key)
+        for bound_key, value in fixed_scenario_bounds.items():
+            scenario_bound_by_key[bound_key] = Bound(value, value)
+            scenario_base_by_key[bound_key] = value
+        scenario_enabled_sides = {
+            side
+            for side in ("long", "short")
+            if gpu_side_enabled(item["config"], side)
+        }
+        _validate_pinned_scope_bounds(
+            scenario_bound_by_key,
+            scenario_base_by_key,
+            scenario_enabled_sides,
+        )
+        _validate_directional_search_space(
+            scenario_bound_by_key,
+            scenario_base_by_key,
+            item["config"].get("live", {}).get("approved_coins", {}),
+            scenario_enabled_sides,
+            coin_count=1,
+        )
+        item["parameter_overrides"] = parameter_overrides
+
     for bound_key, bound in bound_by_key.items():
         if bound_key == ANCHOR_GENE_KEY or bound.high <= bound.low:
             continue
@@ -2114,6 +2229,7 @@ def run_backend(
                     batch_size=int(options["batch_size"]),
                     needed_metrics=needed_metrics,
                 ),
+                item["parameter_overrides"],
             )
             for item in suite_inputs
         ]

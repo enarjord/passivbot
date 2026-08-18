@@ -8,10 +8,12 @@ All notable user-facing changes will be documented in this file.
   trailing-martingale scopes. Metal screens every candidate against each prepared scenario, while
   the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and
   unchanged exact Rust suite evaluations remain authoritative. This slice supports scenario date,
-  coin, ignored-coin, and single-exchange selection; scenario config overrides, multi-exchange
-  suites, multi-coin scenarios, and per-coin source assignments still fail closed. Effective
-  external suite definitions, scenario filters, and resolved date windows are persisted and
-  checked on resume.
+  coin, ignored-coin, and single-exchange selection. Scenario `bot.long`/`bot.short` overrides now
+  retain exact last-write precedence by shadowing affected Metal candidate parameters per scenario
+  and revalidating each effective scenario against the GPU scope; non-bot override paths,
+  multi-exchange suites, multi-coin scenarios, and per-coin source assignments still fail closed.
+  Effective external suite definitions, scenario filters, overrides, and resolved date windows are
+  persisted and checked on resume.
 
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
