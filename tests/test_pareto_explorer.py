@@ -1666,6 +1666,148 @@ def test_combined_outputs_restore_selected_when_install_return_is_interrupted(
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
 
 
+def test_combined_outputs_keep_committed_pair_when_filtered_return_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
+    real_write_filtered = pareto_explorer._write_filtered_outputs
+    interrupted = False
+
+    def interrupt_after_filtered_return(*args, **kwargs):
+        nonlocal interrupted
+        real_write_filtered(*args, **kwargs)
+        interrupted = True
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_filtered_outputs", interrupt_after_filtered_return
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert selected_output.read_bytes() != b'{"selected": "old"}\n'
+    assert not (filtered_output / "stale.json").exists()
+    assert (filtered_output / "selection.json").exists()
+
+
+def test_selected_rollback_restores_path_when_verification_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+    real_stat = Path.stat
+    interrupted = False
+
+    def fail_filtered_staging(candidate, destination, file_descriptor):
+        destination = Path(destination)
+        if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
+            os.close(file_descriptor)
+            raise OSError("simulated filtered copy failure")
+        real_write_snapshot(candidate, destination, file_descriptor)
+
+    def interrupt_rollback_stat(path: Path, *args, **kwargs):
+        nonlocal interrupted
+        if path.suffix == ".rollback" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot_fd", fail_filtered_staging
+    )
+    monkeypatch.setattr(Path, "stat", interrupt_rollback_stat)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert selected_output.exists()
+    backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+    rollbacks = [path for path in tmp_path.iterdir() if path.suffix == ".rollback"]
+    assert len(backups) == 1
+    assert len(rollbacks) == 1
+    assert json.loads(backups[0].read_text()) == {"selected": "old"}
+    assert selected_output.read_bytes() == rollbacks[0].read_bytes()
+    backups[0].unlink()
+    rollbacks[0].unlink()
+
+
+def test_selected_rollback_preserves_timestamps_without_hard_links(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    old_timestamp_ns = 946684800_000_000_000
+    os.utime(selected_output, ns=(old_timestamp_ns, old_timestamp_ns))
+    filtered_output = tmp_path / "filtered"
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+
+    def reject_hard_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    def fail_filtered_staging(candidate, destination, file_descriptor):
+        destination = Path(destination)
+        if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
+            os.close(file_descriptor)
+            raise OSError("simulated filtered copy failure")
+        real_write_snapshot(candidate, destination, file_descriptor)
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot_fd", fail_filtered_staging
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(OSError, match="simulated filtered copy failure"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_mtime_ns == old_timestamp_ns
+
+
 def test_combined_outputs_refuse_rollback_over_newer_selected_file(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -2515,6 +2657,34 @@ def test_single_file_input_allows_sibling_outputs(
     ]
 
 
+def test_single_file_input_rejects_filtered_parent_filesystem_alias(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    source = sample_pareto_dir / "balanced.json"
+    output_alias = tmp_path / "source-parent-alias"
+    output_alias.mkdir()
+    real_samefile = os.path.samefile
+
+    def report_bind_mount_alias(left, right):
+        pair = {Path(left).resolve(), Path(right).resolve()}
+        if pair == {output_alias.resolve(), sample_pareto_dir.resolve()}:
+            return True
+        return real_samefile(left, right)
+
+    monkeypatch.setattr(os.path, "samefile", report_bind_mount_alias)
+    args = build_parser().parse_args(
+        [str(source), "-f", str(output_alias), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="resolved source Pareto member"):
+        run_from_args(args)
+
+    assert source.exists()
+    assert not list(output_alias.iterdir())
+
+
 def test_single_file_symlink_member_path_normalizes_dot_dot_without_dereferencing(
     tmp_path: Path,
 ):
@@ -2607,6 +2777,44 @@ def test_save_outputs_refuse_both_overlap_directions(
 
     assert not filtered_parent.exists()
     assert not selected_parent.exists()
+
+
+def test_save_outputs_refuse_filesystem_alias_overlap(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_parent = tmp_path / "selected-parent"
+    selected_parent.mkdir()
+    selected_output = selected_parent / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_alias = tmp_path / "filtered-alias"
+    filtered_alias.mkdir()
+    real_samefile = os.path.samefile
+
+    def report_bind_mount_alias(left, right):
+        pair = {Path(left).resolve(), Path(right).resolve()}
+        if pair == {selected_parent.resolve(), filtered_alias.resolve()}:
+            return True
+        return real_samefile(left, right)
+
+    monkeypatch.setattr(os.path, "samefile", report_bind_mount_alias)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_alias),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert not list(filtered_alias.iterdir())
 
 
 def test_filtered_manifest_records_normalized_decision_inputs(

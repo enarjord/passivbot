@@ -1599,6 +1599,34 @@ def _same_existing_filesystem_object(left: Path, right: Path) -> bool:
         return False
 
 
+def _existing_ancestors_with_suffix(path: Path) -> List[tuple[Path, tuple[str, ...]]]:
+    ancestors: List[tuple[Path, tuple[str, ...]]] = []
+    suffix: tuple[str, ...] = ()
+    current = path
+    while True:
+        if current.exists():
+            ancestors.append((current, suffix))
+        parent = current.parent
+        if parent == current:
+            break
+        suffix = (current.name, *suffix)
+        current = parent
+    return ancestors
+
+
+def _paths_overlap_by_filesystem_identity(left: Path, right: Path) -> bool:
+    for left_ancestor, left_suffix in _existing_ancestors_with_suffix(left):
+        for right_ancestor, right_suffix in _existing_ancestors_with_suffix(right):
+            if not _same_existing_filesystem_object(left_ancestor, right_ancestor):
+                continue
+            shorter, longer = sorted(
+                (left_suffix, right_suffix), key=lambda parts: len(parts)
+            )
+            if longer[: len(shorter)] == shorter:
+                return True
+    return False
+
+
 def _validate_output_outside_source(
     path: Path,
     protected_source_dir: Path | None,
@@ -1639,6 +1667,7 @@ def _validate_filtered_output_contains_no_sources(
             for candidate in candidates
             for source in (candidate.path.resolve(), candidate.member_path)
             if _is_within(source, output_dir)
+            or _paths_overlap_by_filesystem_identity(source, output_dir)
         },
         key=str,
     )
@@ -1778,7 +1807,12 @@ def _copy_platform_acl(source: Path, destination: Path) -> None:
         )
 
 
-def _copy_file_metadata(source: Path, destination: Path) -> None:
+def _copy_file_metadata(
+    source: Path,
+    destination: Path,
+    *,
+    preserve_timestamps: bool = False,
+) -> None:
     source_stat = source.stat(follow_symlinks=False)
     destination_stat = destination.stat(follow_symlinks=False)
     if hasattr(os, "chown"):
@@ -1790,11 +1824,12 @@ def _copy_file_metadata(source: Path, destination: Path) -> None:
         )
     shutil.copystat(source, destination, follow_symlinks=False)
     _copy_platform_acl(source, destination)
-    os.utime(
-        destination,
-        ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
-        follow_symlinks=False,
-    )
+    if not preserve_timestamps:
+        os.utime(
+            destination,
+            ns=(destination_stat.st_atime_ns, destination_stat.st_mtime_ns),
+            follow_symlinks=False,
+        )
 
 
 def _warn_post_commit_cleanup_failure(
@@ -1813,6 +1848,7 @@ def _install_selected_without_overwrite(
     source_bytes: bytes,
     *,
     metadata_source: Path | None = None,
+    preserve_metadata_timestamps: bool = False,
 ) -> tuple[int, int]:
     staging_stat = staging_path.stat(follow_symlinks=False)
     try:
@@ -1853,7 +1889,14 @@ def _install_selected_without_overwrite(
                         f"Selected output changed concurrently; refusing metadata copy: "
                         f"{output}"
                     )
-                _copy_file_metadata(metadata_source, output)
+                if preserve_metadata_timestamps:
+                    _copy_file_metadata(
+                        metadata_source,
+                        output,
+                        preserve_timestamps=True,
+                    )
+                else:
+                    _copy_file_metadata(metadata_source, output)
             output_stat = output.stat(follow_symlinks=False)
             if (output_stat.st_dev, output_stat.st_ino) != created_identity:
                 raise RuntimeError(
@@ -2032,56 +2075,69 @@ def _restore_selected_output(output: Path, install: _SelectedOutputInstall) -> N
     os.close(rollback_descriptor)
     rollback_path = Path(rollback_name)
     rollback_path.unlink()
+    moved = False
     try:
-        os.replace(output, rollback_path)
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Selected output changed concurrently; refusing rollback: {output}"
-        ) from exc
-    rollback_stat = rollback_path.stat(follow_symlinks=False)
-    rollback_bytes = rollback_path.read_bytes()
-    if (
-        (rollback_stat.st_dev, rollback_stat.st_ino) != install.installed_identity
-        or rollback_bytes != install.installed_bytes
-    ):
         try:
+            os.replace(output, rollback_path)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Selected output changed concurrently; refusing rollback: {output}"
+            ) from exc
+        finally:
+            moved = os.path.lexists(rollback_path)
+        rollback_stat = rollback_path.stat(follow_symlinks=False)
+        rollback_bytes = rollback_path.read_bytes()
+        if (
+            (rollback_stat.st_dev, rollback_stat.st_ino)
+            != install.installed_identity
+            or rollback_bytes != install.installed_bytes
+        ):
             _install_selected_without_overwrite(
                 rollback_path,
                 output,
                 rollback_bytes,
                 metadata_source=rollback_path,
+                preserve_metadata_timestamps=True,
             )
-        except BaseException as restore_exc:
             backup_note = (
                 f" Original backup retained at {install.backup_path}."
                 if install.backup_path is not None
                 else ""
             )
             raise RuntimeError(
-                f"Selected output changed concurrently; moved file retained at "
-                f"{rollback_path}.{backup_note}"
-            ) from restore_exc
-        backup_note = (
-            f" Original backup retained at {install.backup_path}."
-            if install.backup_path is not None
-            else ""
-        )
-        raise RuntimeError(
-            f"Selected output changed concurrently; refusing rollback: {output}."
-            f" Moved file retained at {rollback_path}.{backup_note}"
-        )
-    if install.backup_path is None:
-        rollback_path.unlink()
-    else:
-        backup_bytes = install.backup_path.read_bytes()
-        _install_selected_without_overwrite(
-            install.backup_path,
-            output,
-            backup_bytes,
-            metadata_source=install.backup_path,
-        )
-        rollback_path.unlink()
-        install.backup_path.unlink()
+                f"Selected output changed concurrently; refusing rollback: {output}."
+                f" Moved file retained at {rollback_path}.{backup_note}"
+            )
+        if install.backup_path is None:
+            rollback_path.unlink()
+        else:
+            backup_bytes = install.backup_path.read_bytes()
+            _install_selected_without_overwrite(
+                install.backup_path,
+                output,
+                backup_bytes,
+                metadata_source=install.backup_path,
+                preserve_metadata_timestamps=True,
+            )
+            rollback_path.unlink()
+            install.backup_path.unlink()
+    except BaseException as exc:
+        if moved and not output.exists() and os.path.lexists(rollback_path):
+            try:
+                rollback_bytes = rollback_path.read_bytes()
+                _install_selected_without_overwrite(
+                    rollback_path,
+                    output,
+                    rollback_bytes,
+                    metadata_source=rollback_path,
+                    preserve_metadata_timestamps=True,
+                )
+            except BaseException as restore_exc:
+                raise RuntimeError(
+                    f"Selected rollback was interrupted; moved file retained at "
+                    f"{rollback_path}"
+                ) from restore_exc
+        raise
 
 
 def _remove_selected_backup_after_commit(backup_path: Path) -> None:
@@ -2265,7 +2321,14 @@ def _write_filtered_outputs(
     selected: ParetoCandidate,
     result: SelectionResult,
     overwrite: bool,
+    commit_sink: List[Path] | None = None,
 ) -> Path:
+    manifest_output = output_dir / FILTERED_SELECTION_MANIFEST
+
+    def record_commit() -> None:
+        if commit_sink is not None and not commit_sink:
+            commit_sink.append(manifest_output)
+
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     reservation_identity, observed_output = _ensure_filtered_output_dir(
         output_dir,
@@ -2345,6 +2408,7 @@ def _write_filtered_outputs(
             observed_output=observed_output,
         )
         committed = True
+        record_commit()
     finally:
         if not committed and staging_identity is not None:
             try:
@@ -2357,6 +2421,7 @@ def _write_filtered_outputs(
             ) == staging_identity:
                 committed = True
         if committed:
+            record_commit()
             try:
                 _remove_filtered_reservation(output_dir, reservation_identity)
             except BaseException as exc:
@@ -2367,7 +2432,7 @@ def _write_filtered_outputs(
             if staging_dir is not None:
                 _remove_output_tree(staging_dir)
             _remove_filtered_reservation(output_dir, reservation_identity)
-    return output_dir / FILTERED_SELECTION_MANIFEST
+    return manifest_output
 
 
 def run_from_args(args: argparse.Namespace) -> SelectionResult:
@@ -2434,12 +2499,16 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         and (
             _is_within(selected_output, filtered_output_dir)
             or _is_within(filtered_output_dir, selected_output)
+            or _paths_overlap_by_filesystem_identity(
+                selected_output, filtered_output_dir
+            )
         )
     ):
         raise ValueError(
             "Selected and filtered output paths must not overlap when both are saved."
         )
     selected_installs: List[_SelectedOutputInstall] = []
+    filtered_commits: List[Path] = []
     selected_install: _SelectedOutputInstall | None = None
     filtered_manifest: Path | None = None
     try:
@@ -2463,9 +2532,14 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 selected=result.candidate,
                 result=result,
                 overwrite=overwrite,
+                commit_sink=filtered_commits,
             )
     except BaseException:
-        if selected_output is not None and selected_installs:
+        if (
+            selected_output is not None
+            and selected_installs
+            and not filtered_commits
+        ):
             _restore_selected_output(selected_output, selected_installs[0])
         raise
     else:
