@@ -1559,8 +1559,31 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
+def _is_within_by_identity(path: Path, directory: Path) -> bool:
+    current = path
+    while True:
+        try:
+            if current.samefile(directory):
+                return True
+        except FileNotFoundError:
+            pass
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
 def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> None:
-    if _is_within(path, pareto_dir) or (directory and _is_within(pareto_dir, path)):
+    if (
+        _is_within(path, pareto_dir)
+        or _is_within_by_identity(path, pareto_dir)
+        or (
+            directory
+            and (
+                _is_within(pareto_dir, path)
+                or _is_within_by_identity(pareto_dir, path)
+            )
+        )
+    ):
         raise ValueError(
             f"Output must not overlap the source Pareto directory: {path}"
         )
@@ -1659,8 +1682,9 @@ def _install_selected(temporary: Path, output: Path, *, overwrite: bool) -> None
         if overwrite:
             os.replace(temporary, output)
         else:
-            os.link(temporary, output)
-            temporary.unlink()
+            if output.exists():
+                raise FileExistsError(f"Selected output already exists: {output}")
+            temporary.rename(output)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1705,6 +1729,11 @@ def _stage_filtered(
         raise
 
 
+def _remove_export_tree(path: Path) -> None:
+    path.chmod(path.stat().st_mode | 0o200)
+    shutil.rmtree(path)
+
+
 def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
     backup: Path | None = None
     try:
@@ -1714,7 +1743,7 @@ def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
                     f"Filtered output directory already exists: {output} "
                     "(use --overwrite to replace it)"
                 )
-            backup = output.parent / f".{output.name}.backup-{uuid.uuid4().hex}"
+            backup = output.parent / f".pareto-backup-{uuid.uuid4().hex}"
             output.rename(backup)
         try:
             stage.rename(output)
@@ -1723,12 +1752,11 @@ def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
                 backup.rename(output)
             raise
         if backup is not None:
-            backup.chmod(backup.stat().st_mode | 0o200)
-            shutil.rmtree(backup)
+            _remove_export_tree(backup)
         return output / FILTERED_SELECTION_MANIFEST
     finally:
         if stage.exists():
-            shutil.rmtree(stage)
+            _remove_export_tree(stage)
 
 
 def run_from_args(args: argparse.Namespace) -> SelectionResult:
@@ -1829,7 +1857,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         if selected_stage is not None:
             selected_stage.unlink(missing_ok=True)
         if filtered_stage is not None and filtered_stage.exists():
-            shutil.rmtree(filtered_stage)
+            _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
