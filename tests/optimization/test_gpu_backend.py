@@ -1024,12 +1024,6 @@ def test_gpu_coin_overrides_reject_single_coin_scope():
             ),
             "dynamic_wel_by_tradability",
         ),
-        (
-            lambda config: config["live"].__setitem__(
-                "forager_score_hysteresis_pct", 0.01
-            ),
-            "forager_score_hysteresis_pct",
-        ),
     ],
 )
 def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
@@ -1053,6 +1047,15 @@ def test_gpu_multicoin_foundation_accepts_dual_side_hedge_mode():
     }
     config["live"]["hedge_mode"] = True
     config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["forager_score_hysteresis_pct"] = 0.02
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
@@ -2653,6 +2656,14 @@ def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     assert _checkpoint_signature(active, scoring) != original
     assert (
         _checkpoint_signature(active, scoring, runtime_contract=edited)
+        != original
+    )
+    hysteresis_edited = copy.deepcopy(contract)
+    hysteresis_edited["forager_score_hysteresis_pct"] = 0.02
+    assert (
+        _checkpoint_signature(
+            active, scoring, runtime_contract=hysteresis_edited
+        )
         != original
     )
 

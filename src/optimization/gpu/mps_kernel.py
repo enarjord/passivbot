@@ -310,6 +310,7 @@ class MpsEmaAnchorMulticoinRunner:
         *,
         side: str,
         coin_overrides: np.ndarray | None = None,
+        forager_score_hysteresis_pct: float = 0.0,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -335,11 +336,24 @@ class MpsEmaAnchorMulticoinRunner:
         self.coin_overrides = torch.as_tensor(
             np.ascontiguousarray(coin_overrides), device="mps"
         )
+        forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
+        if not np.isfinite(forager_score_hysteresis_pct) or (
+            forager_score_hysteresis_pct < 0.0
+        ):
+            raise ValueError(
+                "forager_score_hysteresis_pct must be finite and non-negative"
+            )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
         self.settings = torch.tensor(
-            [run.starting_balance, liq_floor, run.interval_ms, float(side == "short")],
+            [
+                run.starting_balance,
+                liq_floor,
+                run.interval_ms,
+                float(side == "short"),
+                forager_score_hysteresis_pct,
+            ],
             dtype=torch.float32,
             device="mps",
         )

@@ -106,7 +106,9 @@ The supported slice is intentionally narrow:
 - long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor runs for up to 64 coins,
   with dynamic wallet-exposure allocation and independent per-side Forager selection; dual-side
   runs require matching long/short approved and ignored coin sets, and all multi-coin runs require
-  `backtest.dynamic_wel_by_tradability: true` and `live.forager_score_hysteresis_pct: 0`
+  `backtest.dynamic_wel_by_tradability: true`; `live.forager_score_hysteresis_pct` preserves flat
+  incumbent candidates when a challenger's normalized Forager-score lead is within the configured
+  gap
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count

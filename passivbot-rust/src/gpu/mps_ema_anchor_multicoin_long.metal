@@ -120,6 +120,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
+    const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -143,6 +144,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int entry_tick[MAX_COINS];
     int close_tick[MAX_COINS];
     bool selected[MAX_COINS];
+    bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
     float alpha0_coin[MAX_COINS];
@@ -179,6 +181,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         entry_tick[c] = 0;
         close_tick[c] = 0;
         selected[c] = false;
+        incumbent[c] = false;
         survivor[c] = false;
         entry_candidate[c] = false;
         if (c < C) {
@@ -419,6 +422,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             if (reselect) {
                 int active_count = 0;
                 for (int c = 0; c < C; ++c) {
+                    incumbent[c] = selected[c] && psize[c] <= 0.0f;
                     selected[c] = psize[c] > 0.0f;
                     if (selected[c]) active_count += 1;
                     survivor[c] = false;
@@ -518,6 +522,43 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         }
                     }
                     if (best >= 0) selected[best] = true;
+                }
+                if (score_hysteresis > 0.0f) {
+                    // Match Rust's score hysteresis: consider incumbent flat
+                    // candidates from best to worst, then displace only the
+                    // weakest selected non-incumbent challenger when its
+                    // normalized-score lead is within the configured gap.
+                    for (int rank = 0; rank < C; ++rank) {
+                        int incumbent_coin = -1;
+                        for (int c = 0; c < C; ++c) {
+                            if (!survivor[c] || !incumbent[c] || selected[c]) continue;
+                            if (incumbent_coin < 0 || score[c] > score[incumbent_coin]
+                                || (score[c] == score[incumbent_coin]
+                                    && c < incumbent_coin)) {
+                                incumbent_coin = c;
+                            }
+                        }
+                        if (incumbent_coin < 0) break;
+
+                        int challenger = -1;
+                        for (int c = 0; c < C; ++c) {
+                            if (!selected[c] || incumbent[c] || !survivor[c]) continue;
+                            if (challenger < 0 || score[c] < score[challenger]
+                                || (score[c] == score[challenger] && c > challenger)) {
+                                challenger = c;
+                            }
+                        }
+                        if (challenger < 0) break;
+                        if (score[challenger] - score[incumbent_coin]
+                            <= score_hysteresis) {
+                            selected[challenger] = false;
+                            selected[incumbent_coin] = true;
+                        } else {
+                            // Rust continues to lower-scored incumbents, but
+                            // none can satisfy the gap once the best cannot.
+                            break;
+                        }
+                    }
                 }
                 selection_initialized = true;
                 previous_effective_n_positions = effective_n_positions;
