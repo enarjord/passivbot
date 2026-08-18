@@ -30,6 +30,7 @@ from optimization.backends.gpu_backend import (
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
     _gpu_suite_enabled,
+    _gpu_suite_checkpoint_contract,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
     _gpu_suite_search_context,
@@ -2502,6 +2503,58 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
         _checkpoint_signature(active, scoring, suite_contract=changed_date)
         != original
     )
+
+
+def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000, 3000]),
+    }
+    original = _gpu_suite_checkpoint_contract(config, [item])
+
+    assert original["prepared_scenarios"] == [
+        {
+            "label": "stress",
+            "exchange": "bybit",
+            "coins": ["BTC", "ETH"],
+            "coin_count": 2,
+            "strategy_kind": "ema_anchor",
+            "enabled_sides": ["long"],
+            "candle_count": 3,
+            "first_timestamp": 1000,
+            "last_timestamp": 3000,
+        }
+    ]
+
+    changed_coins = copy.deepcopy(item)
+    changed_coins["coins"] = ["BTC", "SOL"]
+    changed_window = copy.deepcopy(item)
+    changed_window["timestamps"] = np.array([1000, 2000, 4000])
+
+    assert _gpu_suite_checkpoint_contract(config, [changed_coins]) != original
+    assert _gpu_suite_checkpoint_contract(config, [changed_window]) != original
+
+
+def test_gpu_suite_checkpoint_contract_rejects_timestamp_shape_mismatch():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000]),
+    }
+
+    with pytest.raises(ValueError, match="timestamp identity mismatch"):
+        _gpu_suite_checkpoint_contract(config, [item])
 
 
 def test_gpu_rejects_pinned_unsupported_risk_behavior():

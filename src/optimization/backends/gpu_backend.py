@@ -878,6 +878,14 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             coin_count=coin_count,
             allow_suite=True,
         )
+        effective_coins = [
+            str(coin) for coin in ctx.msss[exchange] if coin != "__meta__"
+        ]
+        if len(effective_coins) != coin_count:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} prepared coin identity "
+                f"mismatch: hlcvs={coin_count}, market_settings={effective_coins}"
+            )
         prepared.append(
             {
                 "ctx": ctx,
@@ -885,6 +893,7 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 "overrides": deepcopy(overrides),
                 "exchange": exchange,
                 "coin_count": coin_count,
+                "coins": effective_coins,
                 "hlcvs": values,
                 "mss": ctx.msss[exchange],
                 "btc": btc,
@@ -1446,9 +1455,9 @@ def _update_novelty_stall(
     return current
 
 
-def _gpu_suite_checkpoint_contract(config: dict) -> dict:
+def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     backtest = config.get("backtest", {})
-    return {
+    contract = {
         key: deepcopy(backtest.get(key))
         for key in (
             "suite_enabled",
@@ -1458,6 +1467,42 @@ def _gpu_suite_checkpoint_contract(config: dict) -> dict:
             "volume_normalization",
         )
     }
+    if suite_inputs is not None:
+        prepared_scenarios = []
+        for item in suite_inputs:
+            timestamps = np.asarray(item["timestamps"]).reshape(-1)
+            if len(timestamps) != len(item["hlcvs"]):
+                raise ValueError(
+                    f"GPU suite scenario {item['ctx'].label!r} timestamp identity "
+                    f"mismatch: timestamps={len(timestamps)}, hlcvs={len(item['hlcvs'])}"
+                )
+            prepared_scenarios.append(
+                {
+                    "label": item["ctx"].label,
+                    "exchange": item["exchange"],
+                    "coins": list(item["coins"]),
+                    "coin_count": int(item["coin_count"]),
+                    "strategy_kind": str(
+                        item["config"].get("live", {}).get("strategy_kind", "")
+                    )
+                    .strip()
+                    .lower(),
+                    "enabled_sides": [
+                        side
+                        for side in ("long", "short")
+                        if gpu_side_enabled(item["config"], side)
+                    ],
+                    "candle_count": int(len(item["hlcvs"])),
+                    "first_timestamp": (
+                        int(timestamps[0]) if len(timestamps) else None
+                    ),
+                    "last_timestamp": (
+                        int(timestamps[-1]) if len(timestamps) else None
+                    ),
+                }
+            )
+        contract["prepared_scenarios"] = prepared_scenarios
+    return contract
 
 
 def _checkpoint_signature(
@@ -2430,7 +2475,9 @@ def run_backend(
         config["optimize"]["scoring"],
         anchor_plan=get_anchor_plan(config),
         suite_contract=(
-            _gpu_suite_checkpoint_contract(config) if suite_enabled else None
+            _gpu_suite_checkpoint_contract(config, suite_inputs)
+            if suite_enabled
+            else None
         ),
     )
     budget = int(config["optimize"]["iters"])

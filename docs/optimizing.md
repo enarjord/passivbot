@@ -130,10 +130,10 @@ For a supported suite, each Metal candidate is dispatched across every prepared 
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
 for aggregate reducers, named-scenario objectives, and named-scenario or suite-reduced limits.
 Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
-suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different
-single coin or date window, but every scenario must resolve to exactly one coin on the same
-exchange. Scenario `overrides` require explicit candidate-shadowing behavior in the proxy. This
-slice models `bot.long` and `bot.short` overrides: the canonical exact
+suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different coin
+subset or date window, but every scenario must use the same exchange. Scenario `overrides` require
+explicit candidate-shadowing behavior in the proxy. This slice models `bot.long` and `bot.short`
+overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
 Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
 overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
@@ -144,7 +144,8 @@ uses the single-coin or multicoin kernel independently for each scenario, then f
 the same suite reducer. Non-bot override paths and scenario `coin_sources` remain rejected until
 their proxy semantics are modeled. The effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
-prepared concrete dates, so resume fails closed if the definition or resolved window changes.
+prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
+coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
