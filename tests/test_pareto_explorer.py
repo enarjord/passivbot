@@ -1151,6 +1151,54 @@ def test_selected_fallback_refuses_to_remove_concurrent_replacement(
     backups[0].unlink()
 
 
+def test_selected_fallback_recovers_when_exclusive_creation_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    real_open = Path.open
+    interrupted = False
+
+    def reject_hard_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    def interrupt_after_exclusive_create(path: Path, *args, **kwargs):
+        nonlocal interrupted
+        output_file = real_open(path, *args, **kwargs)
+        if path == selected_output and args and args[0] == "xb" and not interrupted:
+            interrupted = True
+            output_file.close()
+            raise KeyboardInterrupt()
+        return output_file
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    monkeypatch.setattr(Path, "open", interrupt_after_exclusive_create)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="unverified file retained"):
+        run_from_args(args)
+
+    assert interrupted
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert not filtered_output.exists()
+    failed = [path for path in tmp_path.iterdir() if path.suffix == ".failed"]
+    assert len(failed) == 1
+    assert failed[0].read_bytes() == b""
+    failed[0].unlink()
+
+
 def test_selected_overwrite_detects_replacement_before_commit(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1664,6 +1712,47 @@ def test_combined_outputs_restore_selected_when_install_return_is_interrupted(
     assert json.loads(stale.read_text()) == {"filtered": "old"}
     assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_cleanup_filtered_reservation_when_return_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_inode = selected_output.stat().st_ino
+    filtered_output = tmp_path / "filtered"
+    real_ensure = pareto_explorer._ensure_filtered_output_dir
+    interrupted = False
+
+    def interrupt_after_reservation(*args, **kwargs):
+        nonlocal interrupted
+        result = real_ensure(*args, **kwargs)
+        interrupted = True
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(
+        pareto_explorer, "_ensure_filtered_output_dir", interrupt_after_reservation
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_ino == selected_inode
+    assert not filtered_output.exists()
 
 
 def test_combined_outputs_record_no_hard_link_commit_before_nested_return(
@@ -2742,6 +2831,23 @@ def test_single_file_input_allows_sibling_outputs(
     ]
 
 
+def test_single_file_input_rejects_non_json_filtered_member_name(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    json_source = sample_pareto_dir / "balanced.json"
+    source = tmp_path / "balanced.config"
+    source.write_bytes(json_source.read_bytes())
+    output_dir = tmp_path / "filtered"
+    args = build_parser().parse_args([str(source), "-f", str(output_dir)])
+
+    with pytest.raises(ValueError, match=r"must use \.json filenames"):
+        run_from_args(args)
+
+    assert source.exists()
+    assert not output_dir.exists()
+
+
 def test_single_file_input_rejects_filtered_parent_filesystem_alias(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -2900,6 +3006,44 @@ def test_save_outputs_refuse_filesystem_alias_overlap(
 
     assert json.loads(selected_output.read_text()) == {"selected": "old"}
     assert not list(filtered_alias.iterdir())
+
+
+def test_save_outputs_conservatively_normalize_aliased_uncreated_suffixes(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_root = tmp_path / "selected-root"
+    selected_root.mkdir()
+    filtered_root = tmp_path / "filtered-root"
+    filtered_root.mkdir()
+    selected_output = selected_root / "New" / "selected.json"
+    filtered_output = filtered_root / "new"
+    real_samefile = os.path.samefile
+
+    def report_bind_mount_alias(left, right):
+        pair = {Path(left).resolve(), Path(right).resolve()}
+        if pair == {selected_root.resolve(), filtered_root.resolve()}:
+            return True
+        return real_samefile(left, right)
+
+    monkeypatch.setattr(os.path, "samefile", report_bind_mount_alias)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(args)
+
+    assert not selected_output.exists()
+    assert not filtered_output.exists()
 
 
 def test_filtered_manifest_records_normalized_decision_inputs(

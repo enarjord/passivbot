@@ -11,6 +11,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import unicodedata
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -1619,8 +1620,16 @@ def _paths_overlap_by_filesystem_identity(left: Path, right: Path) -> bool:
         for right_ancestor, right_suffix in _existing_ancestors_with_suffix(right):
             if not _same_existing_filesystem_object(left_ancestor, right_ancestor):
                 continue
+            normalized_left = tuple(
+                unicodedata.normalize("NFC", part).casefold()
+                for part in left_suffix
+            )
+            normalized_right = tuple(
+                unicodedata.normalize("NFC", part).casefold()
+                for part in right_suffix
+            )
             shorter, longer = sorted(
-                (left_suffix, right_suffix), key=lambda parts: len(parts)
+                (normalized_left, normalized_right), key=lambda parts: len(parts)
             )
             if longer[: len(shorter)] == shorter:
                 return True
@@ -1746,6 +1755,12 @@ def _prepare_filtered_output_dir(
     _validate_output_outside_source(output_dir, protected_source_dir, label="filtered output")
     _validate_filtered_output_contains_no_sources(output_dir, source_candidates)
     names = [candidate.member_name for candidate in candidates]
+    invalid_names = sorted(name for name in names if Path(name).suffix.lower() != ".json")
+    if invalid_names:
+        preview = ", ".join(invalid_names[:5])
+        raise ValueError(
+            f"Filtered members must use .json filenames; invalid member(s): {preview}"
+        )
     normalized_names = [name.casefold() for name in names]
     if len(normalized_names) != len(set(normalized_names)):
         raise ValueError("Filtered members contain duplicate filenames; cannot copy safely.")
@@ -1874,20 +1889,37 @@ def _install_selected_without_overwrite(
         windows_invalid_function = getattr(exc, "winerror", None) == 1
         if exc.errno not in unsupported and not windows_invalid_function:
             raise
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_CLOEXEC"):
-            flags |= os.O_CLOEXEC
         try:
-            file_descriptor = os.open(output, flags, 0o666)
+            output_file = output.open("xb")
         except FileExistsError as conflict:
             raise FileExistsError(
                 f"Selected output already exists: {output} "
                 "(use --overwrite to replace it)"
             ) from conflict
-        created_stat = os.fstat(file_descriptor)
+        except BaseException as create_exc:
+            if os.path.lexists(output):
+                failed_descriptor, failed_name = tempfile.mkstemp(
+                    prefix=SELECTED_BACKUP_PREFIX,
+                    suffix=".failed",
+                    dir=output.parent,
+                )
+                os.close(failed_descriptor)
+                failed_path = Path(failed_name)
+                failed_path.unlink()
+                try:
+                    os.replace(output, failed_path)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise RuntimeError(
+                        f"Selected output creation was interrupted; unverified file "
+                        f"retained at {failed_path}"
+                    ) from create_exc
+            raise
+        created_stat = os.fstat(output_file.fileno())
         created_identity = created_stat.st_dev, created_stat.st_ino
         try:
-            with os.fdopen(file_descriptor, "wb") as output_file:
+            with output_file:
                 output_file.write(source_bytes)
             if metadata_source is not None:
                 output_stat = output.stat(follow_symlinks=False)
@@ -2276,6 +2308,7 @@ def _ensure_filtered_output_dir(
     output_dir: Path,
     *,
     overwrite: bool,
+    reservation_sink: List[tuple[int, int]] | None = None,
 ) -> tuple[tuple[int, int] | None, _FilteredOutputSnapshot]:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if output_dir.exists():
@@ -2287,6 +2320,8 @@ def _ensure_filtered_output_dir(
         return None, _snapshot_filtered_output_dir(output_dir)
     output_stat = output_dir.stat(follow_symlinks=False)
     identity = output_stat.st_dev, output_stat.st_ino
+    if reservation_sink is not None and not reservation_sink:
+        reservation_sink.append(identity)
     return identity, _FilteredOutputSnapshot(identity, ())
 
 
@@ -2345,14 +2380,18 @@ def _write_filtered_outputs(
             commit_sink.append(manifest_output)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    reservation_identity, observed_output = _ensure_filtered_output_dir(
-        output_dir,
-        overwrite=overwrite,
-    )
+    reservation_identities: List[tuple[int, int]] = []
+    reservation_identity: tuple[int, int] | None = None
+    observed_output: _FilteredOutputSnapshot | None = None
     staging_dir: Path | None = None
     staging_identity: tuple[int, int] | None = None
     committed = False
     try:
+        reservation_identity, observed_output = _ensure_filtered_output_dir(
+            output_dir,
+            overwrite=overwrite,
+            reservation_sink=reservation_identities,
+        )
         staging_dir = Path(
             tempfile.mkdtemp(
                 prefix=FILTERED_STAGING_PREFIX,
@@ -2425,6 +2464,8 @@ def _write_filtered_outputs(
         committed = True
         record_commit()
     finally:
+        if reservation_identity is None and reservation_identities:
+            reservation_identity = reservation_identities[0]
         if not committed and staging_identity is not None:
             try:
                 output_stat = output_dir.stat(follow_symlinks=False)
