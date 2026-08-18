@@ -1617,7 +1617,9 @@ def _validate_selected_output_not_source(
         for candidate in candidates
         for source in (candidate.path.resolve(), candidate.member_path)
     }
-    if output in sources:
+    if output in sources or any(
+        _same_existing_filesystem_object(output, source) for source in sources
+    ):
         raise ValueError(f"Refusing to overwrite a source Pareto member: {output}")
 
 
@@ -1724,11 +1726,16 @@ def _prepare_filtered_output_dir(
     return output_dir
 
 
-def _write_candidate_snapshot(candidate: ParetoCandidate, destination: Path) -> None:
-    destination.write_bytes(candidate.source_bytes)
+def _write_candidate_snapshot_fd(
+    candidate: ParetoCandidate,
+    destination: Path,
+    file_descriptor: int,
+) -> None:
+    with os.fdopen(file_descriptor, "wb") as destination_file:
+        destination_file.write(candidate.source_bytes)
 
 
-def _create_selected_staging_file(parent: Path) -> Path:
+def _create_selected_staging_file(parent: Path) -> tuple[Path, int]:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -1738,8 +1745,7 @@ def _create_selected_staging_file(parent: Path) -> Path:
             file_descriptor = os.open(staging_path, flags, 0o666)
         except FileExistsError:
             continue
-        os.close(file_descriptor)
-        return staging_path
+        return staging_path, file_descriptor
     raise FileExistsError(f"Could not reserve selected staging file in {parent}")
 
 
@@ -1829,16 +1835,60 @@ def _install_selected_without_overwrite(
                 f"Selected output already exists: {output} "
                 "(use --overwrite to replace it)"
             ) from conflict
+        created_stat = os.fstat(file_descriptor)
+        created_identity = created_stat.st_dev, created_stat.st_ino
         try:
             with os.fdopen(file_descriptor, "wb") as output_file:
                 output_file.write(source_bytes)
             if metadata_source is not None:
+                output_stat = output.stat(follow_symlinks=False)
+                if (output_stat.st_dev, output_stat.st_ino) != created_identity:
+                    raise RuntimeError(
+                        f"Selected output changed concurrently; refusing metadata copy: "
+                        f"{output}"
+                    )
                 _copy_file_metadata(metadata_source, output)
-        except BaseException:
-            output.unlink(missing_ok=True)
+            output_stat = output.stat(follow_symlinks=False)
+            if (output_stat.st_dev, output_stat.st_ino) != created_identity:
+                raise RuntimeError(
+                    f"Selected output changed concurrently after metadata copy: {output}"
+                )
+        except BaseException as exc:
+            try:
+                output_stat = output.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                output_stat = None
+            if output_stat is not None and (
+                output_stat.st_dev,
+                output_stat.st_ino,
+            ) == created_identity:
+                failed_descriptor, failed_name = tempfile.mkstemp(
+                    prefix=SELECTED_BACKUP_PREFIX,
+                    suffix=".failed",
+                    dir=output.parent,
+                )
+                os.close(failed_descriptor)
+                failed_path = Path(failed_name)
+                failed_path.unlink()
+                try:
+                    os.replace(output, failed_path)
+                except FileNotFoundError:
+                    pass
+                else:
+                    failed_stat = failed_path.stat(follow_symlinks=False)
+                    if (failed_stat.st_dev, failed_stat.st_ino) == created_identity:
+                        failed_path.unlink()
+                    else:
+                        raise RuntimeError(
+                            f"Selected output changed concurrently; moved file retained "
+                            f"at {failed_path}"
+                        ) from exc
+            elif output_stat is not None:
+                raise RuntimeError(
+                    f"Selected output changed concurrently; refusing cleanup: {output}"
+                ) from exc
             raise
-        output_stat = output.stat(follow_symlinks=False)
-        return output_stat.st_dev, output_stat.st_ino
+        return created_identity
     return staging_stat.st_dev, staging_stat.st_ino
 
 
@@ -1850,12 +1900,12 @@ def _write_selected_output(
     overwrite: bool,
 ) -> _SelectedOutputInstall:
     output.parent.mkdir(parents=True, exist_ok=True)
-    staging_path = _create_selected_staging_file(output.parent)
+    staging_path, staging_descriptor = _create_selected_staging_file(output.parent)
     backup_path: Path | None = None
     staging_cleanup_attempted = False
     installed_identity: tuple[int, int] | None = None
     try:
-        _write_candidate_snapshot(candidate, staging_path)
+        _write_candidate_snapshot_fd(candidate, staging_path, staging_descriptor)
         if not overwrite:
             staging_stat = staging_path.stat(follow_symlinks=False)
             installed_identity = staging_stat.st_dev, staging_stat.st_ino
@@ -2123,7 +2173,7 @@ def _remove_filtered_reservation(
         )
 
 
-def _reserve_filtered_output_file(destination: Path, *, label: str) -> None:
+def _reserve_filtered_output_file(destination: Path, *, label: str) -> int:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -2133,7 +2183,7 @@ def _reserve_filtered_output_file(destination: Path, *, label: str) -> None:
         raise ValueError(
             f"{label} collides on the destination filesystem: {destination.name}"
         ) from exc
-    os.close(file_descriptor)
+    return file_descriptor
 
 
 def _write_filtered_outputs(
@@ -2154,6 +2204,8 @@ def _write_filtered_outputs(
         overwrite=overwrite,
     )
     staging_dir: Path | None = None
+    staging_identity: tuple[int, int] | None = None
+    committed = False
     try:
         staging_dir = Path(
             tempfile.mkdtemp(
@@ -2166,14 +2218,18 @@ def _write_filtered_outputs(
         staging_dir.chmod(
             stat.S_IMODE(staging_dir.stat().st_mode) | stat.S_IWUSR | stat.S_IXUSR
         )
+        staging_stat = staging_dir.stat(follow_symlinks=False)
+        staging_identity = staging_stat.st_dev, staging_stat.st_ino
         members: List[Dict[str, Any]] = []
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
             final_destination = output_dir / candidate.member_name
-            _reserve_filtered_output_file(
+            member_descriptor = _reserve_filtered_output_file(
                 staged_destination, label="Filtered member filename"
             )
-            _write_candidate_snapshot(candidate, staged_destination)
+            _write_candidate_snapshot_fd(
+                candidate, staged_destination, member_descriptor
+            )
             members.append(
                 {
                     "file": candidate.member_name,
@@ -2207,22 +2263,48 @@ def _write_filtered_outputs(
             "members": members,
         }
         manifest_path = staging_dir / FILTERED_SELECTION_MANIFEST
-        _reserve_filtered_output_file(
+        manifest_descriptor = _reserve_filtered_output_file(
             manifest_path, label="Filtered selection manifest"
         )
-        manifest_path.write_text(
-            json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        with os.fdopen(manifest_descriptor, "w", encoding="utf-8") as manifest_file:
+            manifest_file.write(
+                json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n"
+            )
         _replace_filtered_output_dir(
             staging_dir,
             output_dir,
             overwrite=overwrite,
         )
+        committed = True
     finally:
-        if staging_dir is not None:
-            _remove_output_tree(staging_dir)
-        _remove_filtered_reservation(output_dir, reservation_identity)
+        if not committed and staging_identity is not None:
+            try:
+                output_stat = output_dir.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                output_stat = None
+            if output_stat is not None and (
+                output_stat.st_dev,
+                output_stat.st_ino,
+            ) == staging_identity:
+                committed = True
+        if committed:
+            if staging_dir is not None:
+                try:
+                    _remove_output_tree(staging_dir)
+                except BaseException as exc:
+                    _warn_post_commit_cleanup_failure(
+                        "filtered output", staging_dir, exc
+                    )
+            try:
+                _remove_filtered_reservation(output_dir, reservation_identity)
+            except BaseException as exc:
+                _warn_post_commit_cleanup_failure(
+                    "filtered output reservation", output_dir, exc
+                )
+        else:
+            if staging_dir is not None:
+                _remove_output_tree(staging_dir)
+            _remove_filtered_reservation(output_dir, reservation_identity)
     return output_dir / FILTERED_SELECTION_MANIFEST
 
 

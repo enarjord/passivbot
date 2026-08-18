@@ -1112,6 +1112,44 @@ def test_selected_output_falls_back_when_hard_links_are_unsupported(
     assert selected_output.read_bytes() == result.candidate.source_bytes
 
 
+def test_selected_fallback_refuses_to_remove_concurrent_replacement(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    real_copy_metadata = pareto_explorer._copy_file_metadata
+
+    def reject_hard_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    def replace_during_metadata_copy(source: Path, destination: Path):
+        if destination == selected_output:
+            newer = tmp_path / "newer.json"
+            newer.write_text('{"selected": "newer"}\n')
+            os.replace(newer, selected_output)
+            raise OSError("simulated metadata copy failure")
+        real_copy_metadata(source, destination)
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    monkeypatch.setattr(
+        pareto_explorer, "_copy_file_metadata", replace_during_metadata_copy
+    )
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "newer"}
+    backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text()) == {"selected": "old"}
+    backups[0].unlink()
+
+
 def test_selected_overwrite_detects_replacement_before_commit(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1187,16 +1225,18 @@ def test_selected_output_does_not_overwrite_racing_destination_without_permissio
     selected_output = tmp_path / "selected.json"
     destination_created = False
 
-    def create_destination_during_staging(candidate, destination):
+    def create_destination_during_staging(candidate, destination, file_descriptor):
         nonlocal destination_created
         destination = Path(destination)
         if not destination_created and destination.suffix == ".tmp":
             selected_output.write_text('{"racing": true}\n')
             destination_created = True
-        destination.write_bytes(candidate.source_bytes)
+        with os.fdopen(file_descriptor, "wb") as destination_file:
+            destination_file.write(candidate.source_bytes)
 
     monkeypatch.setattr(
-        "pareto_explorer._write_candidate_snapshot", create_destination_during_staging
+        "pareto_explorer._write_candidate_snapshot_fd",
+        create_destination_during_staging,
     )
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-s", str(selected_output)]
@@ -1375,14 +1415,19 @@ def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
     stale.write_text('{"stale": true}\n')
     copies = 0
 
-    def fail_on_second_copy(candidate, destination):
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+
+    def fail_on_second_copy(candidate, destination, file_descriptor):
         nonlocal copies
         copies += 1
         if copies == 2:
+            os.close(file_descriptor)
             raise OSError("simulated copy failure")
-        Path(destination).write_bytes(candidate.source_bytes)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
-    monkeypatch.setattr("pareto_explorer._write_candidate_snapshot", fail_on_second_copy)
+    monkeypatch.setattr(
+        "pareto_explorer._write_candidate_snapshot_fd", fail_on_second_copy
+    )
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
     )
@@ -1416,16 +1461,20 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
     stale = filtered_output / "stale.json"
     stale.write_text('{"filtered": "old"}\n')
 
-    def fail_during_filtered_staging(candidate, destination):
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+
+    def fail_during_filtered_staging(candidate, destination, file_descriptor):
         destination = Path(destination)
         if destination.name == "b_extreme.json" and destination.parent.name.startswith(
             pareto_explorer.FILTERED_STAGING_PREFIX
         ):
+            os.close(file_descriptor)
             raise OSError("simulated filtered copy failure")
-        destination.write_bytes(candidate.source_bytes)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(
-        "pareto_explorer._write_candidate_snapshot", fail_during_filtered_staging
+        "pareto_explorer._write_candidate_snapshot_fd",
+        fail_during_filtered_staging,
     )
     args = build_parser().parse_args(
         [
@@ -1503,17 +1552,20 @@ def test_combined_outputs_refuse_rollback_over_newer_selected_file(
     selected_output.write_text('{"selected": "old"}\n')
     filtered_output = tmp_path / "filtered"
 
-    def replace_selected_then_fail(candidate, destination):
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+
+    def replace_selected_then_fail(candidate, destination, file_descriptor):
         destination = Path(destination)
         if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
             newer = tmp_path / "newer.json"
             newer.write_text('{"selected": "newer"}\n')
             os.replace(newer, selected_output)
+            os.close(file_descriptor)
             raise OSError("simulated filtered copy failure")
-        destination.write_bytes(candidate.source_bytes)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(
-        pareto_explorer, "_write_candidate_snapshot", replace_selected_then_fail
+        pareto_explorer, "_write_candidate_snapshot_fd", replace_selected_then_fail
     )
     args = build_parser().parse_args(
         [
@@ -1545,15 +1597,18 @@ def test_combined_outputs_refuse_rollback_over_in_place_selected_edit(
     selected_output.write_text('{"selected": "old"}\n')
     filtered_output = tmp_path / "filtered"
 
-    def edit_selected_then_fail(candidate, destination):
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+
+    def edit_selected_then_fail(candidate, destination, file_descriptor):
         destination = Path(destination)
         if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
             selected_output.write_text('{"selected": "newer"}\n')
+            os.close(file_descriptor)
             raise OSError("simulated filtered copy failure")
-        destination.write_bytes(candidate.source_bytes)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(
-        pareto_explorer, "_write_candidate_snapshot", edit_selected_then_fail
+        pareto_explorer, "_write_candidate_snapshot_fd", edit_selected_then_fail
     )
     args = build_parser().parse_args(
         [
@@ -1625,6 +1680,52 @@ def test_combined_outputs_keep_committed_pair_when_filtered_rename_is_interrupte
     assert (filtered_output / "selection.json").exists()
     assert "install committed before interruption" in capsys.readouterr().err
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_keep_committed_pair_when_filtered_staging_cleanup_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
+    real_remove = pareto_explorer._remove_output_tree
+    interrupted = False
+
+    def interrupt_staging_cleanup(path: Path):
+        nonlocal interrupted
+        if path.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
+            interrupted = True
+            raise KeyboardInterrupt()
+        return real_remove(path)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_remove_output_tree", interrupt_staging_cleanup
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert interrupted
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert not (filtered_output / "stale.json").exists()
+    assert (filtered_output / "selection.json").exists()
+    assert "filtered output installed, but temporary path could not be removed" in (
+        capsys.readouterr().err
+    )
 
 
 def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupted(
@@ -1950,7 +2051,7 @@ def test_filtered_output_applies_directory_metadata_before_writing_members(
     output_dir.mkdir()
     (output_dir / "stale.json").write_text('{"stale": true}\n')
     real_copy_metadata = pareto_explorer._copy_directory_metadata
-    real_write_snapshot = pareto_explorer._write_candidate_snapshot
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
     metadata_ready = False
 
     def track_metadata(source: Path, destination: Path):
@@ -1959,13 +2060,13 @@ def test_filtered_output_applies_directory_metadata_before_writing_members(
         if source == output_dir and destination.name.endswith(".tmp"):
             metadata_ready = True
 
-    def require_metadata_before_write(candidate, destination):
+    def require_metadata_before_write(candidate, destination, file_descriptor):
         assert metadata_ready
-        real_write_snapshot(candidate, destination)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(pareto_explorer, "_copy_directory_metadata", track_metadata)
     monkeypatch.setattr(
-        pareto_explorer, "_write_candidate_snapshot", require_metadata_before_write
+        pareto_explorer, "_write_candidate_snapshot_fd", require_metadata_before_write
     )
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
@@ -2145,18 +2246,18 @@ def test_saved_outputs_use_candidate_snapshot_from_selection_time(
     original_bytes = source.read_bytes()
     selected_output = tmp_path / "selected.json"
     filtered_output = tmp_path / "filtered"
-    real_write_snapshot = pareto_explorer._write_candidate_snapshot
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
     source_changed = False
 
-    def change_source_before_export(candidate, destination):
+    def change_source_before_export(candidate, destination, file_descriptor):
         nonlocal source_changed
         if not source_changed:
             source.write_text('{"changed": true}\n')
             source_changed = True
-        return real_write_snapshot(candidate, destination)
+        return real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(
-        pareto_explorer, "_write_candidate_snapshot", change_source_before_export
+        pareto_explorer, "_write_candidate_snapshot_fd", change_source_before_export
     )
     args = build_parser().parse_args(
         [
@@ -2211,6 +2312,25 @@ def test_save_outputs_refuse_source_pareto_directory(
     )
     with pytest.raises(ValueError, match="inside the source Pareto directory"):
         run_from_args(filtered_args)
+
+
+def test_save_selected_refuses_filesystem_identity_alias_of_source_member(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    source = sample_pareto_dir / "balanced.json"
+    output_alias = tmp_path / "selected.json"
+    os.link(source, output_alias)
+    original_bytes = source.read_bytes()
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(output_alias), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="source Pareto member"):
+        run_from_args(args)
+
+    assert source.read_bytes() == original_bytes
+    assert output_alias.read_bytes() == original_bytes
 
 
 def test_save_filtered_refuses_filesystem_identity_alias_of_source_directory(
