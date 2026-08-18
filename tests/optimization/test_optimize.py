@@ -797,6 +797,48 @@ def test_active_suite_scenario_labels_use_canonical_fallbacks():
     ) is None
 
 
+def test_materialize_gpu_suite_run_contract_persists_external_and_filtered_suite():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = False
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [{"label": "stress", "coins": ["ETH"]}],
+        "reducer": {"default": "max"},
+        "exchanges": ["bybit"],
+        "volume_normalization": False,
+    }
+
+    optimize._materialize_gpu_suite_run_contract(config, suite_cfg)
+
+    assert config["backtest"]["suite_enabled"] is True
+    assert config["backtest"]["scenarios"] == suite_cfg["scenarios"]
+    assert config["backtest"]["reducer"] == suite_cfg["reducer"]
+    assert config["backtest"]["exchanges"] == ["bybit"]
+    assert config["backtest"]["volume_normalization"] is False
+    suite_cfg["scenarios"][0]["coins"] = ["BTC"]
+    assert config["backtest"]["scenarios"][0]["coins"] == ["ETH"]
+
+
+def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "pymoo"
+    before = deepcopy(config["backtest"])
+
+    optimize._materialize_gpu_suite_run_contract(
+        config,
+        {
+            "enabled": True,
+            "scenarios": [{"label": "stress", "coins": ["ETH"]}],
+            "reducer": {"default": "max"},
+            "exchanges": ["bybit"],
+            "volume_normalization": False,
+        },
+    )
+
+    assert config["backtest"] == before
+
+
 def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
     config = optimize.get_template_config()
     config["optimize"]["limits"] = [

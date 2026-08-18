@@ -111,7 +111,8 @@ The supported slice is intentionally narrow:
   prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode for single-coin scenarios on one shared exchange; scenario date, coin, ignored-coin,
-  and exchange selection are supported, while scenario config overrides remain unsupported
+  and exchange selection are supported, while scenario config overrides and per-coin source
+  assignments remain unsupported
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
@@ -119,8 +120,8 @@ The supported slice is intentionally narrow:
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
-long+short runs, multi-coin or multi-exchange suites, suite scenario config overrides, HSL, and
-auto-unstuck are not silently approximated by this release.
+long+short runs, multi-coin or multi-exchange suites, suite scenario config overrides or per-coin
+source assignments, HSL, and auto-unstuck are not silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
@@ -129,7 +130,9 @@ Every exact validation still runs the unchanged Rust backtest for every scenario
 suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different
 single coin or date window, but every scenario must resolve to exactly one coin on the same
 exchange. Scenario `overrides` are rejected until their candidate-shadowing behavior is explicitly
-modeled by the proxy.
+modeled by the proxy, and scenario `coin_sources` are rejected until per-coin source-exchange
+semantics are modeled. The effective external suite definition and any `--scenarios` filter are
+stored in the run contract and checkpoint identity, so resume fails closed if either changes.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the

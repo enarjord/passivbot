@@ -825,6 +825,14 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 f"GPU suite scenario {ctx.label!r} uses config overrides; this slice "
                 "supports scenario dates, coins, ignored coins, and exchange selection only"
             )
+        coin_sources = (
+            getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources") or {}
+        )
+        if coin_sources:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} uses coin_sources; this slice "
+                "does not model per-coin source exchanges"
+            )
         exchanges = list(ctx.exchanges)
         if len(exchanges) != 1:
             raise ValueError(
@@ -874,6 +882,13 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             }
         )
     return prepared
+
+
+def _gpu_suite_enabled(config: dict, evaluator, evaluator_for_pool) -> bool:
+    enabled = evaluator_for_pool is not evaluator
+    if bool(config.get("backtest", {}).get("suite_enabled")) and not enabled:
+        raise TypeError("GPU suite mode requires the canonical SuiteEvaluator")
+    return enabled
 
 
 def _average_ranks(values: np.ndarray) -> np.ndarray:
@@ -1307,7 +1322,27 @@ def _update_novelty_stall(
     return current
 
 
-def _checkpoint_signature(active, scoring, *, anchor_plan=None) -> str:
+def _gpu_suite_checkpoint_contract(config: dict) -> dict:
+    backtest = config.get("backtest", {})
+    return {
+        key: deepcopy(backtest.get(key))
+        for key in (
+            "suite_enabled",
+            "scenarios",
+            "reducer",
+            "exchanges",
+            "volume_normalization",
+        )
+    }
+
+
+def _checkpoint_signature(
+    active,
+    scoring,
+    *,
+    anchor_plan=None,
+    suite_contract=None,
+) -> str:
     payload = {
         "active": [
             [name, int(index), float(bound.low), float(bound.high), bound.step]
@@ -1328,6 +1363,8 @@ def _checkpoint_signature(active, scoring, *, anchor_plan=None) -> str:
                 for anchor in anchor_plan.get("anchors") or []
             ],
         }
+    if suite_contract is not None:
+        payload["suite_contract"] = suite_contract
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -1635,6 +1672,14 @@ def _constraint_diagnostics(evaluator, proxy_metrics: dict, exact_payload: dict)
     proxy_suite = proxy_metrics.get(_GPU_SUITE_METRICS_KEY)
     exact_metrics = exact_payload.get("metrics") or {}
     exact_suite = exact_metrics.get("suite_metrics")
+    exact_constraint_violation = float(
+        exact_metrics.get("constraint_violation", 0.0) or 0.0
+    )
+    exact_failure_penalty = (
+        exact_constraint_violation
+        if exact_metrics.get("error") and exact_constraint_violation > 0.0
+        else None
+    )
     proxy_surface = (
         None if proxy_suite is not None else _single_scenario_metric_surface(proxy_metrics)
     )
@@ -1655,15 +1700,24 @@ def _constraint_diagnostics(evaluator, proxy_metrics: dict, exact_payload: dict)
             if exact_suite is not None
             else resolve_metric_value(exact_surface, check["metric_key"])
         )
+        exact_limit_violation = (
+            None
+            if exact_value is None and exact_failure_penalty is not None
+            else float(compute_limit_violation(check, exact_value))
+        )
         entry = {
             "metric": check["metric"],
             "metric_key": check["metric_key"],
+            "scenario": check.get("scenario"),
+            "reducer": check.get("reducer"),
             "mode": check["mode"],
             "proxy_value": None if proxy_value is None else float(proxy_value),
             "exact_value": None if exact_value is None else float(exact_value),
             "proxy_violation": float(compute_limit_violation(check, proxy_value)),
-            "exact_violation": float(compute_limit_violation(check, exact_value)),
+            "exact_violation": exact_limit_violation,
         }
+        if exact_limit_violation is None:
+            entry["exact_failure_penalty"] = exact_failure_penalty
         if "bound" in check:
             entry["bound"] = float(check["bound"])
         if "range" in check:
@@ -1676,13 +1730,20 @@ def _format_constraint_diagnostics(diagnostics: list[dict]) -> str:
     differing = [
         item
         for item in diagnostics
-        if (item["proxy_violation"] > 0.0) != (item["exact_violation"] > 0.0)
+        if item["exact_violation"] is None
+        or (item["proxy_violation"] > 0.0) != (item["exact_violation"] > 0.0)
     ]
     selected = differing or diagnostics
     return "; ".join(
         f"{item['metric_key']}: proxy={item['proxy_value']} "
         f"exact={item['exact_value']} mode={item['mode']} "
-        f"bound={item.get('bound', item.get('range'))}"
+        f"bound={item.get('bound', item.get('range'))} "
+        f"scenario={item.get('scenario')} reducer={item.get('reducer')}"
+        + (
+            f" exact_failure_penalty={item['exact_failure_penalty']}"
+            if item.get("exact_failure_penalty") is not None
+            else ""
+        )
         for item in selected
     )
 
@@ -1832,7 +1893,7 @@ def run_backend(
         overrides_list,
         finalize_fn=_finalize_optimizer_vector_config,
     )
-    suite_enabled = bool(config.get("backtest", {}).get("suite_enabled"))
+    suite_enabled = _gpu_suite_enabled(config, evaluator, evaluator_for_pool)
     suite_inputs = (
         _gpu_suite_scenario_inputs(proxy_config, evaluator_for_pool)
         if suite_enabled
@@ -2181,6 +2242,9 @@ def run_backend(
         active,
         config["optimize"]["scoring"],
         anchor_plan=get_anchor_plan(config),
+        suite_contract=(
+            _gpu_suite_checkpoint_contract(config) if suite_enabled else None
+        ),
     )
     budget = int(config["optimize"]["iters"])
     if budget <= 0:
@@ -2192,7 +2256,9 @@ def run_backend(
         with open(checkpoint_path, "rb") as file:
             checkpoint = pickle.load(file)
         if checkpoint.get("signature") != signature:
-            raise ValueError("GPU checkpoint does not match current bounds and scoring")
+            raise ValueError(
+                "GPU checkpoint does not match current bounds, scoring, or suite contract"
+            )
         algorithm = checkpoint["algorithm"]
         seed = int(checkpoint.get("seed", seed))
         generation = int(checkpoint["generation"])

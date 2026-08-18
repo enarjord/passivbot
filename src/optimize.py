@@ -117,6 +117,7 @@ from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_appr
 from logging_setup import configure_logging, resolve_log_level
 from materialized_cache import release_materialized_payload
 from copy import deepcopy
+from dataclasses import replace
 import gc
 import numpy as np
 from uuid import uuid4
@@ -2282,6 +2283,26 @@ class SuiteEvaluator:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
         return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["contexts"] = [
+            replace(
+                ctx,
+                shared_hlcvs_np={},
+                shared_btc_np={},
+                attachments={"hlcvs": {}, "btc": {}},
+            )
+            for ctx in self.contexts
+        ]
+        state["_master_attachments"] = {"hlcvs": {}, "btc": {}}
+        state["_master_arrays"] = {"hlcvs": {}, "btc": {}}
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._master_attachments = {"hlcvs": {}, "btc": {}}
+        self._master_arrays = {"hlcvs": {}, "btc": {}}
+
     def __del__(self):
         self.close()
 
@@ -2932,6 +2953,22 @@ def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | N
     return [scenario.label for scenario in scenarios]
 
 
+def _materialize_gpu_suite_run_contract(
+    config: Dict[str, Any], suite_cfg: Mapping[str, Any]
+) -> None:
+    """Persist the effective external/filterable suite in the GPU run config."""
+
+    if config.get("optimize", {}).get("backend") != "gpu" or not suite_cfg.get(
+        "enabled"
+    ):
+        return
+    backtest = config.setdefault("backtest", {})
+    backtest["suite_enabled"] = True
+    for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
+        if key in suite_cfg:
+            backtest[key] = deepcopy(suite_cfg[key])
+
+
 def _validate_optimizer_limit_suite_mode(
     config: Mapping[str, Any],
     *,
@@ -3228,6 +3265,7 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
+    _materialize_gpu_suite_run_contract(config, suite_cfg)
     active_suite_scenario_labels = _active_suite_scenario_labels(suite_cfg)
     _validate_optimizer_limit_suite_mode(
         config,

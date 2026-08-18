@@ -29,6 +29,7 @@ from optimization.backends.gpu_backend import (
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
+    _gpu_suite_enabled,
     _gpu_suite_scenario_inputs,
     _materialize_gpu_override_template,
     _DriftMonitor,
@@ -407,6 +408,19 @@ def test_gpu_scope_allows_suite_only_when_explicitly_requested():
     assert _validate_scope(config, _Evaluator(), allow_suite=True) == "bybit"
 
 
+def test_gpu_suite_activation_comes_from_exact_evaluator_wrapper():
+    config = _long_only_ema_config()
+    base = object()
+    suite = object()
+
+    assert _gpu_suite_enabled(config, base, suite) is True
+    assert _gpu_suite_enabled(config, base, base) is False
+
+    config["backtest"]["suite_enabled"] = True
+    with pytest.raises(TypeError, match="canonical SuiteEvaluator"):
+        _gpu_suite_enabled(config, base, base)
+
+
 def test_gpu_suite_inputs_materialize_one_selected_coin():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
@@ -471,6 +485,33 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             return copy.deepcopy(proxy_config)
 
     with pytest.raises(ValueError, match=message):
+        _gpu_suite_scenario_inputs(config, Suite())
+
+
+def test_gpu_suite_inputs_reject_effective_coin_sources():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="stress",
+        config={"backtest": {"coin_sources": {"BTC": "binance"}}},
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    with pytest.raises(ValueError, match="coin_sources"):
         _gpu_suite_scenario_inputs(config, Suite())
 
 
@@ -2197,6 +2238,33 @@ def test_gpu_anchor_checkpoint_signature_tracks_ordered_fixed_values():
     assert _checkpoint_signature(active, scoring, anchor_plan=reordered_items) == original
 
 
+def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
+    active = [("long_base_qty_pct", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    suite = {
+        "suite_enabled": True,
+        "scenarios": [{"label": "base", "coins": ["BTC"]}],
+        "reducer": {"default": "mean"},
+        "exchanges": ["bybit"],
+        "volume_normalization": True,
+    }
+    original = _checkpoint_signature(active, scoring, suite_contract=suite)
+    changed_scenario = copy.deepcopy(suite)
+    changed_scenario["scenarios"][0]["coins"] = ["ETH"]
+    changed_reducer = copy.deepcopy(suite)
+    changed_reducer["reducer"]["default"] = "min"
+
+    assert _checkpoint_signature(active, scoring) != original
+    assert (
+        _checkpoint_signature(active, scoring, suite_contract=changed_scenario)
+        != original
+    )
+    assert (
+        _checkpoint_signature(active, scoring, suite_contract=changed_reducer)
+        != original
+    )
+
+
 def test_gpu_rejects_pinned_unsupported_risk_behavior():
     from optimization.bounds import Bound
 
@@ -2368,6 +2436,8 @@ def test_constraint_diagnostics_name_disagreeing_limit_values():
         {
             "metric": "position_held_days_max",
             "metric_key": "position_held_days_max_max",
+            "scenario": None,
+            "reducer": None,
             "mode": "greater_than",
             "proxy_value": 24.0,
             "exact_value": 195.0,
@@ -2380,6 +2450,7 @@ def test_constraint_diagnostics_name_disagreeing_limit_values():
     assert "position_held_days_max_max" in detail
     assert "proxy=24.0 exact=195.0" in detail
     assert "bound=60.0" in detail
+    assert "scenario=None reducer=None" in detail
 
 
 def test_constraint_diagnostics_reads_suite_reducers_and_scenarios():
@@ -2441,6 +2512,50 @@ def test_constraint_diagnostics_reads_suite_reducers_and_scenarios():
     ]
     assert [item["exact_violation"] for item in diagnostics] == pytest.approx(
         [0.1, 0.001]
+    )
+    detail = _format_constraint_diagnostics(diagnostics)
+    assert "scenario=None reducer=max" in detail
+    assert "scenario=stress reducer=mean" in detail
+
+
+def test_constraint_diagnostics_preserve_invalid_exact_suite_penalty():
+    check = {
+        "metric": "backtest_completion_ratio",
+        "metric_key": "backtest_completion_ratio_min",
+        "mode": "less_than",
+        "bound": 0.99,
+        "penalty_weight": 1.0,
+        "reducer": "min",
+        "scenario": None,
+    }
+    evaluator = type("Evaluator", (), {"limit_checks": [check]})()
+    diagnostics = _constraint_diagnostics(
+        evaluator,
+        {
+            _GPU_SUITE_METRICS_KEY: {
+                "metrics": {
+                    "backtest_completion_ratio": {
+                        "stats": {"min": 1.0},
+                        "scenarios": {"base": 1.0},
+                    }
+                }
+            }
+        },
+        {
+            "metrics": {
+                "suite_metrics": {},
+                "constraint_violation": 1.0e18,
+                "error": "recoverable Rust failure",
+            },
+            "G": np.asarray([1.0e18]),
+        },
+    )
+
+    assert diagnostics[0]["exact_value"] is None
+    assert diagnostics[0]["exact_violation"] is None
+    assert diagnostics[0]["exact_failure_penalty"] == 1.0e18
+    assert "exact_failure_penalty=1e+18" in _format_constraint_diagnostics(
+        diagnostics
     )
 
 

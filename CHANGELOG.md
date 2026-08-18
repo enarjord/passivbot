@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and
   unchanged exact Rust suite evaluations remain authoritative. This slice supports scenario date,
   coin, ignored-coin, and single-exchange selection; scenario config overrides, multi-exchange
-  suites, and multi-coin scenarios still fail closed.
+  suites, multi-coin scenarios, and per-coin source assignments still fail closed. Effective
+  external suite definitions and scenario filters are persisted and checked on resume.
 
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
