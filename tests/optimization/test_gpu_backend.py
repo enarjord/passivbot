@@ -1331,6 +1331,45 @@ def test_gpu_lossless_hash_uses_effective_threshold_and_mirror_ordering():
     assert submitted == recovered == [0.04, 0.04, 0.7, 0.8]
 
 
+def test_gpu_lossless_hash_uses_selected_anchor_fixed_retracement():
+    key_paths = [
+        (ANCHOR_GENE_KEY, ("optimize", "fine_tune_anchor_index")),
+        (
+            "long_close_threshold_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "threshold_base_pct",
+            ),
+        ),
+    ]
+    base_vector = [0.0, 0.01]
+    anchors = [
+        {"long_close_retracement_base_pct": 0.02},
+        {"long_close_retracement_base_pct": 0.06},
+    ]
+
+    submitted = _canonicalize_optimizer_override_hash_vector(
+        [1.0, 0.01],
+        base_vector,
+        key_paths,
+        {"lossless_close_trailing"},
+        anchor_parameter_overrides=anchors,
+    )
+    recovered = _canonicalize_optimizer_override_hash_vector(
+        [1.0, 0.06],
+        base_vector,
+        key_paths,
+        {"lossless_close_trailing"},
+        anchor_parameter_overrides=anchors,
+    )
+
+    assert submitted == recovered == [1.0, 0.06]
+
+
 def test_gpu_short_only_mirror_keeps_long_source_genes_active():
     assert _gpu_candidate_source_sides(
         {"short"}, {"mirror_short_from_long"}

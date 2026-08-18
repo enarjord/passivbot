@@ -1160,6 +1160,8 @@ def _canonicalize_optimizer_override_hash_vector(
     base_vector,
     key_paths,
     overrides: set[str],
+    *,
+    anchor_parameter_overrides: list[dict[str, float]] | None = None,
 ) -> list[float]:
     """Hash the effective candidate while neutralizing mirrored shadow genes."""
 
@@ -1167,12 +1169,25 @@ def _canonicalize_optimizer_override_hash_vector(
     index_by_key = {
         bound_key: index for index, (bound_key, _path) in enumerate(key_paths)
     }
-    parameters = {
-        bound_key: canonical[index] for bound_key, index in index_by_key.items()
-    }
+    parameters = {}
+    if anchor_parameter_overrides is not None:
+        anchor_index = index_by_key.get(ANCHOR_GENE_KEY)
+        anchor_id = (
+            int(round(canonical[anchor_index])) if anchor_index is not None else 0
+        )
+        if anchor_id < 0 or anchor_id >= len(anchor_parameter_overrides):
+            raise ValueError(
+                "GPU anchored fine-tune selected invalid anchor id while hashing "
+                f"{anchor_id}; available={len(anchor_parameter_overrides)}"
+            )
+        parameters.update(anchor_parameter_overrides[anchor_id])
+    parameters.update(
+        {bound_key: canonical[index] for bound_key, index in index_by_key.items()}
+    )
     _apply_gpu_optimizer_overrides(parameters, overrides)
     for bound_key, value in parameters.items():
-        canonical[index_by_key[bound_key]] = float(value)
+        if bound_key in index_by_key:
+            canonical[index_by_key[bound_key]] = float(value)
     if "mirror_short_from_long" in overrides:
         canonical = _canonicalize_mirrored_hash_vector(
             canonical,
@@ -1801,6 +1816,7 @@ def run_backend(
             base_vector,
             key_paths,
             gpu_optimizer_overrides,
+            anchor_parameter_overrides=anchor_parameter_overrides,
         )
         return _canonical_vector_hash(vector, bounds, sig_digits)
 
