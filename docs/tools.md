@@ -38,7 +38,7 @@ passivbot tool pareto optimize_results/.../pareto \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0' \
-  --save-filtered filtered_pareto
+  --save-filtered optimize_results/filtered_pareto
 passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
@@ -88,7 +88,8 @@ are JSON files. Writes are staged before installation to protect existing output
 copy failures. When both save options are used, all member copies are staged before either output
 is installed. The two destinations are then installed independently: an installation failure for
 one does not roll back the other. The tool does not promise transactional behavior against
-concurrent modification of the source or destination by another process.
+concurrent modification of the source or destination by another process, or against process
+interruption during destination installation.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
