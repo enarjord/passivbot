@@ -5,7 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Add `-s/--save-selected` and `-f/--save-filtered` to `passivbot tool pareto` for copying the
-  selected member or the post-limit member set, with explicit overwrite handling and a filtered
+  selected member or the post-limit member set, with fail-if-present destinations and a filtered
   export manifest.
 
 - Add experimental Apple MPS optimization suites for the existing single-coin EMA-anchor and

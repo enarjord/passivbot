@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 import textwrap
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -440,11 +439,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Copy every member retained after limits to DIR and write selection.json. "
             "Without limits, copy the full loaded set."
         ),
-    )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Replace an existing selected FILE or filtered DIR.",
     )
     parser.add_argument(
         "--json",
@@ -1559,37 +1553,10 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
-def _is_within_by_identity(path: Path, directory: Path) -> bool:
-    current = path
-    while True:
-        try:
-            if current.samefile(directory):
-                return True
-        except FileNotFoundError:
-            pass
-        if current.parent == current:
-            return False
-        current = current.parent
-
-
-def _same_existing_path(left: Path, right: Path) -> bool:
-    try:
-        return left.samefile(right)
-    except FileNotFoundError:
-        return False
-
-
 def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> None:
     if (
         _is_within(path, pareto_dir)
-        or _is_within_by_identity(path, pareto_dir)
-        or (
-            directory
-            and (
-                _is_within(pareto_dir, path)
-                or _is_within_by_identity(pareto_dir, path)
-            )
-        )
+        or (directory and _is_within(pareto_dir, path))
     ):
         raise ValueError(
             f"Output must not overlap the source Pareto directory: {path}"
@@ -1599,8 +1566,6 @@ def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> N
 def _prepare_selected_output(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
-    *,
-    overwrite: bool,
 ) -> Path | None:
     if raw_path is None:
         return None
@@ -1611,10 +1576,7 @@ def _prepare_selected_output(
     if output.exists():
         if output.is_dir():
             raise IsADirectoryError(f"Selected output path is a directory: {output}")
-        if not overwrite:
-            raise FileExistsError(
-                f"Selected output already exists: {output} (use --overwrite to replace it)"
-            )
+        raise FileExistsError(f"Selected output already exists: {output}")
     if output.parent.exists() and not output.parent.is_dir():
         raise NotADirectoryError(f"Selected output parent is not a directory: {output.parent}")
     return output
@@ -1624,16 +1586,11 @@ def _prepare_filtered_output(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
     candidates: Sequence[ParetoCandidate],
-    *,
-    overwrite: bool,
 ) -> Path | None:
     if raw_path is None:
         return None
     output = Path(raw_path).expanduser().resolve()
     _validate_output_path(output, pareto_dir, directory=True)
-    cwd = Path.cwd().resolve()
-    if overwrite and (output == cwd or _same_existing_path(output, cwd)):
-        raise ValueError("Refusing to replace the current working directory.")
     names = [candidate.path.name for candidate in candidates]
     folded_names = [name.casefold() for name in names]
     if len(folded_names) != len(set(folded_names)):
@@ -1645,30 +1602,13 @@ def _prepare_filtered_output(
     if output.exists():
         if not output.is_dir():
             raise NotADirectoryError(f"Filtered output path is not a directory: {output}")
-        if not overwrite:
-            raise FileExistsError(
-                f"Filtered output directory already exists: {output} "
-                "(use --overwrite to replace it)"
-            )
-        invalid = [
-            entry
-            for entry in output.iterdir()
-            if entry.is_symlink()
-            or not entry.is_file()
-            or entry.suffix.lower() != ".json"
-        ]
-        if invalid:
-            preview = ", ".join(sorted(entry.name for entry in invalid)[:5])
-            raise FileExistsError(
-                "Refusing to replace a filtered output directory containing non-JSON "
-                f"entries: {preview}"
-            )
+        raise FileExistsError(f"Filtered output directory already exists: {output}")
     if output.parent.exists() and not output.parent.is_dir():
         raise NotADirectoryError(f"Filtered output parent is not a directory: {output.parent}")
     return output
 
 
-def _stage_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool) -> Path:
+def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         dir=output.parent,
@@ -1679,22 +1619,17 @@ def _stage_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool
     temporary = Path(temporary_name)
     try:
         shutil.copyfile(candidate.path, temporary)
-        mode_source = output if overwrite and output.exists() else candidate.path
-        shutil.copymode(mode_source, temporary)
         return temporary
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
 
 
-def _install_selected(temporary: Path, output: Path, *, overwrite: bool) -> None:
+def _install_selected(temporary: Path, output: Path) -> None:
     try:
-        if overwrite:
-            os.replace(temporary, output)
-        else:
-            if output.exists():
-                raise FileExistsError(f"Selected output already exists: {output}")
-            temporary.rename(output)
+        if output.exists():
+            raise FileExistsError(f"Selected output already exists: {output}")
+        temporary.rename(output)
     finally:
         _remove_export_file(temporary)
 
@@ -1708,7 +1643,6 @@ def _stage_filtered(
     active_limits: Sequence[Mapping[str, Any]],
     scenario: str | None,
     selected: ParetoCandidate,
-    overwrite: bool,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
@@ -1721,7 +1655,6 @@ def _stage_filtered(
                     f"{candidate.path.name}"
                 )
             shutil.copyfile(candidate.path, destination)
-            shutil.copymode(candidate.path, destination)
         manifest = {
             "tool": "passivbot tool pareto",
             "pareto_dir": str(pareto_dir),
@@ -1741,46 +1674,25 @@ def _stage_filtered(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        mode_source = output if overwrite and output.exists() else pareto_dir
-        shutil.copymode(mode_source, stage)
         return stage
     except Exception:
-        shutil.rmtree(stage)
+        _remove_export_tree(stage)
         raise
 
 
 def _remove_export_tree(path: Path) -> None:
-    for child in path.iterdir():
-        child.chmod(child.stat().st_mode | 0o200)
-    path.chmod(path.stat().st_mode | 0o200)
     shutil.rmtree(path)
 
 
 def _remove_export_file(path: Path) -> None:
-    if path.exists():
-        path.chmod(path.stat().st_mode | 0o200)
-        path.unlink()
+    path.unlink(missing_ok=True)
 
 
-def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
-    backup: Path | None = None
+def _install_filtered(stage: Path, output: Path) -> Path:
     try:
         if output.exists():
-            if not overwrite:
-                raise FileExistsError(
-                    f"Filtered output directory already exists: {output} "
-                    "(use --overwrite to replace it)"
-                )
-            backup = output.parent / f".pareto-backup-{uuid.uuid4().hex}"
-            output.rename(backup)
-        try:
-            stage.rename(output)
-        except Exception:
-            if backup is not None:
-                backup.rename(output)
-            raise
-        if backup is not None:
-            _remove_export_tree(backup)
+            raise FileExistsError(f"Filtered output directory already exists: {output}")
+        stage.rename(output)
         return output / FILTERED_SELECTION_MANIFEST
     finally:
         if stage.exists():
@@ -1829,17 +1741,14 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         target_pairs=getattr(args, "target", None),
         priority_arg=getattr(args, "priority", None),
     )
-    overwrite = bool(getattr(args, "overwrite", False))
     selected_output = _prepare_selected_output(
         getattr(args, "save_selected", None),
         pareto_dir,
-        overwrite=overwrite,
     )
     filtered_output = _prepare_filtered_output(
         getattr(args, "save_filtered", None),
         pareto_dir,
         filtered_candidates,
-        overwrite=overwrite,
     )
     if (
         selected_output is not None
@@ -1847,8 +1756,6 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         and (
             _is_within(selected_output, filtered_output)
             or _is_within(filtered_output, selected_output)
-            or _is_within_by_identity(selected_output, filtered_output)
-            or _is_within_by_identity(filtered_output, selected_output)
         )
     ):
         raise ValueError("Selected and filtered output paths must not overlap.")
@@ -1860,7 +1767,6 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             selected_stage = _stage_selected(
                 result.candidate,
                 selected_output,
-                overwrite=overwrite,
             )
         if filtered_output is not None:
             filtered_stage = _stage_filtered(
@@ -1871,16 +1777,14 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 active_limits=active_limits,
                 scenario=scenario,
                 selected=result.candidate,
-                overwrite=overwrite,
             )
         if selected_output is not None and selected_stage is not None:
-            _install_selected(selected_stage, selected_output, overwrite=overwrite)
+            _install_selected(selected_stage, selected_output)
             selected_stage = None
         if filtered_output is not None and filtered_stage is not None:
             filtered_manifest = _install_filtered(
                 filtered_stage,
                 filtered_output,
-                overwrite=overwrite,
             )
             filtered_stage = None
     finally:

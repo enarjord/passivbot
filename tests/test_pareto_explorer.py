@@ -442,13 +442,10 @@ def test_build_parser_accepts_scenario():
 
 
 def test_build_parser_accepts_save_outputs():
-    args = build_parser().parse_args(
-        ["-s", "selected.json", "-f", "filtered", "--overwrite"]
-    )
+    args = build_parser().parse_args(["-s", "selected.json", "-f", "filtered"])
 
     assert args.save_selected == "selected.json"
     assert args.save_filtered == "filtered"
-    assert args.overwrite is True
 
 
 def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
@@ -799,53 +796,6 @@ def test_run_from_args_saves_selected_member_exactly(
     assert "Saved selected member:" in capsys.readouterr().out
 
 
-def test_new_selected_output_does_not_require_hard_links(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-):
-    output = tmp_path / "selected.json"
-    monkeypatch.setattr(
-        pareto_explorer.os,
-        "link",
-        lambda *_args: (_ for _ in ()).throw(OSError("hard links unavailable")),
-    )
-
-    result = run_from_args(
-        build_parser().parse_args([str(sample_pareto_dir), "-s", str(output)])
-    )
-    capsys.readouterr()
-    assert output.read_bytes() == result.candidate.path.read_bytes()
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
-def test_selected_output_preserves_source_or_existing_mode(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    capsys,
-):
-    source = sample_pareto_dir / "balanced.json"
-    output = tmp_path / "selected.json"
-    source.chmod(0o640)
-
-    run_from_args(
-        build_parser().parse_args([str(sample_pareto_dir), "-s", str(output)])
-    )
-    capsys.readouterr()
-    assert output.stat().st_mode & 0o777 == 0o640
-
-    output.chmod(0o604)
-    source.chmod(0o600)
-    run_from_args(
-        build_parser().parse_args(
-            [str(sample_pareto_dir), "-s", str(output), "--overwrite"]
-        )
-    )
-    capsys.readouterr()
-    assert output.stat().st_mode & 0o777 == 0o604
-
-
 def test_run_from_args_saves_post_limit_members_and_manifest(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -873,136 +823,6 @@ def test_run_from_args_saves_post_limit_members_and_manifest(
     assert manifest["members"] == ["a_extreme.json", "balanced.json"]
     assert manifest["applied_limits"][0]["metric"] == "metric_a"
     assert "Saved filtered members: 2" in capsys.readouterr().out
-
-
-def test_filtered_export_detects_destination_filesystem_name_collision(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    original_exists = Path.exists
-
-    def collision_exists(path: Path) -> bool:
-        if path.name == "b_extreme.json" and path.parent.name.startswith(
-            ".pareto-filtered-"
-        ):
-            return True
-        return original_exists(path)
-
-    monkeypatch.setattr(Path, "exists", collision_exists)
-    output = tmp_path / "filtered"
-    args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(output)])
-
-    with pytest.raises(ValueError, match="collides on the destination filesystem"):
-        run_from_args(args)
-    assert not output.exists()
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
-def test_filtered_output_preserves_source_or_existing_modes(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    capsys,
-):
-    output = tmp_path / "filtered"
-    sample_pareto_dir.chmod(0o751)
-    (sample_pareto_dir / "balanced.json").chmod(0o640)
-
-    run_from_args(
-        build_parser().parse_args([str(sample_pareto_dir), "-f", str(output)])
-    )
-    capsys.readouterr()
-    assert output.stat().st_mode & 0o777 == 0o751
-    assert (output / "balanced.json").stat().st_mode & 0o777 == 0o640
-
-    output.chmod(0o750)
-    sample_pareto_dir.chmod(0o700)
-    run_from_args(
-        build_parser().parse_args(
-            [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-        )
-    )
-    capsys.readouterr()
-    assert output.stat().st_mode & 0o777 == 0o750
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
-def test_filtered_overwrite_removes_read_only_backup(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    capsys,
-):
-    output = tmp_path / "filtered"
-    output.mkdir()
-    old_output = output / "old.json"
-    old_output.write_text('{"old": true}\n')
-    old_output.chmod(0o444)
-    output.chmod(0o555)
-
-    run_from_args(
-        build_parser().parse_args(
-            [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-        )
-    )
-    capsys.readouterr()
-
-    assert output.stat().st_mode & 0o777 == 0o555
-    assert not list(tmp_path.glob(".pareto-backup-*"))
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
-def test_read_only_filtered_stage_remains_cleanupable(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    sample_pareto_dir.chmod(0o555)
-    selected = tmp_path / "selected.json"
-    filtered = tmp_path / "filtered"
-
-    def fail_selected_install(*_args, **_kwargs):
-        raise OSError("simulated selected install failure")
-
-    monkeypatch.setattr(pareto_explorer, "_install_selected", fail_selected_install)
-    args = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-s",
-            str(selected),
-            "-f",
-            str(filtered),
-        ]
-    )
-
-    with pytest.raises(OSError, match="simulated selected install failure"):
-        run_from_args(args)
-    assert not list(tmp_path.glob(".pareto-filtered-*"))
-
-
-def test_exports_support_long_destination_names(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    capsys,
-):
-    selected = tmp_path / (("s" * 245) + ".json")
-    run_from_args(
-        build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
-    )
-    capsys.readouterr()
-    assert selected.is_file()
-
-    output = tmp_path / ("f" * 250)
-    output.mkdir()
-    (output / "old.json").write_text('{"old": true}\n')
-
-    run_from_args(
-        build_parser().parse_args(
-            [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-        )
-    )
-    capsys.readouterr()
-    assert (output / "selection.json").is_file()
-    assert not list(tmp_path.glob(".pareto-backup-*"))
 
 
 def test_saved_outputs_are_reported_in_json(
@@ -1036,118 +856,25 @@ def test_saved_outputs_are_reported_in_json(
     }
 
 
-def test_saved_outputs_require_explicit_overwrite(
+def test_saved_outputs_must_not_already_exist(
     sample_pareto_dir: Path,
     tmp_path: Path,
-    capsys,
 ):
     selected = tmp_path / "selected.json"
     selected.write_text('{"old": true}\n')
     args = build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
-    with pytest.raises(FileExistsError, match="use --overwrite"):
+    with pytest.raises(FileExistsError, match="already exists"):
         run_from_args(args)
     assert json.loads(selected.read_text()) == {"old": True}
-
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-s", str(selected), "--overwrite"]
-    )
-    result = run_from_args(args)
-    capsys.readouterr()
-    assert selected.read_bytes() == result.candidate.path.read_bytes()
 
     filtered = tmp_path / "filtered"
     filtered.mkdir()
     stale = filtered / "stale.json"
     stale.write_text('{"stale": true}\n')
     args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(filtered)])
-    with pytest.raises(FileExistsError, match="use --overwrite"):
+    with pytest.raises(FileExistsError, match="already exists"):
         run_from_args(args)
     assert stale.exists()
-
-    args = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-l",
-            "metric_a>0.6",
-            "-f",
-            str(filtered),
-            "--overwrite",
-        ]
-    )
-    run_from_args(args)
-    capsys.readouterr()
-    assert not stale.exists()
-    assert sorted(path.name for path in filtered.iterdir()) == [
-        "a_extreme.json",
-        "balanced.json",
-        "selection.json",
-    ]
-
-
-def test_filtered_overwrite_refuses_non_json_entries(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-):
-    output = tmp_path / "filtered"
-    output.mkdir()
-    note = output / "notes.txt"
-    note.write_text("keep me\n")
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-    )
-
-    with pytest.raises(FileExistsError, match="non-JSON entries: notes.txt"):
-        run_from_args(args)
-    assert note.read_text() == "keep me\n"
-
-
-def test_filtered_overwrite_refuses_current_working_directory(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    output = tmp_path / "filtered"
-    output.mkdir()
-    existing = output / "old.json"
-    existing.write_text('{"old": true}\n')
-    monkeypatch.chdir(output)
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-f", ".", "--overwrite"]
-    )
-
-    with pytest.raises(ValueError, match="current working directory"):
-        run_from_args(args)
-    assert json.loads(existing.read_text()) == {"old": True}
-
-
-def test_existing_path_identity_detects_directory_alias(
-    tmp_path: Path,
-):
-    directory = tmp_path / "directory"
-    directory.mkdir()
-    alias = tmp_path / "alias"
-    alias.symlink_to(directory, target_is_directory=True)
-
-    assert pareto_explorer._same_existing_path(alias, directory)
-
-
-def test_filtered_overwrite_refuses_json_symlink(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-):
-    output = tmp_path / "filtered"
-    output.mkdir()
-    external = tmp_path / "external.json"
-    external.write_text('{"external": true}\n')
-    linked = output / "linked.json"
-    linked.symlink_to(external)
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-    )
-
-    with pytest.raises(FileExistsError, match="non-JSON entries: linked.json"):
-        run_from_args(args)
-    assert json.loads(external.read_text()) == {"external": True}
 
 
 def test_save_outputs_refuse_source_overlap(
@@ -1164,19 +891,6 @@ def test_save_outputs_refuse_source_overlap(
     )
     with pytest.raises(ValueError, match="must not overlap"):
         run_from_args(filtered_args)
-
-
-def test_identity_overlap_detects_existing_directory_alias(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-):
-    alias = tmp_path / "pareto_alias"
-    alias.symlink_to(sample_pareto_dir, target_is_directory=True)
-
-    assert pareto_explorer._is_within_by_identity(
-        alias / "filtered",
-        sample_pareto_dir,
-    )
 
 
 def test_combined_outputs_refuse_overlap_in_either_direction(
@@ -1211,51 +925,23 @@ def test_combined_outputs_refuse_overlap_in_either_direction(
     assert not selected.exists()
 
 
-def test_combined_outputs_use_identity_overlap_check(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    filtered = tmp_path / "filtered"
-    filtered.mkdir()
-    monkeypatch.setattr(pareto_explorer, "_is_within", lambda *_args: False)
-    args = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-s",
-            str(filtered / "selected.json"),
-            "-f",
-            str(filtered),
-            "--overwrite",
-        ]
-    )
-
-    with pytest.raises(ValueError, match="must not overlap"):
-        run_from_args(args)
-
-
-def test_filtered_copy_failure_preserves_existing_output(
+def test_filtered_copy_failure_leaves_no_output(
     sample_pareto_dir: Path,
     tmp_path: Path,
     monkeypatch,
 ):
     output = tmp_path / "filtered"
-    output.mkdir()
-    existing = output / "old.json"
-    existing.write_text('{"old": true}\n')
 
     def fail_copy(_source, _destination):
         raise OSError("simulated copy failure")
 
     monkeypatch.setattr(pareto_explorer.shutil, "copyfile", fail_copy)
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
-    )
+    args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(output)])
 
     with pytest.raises(OSError, match="simulated copy failure"):
         run_from_args(args)
-    assert json.loads(existing.read_text()) == {"old": True}
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["filtered", "run"]
+    assert not output.exists()
+    assert not list(tmp_path.glob(".pareto-filtered-*"))
 
 
 def test_combined_copy_failure_happens_before_either_output_is_installed(
