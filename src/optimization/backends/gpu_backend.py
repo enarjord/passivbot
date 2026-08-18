@@ -921,7 +921,6 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
         raise TypeError("GPU suite mode requires the canonical SuiteEvaluator")
 
     prepared = []
-    expected_exchange = None
     for ctx in contexts:
         overrides = getattr(ctx, "overrides", {}) or {}
         for dotted_path in overrides:
@@ -953,14 +952,6 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             raise ValueError(
                 "GPU suite scenarios do not support combined multi-exchange datasets"
             )
-        if expected_exchange is None:
-            expected_exchange = exchange
-        elif exchange != expected_exchange:
-            raise ValueError(
-                "GPU suite scenarios must use one shared exchange; "
-                f"expected {expected_exchange!r}, got {exchange!r} in {ctx.label!r}"
-            )
-
         hlcvs, btc, coin_indices = get_data(ctx, exchange)
         values = np.asarray(hlcvs)
         if coin_indices is not None:
@@ -2175,7 +2166,6 @@ def run_backend(
         else []
     )
     if suite_enabled:
-        exchange = suite_inputs[0]["exchange"]
         min_coin_count, max_coin_count, suite_multicoin_sides = (
             _gpu_suite_search_context(suite_inputs)
         )
