@@ -1816,7 +1816,8 @@ def _install_selected_without_overwrite(
             unsupported.add(errno.EOPNOTSUPP)
         if hasattr(errno, "ENOTSUP"):
             unsupported.add(errno.ENOTSUP)
-        if exc.errno not in unsupported:
+        windows_invalid_function = getattr(exc, "winerror", None) == 1
+        if exc.errno not in unsupported and not windows_invalid_function:
             raise
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_CLOEXEC"):

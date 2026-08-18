@@ -1081,16 +1081,25 @@ def test_selected_staging_uses_normal_exclusive_file_creation(
     assert mode == 0o666
 
 
+@pytest.mark.parametrize(
+    ("error_number", "winerror"),
+    [(errno.EOPNOTSUPP, None), (errno.EINVAL, 1)],
+)
 def test_selected_output_falls_back_when_hard_links_are_unsupported(
     sample_pareto_dir: Path,
     tmp_path: Path,
     monkeypatch,
     capsys,
+    error_number: int,
+    winerror: int | None,
 ):
     selected_output = tmp_path / "selected.json"
 
     def reject_hard_link(*args, **kwargs):
-        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+        error = OSError(error_number, "hard links unsupported")
+        if winerror is not None:
+            error.winerror = winerror
+        raise error
 
     monkeypatch.setattr(os, "link", reject_hard_link)
     args = build_parser().parse_args(
