@@ -1003,6 +1003,43 @@ def test_filtered_overwrite_refuses_non_json_entries(
     assert note.read_text() == "keep me\n"
 
 
+def test_filtered_overwrite_revalidates_contents_after_move_aside(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    stale = output_dir / "stale.json"
+    stale.write_text('{"stale": true}\n')
+    real_replace = os.replace
+    injected = False
+
+    def add_non_json_before_move_aside(source, destination):
+        nonlocal injected
+        source = Path(source)
+        destination = Path(destination)
+        if source == output_dir and ".backup-" in destination.name and not injected:
+            (output_dir / "notes.txt").write_text("preserve me\n")
+            injected = True
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("pareto_explorer.os.replace", add_non_json_before_move_aside)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    with pytest.raises(FileExistsError, match="non-JSON entries: notes.txt"):
+        run_from_args(args)
+
+    assert json.loads(stale.read_text()) == {"stale": True}
+    assert (output_dir / "notes.txt").read_text() == "preserve me\n"
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "notes.txt",
+        "stale.json",
+    ]
+
+
 def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1278,6 +1315,38 @@ def test_single_file_symlink_member_path_normalizes_dot_dot_without_dereferencin
     spelled_path = run_dir / "other" / ".." / "pareto" / "member.json"
     args = build_parser().parse_args(
         [str(spelled_path), "-f", str(pareto_dir), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="resolved source Pareto member"):
+        run_from_args(args)
+
+    assert member_path.is_symlink()
+
+
+def test_single_file_member_path_canonicalizes_symlinked_parent(
+    tmp_path: Path,
+):
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    resolved_source = external_dir / "target.json"
+    _write_candidate(
+        external_dir,
+        "target",
+        {"metric_a": 0.7, "metric_b": 0.7, "metric_c": 0.7},
+    )
+    member_path = pareto_dir / "member.json"
+    member_path.symlink_to(resolved_source)
+    aliased_parent = tmp_path / "pareto_alias"
+    aliased_parent.symlink_to(pareto_dir, target_is_directory=True)
+    args = build_parser().parse_args(
+        [
+            str(aliased_parent / "member.json"),
+            "-f",
+            str(pareto_dir),
+            "--overwrite",
+        ]
     )
 
     with pytest.raises(ValueError, match="resolved source Pareto member"):

@@ -785,7 +785,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         candidates.append(
             ParetoCandidate(
                 path=entry_path.resolve(),
-                member_path=Path(os.path.abspath(entry_path)),
+                member_path=entry_path.parent.resolve() / entry_path.name,
                 member_name=entry_path.name,
                 entry=entry,
                 objectives=objectives,
@@ -1786,6 +1786,7 @@ def _replace_filtered_output_dir(
     backup_dir.rmdir()
     os.replace(output_dir, backup_dir)
     try:
+        _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
         os.replace(staging_dir, output_dir)
     except Exception:
         os.replace(backup_dir, output_dir)
