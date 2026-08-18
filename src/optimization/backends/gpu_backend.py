@@ -818,7 +818,11 @@ def _validate_dual_multicoin_metrics(
         return
     unsupported = sorted(
         set(needed_metrics)
-        & {"fills_gap_longest_days", "strategy_eq_recovery_days_max"}
+        & {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        }
     )
     if unsupported:
         raise ValueError(

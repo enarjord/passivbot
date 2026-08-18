@@ -133,9 +133,10 @@ Rust portfolio backtest, and classification, rank, and drift gates halt material
 Dual-side one-way arbitration, dual-side multi-coin suites and coin overrides, multi-coin
 trailing-martingale, multi-exchange suites, non-bot suite scenario overrides, per-coin source
 assignments, HSL, and auto-unstuck are not silently approximated by this release. Dual-side
-multi-coin screening also rejects `fills_gap_longest_days` and
-`strategy_eq_recovery_days_max`: the independent directional summaries cannot reconstruct
-cross-side-only fill gaps or alternating portfolio recovery periods safely.
+multi-coin screening also rejects `fills_gap_longest_days`,
+`strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
+summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
+or fill volume normalized by the shared balance safely.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer

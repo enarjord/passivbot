@@ -1104,7 +1104,12 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
 
 
 @pytest.mark.parametrize(
-    "metric", ["fills_gap_longest_days", "strategy_eq_recovery_days_max"]
+    "metric",
+    [
+        "fills_gap_longest_days",
+        "strategy_eq_recovery_days_max",
+        "volume_pct_per_day_avg",
+    ],
 )
 def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
     with pytest.raises(ValueError, match=metric):
@@ -1117,7 +1122,11 @@ def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
 
 def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
     _validate_dual_multicoin_metrics(
-        {"fills_gap_longest_days", "strategy_eq_recovery_days_max"},
+        {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        },
         coin_count=3,
         enabled_sides={"long"},
     )
