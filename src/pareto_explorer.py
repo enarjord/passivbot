@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -1567,9 +1568,36 @@ def _validate_output_outside_source(path: Path, pareto_dir: Path, *, label: str)
         )
 
 
+def _validate_selected_output_not_source(
+    output: Path,
+    candidates: Sequence[ParetoCandidate],
+) -> None:
+    sources = {candidate.path.resolve() for candidate in candidates}
+    if output in sources:
+        raise ValueError(f"Refusing to overwrite a source Pareto member: {output}")
+
+
+def _validate_filtered_output_contains_no_sources(
+    output_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+) -> None:
+    contained = [
+        candidate.path.resolve()
+        for candidate in candidates
+        if _is_within(candidate.path.resolve(), output_dir)
+    ]
+    if contained:
+        preview = ", ".join(str(path) for path in contained[:5])
+        raise ValueError(
+            "Refusing to write filtered output over resolved source Pareto member(s): "
+            f"{preview}"
+        )
+
+
 def _prepare_selected_output(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
     *,
     overwrite: bool,
 ) -> Path | None:
@@ -1577,6 +1605,7 @@ def _prepare_selected_output(
         return None
     output = Path(raw_path).expanduser().resolve()
     _validate_output_outside_source(output, pareto_dir, label="selected output")
+    _validate_selected_output_not_source(output, candidates)
     if output.suffix.lower() != ".json":
         raise ValueError(f"Selected output must use a .json filename: {output}")
     if output.exists():
@@ -1591,10 +1620,38 @@ def _prepare_selected_output(
     return output
 
 
+def _validate_existing_filtered_output_dir(output_dir: Path, *, overwrite: bool) -> None:
+    if not output_dir.exists():
+        return
+    if not output_dir.is_dir():
+        raise NotADirectoryError(f"Filtered output path is not a directory: {output_dir}")
+    existing = sorted(
+        (path for path in output_dir.iterdir() if path.name != ".DS_Store"),
+        key=lambda path: path.name,
+    )
+    if existing and not overwrite:
+        raise FileExistsError(
+            f"Filtered output directory is not empty: {output_dir} "
+            "(use --overwrite to replace JSON outputs)"
+        )
+    invalid = [
+        path
+        for path in existing
+        if not path.is_file() or path.suffix.lower() != ".json"
+    ]
+    if invalid:
+        preview = ", ".join(path.name for path in invalid[:5])
+        raise FileExistsError(
+            f"Refusing to overwrite filtered output directory containing non-JSON "
+            f"entries: {preview}"
+        )
+
+
 def _prepare_filtered_output_dir(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
     candidates: Sequence[ParetoCandidate],
+    source_candidates: Sequence[ParetoCandidate],
     *,
     overwrite: bool,
 ) -> Path | None:
@@ -1602,6 +1659,7 @@ def _prepare_filtered_output_dir(
         return None
     output_dir = Path(raw_path).expanduser().resolve()
     _validate_output_outside_source(output_dir, pareto_dir, label="filtered output")
+    _validate_filtered_output_contains_no_sources(output_dir, source_candidates)
     names = [candidate.path.name for candidate in candidates]
     normalized_names = [name.casefold() for name in names]
     if len(normalized_names) != len(set(normalized_names)):
@@ -1611,30 +1669,8 @@ def _prepare_filtered_output_dir(
             f"Filtered member filename conflicts with reserved manifest name "
             f"{FILTERED_SELECTION_MANIFEST!r}."
         )
-    if output_dir.exists():
-        if not output_dir.is_dir():
-            raise NotADirectoryError(f"Filtered output path is not a directory: {output_dir}")
-        existing = sorted(
-            (path for path in output_dir.iterdir() if path.name != ".DS_Store"),
-            key=lambda path: path.name,
-        )
-        if existing and not overwrite:
-            raise FileExistsError(
-                f"Filtered output directory is not empty: {output_dir} "
-                "(use --overwrite to replace JSON outputs)"
-            )
-        invalid = [
-            path
-            for path in existing
-            if not path.is_file() or path.suffix.lower() != ".json"
-        ]
-        if invalid:
-            preview = ", ".join(path.name for path in invalid[:5])
-            raise FileExistsError(
-                f"Refusing to overwrite filtered output directory containing non-JSON "
-                f"entries: {preview}"
-            )
-    elif output_dir.parent.exists() and not output_dir.parent.is_dir():
+    _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
+    if not output_dir.exists() and output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise NotADirectoryError(
             f"Filtered output parent is not a directory: {output_dir.parent}"
         )
@@ -1643,7 +1679,42 @@ def _prepare_filtered_output_dir(
 
 def _write_selected_output(candidate: ParetoCandidate, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(candidate.path, output)
+    file_descriptor, staging_name = tempfile.mkstemp(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+    )
+    os.close(file_descriptor)
+    staging_path = Path(staging_name)
+    try:
+        shutil.copy2(candidate.path, staging_path)
+        os.replace(staging_path, output)
+    finally:
+        staging_path.unlink(missing_ok=True)
+
+
+def _replace_filtered_output_dir(
+    staging_dir: Path,
+    output_dir: Path,
+    *,
+    overwrite: bool,
+) -> None:
+    _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
+    if not output_dir.exists():
+        os.replace(staging_dir, output_dir)
+        return
+
+    backup_name = tempfile.mkdtemp(
+        prefix=f".{output_dir.name}.backup-", dir=output_dir.parent
+    )
+    backup_dir = Path(backup_name)
+    backup_dir.rmdir()
+    os.replace(output_dir, backup_dir)
+    try:
+        os.replace(staging_dir, output_dir)
+    except Exception:
+        os.replace(backup_dir, output_dir)
+        raise
+    else:
+        shutil.rmtree(backup_dir)
 
 
 def _write_filtered_outputs(
@@ -1655,48 +1726,60 @@ def _write_filtered_outputs(
     active_limits: Sequence[Mapping[str, Any]],
     scenario: str | None,
     selected: ParetoCandidate,
+    result: SelectionResult,
     overwrite: bool,
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if overwrite:
-        for path in output_dir.iterdir():
-            if path.name != ".DS_Store" and path.is_file() and path.suffix.lower() == ".json":
-                path.unlink()
-
-    members: List[Dict[str, Any]] = []
-    for candidate in candidates:
-        destination = output_dir / candidate.path.name
-        shutil.copy2(candidate.path, destination)
-        members.append(
-            {
-                "file": candidate.path.name,
-                "hash": candidate.path.stem,
-                "source_path": str(candidate.path),
-                "output_path": str(destination),
-            }
-        )
-
-    manifest_path = output_dir / FILTERED_SELECTION_MANIFEST
-    manifest = {
-        "tool": "passivbot tool pareto",
-        "mode": "filtered",
-        "pareto_dir": str(pareto_dir),
-        "loaded_count": int(loaded_count),
-        "retained_count": len(candidates),
-        "scenario": scenario,
-        "applied_limits": _json_ready(active_limits),
-        "selected_member": {
-            "file": selected.path.name,
-            "hash": selected.path.stem,
-            "source_path": str(selected.path),
-        },
-        "members": members,
-    }
-    manifest_path.write_text(
-        json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent)
     )
-    return manifest_path
+    try:
+        members: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            staged_destination = staging_dir / candidate.path.name
+            final_destination = output_dir / candidate.path.name
+            shutil.copy2(candidate.path, staged_destination)
+            members.append(
+                {
+                    "file": candidate.path.name,
+                    "hash": candidate.path.stem,
+                    "source_path": str(candidate.path),
+                    "output_path": str(final_destination),
+                }
+            )
+
+        active_metrics = result.details.get("active_metrics") or list(
+            result.objective_values
+        )
+        manifest = {
+            "tool": "passivbot tool pareto",
+            "mode": "filtered",
+            "pareto_dir": str(pareto_dir),
+            "loaded_count": int(loaded_count),
+            "retained_count": len(candidates),
+            "scenario": scenario,
+            "applied_limits": _json_ready(active_limits),
+            "method": result.method,
+            "objectives": _json_ready(active_metrics),
+            "weights": _json_ready(result.details.get("weights") or {}),
+            "targets": _json_ready(result.details.get("targets") or {}),
+            "priority": _json_ready(result.details.get("priority") or []),
+            "selected_member": {
+                "file": selected.path.name,
+                "hash": selected.path.stem,
+                "source_path": str(selected.path),
+            },
+            "members": members,
+        }
+        (staging_dir / FILTERED_SELECTION_MANIFEST).write_text(
+            json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _replace_filtered_output_dir(staging_dir, output_dir, overwrite=overwrite)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+    return output_dir / FILTERED_SELECTION_MANIFEST
 
 
 def run_from_args(args: argparse.Namespace) -> SelectionResult:
@@ -1745,21 +1828,26 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     selected_output = _prepare_selected_output(
         getattr(args, "save_selected", None),
         pareto_dir,
+        candidates,
         overwrite=overwrite,
     )
     filtered_output_dir = _prepare_filtered_output_dir(
         getattr(args, "save_filtered", None),
         pareto_dir,
         filtered_candidates,
+        candidates,
         overwrite=overwrite,
     )
     if (
         selected_output is not None
         and filtered_output_dir is not None
-        and _is_within(selected_output, filtered_output_dir)
+        and (
+            _is_within(selected_output, filtered_output_dir)
+            or _is_within(filtered_output_dir, selected_output)
+        )
     ):
         raise ValueError(
-            "Selected output must be outside the filtered output directory when both are saved."
+            "Selected and filtered output paths must not overlap when both are saved."
         )
     if selected_output is not None:
         _write_selected_output(result.candidate, selected_output)
@@ -1772,6 +1860,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             active_limits=active_limits,
             scenario=scenario,
             selected=result.candidate,
+            result=result,
             overwrite=overwrite,
         )
         if filtered_output_dir is not None

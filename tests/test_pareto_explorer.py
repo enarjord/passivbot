@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -837,6 +838,15 @@ def test_run_from_args_saves_filtered_members_and_manifest(
     assert manifest["loaded_count"] == 4
     assert manifest["retained_count"] == 2
     assert manifest["scenario"] is None
+    assert manifest["method"] == "ideal"
+    assert manifest["objectives"] == ["metric_a", "metric_b", "metric_c"]
+    assert manifest["weights"] == {
+        "metric_a": pytest.approx(1 / 3),
+        "metric_b": pytest.approx(1 / 3),
+        "metric_c": pytest.approx(1 / 3),
+    }
+    assert manifest["targets"] == {}
+    assert manifest["priority"] == []
     assert manifest["selected_member"]["file"] == "balanced.json"
     assert [member["file"] for member in manifest["members"]] == [
         "a_extreme.json",
@@ -949,6 +959,64 @@ def test_filtered_overwrite_refuses_non_json_entries(
     assert note.read_text() == "keep me\n"
 
 
+def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    stale = output_dir / "stale.json"
+    stale.write_text('{"stale": true}\n')
+    real_copy2 = shutil.copy2
+    copies = 0
+
+    def fail_on_second_copy(source, destination, *args, **kwargs):
+        nonlocal copies
+        copies += 1
+        if copies == 2:
+            raise OSError("simulated copy failure")
+        return real_copy2(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr("pareto_explorer.shutil.copy2", fail_on_second_copy)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        run_from_args(args)
+
+    assert json.loads(stale.read_text()) == {"stale": True}
+    assert sorted(path.name for path in output_dir.iterdir()) == ["stale.json"]
+    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".filtered.")]
+
+
+def test_save_filtered_refuses_directory_containing_resolved_source_member(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    resolved_source = output_dir / "linked.json"
+    resolved_source.write_bytes((sample_pareto_dir / "balanced.json").read_bytes())
+    (sample_pareto_dir / "linked.json").symlink_to(resolved_source)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>0.8",
+            "-f",
+            str(output_dir),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="resolved source Pareto member"):
+        run_from_args(args)
+
+    assert resolved_source.exists()
+
+
 def test_save_filtered_refuses_manifest_filename_collision(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -984,6 +1052,109 @@ def test_save_outputs_refuse_source_pareto_directory(
     )
     with pytest.raises(ValueError, match="inside the source Pareto directory"):
         run_from_args(filtered_args)
+
+
+def test_save_outputs_refuse_both_overlap_directions(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    filtered_parent = tmp_path / "filtered"
+    selected_inside_args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(filtered_parent / "selected.json"),
+            "-f",
+            str(filtered_parent),
+        ]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(selected_inside_args)
+
+    selected_parent = tmp_path / "selected.json"
+    filtered_inside_args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_parent),
+            "-f",
+            str(selected_parent / "filtered"),
+        ]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(filtered_inside_args)
+
+    assert not filtered_parent.exists()
+    assert not selected_parent.exists()
+
+
+def test_filtered_manifest_records_normalized_decision_inputs(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    utility_dir = tmp_path / "utility"
+    utility_args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-m",
+            "utility",
+            "-o",
+            "metric_b,metric_a",
+            "--weight",
+            "metric_b=5",
+            "-f",
+            str(utility_dir),
+        ]
+    )
+    run_from_args(utility_args)
+    capsys.readouterr()
+    utility_manifest = json.loads((utility_dir / "selection.json").read_text())
+    assert utility_manifest["method"] == "utility"
+    assert utility_manifest["objectives"] == ["metric_b", "metric_a"]
+    assert utility_manifest["weights"] == {
+        "metric_a": pytest.approx(1 / 6),
+        "metric_b": pytest.approx(5 / 6),
+    }
+    assert utility_manifest["targets"] == {}
+    assert utility_manifest["priority"] == []
+
+    reference_dir = tmp_path / "reference"
+    reference_args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-m",
+            "reference",
+            "--target",
+            "metric_a=0.75",
+            "-f",
+            str(reference_dir),
+        ]
+    )
+    run_from_args(reference_args)
+    capsys.readouterr()
+    reference_manifest = json.loads((reference_dir / "selection.json").read_text())
+    assert reference_manifest["method"] == "reference"
+    assert reference_manifest["targets"] == {"metric_a": 0.75}
+
+    priority_dir = tmp_path / "priority"
+    priority_args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-m",
+            "lexicographic",
+            "--priority",
+            "metric_c,metric_a",
+            "-f",
+            str(priority_dir),
+        ]
+    )
+    run_from_args(priority_args)
+    capsys.readouterr()
+    priority_manifest = json.loads((priority_dir / "selection.json").read_text())
+    assert priority_manifest["method"] == "lexicographic"
+    assert priority_manifest["objectives"] == ["metric_c", "metric_a"]
+    assert priority_manifest["priority"] == ["metric_c", "metric_a"]
 
 
 def test_save_filtered_with_scenario_exports_post_limit_set(

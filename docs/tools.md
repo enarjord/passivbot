@@ -34,11 +34,11 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0' \
-  --save-selected configs/promoted_candidate.json
+  --save-selected /path/to/private/passivbot/promoted_candidate.json
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0' \
-  --save-filtered filtered_pareto
+  --save-filtered /path/to/private/passivbot/filtered_pareto
 passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
@@ -81,8 +81,9 @@ saved member is the winner of the active method after objectives, limits, weight
 scenario projection are applied; with the default method it is the ideal-point winner. The original
 Pareto JSON artifact is copied without reserialization. Add `-f DIR` / `--save-filtered DIR` to copy
 every member retained immediately after limits, preserving the source filenames, and write a
-`selection.json` manifest with the source, scenario, limits, counts, selected winner, and copied
-members. Without limits, `--save-filtered` copies the full loaded set. With `--scenario`, the
+`selection.json` manifest with the source, scenario, limits, normalized method inputs, counts,
+selected winner, and copied members. Without limits, `--save-filtered` copies the full loaded set.
+With `--scenario`, the
 exported set is filtered using that scenario's metrics before the scenario-specific nondominated
 front is rebuilt.
 
