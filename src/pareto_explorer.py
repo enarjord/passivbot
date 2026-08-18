@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+import stat
 import tempfile
 import textwrap
 from dataclasses import dataclass
@@ -1698,18 +1699,52 @@ def _prepare_filtered_output_dir(
     return output_dir
 
 
-def _write_selected_output(candidate: ParetoCandidate, output: Path) -> None:
+def _write_selected_output(
+    candidate: ParetoCandidate,
+    output: Path,
+    *,
+    keep_backup: bool,
+) -> Path | None:
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staging_name = tempfile.mkstemp(
         prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
     )
     os.close(file_descriptor)
     staging_path = Path(staging_name)
+    backup_path: Path | None = None
     try:
         shutil.copy2(candidate.path, staging_path)
+        if output.exists():
+            backup_descriptor, backup_name = tempfile.mkstemp(
+                prefix=f".{output.name}.", suffix=".backup", dir=output.parent
+            )
+            os.close(backup_descriptor)
+            backup_path = Path(backup_name)
+            shutil.copy2(output, backup_path)
         os.replace(staging_path, output)
+        if backup_path is not None and not keep_backup:
+            backup_path.unlink()
+            backup_path = None
+        return backup_path
+    except Exception:
+        if backup_path is not None:
+            backup_path.unlink(missing_ok=True)
+        raise
     finally:
         staging_path.unlink(missing_ok=True)
+
+
+def _restore_selected_output(output: Path, backup_path: Path | None) -> None:
+    if backup_path is None:
+        output.unlink(missing_ok=True)
+    else:
+        os.replace(backup_path, output)
+
+
+def _default_directory_mode() -> int:
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    return 0o777 & ~current_umask
 
 
 def _replace_filtered_output_dir(
@@ -1751,10 +1786,16 @@ def _write_filtered_outputs(
     overwrite: bool,
 ) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
+    output_mode = (
+        stat.S_IMODE(output_dir.stat().st_mode)
+        if output_dir.exists()
+        else _default_directory_mode()
+    )
     staging_dir = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent)
     )
     try:
+        staging_dir.chmod(output_mode)
         members: List[Dict[str, Any]] = []
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
@@ -1872,23 +1913,34 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         raise ValueError(
             "Selected and filtered output paths must not overlap when both are saved."
         )
+    selected_backup: Path | None = None
     if selected_output is not None:
-        _write_selected_output(result.candidate, selected_output)
-    filtered_manifest = (
-        _write_filtered_outputs(
-            filtered_output_dir,
-            pareto_dir,
-            filtered_candidates,
-            loaded_count=len(candidates),
-            active_limits=active_limits,
-            scenario=scenario,
-            selected=result.candidate,
-            result=result,
-            overwrite=overwrite,
+        selected_backup = _write_selected_output(
+            result.candidate,
+            selected_output,
+            keep_backup=filtered_output_dir is not None,
         )
-        if filtered_output_dir is not None
-        else None
-    )
+    filtered_manifest: Path | None = None
+    try:
+        if filtered_output_dir is not None:
+            filtered_manifest = _write_filtered_outputs(
+                filtered_output_dir,
+                pareto_dir,
+                filtered_candidates,
+                loaded_count=len(candidates),
+                active_limits=active_limits,
+                scenario=scenario,
+                selected=result.candidate,
+                result=result,
+                overwrite=overwrite,
+            )
+    except Exception:
+        if selected_output is not None:
+            _restore_selected_output(selected_output, selected_backup)
+        raise
+    else:
+        if selected_backup is not None:
+            selected_backup.unlink()
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]

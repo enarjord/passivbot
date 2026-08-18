@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -989,6 +990,80 @@ def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
     assert json.loads(stale.read_text()) == {"stale": True}
     assert sorted(path.name for path in output_dir.iterdir()) == ["stale.json"]
     assert not [path for path in tmp_path.iterdir() if path.name.startswith(".filtered.")]
+
+
+@pytest.mark.parametrize("selected_exists", [False, True])
+def test_combined_outputs_restore_selected_when_filtered_staging_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    selected_exists: bool,
+):
+    selected_output = tmp_path / "selected.json"
+    if selected_exists:
+        selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    stale = filtered_output / "stale.json"
+    stale.write_text('{"filtered": "old"}\n')
+    real_copy2 = shutil.copy2
+
+    def fail_during_filtered_staging(source, destination, *args, **kwargs):
+        destination = Path(destination)
+        if destination.name == "b_extreme.json" and destination.parent.name.startswith(
+            ".filtered."
+        ):
+            raise OSError("simulated filtered copy failure")
+        return real_copy2(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr("pareto_explorer.shutil.copy2", fail_during_filtered_staging)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(OSError, match="simulated filtered copy failure"):
+        run_from_args(args)
+
+    if selected_exists:
+        assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    else:
+        assert not selected_output.exists()
+    assert json.loads(stale.read_text()) == {"filtered": "old"}
+    assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+@pytest.mark.parametrize("output_exists", [False, True])
+def test_filtered_output_directory_uses_destination_permissions(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+    output_exists: bool,
+):
+    output_dir = tmp_path / "filtered"
+    if output_exists:
+        output_dir.mkdir()
+        output_dir.chmod(0o750)
+        (output_dir / "stale.json").write_text('{"stale": true}\n')
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    previous_umask = os.umask(0o027)
+    try:
+        run_from_args(args)
+    finally:
+        os.umask(previous_umask)
+    capsys.readouterr()
+
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
 
 
 def test_save_filtered_refuses_directory_containing_resolved_source_member(
