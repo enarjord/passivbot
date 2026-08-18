@@ -964,6 +964,32 @@ def test_combined_outputs_refuse_overlap_in_either_direction(
     assert not selected.exists()
 
 
+def test_combined_outputs_recheck_overlap_after_staging(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    checks = 0
+
+    def overlap_after_staging(_selected: Path, _filtered: Path) -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    monkeypatch.setattr(pareto_explorer, "_outputs_overlap", overlap_after_staging)
+    selected = tmp_path / "selected.json"
+    filtered = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected), "-f", str(filtered)]
+    )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(args)
+    assert checks == 2
+    assert not selected.exists()
+    assert not filtered.exists()
+
+
 def test_filtered_copy_failure_leaves_no_output(
     sample_pareto_dir: Path,
     tmp_path: Path,

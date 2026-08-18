@@ -1583,6 +1583,15 @@ def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> N
         )
 
 
+def _outputs_overlap(selected_output: Path, filtered_output: Path) -> bool:
+    return (
+        _is_within(selected_output, filtered_output)
+        or _is_within(filtered_output, selected_output)
+        or _is_within_by_identity(selected_output, filtered_output)
+        or _is_within_by_identity(filtered_output, selected_output)
+    )
+
+
 def _prepare_selected_output(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
@@ -1779,12 +1788,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     if (
         selected_output is not None
         and filtered_output is not None
-        and (
-            _is_within(selected_output, filtered_output)
-            or _is_within(filtered_output, selected_output)
-            or _is_within_by_identity(selected_output, filtered_output)
-            or _is_within_by_identity(filtered_output, selected_output)
-        )
+        and _outputs_overlap(selected_output, filtered_output)
     ):
         raise ValueError("Selected and filtered output paths must not overlap.")
     selected_stage: Path | None = None
@@ -1806,6 +1810,12 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 scenario=scenario,
                 selected=result.candidate,
             )
+        if (
+            selected_output is not None
+            and filtered_output is not None
+            and _outputs_overlap(selected_output, filtered_output)
+        ):
+            raise ValueError("Selected and filtered output paths must not overlap.")
         if selected_output is not None and selected_stage is not None:
             _install_selected(selected_stage, selected_output)
             selected_stage = None
