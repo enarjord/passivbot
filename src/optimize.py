@@ -2988,14 +2988,23 @@ def _materialize_resolved_gpu_suite_dates(
     for scenario, ctx in zip(scenarios, scenario_contexts):
         resolved = deepcopy(scenario)
         resolved["label"] = ctx.label
-        context_backtest = ctx.config.get("backtest", {})
         for key in ("start_date", "end_date"):
-            value = context_backtest.get(key)
-            if value is None:
+            meta_key = f"requested_{key}"
+            prepared_values = {
+                str(mss.get("__meta__", {}).get(meta_key))
+                for mss in ctx.msss.values()
+                if mss.get("__meta__", {}).get(meta_key) is not None
+            }
+            if not prepared_values:
                 raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} has no prepared {key}"
+                    f"GPU suite scenario {ctx.label!r} has no prepared {meta_key}"
                 )
-            resolved[key] = value
+            if len(prepared_values) != 1:
+                raise RuntimeError(
+                    f"GPU suite scenario {ctx.label!r} has inconsistent prepared "
+                    f"{meta_key} values: {sorted(prepared_values)}"
+                )
+            resolved[key] = prepared_values.pop()
         resolved_scenarios.append(resolved)
     config["backtest"]["scenarios"] = resolved_scenarios
 
