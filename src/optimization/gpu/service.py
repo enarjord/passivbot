@@ -532,10 +532,6 @@ class MpsMulticoinEmaProxy:
                 "MPS dual-side multicoin proxy currently requires live.hedge_mode=true; "
                 "one-way arbitration is not modeled"
             )
-        if len(enabled_sides) == 2 and (config.get("coin_overrides") or {}):
-            raise ValueError(
-                "MPS dual-side multicoin proxy does not yet support coin_overrides"
-            )
         if len(enabled_sides) == 2:
             approved = config.get("live", {}).get("approved_coins", {}) or {}
             ignored = config.get("live", {}).get("ignored_coins", {}) or {}
@@ -672,27 +668,31 @@ class MpsMulticoinEmaProxy:
                 f"coins={coins}, prepared={coin_count}"
             )
         per_side_coin_overrides = {}
-        if len(self.sides) == 1:
-            side = self.sides[0]
-            overrides, self.coin_override_contract = (
-                _build_multicoin_ema_coin_overrides(
-                    config=config,
-                    mss=mss,
-                    exchange=exchange,
-                    coins=coins,
-                    payload=payload,
-                    side=side,
-                )
+        per_side_override_contracts = {}
+        for side in self.sides:
+            overrides, contract = _build_multicoin_ema_coin_overrides(
+                config=config,
+                mss=mss,
+                exchange=exchange,
+                coins=coins,
+                payload=payload,
+                side=side,
             )
             per_side_coin_overrides[side] = overrides
+            per_side_override_contracts[side] = contract
+        if len(self.sides) == 1:
+            self.coin_override_contract = per_side_override_contracts[self.sides[0]]
         else:
             self.coin_override_contract = {
                 "exchange": exchange,
                 "coins": coins,
                 "sides": list(self.sides),
+                "values_by_side": {
+                    side: per_side_override_contracts[side]["values"]
+                    for side in self.sides
+                },
                 "proxy_mode": "independent-side-hedge-v1",
             }
-            per_side_coin_overrides = {side: None for side in self.sides}
         self.coin_override_contract["forager_score_hysteresis_pct"] = (
             self.forager_score_hysteresis_pct
         )
