@@ -911,7 +911,9 @@ def test_filtered_overwrite_removes_read_only_backup(
 ):
     output = tmp_path / "filtered"
     output.mkdir()
-    (output / "old.json").write_text('{"old": true}\n')
+    old_output = output / "old.json"
+    old_output.write_text('{"old": true}\n')
+    old_output.chmod(0o444)
     output.chmod(0o555)
 
     run_from_args(
@@ -951,15 +953,22 @@ def test_read_only_filtered_stage_remains_cleanupable(
 
     with pytest.raises(OSError, match="simulated selected install failure"):
         run_from_args(args)
-    assert not list(tmp_path.glob(".filtered.tmp-*"))
+    assert not list(tmp_path.glob(".pareto-filtered-*"))
 
 
-def test_filtered_overwrite_supports_long_destination_name(
+def test_exports_support_long_destination_names(
     sample_pareto_dir: Path,
     tmp_path: Path,
     capsys,
 ):
-    output = tmp_path / ("f" * 220)
+    selected = tmp_path / (("s" * 245) + ".json")
+    run_from_args(
+        build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
+    )
+    capsys.readouterr()
+    assert selected.is_file()
+
+    output = tmp_path / ("f" * 250)
     output.mkdir()
     (output / "old.json").write_text('{"old": true}\n')
 
@@ -1147,6 +1156,29 @@ def test_combined_outputs_refuse_overlap_in_either_direction(
     with pytest.raises(ValueError, match="must not overlap"):
         run_from_args(filtered_inside)
     assert not selected.exists()
+
+
+def test_combined_outputs_use_identity_overlap_check(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    monkeypatch.setattr(pareto_explorer, "_is_within", lambda *_args: False)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(filtered / "selected.json"),
+            "-f",
+            str(filtered),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(args)
 
 
 def test_filtered_copy_failure_preserves_existing_output(

@@ -1662,7 +1662,7 @@ def _stage_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         dir=output.parent,
-        prefix=f".{output.name}.",
+        prefix=".pareto-selected-",
         suffix=".tmp",
     )
     os.close(file_descriptor)
@@ -1701,7 +1701,7 @@ def _stage_filtered(
     overwrite: bool,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=f".{output.name}.tmp-"))
+    stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
     try:
         for candidate in candidates:
             destination = stage / candidate.path.name
@@ -1730,6 +1730,8 @@ def _stage_filtered(
 
 
 def _remove_export_tree(path: Path) -> None:
+    for child in path.iterdir():
+        child.chmod(child.stat().st_mode | 0o200)
     path.chmod(path.stat().st_mode | 0o200)
     shutil.rmtree(path)
 
@@ -1819,6 +1821,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         and (
             _is_within(selected_output, filtered_output)
             or _is_within(filtered_output, selected_output)
+            or _is_within_by_identity(selected_output, filtered_output)
+            or _is_within_by_identity(filtered_output, selected_output)
         )
     ):
         raise ValueError("Selected and filtered output paths must not overlap.")
