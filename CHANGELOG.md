@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin private futures order websockets now discard the exact cached negotiated URL when the
+  exchange expires its token, allowing `watch_orders` to obtain a fresh token instead of reusing
+  the rejected URL indefinitely. The expected callback exception is reduced to a throttled warning
+  while REST reconciliation continues normally.
+
 - Extend `passivbot tool pareto` with `--save-selected` for copying the method winner to a JSON
   file and `--save-filtered` for copying the complete post-limit member set with a reproducible
   selection manifest. Output writes protect source Pareto directories, require explicit overwrite

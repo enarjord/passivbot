@@ -6669,7 +6669,10 @@ class Passivbot:
         )
         if not callback_like:
             return False
-        known_transport_error = any(
+        kucoin_token_expired = (
+            "token is expired" in combined and "kucoin" in combined
+        )
+        known_transport_error = kucoin_token_expired or any(
             needle in combined
             for needle in (
                 "ping timeout",
@@ -6700,7 +6703,11 @@ class Passivbot:
             self._asyncio_ws_callback_last_log_ms = now_ms
             level = logging.DEBUG if self._shutdown_requested() else logging.WARNING
             reason = (
-                "ping timeout" if "ping timeout" in combined else type(exc).__name__
+                "token expired"
+                if kucoin_token_expired
+                else "ping timeout"
+                if "ping timeout" in combined
+                else type(exc).__name__
             )
             if not reason:
                 reason = "transport error"
