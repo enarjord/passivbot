@@ -17,6 +17,7 @@ from optimization.gpu.model import (
 
 
 MPS_DAILY_COLS = 5
+MPS_MULTICOIN_DAILY_COLS = 6
 MPS_SCALAR_COLS = 18
 
 
@@ -70,6 +71,11 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "day_max_dd": daily[:, :, 2],
         "day_volume": daily[:, :, 3],
         "day_has_fill": daily[:, :, 4] > 0.0,
+        "day_min_balance": torch.where(
+            active_days,
+            daily[:, :, 5],
+            torch.full_like(daily[:, :, 5], float("inf")),
+        ),
         "max_dd": scalars[:, 0],
         "held_max_ms": scalars[:, 1],
         "gap_hist": gaps,
@@ -364,7 +370,7 @@ class MpsEmaAnchorMulticoinRunner:
             self._buffers = {
                 batch_size: (
                     torch.zeros(
-                        (batch_size, self.n_days, MPS_DAILY_COLS),
+                        (batch_size, self.n_days, MPS_MULTICOIN_DAILY_COLS),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -382,6 +388,7 @@ class MpsEmaAnchorMulticoinRunner:
             for buffer in self._buffers[batch_size]:
                 buffer.zero_()
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
+        self._buffers[batch_size][0][:, :, 5].fill_(float("inf"))
         return self._buffers[batch_size]
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:

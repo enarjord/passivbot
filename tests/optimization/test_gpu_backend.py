@@ -50,6 +50,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _update_probe_shortfall_log,
     _validate_directional_search_space,
+    _validate_dual_multicoin_metrics,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
@@ -1044,16 +1045,91 @@ def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_multicoin_foundation_rejects_hedge_mode():
+def test_gpu_multicoin_foundation_accepts_dual_side_hedge_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
         "short": ["BTC", "ETH", "SOL"],
     }
+    config["live"]["hedge_mode"] = True
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = False
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="one-way arbitration is not modeled"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_coin_overrides():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+    }
+
     with pytest.raises(ValueError, match="exactly one enabled side"):
         _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="matching long/short approved_coins"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "fills_gap_longest_days",
+        "strategy_eq_recovery_days_max",
+        "volume_pct_per_day_avg",
+    ],
+)
+def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
+    with pytest.raises(ValueError, match=metric):
+        _validate_dual_multicoin_metrics(
+            {metric, "adg_strategy_eq"},
+            coin_count=3,
+            enabled_sides={"long", "short"},
+        )
+
+
+def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
+    _validate_dual_multicoin_metrics(
+        {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        },
+        coin_count=3,
+        enabled_sides={"long"},
+    )
 
 
 @pytest.mark.parametrize(

@@ -740,10 +740,28 @@ def _validate_scope_config(
             raise ValueError(
                 "GPU multicoin foundation currently supports strategy_kind=ema_anchor only"
             )
-        if len(enabled_sides) != 1:
+        if len(enabled_sides) not in (1, 2):
             raise ValueError(
-                "GPU multicoin foundation currently supports exactly one enabled side"
+                "GPU multicoin foundation requires one or two enabled sides"
             )
+        if len(enabled_sides) == 2 and not bool(
+            config.get("live", {}).get("hedge_mode")
+        ):
+            raise ValueError(
+                "GPU dual-side multicoin EMA Anchor currently requires "
+                "live.hedge_mode=true; one-way arbitration is not modeled"
+            )
+        if len(enabled_sides) == 2:
+            approved = config.get("live", {}).get("approved_coins", {}) or {}
+            ignored = config.get("live", {}).get("ignored_coins", {}) or {}
+            for label, values in (("approved", approved), ("ignored", ignored)):
+                if set(values.get("long", []) or []) != set(
+                    values.get("short", []) or []
+                ):
+                    raise ValueError(
+                        "GPU dual-side multicoin EMA Anchor currently requires "
+                        f"matching long/short {label}_coins"
+                    )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "GPU multicoin foundation requires "
@@ -789,6 +807,29 @@ def _validate_scope_config(
                 f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
             )
     return exchange
+
+
+def _validate_dual_multicoin_metrics(
+    needed_metrics, *, coin_count: int, enabled_sides
+) -> None:
+    """Reject metrics which cannot be reconstructed from directional summaries."""
+
+    if int(coin_count) <= 1 or len(set(enabled_sides)) != 2:
+        return
+    unsupported = sorted(
+        set(needed_metrics)
+        & {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        }
+    )
+    if unsupported:
+        raise ValueError(
+            "GPU dual-side multicoin EMA Anchor cannot safely reconstruct proxy "
+            f"metrics {unsupported} from independent directional summaries; "
+            "use other metrics or the CPU optimizer"
+        )
 
 
 def _validate_gpu_coin_overrides(
@@ -2164,13 +2205,17 @@ def run_backend(
                 if gpu_side_enabled(proxy_config, side)
             ]
         )
-        if len(multicoin_sides) != 1:
+        if len(multicoin_sides) not in (1, 2):
             raise ValueError(
-                "GPU multicoin foundation requires exactly one enabled side"
+                "GPU multicoin foundation requires one or two enabled sides"
             )
-        bound_map = _ema_multicoin_bound_map(
-            multicoin_sides[0], gpu_optimizer_overrides
-        )
+        bound_map = {}
+        for multicoin_side in multicoin_sides:
+            bound_map.update(
+                _ema_multicoin_bound_map(
+                    multicoin_side, gpu_optimizer_overrides
+                )
+            )
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
@@ -2398,6 +2443,11 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
+    _validate_dual_multicoin_metrics(
+        needed_metrics,
+        coin_count=max_coin_count,
+        enabled_sides=enabled_sides,
+    )
 
     if suite_enabled:
         scenario_proxies = []

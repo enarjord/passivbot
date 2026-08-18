@@ -209,6 +209,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
     assert "constant int OVERRIDE_COLS = 12" in source
+    assert "constant int DAILY_COLS = 6" in source
+    assert "day_min_balance" in source
     assert "coin_override_or" in source
     count = 512
     coin_count = 3
@@ -271,6 +273,10 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert output["balance"].device.type == "mps"
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
+    assert output["day_min_balance"].shape == output["day_min_eq"].shape
+    assert torch.isfinite(
+        output["day_min_balance"][output["day_min_eq"].isfinite()]
+    ).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
 

@@ -662,8 +662,9 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **population_size**: Size of population for genetic optimization algorithm. With the default `pymoo` backend, `null` means auto: NSGA-II resolves to `250`, while NSGA-III resolves to a default population budget of `500` and chooses the finest auto reference-direction grid that fits inside that budget. Set an explicit integer to change the NSGA-III per-generation evaluation budget and auto reference-direction coarseness.
 - **backend**: Optimizer backend. Default is `pymoo`. Supported values are `deap`, `pymoo`, and
   experimental `gpu`. The GPU backend currently supports Apple MPS, single-coin EMA-anchor and
-  trailing-martingale runs in long-only, short-only, and long+short modes; single-side multi-coin
-  EMA-anchor runs; anchored fine-tuning with `--start` plus `--fine-tune-params`; and the V8
+  trailing-martingale runs in long-only, short-only, and long+short modes; single-side and
+  dual-side hedge-mode multi-coin EMA-anchor runs; anchored fine-tuning with `--start` plus
+  `--fine-tune-params`; and the V8
   `mirror_short_from_long` and `lossless_close_trailing` optimizer overrides. See
   `docs/optimizing.md` for its fail-closed scope and `optimize.gpu` settings.
   With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer

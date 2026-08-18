@@ -60,7 +60,8 @@ mod tests {
         assert!(source.contains("constant int OVERRIDE_COLS = 12"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
-        assert!(source.contains("constant int DAILY_COLS = 5"));
+        assert!(source.contains("constant int DAILY_COLS = 6"));
+        assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
