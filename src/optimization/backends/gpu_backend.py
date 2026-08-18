@@ -987,7 +987,7 @@ def _update_novelty_stall(
     return current
 
 
-def _checkpoint_signature(active, scoring) -> str:
+def _checkpoint_signature(active, scoring, *, anchor_plan=None) -> str:
     payload = {
         "active": [
             [name, int(index), float(bound.low), float(bound.high), bound.step]
@@ -996,6 +996,18 @@ def _checkpoint_signature(active, scoring) -> str:
         "scoring": scoring,
         "version": 2,
     }
+    if anchor_plan is not None:
+        payload["anchor_plan"] = {
+            "fixed_keys": sorted(anchor_plan.get("fixed_keys") or []),
+            "tunable_keys": sorted(anchor_plan.get("tunable_keys") or []),
+            "anchors": [
+                sorted(
+                    [str(item["key"]), float(item["value"])]
+                    for item in anchor.get("fixed_values") or []
+                )
+                for anchor in anchor_plan.get("anchors") or []
+            ],
+        }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -1669,7 +1681,11 @@ def run_backend(
     objective_scale = _ObjectiveScale()
     drift_monitor = _DriftMonitor(options)
     persisted_halt_reason = None
-    signature = _checkpoint_signature(active, config["optimize"]["scoring"])
+    signature = _checkpoint_signature(
+        active,
+        config["optimize"]["scoring"],
+        anchor_plan=get_anchor_plan(config),
+    )
     budget = int(config["optimize"]["iters"])
     if budget <= 0:
         raise ValueError("optimize.iters must be greater than zero")

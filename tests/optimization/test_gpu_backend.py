@@ -16,6 +16,7 @@ from optimization.backends.gpu_backend import (
     _build_anchor_parameter_context,
     _build_gpu_nsga2,
     _build_proxy_parameter_dicts,
+    _checkpoint_signature,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _format_constraint_diagnostics,
@@ -1482,6 +1483,44 @@ def test_gpu_anchor_ranges_cannot_change_side_enablement():
             {"long": ["BTC"], "short": []},
             {"long"},
         )
+
+
+def test_gpu_anchor_checkpoint_signature_tracks_ordered_fixed_values():
+    active = [(ANCHOR_GENE_KEY, 0, Bound(0.0, 1.0, 1.0))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    plan = {
+        "fixed_keys": ["long_base_qty_pct", "long_offset_psize_weight"],
+        "tunable_keys": ["long_offset"],
+        "anchors": [
+            {
+                "fixed_values": [
+                    {"key": "long_base_qty_pct", "value": 0.1},
+                    {"key": "long_offset_psize_weight", "value": 0.2},
+                ]
+            },
+            {
+                "fixed_values": [
+                    {"key": "long_base_qty_pct", "value": 0.3},
+                    {"key": "long_offset_psize_weight", "value": 0.4},
+                ]
+            },
+        ],
+    }
+    original = _checkpoint_signature(active, scoring, anchor_plan=plan)
+
+    edited = copy.deepcopy(plan)
+    edited["anchors"][1]["fixed_values"][0]["value"] = 0.31
+    reordered_anchors = copy.deepcopy(plan)
+    reordered_anchors["anchors"].reverse()
+    reordered_items = copy.deepcopy(plan)
+    reordered_items["anchors"][0]["fixed_values"].reverse()
+
+    assert _checkpoint_signature(active, scoring, anchor_plan=edited) != original
+    assert (
+        _checkpoint_signature(active, scoring, anchor_plan=reordered_anchors)
+        != original
+    )
+    assert _checkpoint_signature(active, scoring, anchor_plan=reordered_items) == original
 
 
 def test_gpu_rejects_pinned_unsupported_risk_behavior():
