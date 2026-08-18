@@ -30,8 +30,10 @@ from optimization.backends.gpu_backend import (
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
     _gpu_suite_enabled,
+    _gpu_suite_checkpoint_contract,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
+    _gpu_suite_search_context,
     _materialize_gpu_override_template,
     _DriftMonitor,
     _ObjectiveScale,
@@ -450,6 +452,40 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
     assert len(prepared) == 1
     assert prepared[0]["hlcvs"].shape == (10, 1, 4)
     assert np.array_equal(prepared[0]["hlcvs"][:, 0], master[:, 1])
+    assert prepared[0]["coin_count"] == 1
+
+
+def test_gpu_suite_inputs_materialize_multicoin_subset():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    master = np.arange(10 * 4 * 4, dtype=np.float64).reshape(10, 4, 4)
+    ctx = SimpleNamespace(
+        label="three_coins",
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {coin: {} for coin in ("BTC", "ETH", "SOL")}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return master, np.ones(10), [0, 2, 3]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["coin_count"] == 3
+    assert prepared[0]["hlcvs"].shape == (10, 3, 4)
+    assert np.array_equal(prepared[0]["hlcvs"][:, 1], master[:, 2])
 
 
 @pytest.mark.parametrize(
@@ -458,7 +494,6 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
         ({"backtest.starting_balance": 1_000}, ["bybit"], [0], "outside the supported"),
         ({}, ["bybit", "binance"], [0], "exactly one exchange"),
         ({}, ["combined"], [0], "combined multi-exchange"),
-        ({}, ["bybit"], [0, 1], "exactly one prepared coin"),
     ],
 )
 def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
@@ -487,6 +522,63 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
 
     with pytest.raises(ValueError, match=message):
         _gpu_suite_scenario_inputs(config, Suite())
+
+
+def _suite_search_input(label, config, coin_count):
+    return {
+        "ctx": SimpleNamespace(label=label),
+        "config": config,
+        "coin_count": coin_count,
+    }
+
+
+def test_gpu_suite_search_context_reports_coin_count_range():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("broad", config, 4),
+            _suite_search_input("narrow", config, 2),
+        ]
+    ) == (2, 4, "long")
+
+
+def test_gpu_suite_search_context_allows_legacy_single_coin_topologies():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("base", config, 1),
+            _suite_search_input("stress", config, 1),
+        ]
+    ) == (1, 1, None)
+
+
+def test_gpu_suite_search_context_rejects_multicoin_trailing_martingale():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+
+    with pytest.raises(ValueError, match="strategy_kind=ema_anchor"):
+        _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+
+
+def test_gpu_suite_search_context_rejects_multicoin_dual_side_scenario():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+
+    with pytest.raises(ValueError, match="exactly one enabled side"):
+        _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+
+
+def test_gpu_suite_search_context_rejects_different_sides():
+    long_config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    short_config = _directional_ema_config(long_enabled=False, short_enabled=True)
+
+    with pytest.raises(ValueError, match="same enabled side"):
+        _gpu_suite_search_context(
+            [
+                _suite_search_input("long", long_config, 3),
+                _suite_search_input("short", short_config, 2),
+            ]
+        )
 
 
 def test_gpu_suite_scenario_overrides_shadow_candidate_parameters_last():
@@ -2411,6 +2503,58 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
         _checkpoint_signature(active, scoring, suite_contract=changed_date)
         != original
     )
+
+
+def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000, 3000]),
+    }
+    original = _gpu_suite_checkpoint_contract(config, [item])
+
+    assert original["prepared_scenarios"] == [
+        {
+            "label": "stress",
+            "exchange": "bybit",
+            "coins": ["BTC", "ETH"],
+            "coin_count": 2,
+            "strategy_kind": "ema_anchor",
+            "enabled_sides": ["long"],
+            "candle_count": 3,
+            "first_timestamp": 1000,
+            "last_timestamp": 3000,
+        }
+    ]
+
+    changed_coins = copy.deepcopy(item)
+    changed_coins["coins"] = ["BTC", "SOL"]
+    changed_window = copy.deepcopy(item)
+    changed_window["timestamps"] = np.array([1000, 2000, 4000])
+
+    assert _gpu_suite_checkpoint_contract(config, [changed_coins]) != original
+    assert _gpu_suite_checkpoint_contract(config, [changed_window]) != original
+
+
+def test_gpu_suite_checkpoint_contract_rejects_timestamp_shape_mismatch():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000]),
+    }
+
+    with pytest.raises(ValueError, match="timestamp identity mismatch"):
+        _gpu_suite_checkpoint_contract(config, [item])
 
 
 def test_gpu_rejects_pinned_unsupported_risk_behavior():

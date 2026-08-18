@@ -110,9 +110,12 @@ The supported slice is intentionally narrow:
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
-- suite mode for single-coin scenarios on one shared exchange; scenario date, coin, ignored-coin,
-  exchange selection, and fail-closed `bot.long`/`bot.short` config overrides are supported, while
-  non-bot override paths and per-coin source assignments remain unsupported
+- suite mode on one shared exchange; single-coin EMA-anchor and trailing-martingale scenarios keep
+  their existing directional support, while EMA-anchor suites may also use different multi-coin
+  subsets of up to 64 coins when every effective scenario shares exactly one enabled side;
+  scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
+  config overrides are supported, while non-bot override paths and per-coin source assignments
+  remain unsupported
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
@@ -120,25 +123,29 @@ The supported slice is intentionally narrow:
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
-long+short runs, multi-coin or multi-exchange suites, non-bot suite scenario overrides, per-coin
-source assignments, HSL, and auto-unstuck are not silently approximated by this release.
+long+short runs and suites, multi-exchange suites, non-bot suite scenario overrides, per-coin source
+assignments, HSL, and auto-unstuck are not silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
 for aggregate reducers, named-scenario objectives, and named-scenario or suite-reduced limits.
 Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
-suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different
-single coin or date window, but every scenario must resolve to exactly one coin on the same
-exchange. Scenario `overrides` require explicit candidate-shadowing behavior in the proxy. This
-slice models `bot.long` and `bot.short` overrides: the canonical exact
+suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different coin
+subset or date window, but every scenario must use the same exchange. Scenario `overrides` require
+explicit candidate-shadowing behavior in the proxy. This slice models `bot.long` and `bot.short`
+overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
 Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
 overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
 enable HSL, auto-unstuck, an exposure enforcer, an invalid position count, or another unsupported
-behavior. Non-bot override paths and scenario `coin_sources` remain rejected until their proxy
-semantics are modeled. The effective external suite definition and any `--scenarios` filter are
+behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
+range within that subset, either through common bounds or an explicit scenario override. Metal
+uses the single-coin or multicoin kernel independently for each scenario, then feeds all results to
+the same suite reducer. Non-bot override paths and scenario `coin_sources` remain rejected until
+their proxy semantics are modeled. The effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
-prepared concrete dates, so resume fails closed if the definition or resolved window changes.
+prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
+coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
