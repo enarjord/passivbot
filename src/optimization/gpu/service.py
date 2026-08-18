@@ -26,6 +26,7 @@ CORE_OUTPUT_KEYS = {
     "day_max_dd",
     "day_volume",
     "day_has_fill",
+    "day_min_balance",
     "max_dd",
     "held_max_ms",
     "gap_hist",
@@ -98,10 +99,17 @@ def _combine_hedged_multicoin_outputs(
     raw_combined_min = (
         long["day_min_eq"] + short["day_min_eq"] - float(starting_balance)
     )
+    raw_combined_min_balance = (
+        long["day_min_balance"]
+        + short["day_min_balance"]
+        - float(starting_balance)
+    )
     portfolio_floor = max(0.0, float(starting_balance)) * max(
         0.0, float(liquidation_threshold)
     )
-    portfolio_breach = active & (raw_combined_min <= portfolio_floor)
+    portfolio_breach = active & (
+        (raw_combined_min <= portfolio_floor) | (raw_combined_min_balance <= 0.0)
+    )
     portfolio_liquidation_day = portfolio_breach.to(
         dtype=long["liq_step"].dtype
     ).argmax(dim=1).where(

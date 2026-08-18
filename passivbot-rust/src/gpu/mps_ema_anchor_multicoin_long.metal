@@ -5,7 +5,7 @@ constant int MAX_COINS = 64;
 constant int PARAM_COLS = 19;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 12;
-constant int DAILY_COLS = 5;
+constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
 
@@ -235,6 +235,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_dd = 0.0f;
     float day_volume = 0.0f;
     float day_has_fill = 0.0f;
+    float day_min_balance = INFINITY;
 
     for (int k = 1; k < T - 1; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
@@ -246,6 +247,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 2] = day_dd;
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
+                daily[output + 5] = day_min_balance;
             }
             current_day = day_index;
             day_touched = false;
@@ -254,6 +256,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_dd = 0.0f;
             day_volume = 0.0f;
             day_has_fill = 0.0f;
+            day_min_balance = INFINITY;
         }
 
         bool any_fill = false;
@@ -747,6 +750,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             max_dd = fmax(max_dd, drawdown);
             day_end = effective_equity;
             day_min = fmin(day_min, effective_equity);
+            day_min_balance = fmin(day_min_balance, balance);
             day_dd = fmax(day_dd, drawdown);
             day_touched = true;
             if (liquidated) {
@@ -763,6 +767,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 2] = day_dd;
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
+        daily[output + 5] = day_min_balance;
     }
 
     float total_size = 0.0f;

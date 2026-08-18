@@ -89,6 +89,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "day_max_dd": torch.tensor([[0.10, 0.20]]),
             "day_volume": torch.tensor([[0.4, 0.5]]),
             "day_has_fill": torch.tensor([fill]),
+            "day_min_balance": torch.tensor([[1_000.0, 1_000.0]]),
             "max_dd": torch.tensor([0.20]),
             "held_max_ms": torch.tensor([100.0]),
             "gap_hist": torch.tensor([[1, 2]]),
@@ -173,6 +174,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_max_dd": torch.tensor([[0.10, 0.48, 0.20]]),
             "day_volume": torch.tensor([[0.1, 0.1, 0.1]]),
             "day_has_fill": torch.tensor([[True, True, True]]),
+            "day_min_balance": torch.tensor([[900.0, 900.0, 900.0]]),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
             "gap_hist": torch.tensor([[1, 2]]),
@@ -195,6 +197,42 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
     assert torch.isinf(combined["day_min_eq"][0, 1])
     assert torch.isinf(combined["day_min_eq"][0, 2])
     assert combined["day_end_eq"][0, 1].item() == 0.0
+    assert combined["last_eq_ts"].item() == 86_340_000.0
+
+
+def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
+    torch = pytest.importorskip("torch")
+
+    def side_output():
+        return {
+            "day_end_eq": torch.tensor([[900.0, 600.0, 800.0]]),
+            "day_min_eq": torch.tensor([[800.0, 600.0, 700.0]]),
+            "day_max_dd": torch.tensor([[0.10, 0.40, 0.30]]),
+            "day_volume": torch.tensor([[0.1, 0.1, 0.1]]),
+            "day_has_fill": torch.tensor([[True, True, True]]),
+            "day_min_balance": torch.tensor([[900.0, 450.0, 700.0]]),
+            "max_dd": torch.tensor([0.40]),
+            "held_max_ms": torch.tensor([100.0]),
+            "gap_hist": torch.tensor([[1, 2]]),
+            "gap_max_ms": torch.tensor([300.0]),
+            "first_fill_ts": torch.tensor([100.0]),
+            "last_fill_ts": torch.tensor([200_000_000.0]),
+            "recovery_max_ms": torch.tensor([400.0]),
+            "last_high_ts": torch.tensor([1_000.0]),
+            "first_eq_ts": torch.tensor([0.0]),
+            "last_eq_ts": torch.tensor([200_000_000.0]),
+            "liq_step": torch.tensor([-1]),
+        }
+
+    combined = _combine_hedged_multicoin_outputs(
+        side_output(), side_output(), 1_000.0, 0.05, 0, 60_000
+    )
+
+    # Combined equity remains 200, above the 50 floor, while conservative
+    # combined realized balance is -100 and must terminate the screen.
+    assert combined["liq_step"].item() == 1
+    assert torch.isfinite(combined["day_min_eq"][0, 0])
+    assert torch.isinf(combined["day_min_eq"][0, 1])
     assert combined["last_eq_ts"].item() == 86_340_000.0
 
 
