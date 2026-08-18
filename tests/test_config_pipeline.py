@@ -69,6 +69,38 @@ def test_startup_phase_budgets_validate_and_roundtrip():
     ]
 
 
+def test_prepare_config_preserves_fixed_runtime_override_mapping():
+    source = get_template_config()
+    source["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.strategy.trailing_martingale.entry.threshold_base_pct": 0.123,
+        "bot.short.hsl.no_restart_drawdown_threshold": 1.0,
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["optimize"]["fixed_runtime_overrides"] == source["optimize"][
+        "fixed_runtime_overrides"
+    ]
+
+
+@pytest.mark.parametrize(
+    "overrides,error_type,error_match",
+    [
+        ([], TypeError, "fixed_runtime_overrides must be a dict"),
+        ({1: 2}, TypeError, "keys must be dotted strings"),
+        ({"bot.long.not_a_setting": 1}, KeyError, "Unknown override path"),
+    ],
+)
+def test_prepare_config_rejects_invalid_fixed_runtime_overrides(
+    overrides, error_type, error_match
+):
+    source = get_template_config()
+    source["optimize"]["fixed_runtime_overrides"] = overrides
+
+    with pytest.raises(error_type, match=error_match):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 @pytest.mark.parametrize(
     "budgets,error_type,error_match",
     [

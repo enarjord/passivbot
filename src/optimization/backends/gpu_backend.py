@@ -162,10 +162,31 @@ def _materialize_gpu_override_template(
     config: dict,
     overrides_list,
     overrides_fn,
+    *,
+    fixed_overrides_fn=None,
 ) -> dict:
-    """Apply the exact candidate override contract to the proxy's base config."""
+    """Apply exact runtime-finalization overrides to the proxy base config."""
 
     proxy_config = deepcopy(config)
+    fixed_overrides = (
+        proxy_config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
+    )
+    if fixed_overrides:
+        if not callable(fixed_overrides_fn):
+            from optimization.warmup import _apply_config_overrides
+
+            fixed_overrides_fn = _apply_config_overrides
+        fixed_overrides_fn(proxy_config, fixed_overrides)
+    source_strategy_kind = str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+    effective_strategy_kind = (
+        str(proxy_config.get("live", {}).get("strategy_kind", "")).strip().lower()
+    )
+    if effective_strategy_kind != source_strategy_kind:
+        raise ValueError(
+            "GPU optimize.fixed_runtime_overrides may not change live.strategy_kind; "
+            "configure the strategy kind before optimization so the search shape and "
+            "Metal kernel remain aligned"
+        )
     if not overrides_list:
         return proxy_config
     if not callable(overrides_fn):
@@ -176,6 +197,57 @@ def _materialize_gpu_override_template(
     for side in ("long", "short"):
         proxy_config = overrides_fn(overrides_list, proxy_config, side)
     return proxy_config
+
+
+def _gpu_fixed_bound_context(
+    config: dict,
+    effective_config: dict,
+    key_paths,
+    bound_map: dict[str, str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Resolve runtime-fixed optimizer bounds and their proxy parameter names."""
+
+    from config.param_paths import (
+        require_existing_config_path,
+        resolve_optimizer_key_path,
+    )
+
+    path_to_bound_key = {
+        tuple(path): bound_key for bound_key, path in key_paths
+    }
+    for bound_key in bound_map:
+        path = resolve_optimizer_key_path(config, bound_key)
+        if path is not None:
+            path_to_bound_key[tuple(path)] = bound_key
+    fixed_bound_values: dict[str, float] = {}
+    fixed_parameters: dict[str, float] = {}
+    fixed_overrides = (
+        config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
+    )
+    for dotted_path in fixed_overrides:
+        resolved = require_existing_config_path(config, dotted_path)
+        bound_key = path_to_bound_key.get(tuple(resolved))
+        if bound_key is None:
+            continue
+        target = effective_config
+        for part in resolved:
+            target = target[part]
+        try:
+            value = float(target)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "GPU fixed runtime override for optimizer bound "
+                f"{bound_key!r} must resolve to a numeric value"
+            ) from exc
+        if not math.isfinite(value):
+            raise ValueError(
+                "GPU fixed runtime override for optimizer bound "
+                f"{bound_key!r} must resolve to a finite value"
+            )
+        fixed_bound_values[bound_key] = value
+        if bound_key in bound_map:
+            fixed_parameters[bound_map[bound_key]] = value
+    return fixed_bound_values, fixed_parameters
 
 
 def _mirror_short_mapping(mapping: dict) -> None:
@@ -556,17 +628,6 @@ def _validate_scope(config: dict, evaluator) -> str:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
     if config.get("coin_overrides"):
         raise ValueError("GPU foundation does not support coin_overrides")
-    fixed_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
-    inert_hsl_policy_overrides = {
-        "bot.long.hsl.restart_after_red_policy",
-        "bot.short.hsl.restart_after_red_policy",
-    }
-    unsupported_overrides = sorted(set(fixed_overrides) - inert_hsl_policy_overrides)
-    if unsupported_overrides:
-        raise ValueError(
-            "GPU foundation does not support optimize.fixed_runtime_overrides for "
-            f"{unsupported_overrides}; apply the values directly to the config"
-        )
     if float(config.get("live", {}).get("max_realized_loss_pct", 1.0)) != 1.0:
         raise ValueError(
             "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
@@ -1162,6 +1223,8 @@ def _canonicalize_optimizer_override_hash_vector(
     overrides: set[str],
     *,
     anchor_parameter_overrides: list[dict[str, float]] | None = None,
+    fixed_bound_values: dict[str, float] | None = None,
+    fixed_parameter_overrides: dict[str, float] | None = None,
 ) -> list[float]:
     """Hash the effective candidate while neutralizing mirrored shadow genes."""
 
@@ -1169,6 +1232,9 @@ def _canonicalize_optimizer_override_hash_vector(
     index_by_key = {
         bound_key: index for index, (bound_key, _path) in enumerate(key_paths)
     }
+    for bound_key, value in (fixed_bound_values or {}).items():
+        if bound_key in index_by_key:
+            canonical[index_by_key[bound_key]] = float(value)
     parameters = {}
     if anchor_parameter_overrides is not None:
         anchor_index = index_by_key.get(ANCHOR_GENE_KEY)
@@ -1184,6 +1250,7 @@ def _canonicalize_optimizer_override_hash_vector(
     parameters.update(
         {bound_key: canonical[index] for bound_key, index in index_by_key.items()}
     )
+    parameters.update(fixed_parameter_overrides or {})
     _apply_gpu_optimizer_overrides(parameters, overrides)
     for bound_key, value in parameters.items():
         if bound_key in index_by_key:
@@ -1204,6 +1271,7 @@ def _build_proxy_parameter_dicts(
     active_values,
     *,
     anchor_parameter_overrides: list[dict[str, float]] | None = None,
+    fixed_parameter_overrides: dict[str, float] | None = None,
     optimizer_overrides: set[str] | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
@@ -1240,6 +1308,7 @@ def _build_proxy_parameter_dicts(
                 if name != ANCHOR_GENE_KEY
             }
         )
+        parameters.update(fixed_parameter_overrides or {})
         result.append(
             _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
         )
@@ -1545,6 +1614,7 @@ def run_backend(
     from config.scoring import extract_objective_specs
     from optimization.gpu.metrics import SUPPORTED_METRICS
     from optimization.gpu.service import MpsMulticoinEmaProxy, MpsSingleCoinProxy
+    from optimization.warmup import _apply_config_overrides
 
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
@@ -1577,6 +1647,7 @@ def run_backend(
         config,
         overrides_list,
         overrides_fn,
+        fixed_overrides_fn=_apply_config_overrides,
     )
     exchange = _validate_scope(proxy_config, evaluator)
     coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
@@ -1595,6 +1666,13 @@ def run_backend(
         )
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
+
+    fixed_bound_values, fixed_parameter_overrides = _gpu_fixed_bound_context(
+        config,
+        proxy_config,
+        key_paths,
+        bound_map,
+    )
 
     anchor_parameter_overrides, anchor_fixed_bounds = (
         _build_anchor_parameter_context(config, bound_map)
@@ -1632,6 +1710,7 @@ def run_backend(
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
     }
+    base_by_key.update(fixed_bound_values)
     if "mirror_short_from_long" in gpu_optimizer_overrides:
         _mirror_short_mapping(base_by_key)
     if anchor_parameter_overrides is not None:
@@ -1677,6 +1756,7 @@ def run_backend(
         (name, index, bound)
         for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
         if bound.high > bound.low
+        and name not in fixed_parameter_overrides
         and not (
             "mirror_short_from_long" in gpu_optimizer_overrides
             and name.startswith("short_")
@@ -1703,6 +1783,12 @@ def run_backend(
             f"{overlap}"
         )
     bound_by_key.update(anchor_fixed_bounds)
+    bound_by_key.update(
+        {
+            bound_key: Bound(value, value)
+            for bound_key, value in fixed_bound_values.items()
+        }
+    )
     if "mirror_short_from_long" in gpu_optimizer_overrides:
         _mirror_short_mapping(bound_by_key)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
@@ -1794,6 +1880,7 @@ def run_backend(
             active,
             values,
             anchor_parameter_overrides=anchor_parameter_overrides,
+            fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
         )
 
@@ -1817,6 +1904,8 @@ def run_backend(
             key_paths,
             gpu_optimizer_overrides,
             anchor_parameter_overrides=anchor_parameter_overrides,
+            fixed_bound_values=fixed_bound_values,
+            fixed_parameter_overrides=fixed_parameter_overrides,
         )
         return _canonical_vector_hash(vector, bounds, sig_digits)
 

@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
+  as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
+  durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the
+  effective config still fails closed on unsupported GPU behavior. Config normalization now
+  preserves documented user-defined dotted override paths and rejects malformed or unknown paths
+  instead of silently replacing them with schema defaults.
+
 - Apply the V8 `optimize.enable_overrides` candidate contract in the experimental Apple MPS
   optimizer. `mirror_short_from_long` now mirrors each proxy candidate after anchor and tunable
   values are resolved, and `lossless_close_trailing` raises each trailing-martingale close
@@ -47,7 +54,7 @@ All notable user-facing changes will be documented in this file.
   equal-price closes, and fill every strictly crossed rung in Rust's canonical order. Other
   strategies, suites, multi-coin hedged or trailing-martingale runs, HSL, auto-unstuck,
   collateral, minimum-effective-cost filtering, market-order execution, incomplete candle tails,
-  non-inert fixed runtime overrides, and unmodeled risk gates fail closed. Fused delta-form Metal
+  and unmodeled risk gates fail closed. Fused delta-form Metal
   EMA updates reduce long-horizon float32 path drift. Optimizer-limit feasibility disagreements
   feed aggregate, proxy-front, and broad-probe rolling constraint-agreement gates, retain exact
   Rust as the only authoritative classification, and persist per-limit proxy/exact diagnostics.

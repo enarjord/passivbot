@@ -138,6 +138,14 @@ genes that exact materialization overwrites are omitted from the proxy search di
 `forward_tp_grid` and `backward_tp_grid` values remain unsupported because the GPU backend does not
 support `trailing_grid_v7`.
 
+`optimize.fixed_runtime_overrides` is also applied in exact candidate-materialization order: after
+anchor and tunable values, and before `optimize.enable_overrides`. A fixed override that shadows a
+supported GPU optimizer bound removes that gene from the Metal search and supplies the fixed value
+to both proxy screening and exact Rust validation. The effective overridden config is checked
+against the same fail-closed GPU scope, so an override cannot silently enable unsupported behavior.
+Config normalization preserves user-defined dotted override paths and rejects malformed or unknown
+paths before optimization begins.
+
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
 `sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,

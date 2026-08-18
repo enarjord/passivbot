@@ -25,6 +25,7 @@ from optimization.backends.gpu_backend import (
     _constraint_diagnostics,
     _ema_multicoin_bound_map,
     _format_constraint_diagnostics,
+    _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
     _materialize_gpu_override_template,
     _DriftMonitor,
@@ -432,12 +433,6 @@ def test_single_scenario_metric_surface_supports_all_reducers():
                 "coin_overrides", {"BTC": {"bot.long.risk.n_positions": 2}}
             ),
             "coin_overrides",
-        ),
-        (
-            lambda config: config["optimize"]["fixed_runtime_overrides"].__setitem__(
-                "bot.long.unstuck.enabled", True
-            ),
-            "fixed_runtime_overrides",
         ),
         (
             lambda config: config["live"].__setitem__(
@@ -1370,6 +1365,53 @@ def test_gpu_lossless_hash_uses_selected_anchor_fixed_retracement():
     assert submitted == recovered == [1.0, 0.06]
 
 
+def test_gpu_hash_uses_runtime_fixed_value_before_lossless_override():
+    key_paths = [
+        (
+            "long_close_threshold_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "threshold_base_pct",
+            ),
+        ),
+        (
+            "long_close_retracement_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "retracement_base_pct",
+            ),
+        ),
+    ]
+    base_vector = [0.01, 0.02]
+
+    submitted = _canonicalize_optimizer_override_hash_vector(
+        [0.01, 0.02],
+        base_vector,
+        key_paths,
+        {"lossless_close_trailing"},
+        fixed_bound_values={"long_close_retracement_base_pct": 0.06},
+        fixed_parameter_overrides={"long_close_retracement_base_pct": 0.06},
+    )
+    recovered = _canonicalize_optimizer_override_hash_vector(
+        [0.06, 0.06],
+        base_vector,
+        key_paths,
+        {"lossless_close_trailing"},
+        fixed_bound_values={"long_close_retracement_base_pct": 0.06},
+        fixed_parameter_overrides={"long_close_retracement_base_pct": 0.06},
+    )
+
+    assert submitted == recovered == [0.06, 0.06]
+
+
 def test_gpu_short_only_mirror_keeps_long_source_genes_active():
     assert _gpu_candidate_source_sides(
         {"short"}, {"mirror_short_from_long"}
@@ -1475,6 +1517,37 @@ def test_gpu_proxy_parameter_builder_applies_optimizer_overrides_after_anchors()
     ]
 
 
+def test_gpu_proxy_parameter_builder_applies_fixed_runtime_after_tunables():
+    mapped = {
+        "long_close_threshold_base_pct": (0, Bound(0.0, 1.0)),
+        "long_close_retracement_base_pct": (1, Bound(0.0, 1.0)),
+    }
+    active = [
+        ("long_close_threshold_base_pct", 0, mapped["long_close_threshold_base_pct"][1]),
+        (
+            "long_close_retracement_base_pct",
+            1,
+            mapped["long_close_retracement_base_pct"][1],
+        ),
+    ]
+
+    parameters = _build_proxy_parameter_dicts(
+        [0.01, 0.02],
+        mapped,
+        active,
+        np.asarray([[0.03, 0.04]]),
+        fixed_parameter_overrides={"long_close_retracement_base_pct": 0.06},
+        optimizer_overrides={"lossless_close_trailing"},
+    )
+
+    assert parameters == [
+        {
+            "long_close_threshold_base_pct": pytest.approx(0.06),
+            "long_close_retracement_base_pct": pytest.approx(0.06),
+        }
+    ]
+
+
 def test_gpu_optimizer_override_template_uses_exact_materializer():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     long_strategy = config["bot"]["long"]["strategy"]["ema_anchor"]
@@ -1493,6 +1566,98 @@ def test_gpu_optimizer_override_template_uses_exact_materializer():
         == pytest.approx(0.123)
     )
     assert short_strategy["base_qty_pct"] == pytest.approx(0.456)
+
+
+def test_gpu_runtime_template_applies_fixed_values_before_optimizer_overrides():
+    from optimization.warmup import _apply_config_overrides
+
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.strategy.ema_anchor.base_qty_pct": 0.321
+    }
+
+    proxy_config = _materialize_gpu_override_template(
+        config,
+        ["mirror_short_from_long"],
+        optimizer_overrides,
+        fixed_overrides_fn=_apply_config_overrides,
+    )
+
+    assert (
+        proxy_config["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"]
+        == pytest.approx(0.321)
+    )
+    assert (
+        proxy_config["bot"]["short"]["strategy"]["ema_anchor"]["base_qty_pct"]
+        == pytest.approx(0.321)
+    )
+
+
+def test_gpu_runtime_template_rejects_fixed_strategy_kind_change():
+    from optimization.warmup import _apply_config_overrides
+
+    config = _long_only_ema_config()
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "live.strategy_kind": "trailing_martingale"
+    }
+
+    with pytest.raises(ValueError, match="may not change live.strategy_kind"):
+        _materialize_gpu_override_template(
+            config,
+            [],
+            optimizer_overrides,
+            fixed_overrides_fn=_apply_config_overrides,
+        )
+
+
+def test_gpu_fixed_bound_context_maps_effective_candidate_shadows():
+    config = _long_only_ema_config()
+    path = ("bot", "long", "strategy", "ema_anchor", "offset")
+    fixed_only_path = ("bot", "long", "risk", "entry_cooldown_minutes")
+    config["optimize"]["fixed_runtime_overrides"] = {
+        ".".join(path): 0.123,
+        ".".join(fixed_only_path): 17.0,
+    }
+    effective = copy.deepcopy(config)
+    effective["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 0.123
+    effective["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 17.0
+
+    bound_values, parameters = _gpu_fixed_bound_context(
+        config,
+        effective,
+        [("long_offset", path)],
+        {
+            "long_offset": "long_offset",
+            "long_risk_entry_cooldown_minutes": "long_entry_cooldown_minutes",
+        },
+    )
+
+    assert bound_values == {
+        "long_offset": 0.123,
+        "long_risk_entry_cooldown_minutes": 17.0,
+    }
+    assert parameters == {
+        "long_offset": 0.123,
+        "long_entry_cooldown_minutes": 17.0,
+    }
+
+
+def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
+    from optimization.warmup import _apply_config_overrides
+
+    config = _long_only_ema_config()
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.unstuck.enabled": True
+    }
+    proxy_config = _materialize_gpu_override_template(
+        config,
+        [],
+        optimizer_overrides,
+        fixed_overrides_fn=_apply_config_overrides,
+    )
+
+    with pytest.raises(ValueError, match=r"bot\.long\.unstuck"):
+        _validate_scope(proxy_config, _Evaluator())
 
 
 def test_gpu_optimizer_override_scope_fails_closed():
