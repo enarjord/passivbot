@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apply the V8 `optimize.enable_overrides` candidate contract in the experimental Apple MPS
+  optimizer. `mirror_short_from_long` now mirrors each proxy candidate after anchor and tunable
+  values are resolved, and `lossless_close_trailing` raises each trailing-martingale close
+  threshold to its candidate retracement before Metal screening. Exact Rust remains authoritative;
+  legacy trailing-grid override modes fail closed because their strategy is not supported by the
+  GPU backend.
+
 - Extend the experimental Apple MPS optimizer to anchored fine-tuning with `--start` plus
   `--fine-tune-params` for supported EMA-anchor and trailing-martingale scopes. The Metal proxy
   evolves the same discrete anchor id as exact Rust, applies each anchor's fixed optimizer-bound

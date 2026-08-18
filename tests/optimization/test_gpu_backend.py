@@ -9,9 +9,12 @@ import numpy as np
 import pytest
 
 from config.schema import get_template_config
+from optimizer_overrides import optimizer_overrides
 from optimization.bounds import Bound
 from optimization.backends.gpu_backend import (
+    _apply_gpu_optimizer_overrides,
     _canonical_candidate_values,
+    _canonicalize_mirrored_hash_vector,
     _canonical_vector_hash,
     _build_anchor_parameter_context,
     _build_gpu_nsga2,
@@ -20,6 +23,7 @@ from optimization.backends.gpu_backend import (
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _format_constraint_diagnostics,
+    _materialize_gpu_override_template,
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
@@ -34,6 +38,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _update_probe_shortfall_log,
     _validate_directional_search_space,
+    _validate_gpu_optimizer_overrides,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
@@ -1199,6 +1204,33 @@ def test_gpu_candidate_hash_uses_exact_significant_digit_quantization():
     )
 
 
+def test_gpu_mirror_hash_ignores_shadowed_short_genes_during_recovery():
+    key_paths = [
+        ("long_offset", ("bot", "long", "offset")),
+        ("short_offset", ("bot", "short", "offset")),
+        ("long_total_wallet_exposure_limit", ("bot", "long", "wel")),
+        ("short_total_wallet_exposure_limit", ("bot", "short", "wel")),
+    ]
+    base_vector = [0.2, 0.7, 1.0, 0.0]
+    submitted = [0.9, 0.7, 1.0, 0.0]
+    recovered_from_mirrored_result = [0.9, 0.9, 1.0, 1.0]
+
+    submitted = _canonicalize_mirrored_hash_vector(
+        submitted, base_vector, key_paths
+    )
+    recovered = _canonicalize_mirrored_hash_vector(
+        recovered_from_mirrored_result,
+        base_vector,
+        key_paths,
+    )
+
+    assert submitted == recovered == [0.9, 0.7, 1.0, 0.0]
+    bounds = [Bound(0.0, 1.0) for _ in key_paths]
+    assert _canonical_vector_hash(submitted, bounds, 6) == _canonical_vector_hash(
+        recovered, bounds, 6
+    )
+
+
 def test_proxy_parameters_include_canonical_pinned_ema_values():
     from optimization.bounds import Bound
 
@@ -1232,6 +1264,103 @@ def test_proxy_parameters_keep_directional_names_distinct():
     )
 
     assert parameters == [{"long_offset": 0.75, "short_offset": 0.125}]
+
+
+def test_gpu_proxy_applies_mirror_before_lossless_close_override():
+    parameters = {
+        "long_close_threshold_base_pct": 0.01,
+        "long_close_retracement_base_pct": 0.02,
+        "long_entry_initial_qty_pct": 0.03,
+        "short_close_threshold_base_pct": 0.08,
+        "short_close_retracement_base_pct": 0.09,
+        "short_entry_initial_qty_pct": 0.10,
+    }
+
+    result = _apply_gpu_optimizer_overrides(
+        parameters,
+        {"mirror_short_from_long", "lossless_close_trailing"},
+    )
+
+    assert result["long_close_threshold_base_pct"] == pytest.approx(0.02)
+    assert result["short_close_threshold_base_pct"] == pytest.approx(0.02)
+    assert result["short_close_retracement_base_pct"] == pytest.approx(0.02)
+    assert result["short_entry_initial_qty_pct"] == pytest.approx(0.03)
+
+
+def test_gpu_proxy_parameter_builder_applies_optimizer_overrides_after_anchors():
+    mapped = {
+        "long_close_threshold_base_pct": (1, Bound(0.0, 1.0)),
+        "long_close_retracement_base_pct": (2, Bound(0.0, 1.0)),
+        "short_close_threshold_base_pct": (3, Bound(0.0, 1.0)),
+        "short_close_retracement_base_pct": (4, Bound(0.0, 1.0)),
+    }
+    active = [(ANCHOR_GENE_KEY, 0, Bound(0.0, 1.0, 1.0))]
+
+    parameters = _build_proxy_parameter_dicts(
+        [0.0, 0.01, 0.02, 0.4, 0.5],
+        mapped,
+        active,
+        np.asarray([[1.0]]),
+        anchor_parameter_overrides=[
+            {
+                "long_close_threshold_base_pct": 0.03,
+                "long_close_retracement_base_pct": 0.04,
+            },
+            {
+                "long_close_threshold_base_pct": 0.05,
+                "long_close_retracement_base_pct": 0.06,
+            },
+        ],
+        optimizer_overrides={
+            "mirror_short_from_long",
+            "lossless_close_trailing",
+        },
+    )
+
+    assert parameters == [
+        {
+            "long_close_threshold_base_pct": pytest.approx(0.06),
+            "long_close_retracement_base_pct": pytest.approx(0.06),
+            "short_close_threshold_base_pct": pytest.approx(0.06),
+            "short_close_retracement_base_pct": pytest.approx(0.06),
+        }
+    ]
+
+
+def test_gpu_optimizer_override_template_uses_exact_materializer():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    long_strategy = config["bot"]["long"]["strategy"]["ema_anchor"]
+    short_strategy = config["bot"]["short"]["strategy"]["ema_anchor"]
+    long_strategy["base_qty_pct"] = 0.123
+    short_strategy["base_qty_pct"] = 0.456
+
+    proxy_config = _materialize_gpu_override_template(
+        config,
+        ["mirror_short_from_long"],
+        optimizer_overrides,
+    )
+
+    assert (
+        proxy_config["bot"]["short"]["strategy"]["ema_anchor"]["base_qty_pct"]
+        == pytest.approx(0.123)
+    )
+    assert short_strategy["base_qty_pct"] == pytest.approx(0.456)
+
+
+def test_gpu_optimizer_override_scope_fails_closed():
+    assert _validate_gpu_optimizer_overrides(
+        ["mirror_short_from_long"], "ema_anchor"
+    ) == {"mirror_short_from_long"}
+    assert _validate_gpu_optimizer_overrides(
+        ["lossless_close_trailing"], "trailing_martingale"
+    ) == {"lossless_close_trailing"}
+
+    with pytest.raises(ValueError, match="forward_tp_grid"):
+        _validate_gpu_optimizer_overrides(["forward_tp_grid"], "ema_anchor")
+    with pytest.raises(ValueError, match="requires.*trailing_martingale"):
+        _validate_gpu_optimizer_overrides(
+            ["lossless_close_trailing"], "ema_anchor"
+        )
 
 
 def test_gpu_anchor_context_maps_fixed_values_and_preserves_ranges():
