@@ -1558,7 +1558,6 @@ def test_gpu_optimizer_override_template_uses_exact_materializer():
     proxy_config = _materialize_gpu_override_template(
         config,
         ["mirror_short_from_long"],
-        optimizer_overrides,
     )
 
     assert (
@@ -1569,8 +1568,6 @@ def test_gpu_optimizer_override_template_uses_exact_materializer():
 
 
 def test_gpu_runtime_template_applies_fixed_values_before_optimizer_overrides():
-    from optimization.warmup import _apply_config_overrides
-
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.ema_anchor.base_qty_pct": 0.321
@@ -1579,8 +1576,6 @@ def test_gpu_runtime_template_applies_fixed_values_before_optimizer_overrides():
     proxy_config = _materialize_gpu_override_template(
         config,
         ["mirror_short_from_long"],
-        optimizer_overrides,
-        fixed_overrides_fn=_apply_config_overrides,
     )
 
     assert (
@@ -1594,8 +1589,6 @@ def test_gpu_runtime_template_applies_fixed_values_before_optimizer_overrides():
 
 
 def test_gpu_runtime_template_rejects_fixed_strategy_kind_change():
-    from optimization.warmup import _apply_config_overrides
-
     config = _long_only_ema_config()
     config["optimize"]["fixed_runtime_overrides"] = {
         "live.strategy_kind": "trailing_martingale"
@@ -1605,8 +1598,6 @@ def test_gpu_runtime_template_rejects_fixed_strategy_kind_change():
         _materialize_gpu_override_template(
             config,
             [],
-            optimizer_overrides,
-            fixed_overrides_fn=_apply_config_overrides,
         )
 
 
@@ -1642,9 +1633,64 @@ def test_gpu_fixed_bound_context_maps_effective_candidate_shadows():
     }
 
 
-def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
-    from optimization.warmup import _apply_config_overrides
+def test_gpu_fixed_disabled_retracement_canonicalizes_dead_weight_genes():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.0
+    }
+    close_path = (
+        "bot",
+        "long",
+        "strategy",
+        "trailing_martingale",
+        "close",
+    )
+    key_paths = [
+        ("long_close_retracement_base_pct", (*close_path, "retracement_base_pct")),
+        (
+            "long_close_retracement_volatility_1h_weight",
+            (*close_path, "retracement_volatility_1h_weight"),
+        ),
+        (
+            "long_close_retracement_volatility_1m_weight",
+            (*close_path, "retracement_volatility_1m_weight"),
+        ),
+    ]
+    bound_map = {key: key for key, _path in key_paths}
+    effective = _materialize_gpu_override_template(config, [])
 
+    bound_values, parameters = _gpu_fixed_bound_context(
+        config,
+        effective,
+        key_paths,
+        bound_map,
+    )
+
+    assert bound_values == {
+        "long_close_retracement_base_pct": 0.0,
+        "long_close_retracement_volatility_1h_weight": 0.01,
+        "long_close_retracement_volatility_1m_weight": 0.01,
+    }
+    assert parameters == bound_values
+    assert _canonicalize_optimizer_override_hash_vector(
+        [0.0, 37.0, 38.0],
+        [0.0, 1.0, 1.0],
+        key_paths,
+        set(),
+        fixed_bound_values=bound_values,
+        fixed_parameter_overrides=parameters,
+    ) == [0.0, 0.01, 0.01]
+
+    materialized = _materialize_gpu_override_template(config, [])
+    close = materialized["bot"]["long"]["strategy"]["trailing_martingale"][
+        "close"
+    ]
+    assert close["retracement_base_pct"] == 0.0
+    assert close["retracement_volatility_1h_weight"] == 0.01
+    assert close["retracement_volatility_1m_weight"] == 0.01
+
+
+def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
     config = _long_only_ema_config()
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.unstuck.enabled": True
@@ -1652,8 +1698,6 @@ def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
     proxy_config = _materialize_gpu_override_template(
         config,
         [],
-        optimizer_overrides,
-        fixed_overrides_fn=_apply_config_overrides,
     )
 
     with pytest.raises(ValueError, match=r"bot\.long\.unstuck"):

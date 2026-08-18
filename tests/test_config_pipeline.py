@@ -89,6 +89,19 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
         ([], TypeError, "fixed_runtime_overrides must be a dict"),
         ({1: 2}, TypeError, "keys must be dotted strings"),
         ({"bot.long.not_a_setting": 1}, KeyError, "Unknown override path"),
+        (
+            {
+                "bot.long.risk.total_wallet_exposure_limit": 1.0,
+                "bot.long.total_wallet_exposure_limit": 2.0,
+            },
+            ValueError,
+            "resolve to the same setting",
+        ),
+        (
+            {"bot.long.strategy.trailing_martingale": {}},
+            TypeError,
+            "must target leaf settings",
+        ),
     ],
 )
 def test_prepare_config_rejects_invalid_fixed_runtime_overrides(

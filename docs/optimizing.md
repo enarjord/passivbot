@@ -143,8 +143,11 @@ anchor and tunable values, and before `optimize.enable_overrides`. A fixed overr
 supported GPU optimizer bound removes that gene from the Metal search and supplies the fixed value
 to both proxy screening and exact Rust validation. The effective overridden config is checked
 against the same fail-closed GPU scope, so an override cannot silently enable unsupported behavior.
-Config normalization preserves user-defined dotted override paths and rejects malformed or unknown
-paths before optimization begins.
+Exact finalized boundary configs are validated before either optimizer backend starts. Config
+normalization preserves user-defined dotted leaf paths, rejects malformed or unknown paths,
+rejects aliases that resolve to the same setting, and rejects mapping-level replacements. When a
+fixed value disables dependent trailing-martingale parameters, the Metal search removes and
+hash-canonicalizes those dead genes using the same rule as exact candidate materialization.
 
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,

@@ -26,12 +26,29 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
     overrides = config.get("optimize", {}).get("fixed_runtime_overrides")
     if not isinstance(overrides, dict):
         raise TypeError("config.optimize.fixed_runtime_overrides must be a dict")
+    resolved_sources: dict[tuple[str, ...], str] = {}
     for dotted_path in overrides:
         if not isinstance(dotted_path, str):
             raise TypeError(
                 "config.optimize.fixed_runtime_overrides keys must be dotted strings"
             )
-        require_existing_config_path(config, dotted_path)
+        resolved = require_existing_config_path(config, dotted_path)
+        prior = resolved_sources.get(resolved)
+        if prior is not None:
+            raise ValueError(
+                "config.optimize.fixed_runtime_overrides paths "
+                f"{prior!r} and {dotted_path!r} resolve to the same setting "
+                f"{'.'.join(resolved)!r}"
+            )
+        resolved_sources[resolved] = dotted_path
+        target = config
+        for part in resolved:
+            target = target[part]
+        if isinstance(target, dict):
+            raise TypeError(
+                "config.optimize.fixed_runtime_overrides must target leaf settings; "
+                f"{dotted_path!r} resolves to a mapping"
+            )
 
 
 def _validate_startup_phase_budgets(live_config: dict) -> None:

@@ -8,8 +8,10 @@ All notable user-facing changes will be documented in this file.
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
   durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the
   effective config still fails closed on unsupported GPU behavior. Config normalization now
-  preserves documented user-defined dotted override paths and rejects malformed or unknown paths
-  instead of silently replacing them with schema defaults.
+  preserves documented user-defined dotted leaf paths instead of silently replacing them with
+  schema defaults, rejects path aliases that collide or replace mappings, and validates exact
+  finalized boundary configs before either optimizer backend starts. Fixed values that disable
+  dependent trailing-martingale parameters remove and hash-canonicalize those dead GPU genes.
 
 - Apply the V8 `optimize.enable_overrides` candidate contract in the experimental Apple MPS
   optimizer. `mirror_short_from_long` now mirrors each proxy candidate after anchor and tunable

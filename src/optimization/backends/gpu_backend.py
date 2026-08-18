@@ -161,22 +161,19 @@ def _validate_gpu_optimizer_overrides(overrides_list, strategy_kind: str) -> set
 def _materialize_gpu_override_template(
     config: dict,
     overrides_list,
-    overrides_fn,
     *,
-    fixed_overrides_fn=None,
+    finalize_fn=None,
 ) -> dict:
     """Apply exact runtime-finalization overrides to the proxy base config."""
 
-    proxy_config = deepcopy(config)
-    fixed_overrides = (
-        proxy_config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
-    )
-    if fixed_overrides:
-        if not callable(fixed_overrides_fn):
-            from optimization.warmup import _apply_config_overrides
+    if not callable(finalize_fn):
+        from optimization.warmup import _finalize_optimizer_vector_config
 
-            fixed_overrides_fn = _apply_config_overrides
-        fixed_overrides_fn(proxy_config, fixed_overrides)
+        finalize_fn = _finalize_optimizer_vector_config
+    proxy_config = finalize_fn(
+        deepcopy(config),
+        overrides_list=overrides_list,
+    )
     source_strategy_kind = str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     effective_strategy_kind = (
         str(proxy_config.get("live", {}).get("strategy_kind", "")).strip().lower()
@@ -187,15 +184,6 @@ def _materialize_gpu_override_template(
             "configure the strategy kind before optimization so the search shape and "
             "Metal kernel remain aligned"
         )
-    if not overrides_list:
-        return proxy_config
-    if not callable(overrides_fn):
-        raise ValueError(
-            "GPU optimizer requires the exact optimizer override materializer"
-        )
-    proxy_config = overrides_fn(overrides_list, proxy_config, None)
-    for side in ("long", "short"):
-        proxy_config = overrides_fn(overrides_list, proxy_config, side)
     return proxy_config
 
 
@@ -211,6 +199,7 @@ def _gpu_fixed_bound_context(
         require_existing_config_path,
         resolve_optimizer_key_path,
     )
+    from optimization.warmup import optimizer_dead_param_values
 
     path_to_bound_key = {
         tuple(path): bound_key for bound_key, path in key_paths
@@ -244,6 +233,13 @@ def _gpu_fixed_bound_context(
                 "GPU fixed runtime override for optimizer bound "
                 f"{bound_key!r} must resolve to a finite value"
             )
+        fixed_bound_values[bound_key] = value
+        if bound_key in bound_map:
+            fixed_parameters[bound_map[bound_key]] = value
+    for bound_key, value in optimizer_dead_param_values(
+        effective_config,
+        globally_dead_only=True,
+    ).items():
         fixed_bound_values[bound_key] = value
         if bound_key in bound_map:
             fixed_parameters[bound_map[bound_key]] = value
@@ -1614,10 +1610,14 @@ def run_backend(
     from config.scoring import extract_objective_specs
     from optimization.gpu.metrics import SUPPORTED_METRICS
     from optimization.gpu.service import MpsMulticoinEmaProxy, MpsSingleCoinProxy
-    from optimization.warmup import _apply_config_overrides
+    from optimization.warmup import (
+        _finalize_optimizer_vector_config,
+        validate_optimizer_effective_configs,
+    )
 
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
+    validate_optimizer_effective_configs(config)
 
     shape = (
         optimization_shape
@@ -1646,8 +1646,7 @@ def run_backend(
     proxy_config = _materialize_gpu_override_template(
         config,
         overrides_list,
-        overrides_fn,
-        fixed_overrides_fn=_apply_config_overrides,
+        finalize_fn=_finalize_optimizer_vector_config,
     )
     exchange = _validate_scope(proxy_config, evaluator)
     coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])

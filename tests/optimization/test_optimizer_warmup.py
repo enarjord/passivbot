@@ -17,6 +17,7 @@ from optimization.warmup import (
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
+    validate_optimizer_effective_configs,
 )
 from warmup_utils import compute_per_coin_warmup_minutes
 
@@ -140,6 +141,16 @@ def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
         _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
 
     assert "n_positons" not in config["bot"]["long"]["risk"]
+
+
+def test_optimizer_rejects_invalid_effective_fixed_runtime_value_before_backend():
+    config = get_template_config()
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.forager.score_weights.volatility": -1.0
+    }
+
+    with pytest.raises(ValueError, match="score_weights.*non-negative"):
+        validate_optimizer_effective_configs(config)
 
 
 def test_stamp_optimizer_warmup_respects_last_valid_index_cap():
