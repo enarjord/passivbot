@@ -5,6 +5,7 @@ import socket
 import types
 
 import pytest
+import ccxt.pro as ccxt_pro
 
 from exchanges.kucoin import (
     AsyncKucoinBrokerFutures,
@@ -39,6 +40,62 @@ class DummyCCA:
     async def set_leverage(self, **params):
         self.leverage_calls.append(params)
         return {"symbol": params["symbol"], "leverage": params["leverage"]}
+
+
+def test_kucoin_futures_expired_ws_token_invalidates_exact_negotiated_url(monkeypatch):
+    client = ProKucoinBrokerFutures({})
+    private_url = object()
+    private_futures_url = object()
+    client.options["urls"] = {
+        "private": private_url,
+        "privateFutures": private_futures_url,
+    }
+    delegated = []
+
+    def handle_error_message(_self, ws_client, message):
+        delegated.append((ws_client, message))
+        return False
+
+    monkeypatch.setattr(
+        ccxt_pro.kucoinfutures,
+        "handle_error_message",
+        handle_error_message,
+    )
+    ws_client = types.SimpleNamespace(
+        url="wss://push-private.kucoin.example/endpoint?token=redacted&connectId=privateFutures"
+    )
+    message = {"type": "error", "data": "token is expired"}
+
+    assert client.handle_error_message(ws_client, message) is False
+
+    assert client.options["urls"]["privateFutures"] is None
+    assert client.options["urls"]["private"] is private_url
+    assert delegated == [(ws_client, message)]
+
+
+def test_kucoin_ws_non_expiry_error_preserves_negotiated_url(monkeypatch):
+    client = ProKucoinBrokerFutures({})
+    private_futures_url = object()
+    client.options["urls"] = {"privateFutures": private_futures_url}
+
+    monkeypatch.setattr(
+        ccxt_pro.kucoinfutures,
+        "handle_error_message",
+        lambda _self, _ws_client, _message: False,
+    )
+    ws_client = types.SimpleNamespace(
+        url="wss://push-private.kucoin.example/endpoint?token=redacted&connectId=privateFutures"
+    )
+
+    assert (
+        client.handle_error_message(
+            ws_client,
+            {"type": "error", "data": "type is not supported"},
+        )
+        is False
+    )
+
+    assert client.options["urls"]["privateFutures"] is private_futures_url
 
 
 @pytest.mark.asyncio

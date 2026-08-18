@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin private futures order websockets now discard the exact cached negotiated URL when the
+  exchange expires its token, allowing `watch_orders` to obtain a fresh token instead of reusing
+  the rejected URL indefinitely. The expected callback exception is reduced to a throttled warning
+  while REST reconciliation continues normally.
+
 - Add `passivbot tool compose-coin-overrides` to validate and combine a directory of single-coin
   configs into a lean unified config with minimal inline per-coin patches. The tool canonicalizes
   parameters belonging only to features disabled in every input, reports account-wide conflicts,
