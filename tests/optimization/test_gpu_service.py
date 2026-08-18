@@ -287,6 +287,74 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert contract["values"][0] == [None] * 12
 
 
+def test_multicoin_coin_overrides_pack_dual_sides_independently():
+    strategy_base = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
+    payload = SimpleNamespace(
+        strategy_params_list=[
+            {"long": strategy_base, "short": strategy_base},
+            {
+                "long": dict(strategy_base, offset=0.25),
+                "short": dict(strategy_base, offset=0.5),
+            },
+        ],
+        bot_params_list=[
+            {
+                "long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0},
+                "short": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0},
+            },
+            {
+                "long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": 0.4},
+                "short": {"entry_cooldown_minutes": 30.0, "wallet_exposure_limit": -1.0},
+            },
+        ],
+    )
+    config = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {"ema_anchor": {"offset": 0.25}},
+                        "wallet_exposure_limit": 0.4,
+                    },
+                    "short": {
+                        "strategy": {"ema_anchor": {"offset": 0.5}},
+                        "risk": {"entry_cooldown_minutes": 30.0},
+                    },
+                }
+            }
+        }
+    }
+    def resolver(config, _mss, _exchange, coin):
+        return config["coin_overrides"].get(coin, {})
+
+    long_matrix, _ = _build_multicoin_ema_coin_overrides(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=resolver,
+    )
+    short_matrix, _ = _build_multicoin_ema_coin_overrides(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="short",
+        resolve_override=resolver,
+    )
+
+    offset_index = EMA_ANCHOR_PARAM_KEYS.index("offset")
+    assert long_matrix[1, offset_index] == pytest.approx(0.25)
+    assert long_matrix[1, 11] == pytest.approx(0.4)
+    assert np.isnan(long_matrix[1, 10])
+    assert short_matrix[1, offset_index] == pytest.approx(0.5)
+    assert short_matrix[1, 10] == pytest.approx(30.0)
+    assert np.isnan(short_matrix[1, 11])
+
+
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():
     proxy = MpsEmaAnchorProxy.__new__(MpsEmaAnchorProxy)
     proxy.param_keys = TRAILING_MARTINGALE_PARAM_KEYS

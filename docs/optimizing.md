@@ -120,9 +120,9 @@ The supported slice is intentionally narrow:
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported, while non-bot override paths and per-coin source assignments
   remain unsupported
-- static `coin_overrides` for the enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
+- static `coin_overrides` for each enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
   parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
-  other sides and override leaves fail closed
+  disabled sides and other override leaves fail closed
 - HSL and auto-unstuck disabled
 - BTC collateral, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
@@ -133,9 +133,9 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, dual-side multi-coin coin overrides, multi-coin
-trailing-martingale, multi-exchange suites, non-bot suite scenario overrides, per-coin source
-assignments, HSL, and auto-unstuck are not silently approximated by this release. Dual-side
+Dual-side one-way arbitration, multi-coin trailing-martingale, multi-exchange suites, non-bot suite
+scenario overrides, per-coin source assignments, HSL, and auto-unstuck are not silently
+approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
