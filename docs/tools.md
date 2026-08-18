@@ -33,7 +33,12 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
   --target drawdown_worst_strategy_eq=0.25
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
-  -l 'adg_strategy_eq>0.0'
+  -l 'adg_strategy_eq>0.0' \
+  --save-selected configs/promoted_candidate.json
+passivbot tool pareto optimize_results/.../pareto \
+  -l 'drawdown_worst_strategy_eq<=0.35' \
+  -l 'adg_strategy_eq>0.0' \
+  --save-filtered filtered_pareto
 passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
@@ -70,6 +75,18 @@ recovered, so it is not the complete scenario Pareto front across all evaluated 
 
 The output also shows the retained front's ideal point: the best observed value for each active
 objective after any `--limit` filters are applied.
+
+Use `-s FILE` / `--save-selected FILE` to copy the selected member without reserializing it. Use
+`-f DIR` / `--save-filtered DIR` to copy every member retained immediately after limits and write
+a `selection.json` manifest. Without limits, the filtered export contains every loaded member.
+Scenario limits use the selected scenario's metrics; the export still represents the post-limit
+set before the scenario-specific nondominated front is rebuilt.
+
+Destinations must not overlap the source Pareto directory and must not already exist unless
+`--overwrite` is supplied. Replacing a filtered directory is allowed only when all of its entries
+are JSON files. Writes are staged before installation to protect existing output from ordinary
+copy failures. The tool does not promise transactional behavior against concurrent modification
+of the source or destination by another process.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON

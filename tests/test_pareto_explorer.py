@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import pareto_explorer
 from pareto_explorer import (
     build_scenario_front,
     build_parser,
@@ -440,6 +441,16 @@ def test_build_parser_accepts_scenario():
     assert args.scenario == "bull"
 
 
+def test_build_parser_accepts_save_outputs():
+    args = build_parser().parse_args(
+        ["-s", "selected.json", "-f", "filtered", "--overwrite"]
+    )
+
+    assert args.save_selected == "selected.json"
+    assert args.save_filtered == "filtered"
+    assert args.overwrite is True
+
+
 def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
     _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
 
@@ -761,6 +772,220 @@ def test_run_from_args_json_output(sample_pareto_dir: Path, capsys):
     assert "ranking_order" not in payload["selected"]["details"]
     assert "score_vector" not in payload["selected"]["details"]
     assert result.candidate.path.stem == "b_extreme"
+
+
+def test_run_from_args_saves_selected_member_exactly(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "promoted" / "candidate.json"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "--method",
+            "utility",
+            "--weight",
+            "metric_b=5",
+            "--save-selected",
+            str(output),
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert result.candidate.path.name == "b_extreme.json"
+    assert output.read_bytes() == result.candidate.path.read_bytes()
+    assert "Saved selected member:" in capsys.readouterr().out
+
+
+def test_run_from_args_saves_post_limit_members_and_manifest(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-l", "metric_a>0.6", "-f", str(output)]
+    )
+
+    result = run_from_args(args)
+
+    assert result.candidate.path.name == "balanced.json"
+    assert sorted(path.name for path in output.iterdir()) == [
+        "a_extreme.json",
+        "balanced.json",
+        "selection.json",
+    ]
+    for name in ["a_extreme.json", "balanced.json"]:
+        assert (output / name).read_bytes() == (sample_pareto_dir / name).read_bytes()
+    manifest = json.loads((output / "selection.json").read_text())
+    assert manifest["loaded_count"] == 4
+    assert manifest["retained_count"] == 2
+    assert manifest["selected_member"] == "balanced.json"
+    assert manifest["members"] == ["a_extreme.json", "balanced.json"]
+    assert manifest["applied_limits"][0]["metric"] == "metric_a"
+    assert "Saved filtered members: 2" in capsys.readouterr().out
+
+
+def test_saved_outputs_are_reported_in_json(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    selected = tmp_path / "selected.json"
+    filtered = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>0.6",
+            "-s",
+            str(selected),
+            "-f",
+            str(filtered),
+            "--json",
+        ]
+    )
+
+    run_from_args(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["selected"]["saved_path"] == str(selected.resolve())
+    assert payload["saved_filtered"] == {
+        "count": 2,
+        "directory": str(filtered.resolve()),
+        "manifest": str((filtered / "selection.json").resolve()),
+    }
+
+
+def test_saved_outputs_require_explicit_overwrite(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    selected = tmp_path / "selected.json"
+    selected.write_text('{"old": true}\n')
+    args = build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
+    with pytest.raises(FileExistsError, match="use --overwrite"):
+        run_from_args(args)
+    assert json.loads(selected.read_text()) == {"old": True}
+
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected), "--overwrite"]
+    )
+    result = run_from_args(args)
+    capsys.readouterr()
+    assert selected.read_bytes() == result.candidate.path.read_bytes()
+
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    stale = filtered / "stale.json"
+    stale.write_text('{"stale": true}\n')
+    args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(filtered)])
+    with pytest.raises(FileExistsError, match="use --overwrite"):
+        run_from_args(args)
+    assert stale.exists()
+
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>0.6",
+            "-f",
+            str(filtered),
+            "--overwrite",
+        ]
+    )
+    run_from_args(args)
+    capsys.readouterr()
+    assert not stale.exists()
+    assert sorted(path.name for path in filtered.iterdir()) == [
+        "a_extreme.json",
+        "balanced.json",
+        "selection.json",
+    ]
+
+
+def test_filtered_overwrite_refuses_non_json_entries(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    output = tmp_path / "filtered"
+    output.mkdir()
+    note = output / "notes.txt"
+    note.write_text("keep me\n")
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
+    )
+
+    with pytest.raises(FileExistsError, match="non-JSON entries: notes.txt"):
+        run_from_args(args)
+    assert note.read_text() == "keep me\n"
+
+
+def test_save_outputs_refuse_source_overlap(
+    sample_pareto_dir: Path,
+):
+    selected_args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(sample_pareto_dir / "selected.json")]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(selected_args)
+
+    filtered_args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(sample_pareto_dir.parent)]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(filtered_args)
+
+
+def test_filtered_copy_failure_preserves_existing_output(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output = tmp_path / "filtered"
+    output.mkdir()
+    existing = output / "old.json"
+    existing.write_text('{"old": true}\n')
+
+    def fail_copy(_source, _destination):
+        raise OSError("simulated copy failure")
+
+    monkeypatch.setattr(pareto_explorer.shutil, "copyfile", fail_copy)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
+    )
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        run_from_args(args)
+    assert json.loads(existing.read_text()) == {"old": True}
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["filtered", "run"]
+
+
+def test_no_output_is_written_when_limits_reject_every_candidate(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected.json"
+    filtered = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>2",
+            "-s",
+            str(selected),
+            "-f",
+            str(filtered),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="No Pareto candidates remained"):
+        run_from_args(args)
+    assert not selected.exists()
+    assert not filtered.exists()
 
 
 def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_dir: Path):

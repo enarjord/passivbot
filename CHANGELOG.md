@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add `-s/--save-selected` and `-f/--save-filtered` to `passivbot tool pareto` for copying the
+  selected member or the post-limit member set, with explicit overwrite handling and a filtered
+  export manifest.
+
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
   durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the
