@@ -67,6 +67,9 @@ mod tests {
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
+        assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
+        assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
+        assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("float total_cap = twel - 1.0e-7f"));
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));

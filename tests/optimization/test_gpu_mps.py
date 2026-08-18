@@ -212,6 +212,9 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "constant int DAILY_COLS = 6" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
+    assert "const float score_hysteresis = fmax(run_settings[4], 0.0f)" in source
+    assert "incumbent[c] = selected[c] && psize[c] <= 0.0f" in source
+    assert "score[challenger] - score[incumbent_coin]" in source
     count = 512
     coin_count = 3
     phase = np.linspace(0.0, 12.0 * np.pi, count)
@@ -265,9 +268,11 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         2.0,
     ]
 
-    output = MpsEmaAnchorMulticoinRunner(runs[0], data, side=side).run(
-        np.array([row, row], dtype=np.float64)
+    runner = MpsEmaAnchorMulticoinRunner(
+        runs[0], data, side=side, forager_score_hysteresis_pct=0.02
     )
+    assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
+    output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
     assert output["balance"].device.type == "mps"
@@ -279,6 +284,14 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     ).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
+
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        MpsEmaAnchorMulticoinRunner(
+            runs[0],
+            data,
+            side=side,
+            forager_score_hysteresis_pct=-0.01,
+        )
 
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"

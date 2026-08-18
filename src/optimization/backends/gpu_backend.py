@@ -767,17 +767,6 @@ def _validate_scope_config(
                 "GPU multicoin foundation requires "
                 "backtest.dynamic_wel_by_tradability=true"
             )
-        if (
-            float(
-                config.get("live", {}).get("forager_score_hysteresis_pct", 0.0)
-                or 0.0
-            )
-            != 0.0
-        ):
-            raise ValueError(
-                "GPU multicoin foundation requires "
-                "live.forager_score_hysteresis_pct=0"
-            )
     _validate_gpu_coin_overrides(
         config,
         strategy_kind=strategy_kind,

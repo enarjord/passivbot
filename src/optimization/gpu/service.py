@@ -580,12 +580,15 @@ class MpsMulticoinEmaProxy:
             raise ValueError(
                 "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
             )
-        if (
-            float(backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0)
-            != 0.0
+        self.forager_score_hysteresis_pct = float(
+            backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0
+        )
+        if not np.isfinite(self.forager_score_hysteresis_pct) or (
+            self.forager_score_hysteresis_pct < 0.0
         ):
             raise ValueError(
-                "MPS multicoin proxy requires live.forager_score_hysteresis_pct=0"
+                "MPS multicoin proxy requires a finite non-negative "
+                "live.forager_score_hysteresis_pct"
             )
         for last_valid_idx in backtest_params["last_valid_indices"]:
             _require_complete_valid_tail(int(last_valid_idx), len(values))
@@ -690,6 +693,9 @@ class MpsMulticoinEmaProxy:
                 "proxy_mode": "independent-side-hedge-v1",
             }
             per_side_coin_overrides = {side: None for side in self.sides}
+        self.coin_override_contract["forager_score_hysteresis_pct"] = (
+            self.forager_score_hysteresis_pct
+        )
 
         markets = [
             ProxyMarket(
@@ -745,6 +751,7 @@ class MpsMulticoinEmaProxy:
                 self.data,
                 side=side,
                 coin_overrides=per_side_coin_overrides[side],
+                forager_score_hysteresis_pct=self.forager_score_hysteresis_pct,
             )
             for side in self.sides
         }

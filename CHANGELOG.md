@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS multi-coin EMA Anchor optimizer support for Forager score hysteresis, retaining
+  flat incumbent candidates when challenger scores are only marginally better.
+
 - Add dual-side hedge-mode multi-coin EMA-anchor optimization to the experimental Apple MPS
   backend. Metal screens long and short independently and combines their compact outputs into a
   conservative portfolio proxy, while unchanged exact Rust backtests remain authoritative and the
