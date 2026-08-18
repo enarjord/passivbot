@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS optimizer suites spanning exchanges, while retaining exactly one exchange per
+  scenario and rejecting combined or per-coin source datasets.
+
 - Added static per-coin EMA Anchor strategy, entry-cooldown, and wallet-exposure overrides to
   dual-side hedge-mode Apple MPS optimization, including compatible multi-coin suites.
 
