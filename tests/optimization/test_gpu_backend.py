@@ -23,6 +23,7 @@ from optimization.backends.gpu_backend import (
     _checkpoint_signature,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
+    _ema_multicoin_bound_map,
     _format_constraint_diagnostics,
     _gpu_candidate_source_sides,
     _materialize_gpu_override_template,
@@ -564,6 +565,24 @@ def test_gpu_multicoin_bound_map_exposes_forager_and_position_dimensions(
     ):
         key = f"{side}_{suffix}"
         assert bound_map[key] == key
+
+
+def test_gpu_short_multicoin_mirror_includes_long_forager_source_dimensions():
+    bound_map = _ema_multicoin_bound_map(
+        "short", {"mirror_short_from_long"}
+    )
+
+    for suffix in (
+        "forager_volume_ema_span_1m",
+        "forager_volatility_ema_span_1m",
+        "forager_volume_drop_pct",
+        "forager_score_weights_volume",
+        "forager_score_weights_ema_readiness",
+        "forager_score_weights_volatility",
+        "n_positions",
+    ):
+        assert f"long_{suffix}" in bound_map
+        assert f"short_{suffix}" in bound_map
 
 
 @pytest.mark.parametrize(
@@ -1231,6 +1250,23 @@ def test_gpu_mirror_hash_ignores_shadowed_short_genes_during_recovery():
     assert _canonical_vector_hash(submitted, bounds, 6) == _canonical_vector_hash(
         recovered, bounds, 6
     )
+
+
+def test_gpu_mirror_hash_neutralizes_anchor_shadow_without_long_shape_key():
+    key_paths = [
+        ("anchor_index", ("optimize", "fine_tune_anchor_index")),
+        ("short_offset", ("bot", "short", "offset")),
+    ]
+    base_vector = [0.0, 0.7]
+
+    submitted = _canonicalize_mirrored_hash_vector(
+        [1.0, 0.7], base_vector, key_paths
+    )
+    recovered = _canonicalize_mirrored_hash_vector(
+        [1.0, 0.2], base_vector, key_paths
+    )
+
+    assert submitted == recovered == [1.0, 0.7]
 
 
 def test_gpu_lossless_hash_uses_effective_threshold_and_mirror_ordering():

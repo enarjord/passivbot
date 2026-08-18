@@ -220,6 +220,15 @@ def _gpu_candidate_source_sides(
     return source_sides
 
 
+def _ema_multicoin_bound_map(target_side: str, overrides: set[str]) -> dict:
+    """Include all bound families that can feed the enabled multicoin side."""
+
+    bound_map = dict(EMA_MULTICOIN_BOUND_MAPS[target_side])
+    if "mirror_short_from_long" in overrides and target_side == "short":
+        bound_map.update(EMA_MULTICOIN_BOUND_MAPS["long"])
+    return bound_map
+
+
 def _minimum_rank_evidence_samples(halt: float) -> int:
     """Total samples needed to guarantee eight comparable at agreement >= halt."""
 
@@ -1142,9 +1151,7 @@ def _canonicalize_mirrored_hash_vector(vector, base_vector, key_paths) -> list[f
     for short_key, short_index in index_by_key.items():
         if not short_key.startswith("short_"):
             continue
-        long_key = f"long_{short_key[len('short_') :]}"
-        if long_key in index_by_key:
-            canonical[short_index] = float(base_vector[short_index])
+        canonical[short_index] = float(base_vector[short_index])
     return canonical
 
 
@@ -1568,7 +1575,9 @@ def run_backend(
             raise ValueError(
                 "GPU multicoin foundation requires exactly one enabled side"
             )
-        bound_map = EMA_MULTICOIN_BOUND_MAPS[multicoin_sides[0]]
+        bound_map = _ema_multicoin_bound_map(
+            multicoin_sides[0], gpu_optimizer_overrides
+        )
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
