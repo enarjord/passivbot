@@ -1017,6 +1017,42 @@ def test_save_filtered_refuses_directory_containing_resolved_source_member(
     assert resolved_source.exists()
 
 
+def test_save_filtered_preserves_symlink_member_name(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    resolved_source = external_dir / "balanced.json"
+    resolved_source.write_bytes((sample_pareto_dir / "balanced.json").read_bytes())
+    (sample_pareto_dir / "aliased_member.json").symlink_to(resolved_source)
+    output_dir = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir)]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert (output_dir / "aliased_member.json").read_bytes() == resolved_source.read_bytes()
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "a_extreme.json",
+        "aliased_member.json",
+        "b_extreme.json",
+        "balanced.json",
+        "c_extreme.json",
+        "selection.json",
+    ]
+    manifest = json.loads((output_dir / "selection.json").read_text())
+    member = next(
+        entry for entry in manifest["members"] if entry["file"] == "aliased_member.json"
+    )
+    assert member["hash"] == "aliased_member"
+    assert member["source_path"] == str(resolved_source.resolve())
+    assert member["output_path"] == str((output_dir / "aliased_member.json").resolve())
+
+
 def test_save_filtered_refuses_manifest_filename_collision(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1052,6 +1088,34 @@ def test_save_outputs_refuse_source_pareto_directory(
     )
     with pytest.raises(ValueError, match="inside the source Pareto directory"):
         run_from_args(filtered_args)
+
+
+def test_single_file_input_allows_sibling_outputs(
+    sample_pareto_dir: Path,
+    capsys,
+):
+    source = sample_pareto_dir / "balanced.json"
+    selected_output = sample_pareto_dir / "promoted.json"
+    filtered_output = sample_pareto_dir / "single_filtered"
+    args = build_parser().parse_args(
+        [
+            str(source),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+        ]
+    )
+
+    result = run_from_args(args)
+    capsys.readouterr()
+
+    assert result.candidate.path == source.resolve()
+    assert selected_output.read_bytes() == source.read_bytes()
+    assert sorted(path.name for path in filtered_output.iterdir()) == [
+        "balanced.json",
+        "selection.json",
+    ]
 
 
 def test_save_outputs_refuse_both_overlap_directions(

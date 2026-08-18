@@ -70,6 +70,8 @@ FILTERED_SELECTION_MANIFEST = "selection.json"
 @dataclass(frozen=True)
 class ParetoCandidate:
     path: Path
+    member_path: Path
+    member_name: str
     entry: Dict[str, Any]
     objectives: Dict[str, float]
     stats_flat: Dict[str, float]
@@ -643,11 +645,13 @@ def project_candidates_to_scenario(
         if missing:
             raise ValueError(
                 f"Scenario {label!r} is missing scoring metric(s) {missing} "
-                f"in {candidate.path.name}."
+                f"in {candidate.member_name}."
             )
         projected.append(
             ParetoCandidate(
                 path=candidate.path,
+                member_path=candidate.member_path,
+                member_name=candidate.member_name,
                 entry=candidate.entry,
                 objectives=objectives,
                 stats_flat={f"{metric}_mean": value for metric, value in values.items()},
@@ -733,7 +737,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     raw_path = Path(path).expanduser()
     if raw_path.is_file():
         pareto_dir = raw_path.parent.resolve()
-        json_paths = [raw_path.resolve()]
+        json_paths = [raw_path]
     else:
         pareto_dir = resolve_pareto_directory(raw_path)
         json_paths = sorted(pareto_dir.glob("*.json"))
@@ -780,6 +784,8 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         candidates.append(
             ParetoCandidate(
                 path=entry_path.resolve(),
+                member_path=entry_path.absolute(),
+                member_name=entry_path.name,
                 entry=entry,
                 objectives=objectives,
                 stats_flat=stats_flat,
@@ -922,8 +928,8 @@ def _ranked_rows(
             {
                 "rank": rank,
                 "score": float(score_vector[int(idx)]),
-                "file": candidate.path.name,
-                "hash": candidate.path.stem,
+                "file": candidate.member_name,
+                "hash": Path(candidate.member_name).stem,
                 "path": str(candidate.path),
                 "objectives": {
                     metric: float(_resolve_candidate_metric_value(candidate, metric))
@@ -1011,7 +1017,7 @@ def _resolve_limit_value(
         if requested_reducer != "mean":
             raise ValueError(
                 f"Scenario {candidate.scenario!r} stores one mean value per metric; "
-                f"limit reducer={requested_reducer!r} is unavailable for {candidate.path.name}."
+                f"limit reducer={requested_reducer!r} is unavailable for {candidate.member_name}."
             )
     reducer = basis.reducer
     if "reducer" not in entry:
@@ -1119,7 +1125,7 @@ def filter_candidates_with_limits(
                 available = _format_available_limit_metrics(candidate)
                 raise ValueError(
                     f"Limit metric {metric!r} could not be resolved for "
-                    f"{candidate.path.name}. Available metrics: {available}"
+                    f"{candidate.member_name}. Available metrics: {available}"
                 )
             if _limit_rejects(entry, value):
                 rejected = True
@@ -1140,7 +1146,7 @@ def _select_knee(
         score = 0.0
         scores = np.array([score], dtype=float)
         mode = "single_candidate"
-        anchor_files: list[str] = [candidates[0].path.name]
+        anchor_files: list[str] = [candidates[0].member_name]
     else:
         anchor_indices = [int(np.argmax(utilities[:, j])) for j in range(n_obj)]
         unique_anchor_indices = list(dict.fromkeys(anchor_indices))
@@ -1162,7 +1168,7 @@ def _select_knee(
             idx = int(np.argmax(scores))
             score = float(scores[idx])
             mode = "maximin_fallback"
-        anchor_files = [candidates[i].path.name for i in unique_anchor_indices]
+        anchor_files = [candidates[i].member_name for i in unique_anchor_indices]
     ranking_order = list(np.argsort(-scores))
     candidate = candidates[idx]
     return SelectionResult(
@@ -1408,7 +1414,7 @@ def format_selection_result(
     result: SelectionResult,
     show_top: int = 1,
 ) -> str:
-    selected_filename = result.candidate.path.name
+    selected_filename = result.candidate.member_name
     score_label, score_value = _score_label_and_value(result)
     selected_display_path = _display_path(result.candidate.path)
     backtest_command = f"passivbot backtest {selected_display_path}"
@@ -1561,8 +1567,15 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
-def _validate_output_outside_source(path: Path, pareto_dir: Path, *, label: str) -> None:
-    if _is_within(path, pareto_dir.resolve()):
+def _validate_output_outside_source(
+    path: Path,
+    protected_source_dir: Path | None,
+    *,
+    label: str,
+) -> None:
+    if protected_source_dir is not None and _is_within(
+        path, protected_source_dir.resolve()
+    ):
         raise ValueError(
             f"Refusing to write {label} inside the source Pareto directory: {path}"
         )
@@ -1572,7 +1585,11 @@ def _validate_selected_output_not_source(
     output: Path,
     candidates: Sequence[ParetoCandidate],
 ) -> None:
-    sources = {candidate.path.resolve() for candidate in candidates}
+    sources = {
+        source
+        for candidate in candidates
+        for source in (candidate.path.resolve(), candidate.member_path)
+    }
     if output in sources:
         raise ValueError(f"Refusing to overwrite a source Pareto member: {output}")
 
@@ -1581,11 +1598,15 @@ def _validate_filtered_output_contains_no_sources(
     output_dir: Path,
     candidates: Sequence[ParetoCandidate],
 ) -> None:
-    contained = [
-        candidate.path.resolve()
-        for candidate in candidates
-        if _is_within(candidate.path.resolve(), output_dir)
-    ]
+    contained = sorted(
+        {
+            source
+            for candidate in candidates
+            for source in (candidate.path.resolve(), candidate.member_path)
+            if _is_within(source, output_dir)
+        },
+        key=str,
+    )
     if contained:
         preview = ", ".join(str(path) for path in contained[:5])
         raise ValueError(
@@ -1596,7 +1617,7 @@ def _validate_filtered_output_contains_no_sources(
 
 def _prepare_selected_output(
     raw_path: str | os.PathLike[str] | None,
-    pareto_dir: Path,
+    protected_source_dir: Path | None,
     candidates: Sequence[ParetoCandidate],
     *,
     overwrite: bool,
@@ -1604,7 +1625,7 @@ def _prepare_selected_output(
     if raw_path is None:
         return None
     output = Path(raw_path).expanduser().resolve()
-    _validate_output_outside_source(output, pareto_dir, label="selected output")
+    _validate_output_outside_source(output, protected_source_dir, label="selected output")
     _validate_selected_output_not_source(output, candidates)
     if output.suffix.lower() != ".json":
         raise ValueError(f"Selected output must use a .json filename: {output}")
@@ -1649,7 +1670,7 @@ def _validate_existing_filtered_output_dir(output_dir: Path, *, overwrite: bool)
 
 def _prepare_filtered_output_dir(
     raw_path: str | os.PathLike[str] | None,
-    pareto_dir: Path,
+    protected_source_dir: Path | None,
     candidates: Sequence[ParetoCandidate],
     source_candidates: Sequence[ParetoCandidate],
     *,
@@ -1658,9 +1679,9 @@ def _prepare_filtered_output_dir(
     if raw_path is None:
         return None
     output_dir = Path(raw_path).expanduser().resolve()
-    _validate_output_outside_source(output_dir, pareto_dir, label="filtered output")
+    _validate_output_outside_source(output_dir, protected_source_dir, label="filtered output")
     _validate_filtered_output_contains_no_sources(output_dir, source_candidates)
-    names = [candidate.path.name for candidate in candidates]
+    names = [candidate.member_name for candidate in candidates]
     normalized_names = [name.casefold() for name in names]
     if len(normalized_names) != len(set(normalized_names)):
         raise ValueError("Filtered members contain duplicate filenames; cannot copy safely.")
@@ -1736,13 +1757,13 @@ def _write_filtered_outputs(
     try:
         members: List[Dict[str, Any]] = []
         for candidate in candidates:
-            staged_destination = staging_dir / candidate.path.name
-            final_destination = output_dir / candidate.path.name
+            staged_destination = staging_dir / candidate.member_name
+            final_destination = output_dir / candidate.member_name
             shutil.copy2(candidate.path, staged_destination)
             members.append(
                 {
-                    "file": candidate.path.name,
-                    "hash": candidate.path.stem,
+                    "file": candidate.member_name,
+                    "hash": Path(candidate.member_name).stem,
                     "source_path": str(candidate.path),
                     "output_path": str(final_destination),
                 }
@@ -1765,8 +1786,8 @@ def _write_filtered_outputs(
             "targets": _json_ready(result.details.get("targets") or {}),
             "priority": _json_ready(result.details.get("priority") or []),
             "selected_member": {
-                "file": selected.path.name,
-                "hash": selected.path.stem,
+                "file": selected.member_name,
+                "hash": Path(selected.member_name).stem,
                 "source_path": str(selected.path),
             },
             "members": members,
@@ -1793,7 +1814,9 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 "with at least one *.json candidate was found."
             )
         raw_path = str(latest)
+    input_is_single_file = Path(raw_path).expanduser().is_file()
     pareto_dir, candidates, scoring_specs = load_candidates(raw_path)
+    protected_source_dir = None if input_is_single_file else pareto_dir
     raw_scenario = getattr(args, "scenario", None)
     scenario = str(raw_scenario).strip() if raw_scenario is not None else None
     selection_candidates = (
@@ -1827,13 +1850,13 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
     overwrite = bool(getattr(args, "overwrite", False))
     selected_output = _prepare_selected_output(
         getattr(args, "save_selected", None),
-        pareto_dir,
+        protected_source_dir,
         candidates,
         overwrite=overwrite,
     )
     filtered_output_dir = _prepare_filtered_output_dir(
         getattr(args, "save_filtered", None),
-        pareto_dir,
+        protected_source_dir,
         filtered_candidates,
         candidates,
         overwrite=overwrite,
@@ -1879,8 +1902,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             "method": result.method,
             "method_description": _method_explanation(result.method),
             "selected": {
-                "file": result.candidate.path.name,
-                "hash": result.candidate.path.stem,
+                "file": result.candidate.member_name,
+                "hash": Path(result.candidate.member_name).stem,
                 "path": str(result.candidate.path),
                 "score": float(result.score),
                 "objectives": _json_ready(result.objective_values),
