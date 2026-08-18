@@ -2023,6 +2023,38 @@ def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(ca
     )
 
 
+def test_asyncio_runtime_exception_handler_suppresses_kucoin_token_expiry_callback(caplog):
+    class AuthenticationError(Exception):
+        pass
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._asyncio_ws_callback_last_log_ms = 0
+
+    with caplog.at_level(logging.WARNING):
+        handled = bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Exception in callback Client.receive_loop",
+                "exception": AuthenticationError("kucoinfutures token is expired"),
+            }
+        )
+
+    assert handled is True
+    assert any("websocket callback token expired" in r.message for r in caplog.records)
+
+    assert (
+        bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Exception in callback Client.receive_loop",
+                "exception": AuthenticationError("invalid api key"),
+            }
+        )
+        is False
+    )
+
+
 def test_asyncio_runtime_exception_handler_suppresses_unretrieved_transport_future(caplog):
     class RequestTimeout(Exception):
         pass

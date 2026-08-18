@@ -181,6 +181,21 @@ whitelist authentication failure.
 Handling: Both KuCoin REST and WebSocket CCXT clients use IPv4-only network
 connectors. Keep the host's stable public IPv4 address in the API-key whitelist.
 
+### Private websocket token renewal
+
+Problem:
+
+1. KuCoin expires private futures websocket tokens during long-running sessions.
+2. Pinned CCXT classifies `connectId=privateFutures` as `private` when handling the expiry message,
+   so its cached futures URL keeps the rejected token and every reconnect reuses it.
+
+Handling:
+
+1. Clear the exact negotiated URL cache entry named by the websocket's `connectId` before CCXT
+   propagates the expiry error to the reconnect loop.
+2. Keep the expiry visible as a throttled websocket warning without emitting the dependency's raw
+   callback traceback. The next `watch_orders` attempt must negotiate a new futures token.
+
 ### KuCoin hedge-mode refresh
 
 Problem:

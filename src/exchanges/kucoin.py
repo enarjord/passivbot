@@ -12,6 +12,7 @@ from collections import defaultdict
 import hmac
 import hashlib
 import base64
+from urllib.parse import parse_qs, urlsplit
 
 calc_order_price_diff = pbr.calc_order_price_diff
 
@@ -83,6 +84,30 @@ class ProKucoinBrokerFutures(IPv4TransportMixin, ccxt_pro.kucoinfutures):
         if api in {"private", "futuresPrivate", "broker"}:
             return _add_kucoin_broker_name_header(signed, self.options)
         return signed
+
+    def handle_error_message(self, client, message):
+        """Expire the exact negotiated websocket URL rejected by KuCoin.
+
+        Pinned CCXT clears ``private`` when a ``privateFutures`` token expires
+        because its substring check matches both connect IDs. Leaving the
+        futures URL future cached makes every reconnect reuse the rejected
+        token. Clear only the connect ID carried by the rejected URL before
+        delegating normal error classification to CCXT.
+        """
+        data = self.safe_string_2(message, "data", "reason", "")
+        if data == "token is expired":
+            query = parse_qs(urlsplit(str(getattr(client, "url", "") or "")).query)
+            connect_id_values = query.get("connectId", [])
+            connect_id = connect_id_values[0] if connect_id_values else None
+            urls = self.options.get("urls")
+            if connect_id in {
+                "private",
+                "privateFutures",
+                "public",
+                "publicFutures",
+            } and isinstance(urls, dict):
+                urls[connect_id] = None
+        return super().handle_error_message(client, message)
 
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
