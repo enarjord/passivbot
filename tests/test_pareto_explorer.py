@@ -1666,6 +1666,55 @@ def test_combined_outputs_restore_selected_when_install_return_is_interrupted(
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
 
 
+def test_combined_outputs_record_no_hard_link_commit_before_nested_return(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    real_install = pareto_explorer._install_selected_without_overwrite
+    interrupted = False
+
+    def reject_hard_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "hard links unsupported")
+
+    def interrupt_after_nested_return(*args, **kwargs):
+        nonlocal interrupted
+        result = real_install(*args, **kwargs)
+        destination = Path(args[1])
+        if destination == selected_output and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(os, "link", reject_hard_link)
+    monkeypatch.setattr(
+        pareto_explorer,
+        "_install_selected_without_overwrite",
+        interrupt_after_nested_return,
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert interrupted
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert (filtered_output / "selection.json").exists()
+    assert "install committed before interruption" in capsys.readouterr().err
+
+
 def test_combined_outputs_keep_committed_pair_when_filtered_return_is_interrupted(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -2627,6 +2676,42 @@ def test_save_filtered_refuses_filesystem_identity_alias_of_source_directory(
 
     assert sorted(path.name for path in sample_pareto_dir.iterdir()) == source_files
     assert not list(output_alias.iterdir())
+
+
+@pytest.mark.parametrize("output_kind", ["selected", "filtered"])
+def test_save_outputs_refuse_descendants_of_source_directory_alias(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    output_kind: str,
+):
+    output_alias = tmp_path / "source-alias"
+    output_alias.mkdir()
+    if output_kind == "selected":
+        output = output_alias / "notes.json"
+        output.write_text('{"unrelated": true}\n')
+        command = [str(sample_pareto_dir), "-s", str(output), "--overwrite"]
+    else:
+        output = output_alias / "nested"
+        output.mkdir()
+        (output / "notes.json").write_text('{"unrelated": true}\n')
+        command = [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
+    real_samefile = os.path.samefile
+
+    def report_bind_mount_alias(left, right):
+        pair = {Path(left).resolve(), Path(right).resolve()}
+        if pair == {output_alias.resolve(), sample_pareto_dir.resolve()}:
+            return True
+        return real_samefile(left, right)
+
+    monkeypatch.setattr(os.path, "samefile", report_bind_mount_alias)
+    args = build_parser().parse_args(command)
+
+    with pytest.raises(ValueError, match="inside the source Pareto directory"):
+        run_from_args(args)
+
+    preserved = output / "notes.json" if output_kind == "filtered" else output
+    assert json.loads(preserved.read_text()) == {"unrelated": True}
 
 
 def test_single_file_input_allows_sibling_outputs(

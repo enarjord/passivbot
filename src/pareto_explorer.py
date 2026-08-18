@@ -1636,6 +1636,7 @@ def _validate_output_outside_source(
     if protected_source_dir is not None and (
         _is_within(path, protected_source_dir.resolve())
         or _same_existing_filesystem_object(path, protected_source_dir)
+        or _paths_overlap_by_filesystem_identity(path, protected_source_dir)
     ):
         raise ValueError(
             f"Refusing to write {label} inside the source Pareto directory: {path}"
@@ -1849,7 +1850,13 @@ def _install_selected_without_overwrite(
     *,
     metadata_source: Path | None = None,
     preserve_metadata_timestamps: bool = False,
+    commit_identity_sink: List[tuple[int, int]] | None = None,
 ) -> tuple[int, int]:
+    def record_commit(identity: tuple[int, int]) -> tuple[int, int]:
+        if commit_identity_sink is not None and not commit_identity_sink:
+            commit_identity_sink.append(identity)
+        return identity
+
     staging_stat = staging_path.stat(follow_symlinks=False)
     try:
         os.link(staging_path, output)
@@ -1902,6 +1909,7 @@ def _install_selected_without_overwrite(
                 raise RuntimeError(
                     f"Selected output changed concurrently after metadata copy: {output}"
                 )
+            record_commit(created_identity)
         except BaseException as exc:
             try:
                 output_stat = output.stat(follow_symlinks=False)
@@ -1938,7 +1946,7 @@ def _install_selected_without_overwrite(
                 ) from exc
             raise
         return created_identity
-    return staging_stat.st_dev, staging_stat.st_ino
+    return record_commit((staging_stat.st_dev, staging_stat.st_ino))
 
 
 def _write_selected_output(
@@ -1959,13 +1967,17 @@ def _write_selected_output(
     backup_path: Path | None = None
     staging_cleanup_attempted = False
     installed_identity: tuple[int, int] | None = None
+    committed_identities: List[tuple[int, int]] = []
     try:
         _write_candidate_snapshot_fd(candidate, staging_path, staging_descriptor)
         if not overwrite:
             staging_stat = staging_path.stat(follow_symlinks=False)
             installed_identity = staging_stat.st_dev, staging_stat.st_ino
             installed_identity = _install_selected_without_overwrite(
-                staging_path, output, candidate.source_bytes
+                staging_path,
+                output,
+                candidate.source_bytes,
+                commit_identity_sink=committed_identities,
             )
             staging_cleanup_attempted = True
             try:
@@ -2018,6 +2030,7 @@ def _write_selected_output(
             output,
             candidate.source_bytes,
             metadata_source=backup_path,
+            commit_identity_sink=committed_identities,
         )
         staging_cleanup_attempted = True
         try:
@@ -2033,6 +2046,8 @@ def _write_selected_output(
             )
         )
     except BaseException as exc:
+        if committed_identities:
+            installed_identity = committed_identities[0]
         if installed_identity is not None:
             try:
                 output_stat = output.stat(follow_symlinks=False)
