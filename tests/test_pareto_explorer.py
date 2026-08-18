@@ -883,6 +883,28 @@ def test_filtered_output_preserves_source_or_existing_modes(
     assert output.stat().st_mode & 0o777 == 0o750
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+def test_filtered_overwrite_removes_read_only_backup(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "filtered"
+    output.mkdir()
+    (output / "old.json").write_text('{"old": true}\n')
+    output.chmod(0o555)
+
+    run_from_args(
+        build_parser().parse_args(
+            [str(sample_pareto_dir), "-f", str(output), "--overwrite"]
+        )
+    )
+    capsys.readouterr()
+
+    assert output.stat().st_mode & 0o777 == 0o555
+    assert not list(tmp_path.glob(".filtered.backup-*"))
+
+
 def test_saved_outputs_are_reported_in_json(
     sample_pareto_dir: Path,
     tmp_path: Path,

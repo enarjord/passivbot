@@ -1723,6 +1723,7 @@ def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
                 backup.rename(output)
             raise
         if backup is not None:
+            backup.chmod(backup.stat().st_mode | 0o200)
             shutil.rmtree(backup)
         return output / FILTERED_SELECTION_MANIFEST
     finally:
