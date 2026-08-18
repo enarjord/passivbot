@@ -341,8 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  -l 'drawdown_worst_strategy_eq<=0.35'\n"
             "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
             "Outputs:\n"
-            "  -s selected.json      Copy the selected member.\n"
-            "  -f filtered_pareto    Copy every member retained after limits.\n"
+            "  -s configs/selected.local.json          Copy the selected member.\n"
+            "  -f optimize_results/filtered_pareto     Copy members retained after limits.\n"
         ),
     )
     parser.add_argument(
@@ -1553,10 +1553,30 @@ def _is_within(path: Path, directory: Path) -> bool:
         return False
 
 
+def _is_within_by_identity(path: Path, directory: Path) -> bool:
+    current = path
+    while True:
+        try:
+            if current.samefile(directory):
+                return True
+        except FileNotFoundError:
+            pass
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
 def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> None:
     if (
         _is_within(path, pareto_dir)
-        or (directory and _is_within(pareto_dir, path))
+        or _is_within_by_identity(path, pareto_dir)
+        or (
+            directory
+            and (
+                _is_within(pareto_dir, path)
+                or _is_within_by_identity(pareto_dir, path)
+            )
+        )
     ):
         raise ValueError(
             f"Output must not overlap the source Pareto directory: {path}"
@@ -1569,7 +1589,10 @@ def _prepare_selected_output(
 ) -> Path | None:
     if raw_path is None:
         return None
-    output = Path(raw_path).expanduser().resolve()
+    unresolved_output = Path(raw_path).expanduser()
+    if unresolved_output.is_symlink():
+        raise FileExistsError(f"Selected output already exists: {unresolved_output}")
+    output = unresolved_output.resolve()
     _validate_output_path(output, pareto_dir, directory=False)
     if output.suffix.lower() != ".json":
         raise ValueError(f"Selected output must use a .json filename: {output}")
@@ -1589,7 +1612,10 @@ def _prepare_filtered_output(
 ) -> Path | None:
     if raw_path is None:
         return None
-    output = Path(raw_path).expanduser().resolve()
+    unresolved_output = Path(raw_path).expanduser()
+    if unresolved_output.is_symlink():
+        raise FileExistsError(f"Filtered output directory already exists: {unresolved_output}")
+    output = unresolved_output.resolve()
     _validate_output_path(output, pareto_dir, directory=True)
     names = [candidate.path.name for candidate in candidates]
     folded_names = [name.casefold() for name in names]
@@ -1756,6 +1782,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         and (
             _is_within(selected_output, filtered_output)
             or _is_within(filtered_output, selected_output)
+            or _is_within_by_identity(selected_output, filtered_output)
+            or _is_within_by_identity(filtered_output, selected_output)
         )
     ):
         raise ValueError("Selected and filtered output paths must not overlap.")

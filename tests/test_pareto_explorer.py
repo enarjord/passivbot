@@ -442,10 +442,14 @@ def test_build_parser_accepts_scenario():
 
 
 def test_build_parser_accepts_save_outputs():
-    args = build_parser().parse_args(["-s", "selected.json", "-f", "filtered"])
+    parser = build_parser()
+    args = parser.parse_args(["-s", "selected.json", "-f", "filtered"])
 
     assert args.save_selected == "selected.json"
     assert args.save_filtered == "filtered"
+    help_text = parser.format_help()
+    assert "configs/selected.local.json" in help_text
+    assert "optimize_results/filtered_pareto" in help_text
 
 
 def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
@@ -877,6 +881,28 @@ def test_saved_outputs_must_not_already_exist(
     assert stale.exists()
 
 
+def test_saved_outputs_refuse_dangling_symlinks(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected.json"
+    selected.symlink_to(tmp_path / "missing-selected.json")
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(
+            build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
+        )
+
+    filtered = tmp_path / "filtered"
+    filtered.symlink_to(tmp_path / "missing-filtered", target_is_directory=True)
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(
+            build_parser().parse_args([str(sample_pareto_dir), "-f", str(filtered)])
+        )
+
+    assert not (tmp_path / "missing-selected.json").exists()
+    assert not (tmp_path / "missing-filtered").exists()
+
+
 def test_save_outputs_refuse_source_overlap(
     sample_pareto_dir: Path,
 ):
@@ -891,6 +917,19 @@ def test_save_outputs_refuse_source_overlap(
     )
     with pytest.raises(ValueError, match="must not overlap"):
         run_from_args(filtered_args)
+
+
+def test_identity_overlap_detects_existing_directory_alias(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    alias = tmp_path / "pareto_alias"
+    alias.symlink_to(sample_pareto_dir, target_is_directory=True)
+
+    assert pareto_explorer._is_within_by_identity(
+        alias / "selected.json",
+        sample_pareto_dir,
+    )
 
 
 def test_combined_outputs_refuse_overlap_in_either_direction(
