@@ -138,6 +138,19 @@ GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
     "mirror_short_from_long",
 }
 
+# These scenario-local values are consumed when each MPS proxy builds the same
+# canonical backtest payload as exact Rust. Keep this allowlist explicit: data
+# selection and unsupported execution/risk behavior must continue to fail
+# closed instead of being accepted merely because the config path exists.
+GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
+    ("backtest", "liquidation_threshold"),
+    ("backtest", "maker_fee_override"),
+    ("backtest", "starting_balance"),
+    ("coin_overrides",),
+    ("live", "forager_score_hysteresis_pct"),
+    ("live", "hedge_mode"),
+}
+
 
 def _validate_gpu_optimizer_overrides(overrides_list, strategy_kind: str) -> set[str]:
     overrides = set(overrides_list or [])
@@ -925,13 +938,18 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
         overrides = getattr(ctx, "overrides", {}) or {}
         for dotted_path in overrides:
             resolved = require_existing_config_path(proxy_config, dotted_path)
-            if len(resolved) < 3 or resolved[0] != "bot" or resolved[1] not in {
-                "long",
-                "short",
-            }:
+            bot_side_override = (
+                len(resolved) >= 3
+                and resolved[0] == "bot"
+                and resolved[1] in {"long", "short"}
+            )
+            if (
+                not bot_side_override
+                and resolved not in GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS
+            ):
                 raise ValueError(
                     f"GPU suite scenario {ctx.label!r} override {dotted_path!r} is "
-                    "outside the supported bot.long/bot.short scope"
+                    "outside the supported modeled scenario scope"
                 )
         coin_sources = (
             getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources") or {}
