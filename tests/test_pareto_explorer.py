@@ -719,6 +719,7 @@ def test_run_from_args_prints_summary(sample_pareto_dir: Path, capsys):
     assert "Target utilities:" not in captured
     assert "Top candidates:" in captured
     assert result.candidate.path.stem == "balanced"
+    assert result.candidate.source_bytes is None
 
 
 def test_run_from_args_uses_latest_pareto_dir_when_path_omitted(tmp_path: Path, monkeypatch, capsys):
@@ -1058,16 +1059,15 @@ def test_selected_staging_uses_normal_exclusive_file_creation(
     capsys,
 ):
     selected_output = tmp_path / "selected.json"
-    real_open = os.open
+    real_open = Path.open
     observed = []
 
-    def track_open(path, flags, mode=0o777, *args, **kwargs):
-        path = Path(path)
+    def track_open(path: Path, *args, **kwargs):
         if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX):
-            observed.append((flags, mode))
-        return real_open(path, flags, mode, *args, **kwargs)
+            observed.append(args[0] if args else kwargs.get("mode"))
+        return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "open", track_open)
+    monkeypatch.setattr(Path, "open", track_open)
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-s", str(selected_output)]
     )
@@ -1076,10 +1076,42 @@ def test_selected_staging_uses_normal_exclusive_file_creation(
     capsys.readouterr()
 
     assert observed
-    flags, mode = observed[0]
-    assert flags & os.O_CREAT
-    assert flags & os.O_EXCL
-    assert mode == 0o666
+    assert observed[0] == "xb"
+
+
+def test_selected_staging_creation_cleans_up_when_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    real_open = Path.open
+    interrupted = False
+
+    def interrupt_after_staging_create(path: Path, *args, **kwargs):
+        nonlocal interrupted
+        staging_file = real_open(path, *args, **kwargs)
+        if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX):
+            interrupted = True
+            staging_file.close()
+            raise KeyboardInterrupt()
+        return staging_file
+
+    monkeypatch.setattr(Path, "open", interrupt_after_staging_create)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert not selected_output.exists()
+    assert not [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1307,6 +1339,7 @@ def test_selected_output_does_not_overwrite_racing_destination_without_permissio
 ):
     selected_output = tmp_path / "selected.json"
     destination_created = False
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
 
     def create_destination_during_staging(candidate, destination, file_descriptor):
         nonlocal destination_created
@@ -1314,8 +1347,7 @@ def test_selected_output_does_not_overwrite_racing_destination_without_permissio
         if not destination_created and destination.suffix == ".tmp":
             selected_output.write_text('{"racing": true}\n')
             destination_created = True
-        with os.fdopen(file_descriptor, "wb") as destination_file:
-            destination_file.write(candidate.source_bytes)
+        real_write_snapshot(candidate, destination, file_descriptor)
 
     monkeypatch.setattr(
         "pareto_explorer._write_candidate_snapshot_fd",
@@ -1735,6 +1767,47 @@ def test_combined_outputs_cleanup_filtered_reservation_when_return_is_interrupte
     monkeypatch.setattr(
         pareto_explorer, "_ensure_filtered_output_dir", interrupt_after_reservation
     )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert interrupted
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_ino == selected_inode
+    assert not filtered_output.exists()
+
+
+def test_combined_outputs_record_filtered_reservation_at_mkdir_boundary(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_inode = selected_output.stat().st_ino
+    filtered_output = tmp_path / "filtered"
+    real_mkdir = Path.mkdir
+    interrupted = False
+
+    def interrupt_after_filtered_mkdir(path: Path, *args, **kwargs):
+        nonlocal interrupted
+        result = real_mkdir(path, *args, **kwargs)
+        if path == filtered_output and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(Path, "mkdir", interrupt_after_filtered_mkdir)
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),

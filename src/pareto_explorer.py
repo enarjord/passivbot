@@ -15,7 +15,7 @@ import unicodedata
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, BinaryIO, Dict, Iterable, List, Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -82,7 +82,7 @@ class ParetoCandidate:
     path: Path
     member_path: Path
     member_name: str
-    source_bytes: bytes
+    source_bytes: bytes | None
     entry: Dict[str, Any]
     objectives: Dict[str, float]
     stats_flat: Dict[str, float]
@@ -758,7 +758,11 @@ def _extract_objectives(entry: Mapping[str, Any]) -> Dict[str, float]:
     return objectives
 
 
-def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCandidate], List[ObjectiveSpec]]:
+def load_candidates(
+    path: str | os.PathLike[str],
+    *,
+    capture_source_bytes: bool = True,
+) -> tuple[Path, List[ParetoCandidate], List[ObjectiveSpec]]:
     raw_path = Path(path).expanduser()
     if raw_path.is_file():
         pareto_dir = raw_path.parent.resolve()
@@ -811,7 +815,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
                 path=entry_path.resolve(),
                 member_path=entry_path.parent.resolve() / entry_path.name,
                 member_name=entry_path.name,
-                source_bytes=source_bytes,
+                source_bytes=source_bytes if capture_source_bytes else None,
                 entry=entry,
                 objectives=objectives,
                 stats_flat=stats_flat,
@@ -1780,23 +1784,30 @@ def _prepare_filtered_output_dir(
 def _write_candidate_snapshot_fd(
     candidate: ParetoCandidate,
     destination: Path,
-    file_descriptor: int,
+    file_descriptor: int | BinaryIO,
 ) -> None:
-    with os.fdopen(file_descriptor, "wb") as destination_file:
+    if candidate.source_bytes is None:
+        raise RuntimeError("Pareto source snapshot was not captured for export.")
+    destination_file = (
+        os.fdopen(file_descriptor, "wb")
+        if isinstance(file_descriptor, int)
+        else file_descriptor
+    )
+    with destination_file:
         destination_file.write(candidate.source_bytes)
 
 
-def _create_selected_staging_file(parent: Path) -> tuple[Path, int]:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
+def _create_selected_staging_file(parent: Path) -> tuple[Path, BinaryIO]:
     for _ in range(100):
         staging_path = parent / f"{SELECTED_STAGING_PREFIX}{secrets.token_hex(8)}.tmp"
         try:
-            file_descriptor = os.open(staging_path, flags, 0o666)
+            staging_file = staging_path.open("xb")
         except FileExistsError:
             continue
-        return staging_path, file_descriptor
+        except BaseException:
+            staging_path.unlink(missing_ok=True)
+            raise
+        return staging_path, staging_file
     raise FileExistsError(f"Could not reserve selected staging file in {parent}")
 
 
@@ -1995,6 +2006,9 @@ def _write_selected_output(
         return install
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    if candidate.source_bytes is None:
+        raise RuntimeError("Pareto source snapshot was not captured for export.")
+    source_bytes = candidate.source_bytes
     staging_path, staging_descriptor = _create_selected_staging_file(output.parent)
     backup_path: Path | None = None
     staging_cleanup_attempted = False
@@ -2008,7 +2022,7 @@ def _write_selected_output(
             installed_identity = _install_selected_without_overwrite(
                 staging_path,
                 output,
-                candidate.source_bytes,
+                source_bytes,
                 commit_identity_sink=committed_identities,
             )
             staging_cleanup_attempted = True
@@ -2019,7 +2033,7 @@ def _write_selected_output(
                     "selected output", staging_path, exc
                 )
             return record_install(
-                _SelectedOutputInstall(None, installed_identity, candidate.source_bytes)
+                _SelectedOutputInstall(None, installed_identity, source_bytes)
             )
         observed_identity: tuple[int, int] | None = None
         observed_bytes: bytes | None = None
@@ -2060,7 +2074,7 @@ def _write_selected_output(
         installed_identity = _install_selected_without_overwrite(
             staging_path,
             output,
-            candidate.source_bytes,
+            source_bytes,
             metadata_source=backup_path,
             commit_identity_sink=committed_identities,
         )
@@ -2074,7 +2088,7 @@ def _write_selected_output(
             backup_path = None
         return record_install(
             _SelectedOutputInstall(
-                backup_path, installed_identity, candidate.source_bytes
+                backup_path, installed_identity, source_bytes
             )
         )
     except BaseException as exc:
@@ -2096,7 +2110,7 @@ def _write_selected_output(
                 )
                 return record_install(
                     _SelectedOutputInstall(
-                        backup_path, installed_identity, candidate.source_bytes
+                        backup_path, installed_identity, source_bytes
                     )
                 )
         if backup_path is not None:
@@ -2313,16 +2327,24 @@ def _ensure_filtered_output_dir(
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if output_dir.exists():
         return None, _snapshot_filtered_output_dir(output_dir)
+    already_existed = False
+    created_identity: tuple[int, int] | None = None
     try:
-        output_dir.mkdir(mode=0o777)
-    except FileExistsError:
+        try:
+            output_dir.mkdir(mode=0o777)
+        except FileExistsError:
+            already_existed = True
+    finally:
+        if not already_existed and output_dir.exists():
+            output_stat = output_dir.stat(follow_symlinks=False)
+            created_identity = output_stat.st_dev, output_stat.st_ino
+            if reservation_sink is not None and not reservation_sink:
+                reservation_sink.append(created_identity)
+    if already_existed:
         _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
         return None, _snapshot_filtered_output_dir(output_dir)
-    output_stat = output_dir.stat(follow_symlinks=False)
-    identity = output_stat.st_dev, output_stat.st_ino
-    if reservation_sink is not None and not reservation_sink:
-        reservation_sink.append(identity)
-    return identity, _FilteredOutputSnapshot(identity, ())
+    assert created_identity is not None
+    return created_identity, _FilteredOutputSnapshot(created_identity, ())
 
 
 def _remove_filtered_reservation(
@@ -2503,7 +2525,13 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             )
         raw_path = str(latest)
     input_is_single_file = Path(raw_path).expanduser().is_file()
-    pareto_dir, candidates, scoring_specs = load_candidates(raw_path)
+    capture_source_bytes = bool(
+        getattr(args, "save_selected", None) or getattr(args, "save_filtered", None)
+    )
+    pareto_dir, candidates, scoring_specs = load_candidates(
+        raw_path,
+        capture_source_bytes=capture_source_bytes,
+    )
     protected_source_dir = None if input_is_single_file else pareto_dir
     raw_scenario = getattr(args, "scenario", None)
     scenario = str(raw_scenario).strip() if raw_scenario is not None else None
