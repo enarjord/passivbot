@@ -50,6 +50,7 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _update_probe_shortfall_log,
     _validate_directional_search_space,
+    _validate_dual_multicoin_metrics,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
@@ -1100,6 +1101,26 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
 
     with pytest.raises(ValueError, match="matching long/short approved_coins"):
         _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize(
+    "metric", ["fills_gap_longest_days", "strategy_eq_recovery_days_max"]
+)
+def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
+    with pytest.raises(ValueError, match=metric):
+        _validate_dual_multicoin_metrics(
+            {metric, "adg_strategy_eq"},
+            coin_count=3,
+            enabled_sides={"long", "short"},
+        )
+
+
+def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
+    _validate_dual_multicoin_metrics(
+        {"fills_gap_longest_days", "strategy_eq_recovery_days_max"},
+        coin_count=3,
+        enabled_sides={"long"},
+    )
 
 
 @pytest.mark.parametrize(

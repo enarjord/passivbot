@@ -809,6 +809,25 @@ def _validate_scope_config(
     return exchange
 
 
+def _validate_dual_multicoin_metrics(
+    needed_metrics, *, coin_count: int, enabled_sides
+) -> None:
+    """Reject metrics which cannot be reconstructed from directional summaries."""
+
+    if int(coin_count) <= 1 or len(set(enabled_sides)) != 2:
+        return
+    unsupported = sorted(
+        set(needed_metrics)
+        & {"fills_gap_longest_days", "strategy_eq_recovery_days_max"}
+    )
+    if unsupported:
+        raise ValueError(
+            "GPU dual-side multicoin EMA Anchor cannot safely reconstruct proxy "
+            f"metrics {unsupported} from independent directional summaries; "
+            "use other metrics or the CPU optimizer"
+        )
+
+
 def _validate_gpu_coin_overrides(
     config: dict,
     *,
@@ -2420,6 +2439,11 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
+    _validate_dual_multicoin_metrics(
+        needed_metrics,
+        coin_count=max_coin_count,
+        enabled_sides=enabled_sides,
+    )
 
     if suite_enabled:
         scenario_proxies = []

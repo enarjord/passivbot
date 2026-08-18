@@ -108,7 +108,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
         fill=[True, False],
         first_fill=float("nan"),
         last_fill=700.0,
-        liq=25,
+        liq=-1,
     )
     short = side_output(
         end=[950.0, 900.0],
@@ -116,7 +116,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
         fill=[False, True],
         first_fill=300.0,
         last_fill=float("nan"),
-        liq=10,
+        liq=-1,
     )
     short["day_max_dd"] = torch.tensor([[0.05, 0.30]])
     short["day_volume"] = torch.tensor([[0.1, 0.2]])
@@ -126,7 +126,9 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     short["recovery_max_ms"] = torch.tensor([500.0])
     short["last_high_ts"] = torch.tensor([800.0])
 
-    combined = _combine_hedged_multicoin_outputs(long, short, 1_000.0)
+    combined = _combine_hedged_multicoin_outputs(
+        long, short, 1_000.0, 0, 60_000
+    )
 
     assert combined["day_end_eq"].tolist() == [[1_050.0, 1_100.0]]
     assert combined["day_min_eq"].tolist() == [[975.0, 950.0]]
@@ -137,16 +139,28 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["first_fill_ts"].item() == 300.0
     assert combined["last_fill_ts"].item() == 700.0
     assert combined["last_high_ts"].item() == 800.0
-    assert combined["liq_step"].item() == 10
+    assert combined["liq_step"].item() == -1
 
     short["day_min_eq"][0, 1] = float("inf")
     short["last_eq_ts"] = torch.tensor([800.0])
-    truncated = _combine_hedged_multicoin_outputs(long, short, 1_000.0)
+    truncated = _combine_hedged_multicoin_outputs(
+        long, short, 1_000.0, 0, 60_000
+    )
     assert truncated["day_end_eq"][0, 1].item() == 0.0
     assert torch.isinf(truncated["day_min_eq"][0, 1])
     assert truncated["day_volume"][0, 1].item() == 0.0
     assert not truncated["day_has_fill"][0, 1].item()
     assert truncated["last_eq_ts"].item() == 800.0
+
+    short["day_min_eq"][0, 1] = 850.0
+    long["liq_step"] = torch.tensor([1_500])
+    liquidated = _combine_hedged_multicoin_outputs(
+        long, short, 1_000.0, 0, 60_000
+    )
+    assert torch.isfinite(liquidated["day_min_eq"][0, 0])
+    assert torch.isinf(liquidated["day_min_eq"][0, 1])
+    assert liquidated["day_end_eq"][0, 1].item() == 0.0
+    assert liquidated["liq_step"].item() == 1_500
 
 
 def test_multicoin_coin_overrides_pack_only_explicit_exact_values():

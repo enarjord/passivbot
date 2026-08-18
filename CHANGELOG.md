@@ -8,7 +8,8 @@ All notable user-facing changes will be documented in this file.
   backend. Metal screens long and short independently and combines their compact outputs into a
   conservative portfolio proxy, while unchanged exact Rust backtests remain authoritative and the
   existing constraint, rank, and drift gates fail closed on disagreement. Dual-side one-way mode,
-  suites, and coin overrides remain explicitly unsupported in this slice.
+  suites, coin overrides, and metrics requiring cross-side fill or recovery event streams remain
+  explicitly unsupported in this slice.
 
 - Add static per-coin overrides to experimental Apple MPS multi-coin EMA-anchor optimization.
   The enabled side may override EMA-anchor parameters, entry cooldown, and an explicit per-coin
