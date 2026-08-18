@@ -92,16 +92,16 @@ def _combine_hedged_multicoin_outputs(long: dict, short: dict, starting_balance:
             values = values.where(active, values.new_zeros(()))
         combined[key] = values
 
-    combined["day_max_dd"] = long["day_max_dd"].maximum(
-        short["day_max_dd"]
-    ).where(active, long["day_max_dd"].new_zeros(()))
+    combined["day_max_dd"] = (
+        long["day_max_dd"] + short["day_max_dd"]
+    ).clamp(max=1.0).where(active, long["day_max_dd"].new_zeros(()))
     combined["day_volume"] = (long["day_volume"] + short["day_volume"]).where(
         active, long["day_volume"].new_zeros(())
     )
     combined["day_has_fill"] = (
         long["day_has_fill"] | short["day_has_fill"]
     ) & active
-    combined["max_dd"] = long["max_dd"].maximum(short["max_dd"])
+    combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["gap_hist"] = long["gap_hist"] + short["gap_hist"]
     combined["gap_max_ms"] = long["gap_max_ms"].maximum(short["gap_max_ms"])

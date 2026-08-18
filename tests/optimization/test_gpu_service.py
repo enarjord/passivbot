@@ -130,7 +130,8 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
 
     assert combined["day_end_eq"].tolist() == [[1_050.0, 1_100.0]]
     assert combined["day_min_eq"].tolist() == [[975.0, 950.0]]
-    np.testing.assert_allclose(combined["day_max_dd"].numpy(), [[0.10, 0.30]])
+    np.testing.assert_allclose(combined["day_max_dd"].numpy(), [[0.15, 0.50]])
+    assert combined["max_dd"].item() == pytest.approx(0.50)
     np.testing.assert_allclose(combined["day_volume"].numpy(), [[0.5, 0.7]])
     assert combined["day_has_fill"].tolist() == [[True, True]]
     assert combined["first_fill_ts"].item() == 300.0
