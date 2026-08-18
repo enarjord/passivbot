@@ -1706,6 +1706,24 @@ def _write_candidate_snapshot(candidate: ParetoCandidate, destination: Path) -> 
     destination.write_bytes(candidate.source_bytes)
 
 
+def _default_file_mode() -> int:
+    current_umask = os.umask(0)
+    os.umask(current_umask)
+    return 0o666 & ~current_umask
+
+
+def _copy_file_metadata(source: Path, destination: Path) -> None:
+    source_stat = source.stat(follow_symlinks=False)
+    if hasattr(os, "chown"):
+        os.chown(
+            destination,
+            source_stat.st_uid,
+            source_stat.st_gid,
+            follow_symlinks=False,
+        )
+    shutil.copystat(source, destination, follow_symlinks=False)
+
+
 def _write_selected_output(
     candidate: ParetoCandidate,
     output: Path,
@@ -1723,6 +1741,7 @@ def _write_selected_output(
     try:
         _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
+            staging_path.chmod(_default_file_mode())
             try:
                 os.link(staging_path, output)
             except FileExistsError as exc:
@@ -1732,15 +1751,19 @@ def _write_selected_output(
                 ) from exc
             staging_path.unlink()
             return None
-        if output.exists() and keep_backup:
+        if output.exists():
             if not output.is_file():
                 raise ValueError(f"Selected output must be a regular file: {output}")
-            backup_descriptor, backup_name = tempfile.mkstemp(
-                prefix=f".{output.name}.", suffix=".backup", dir=output.parent
-            )
-            os.close(backup_descriptor)
-            backup_path = Path(backup_name)
-            shutil.copy2(output, backup_path)
+            if keep_backup:
+                backup_descriptor, backup_name = tempfile.mkstemp(
+                    prefix=f".{output.name}.", suffix=".backup", dir=output.parent
+                )
+                os.close(backup_descriptor)
+                backup_path = Path(backup_name)
+                shutil.copy2(output, backup_path)
+            _copy_file_metadata(output, staging_path)
+        else:
+            staging_path.chmod(_default_file_mode())
         os.replace(staging_path, output)
         if backup_path is not None and not keep_backup:
             backup_path.unlink()
@@ -1759,6 +1782,17 @@ def _restore_selected_output(output: Path, backup_path: Path | None) -> None:
         output.unlink(missing_ok=True)
     else:
         os.replace(backup_path, output)
+
+
+def _remove_selected_backup_after_commit(backup_path: Path) -> None:
+    try:
+        backup_path.unlink()
+    except OSError as exc:
+        print(
+            f"Warning: selected output installed, but old backup could not be removed: "
+            f"{backup_path} ({exc})",
+            file=sys.stderr,
+        )
 
 
 def _default_directory_mode() -> int:
@@ -1989,7 +2023,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         raise
     else:
         if selected_backup is not None:
-            selected_backup.unlink()
+            _remove_selected_backup_after_commit(selected_backup)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]

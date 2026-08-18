@@ -942,6 +942,60 @@ def test_saved_outputs_require_explicit_overwrite(
     ]
 
 
+@pytest.mark.parametrize("output_exists", [False, True])
+def test_selected_output_uses_destination_permissions(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+    output_exists: bool,
+):
+    selected_output = tmp_path / "selected.json"
+    if output_exists:
+        selected_output.write_text('{"old": true}\n')
+        selected_output.chmod(0o750)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    previous_umask = os.umask(0o027)
+    try:
+        run_from_args(args)
+    finally:
+        os.umask(previous_umask)
+    capsys.readouterr()
+
+    expected_mode = 0o750 if output_exists else 0o640
+    assert stat.S_IMODE(selected_output.stat().st_mode) == expected_mode
+
+
+def test_selected_output_preserves_existing_file_metadata(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"old": true}\n')
+    before = selected_output.stat()
+    xattr_name = b"user.passivbot_test"
+    xattr_supported = hasattr(os, "setxattr") and hasattr(os, "getxattr")
+    if xattr_supported:
+        try:
+            os.setxattr(selected_output, xattr_name, b"preserve")
+        except OSError:
+            xattr_supported = False
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    after = selected_output.stat()
+    assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+    if xattr_supported:
+        assert os.getxattr(selected_output, xattr_name) == b"preserve"
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_selected_output_refuses_existing_special_node(
     sample_pareto_dir: Path,
@@ -1181,6 +1235,46 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     backups = [path for path in tmp_path.iterdir() if ".backup-" in path.name]
     assert len(backups) == 1
     real_remove(backups[0])
+
+
+def test_combined_outputs_warn_when_selected_backup_cleanup_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    real_unlink = Path.unlink
+
+    def fail_selected_backup_cleanup(path: Path, *args, **kwargs):
+        if path.suffix == ".backup":
+            raise OSError("simulated selected backup cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_selected_backup_cleanup)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert (filtered_output / "selection.json").exists()
+    assert "selected output installed, but old backup could not be removed" in (
+        capsys.readouterr().err
+    )
+    backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+    assert len(backups) == 1
+    real_unlink(backups[0])
 
 
 @pytest.mark.parametrize("output_exists", [False, True])
