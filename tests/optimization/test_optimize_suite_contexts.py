@@ -1,3 +1,4 @@
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
@@ -162,6 +163,46 @@ def test_suite_evaluator_close_releases_context_and_master_attachments():
     assert evaluator.contexts[0].attachments == {"hlcvs": {}, "btc": {}}
     assert evaluator._master_attachments == {"hlcvs": {}, "btc": {}}
     assert evaluator._master_arrays == {"hlcvs": {}, "btc": {}}
+
+
+def test_suite_evaluator_pickle_strips_attached_and_cached_arrays():
+    from optimize import SuiteEvaluator
+
+    large = np.ones((1024, 1024), dtype=np.float64)
+    context = optimize_suite.ScenarioEvalContext(
+        label="base",
+        config={},
+        exchanges=["bybit"],
+        hlcvs_specs={},
+        btc_usd_specs={},
+        msss={"bybit": {}},
+        timestamps={"bybit": None},
+        shared_hlcvs_np={"bybit": large},
+        shared_btc_np={"bybit": large[:, 0]},
+        attachments={"hlcvs": {"bybit": _FakeAttachment()}, "btc": {}},
+        coin_indices={"bybit": [0]},
+        overrides={},
+    )
+    evaluator = object.__new__(SuiteEvaluator)
+    evaluator.base = None
+    evaluator.contexts = [context]
+    evaluator.reducer_cfg = {"default": "mean"}
+    evaluator._master_attachments = {
+        "hlcvs": {"master": _FakeAttachment()},
+        "btc": {},
+    }
+    evaluator._master_arrays = {"hlcvs": {"master": large}, "btc": {}}
+
+    payload = pickle.dumps(evaluator)
+    restored = pickle.loads(payload)
+
+    assert len(payload) < 100_000
+    assert context.shared_hlcvs_np["bybit"] is large
+    assert restored.contexts[0].shared_hlcvs_np == {}
+    assert restored.contexts[0].shared_btc_np == {}
+    assert restored.contexts[0].attachments == {"hlcvs": {}, "btc": {}}
+    assert restored._master_arrays == {"hlcvs": {}, "btc": {}}
+    assert restored._master_attachments == {"hlcvs": {}, "btc": {}}
 
 
 @pytest.mark.asyncio

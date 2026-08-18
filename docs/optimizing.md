@@ -110,16 +110,30 @@ The supported slice is intentionally narrow:
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
-- suite mode disabled
+- suite mode for single-coin scenarios on one shared exchange; scenario date, coin, ignored-coin,
+  and exchange selection are supported, while scenario config overrides and per-coin source
+  assignments remain unsupported
 - HSL and auto-unstuck disabled
-- BTC collateral, coin overrides, realized-loss gating, exposure enforcers, and non-inert fixed
-  runtime overrides disabled
+- BTC collateral, coin overrides, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
-long+short runs, suites, HSL, and auto-unstuck are not silently approximated by this release.
+long+short runs, multi-coin or multi-exchange suites, suite scenario config overrides or per-coin
+source assignments, HSL, and auto-unstuck are not silently approximated by this release.
+
+For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
+path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
+for aggregate reducers, named-scenario objectives, and named-scenario or suite-reduced limits.
+Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
+suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different
+single coin or date window, but every scenario must resolve to exactly one coin on the same
+exchange. Scenario `overrides` are rejected until their candidate-shadowing behavior is explicitly
+modeled by the proxy, and scenario `coin_sources` are rejected until per-coin source-exchange
+semantics are modeled. The effective external suite definition and any `--scenarios` filter are
+stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
+prepared concrete dates, so resume fails closed if the definition or resolved window changes.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
@@ -173,9 +187,11 @@ The backend is hybrid rather than a replacement backtester:
    price finalization, and their ordering relative to aligned quantity steps is retained across
    float32 transport. Tick-aligned computed targets remain on their exchange tick; residual
    float32 arithmetic drift is measured by exact validation.
-3. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
-4. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
-5. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
+3. In suite mode, the same candidate batch is screened once per scenario and reduced with the
+   canonical suite scoring and limit contract.
+4. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
+5. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
+6. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
    falls below `drift_halt` after sufficient evidence. Constraint classification is monitored over
    all validations and independently for proxy-front candidates and broad probes. An isolated
    disagreement is retained as drift evidence rather than aborting immediately; the exact Rust
