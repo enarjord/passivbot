@@ -423,6 +423,75 @@ def _single_scenario_metric_surface(metrics: dict) -> dict:
     return flattened
 
 
+_GPU_SUITE_OBJECTIVES_KEY = "__gpu_suite_objectives__"
+_GPU_SUITE_VIOLATION_KEY = "__gpu_suite_constraint_violation__"
+_GPU_SUITE_METRICS_KEY = "__gpu_suite_metrics__"
+
+
+def _scalar_metric_stats(metrics: dict) -> dict:
+    return {
+        key: {
+            "mean": float(value),
+            "min": float(value),
+            "max": float(value),
+            "std": 0.0,
+            "median": float(value),
+        }
+        for key, value in metrics.items()
+    }
+
+
+def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -> list[dict]:
+    """Screen one candidate batch across suite scenarios with canonical reducers."""
+
+    from suite_runner import ScenarioResult, SuiteScenario
+
+    scenario_rows = [
+        (ctx, proxy.evaluate(candidates)) for ctx, proxy in scenario_proxies
+    ]
+    results = []
+    for index in range(len(candidates)):
+        scenario_results = [
+            ScenarioResult(
+                scenario=SuiteScenario(
+                    label=ctx.label,
+                    start_date=None,
+                    end_date=None,
+                    coins=None,
+                    ignored_coins=None,
+                ),
+                per_exchange={},
+                metrics={"stats": _scalar_metric_stats(rows[index])},
+                elapsed_seconds=0.0,
+                output_path=None,
+            )
+            for ctx, rows in scenario_rows
+        ]
+        scored = suite_evaluator.score_scenario_results(scenario_results)
+        results.append(
+            {
+                _GPU_SUITE_OBJECTIVES_KEY: tuple(scored["objectives"]),
+                _GPU_SUITE_VIOLATION_KEY: float(scored["constraint_violation"]),
+                _GPU_SUITE_METRICS_KEY: scored["suite_metrics"],
+            }
+        )
+    return results
+
+
+def _suite_limit_metric_value(suite_payload: dict, check: dict):
+    metrics = suite_payload.get("metrics", {}) if isinstance(suite_payload, dict) else {}
+    metric = check["metric"]
+    entry = metrics.get(metric)
+    if entry is None and metric.endswith(("_usd", "_btc")):
+        entry = metrics.get(metric.rsplit("_", 1)[0])
+    if not isinstance(entry, dict):
+        return None
+    scenario = check.get("scenario")
+    if scenario is not None:
+        return (entry.get("scenarios") or {}).get(scenario)
+    return (entry.get("stats") or {}).get(check.get("reducer") or "mean")
+
+
 def _resolve_options(config: dict) -> dict:
     options = dict(GPU_DEFAULTS)
     configured = config.get("optimize", {}).get("gpu", {})
@@ -607,8 +676,14 @@ def _validate_resume_evidence_budget(
         )
 
 
-def _validate_scope(config: dict, evaluator) -> str:
-    if bool(config.get("backtest", {}).get("suite_enabled")):
+def _validate_scope_config(
+    config: dict,
+    *,
+    exchanges,
+    coin_count: int,
+    allow_suite: bool = False,
+) -> str:
+    if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("GPU foundation does not support suite mode")
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
         raise ValueError(
@@ -629,14 +704,13 @@ def _validate_scope(config: dict, evaluator) -> str:
             "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
             "screening proxy does not model the realized-loss gate"
         )
-    exchanges = list(getattr(evaluator, "exchanges", []))
+    exchanges = list(exchanges)
     if len(exchanges) != 1:
         raise ValueError(
             f"GPU foundation requires exactly one exchange, got {exchanges}"
         )
     exchange = exchanges[0]
-    hlcvs = evaluator.shared_hlcvs_np[exchange]
-    coin_count = int(hlcvs.shape[1])
+    coin_count = int(coin_count)
     if coin_count < 1:
         raise ValueError("GPU foundation requires at least one prepared coin")
     strategy_kind = (
@@ -706,6 +780,100 @@ def _validate_scope(config: dict, evaluator) -> str:
                 f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
             )
     return exchange
+
+
+def _validate_scope(
+    config: dict,
+    evaluator,
+    *,
+    allow_suite: bool = False,
+) -> str:
+    exchanges = list(getattr(evaluator, "exchanges", []))
+    if len(exchanges) != 1:
+        return _validate_scope_config(
+            config,
+            exchanges=exchanges,
+            coin_count=0,
+            allow_suite=allow_suite,
+        )
+    exchange = exchanges[0]
+    hlcvs = evaluator.shared_hlcvs_np[exchange]
+    return _validate_scope_config(
+        config,
+        exchanges=exchanges,
+        coin_count=int(hlcvs.shape[1]),
+        allow_suite=allow_suite,
+    )
+
+
+def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict]:
+    """Materialize fail-closed single-coin suite inputs for MPS screening."""
+
+    contexts = getattr(suite_evaluator, "contexts", None)
+    get_data = getattr(suite_evaluator, "get_prepared_context_data", None)
+    build_config = getattr(suite_evaluator, "build_scenario_candidate_config", None)
+    if not isinstance(contexts, list) or not contexts:
+        raise ValueError("GPU suite mode requires prepared optimizer scenario contexts")
+    if not callable(get_data) or not callable(build_config):
+        raise TypeError("GPU suite mode requires the canonical SuiteEvaluator")
+
+    prepared = []
+    expected_exchange = None
+    for ctx in contexts:
+        if ctx.overrides:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} uses config overrides; this slice "
+                "supports scenario dates, coins, ignored coins, and exchange selection only"
+            )
+        exchanges = list(ctx.exchanges)
+        if len(exchanges) != 1:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} requires exactly one exchange, "
+                f"got {exchanges}"
+            )
+        exchange = exchanges[0]
+        if exchange == "combined":
+            raise ValueError(
+                "GPU suite scenarios do not support combined multi-exchange datasets"
+            )
+        if expected_exchange is None:
+            expected_exchange = exchange
+        elif exchange != expected_exchange:
+            raise ValueError(
+                "GPU suite scenarios must use one shared exchange; "
+                f"expected {expected_exchange!r}, got {exchange!r} in {ctx.label!r}"
+            )
+
+        hlcvs, btc, coin_indices = get_data(ctx, exchange)
+        values = np.asarray(hlcvs)
+        if coin_indices is not None:
+            values = np.take(values, list(coin_indices), axis=1)
+        values = np.ascontiguousarray(values)
+        coin_count = int(values.shape[1])
+        if coin_count != 1:
+            raise ValueError(
+                "GPU suite foundation currently requires exactly one prepared coin "
+                f"per scenario; {ctx.label!r} prepared {coin_count}"
+            )
+        scenario_config = build_config(proxy_config, ctx)
+        _validate_scope_config(
+            scenario_config,
+            exchanges=exchanges,
+            coin_count=coin_count,
+            allow_suite=True,
+        )
+        prepared.append(
+            {
+                "ctx": ctx,
+                "config": scenario_config,
+                "exchange": exchange,
+                "hlcvs": values,
+                "mss": ctx.msss[exchange],
+                "btc": btc,
+                "timestamps": ctx.timestamps.get(exchange),
+            }
+        )
+    return prepared
 
 
 def _average_ranks(values: np.ndarray) -> np.ndarray:
@@ -1464,13 +1632,29 @@ def _constraint_classification_mismatch(proxy_violation: float, exact_payload: d
 def _constraint_diagnostics(evaluator, proxy_metrics: dict, exact_payload: dict) -> list[dict]:
     """Describe proxy/exact values for every active optimizer limit."""
 
-    proxy_surface = _single_scenario_metric_surface(proxy_metrics)
-    exact_stats = (exact_payload.get("metrics") or {}).get("stats") or {}
-    exact_surface = flatten_metric_stats(exact_stats)
+    proxy_suite = proxy_metrics.get(_GPU_SUITE_METRICS_KEY)
+    exact_metrics = exact_payload.get("metrics") or {}
+    exact_suite = exact_metrics.get("suite_metrics")
+    proxy_surface = (
+        None if proxy_suite is not None else _single_scenario_metric_surface(proxy_metrics)
+    )
+    exact_surface = (
+        None
+        if exact_suite is not None
+        else flatten_metric_stats(exact_metrics.get("stats") or {})
+    )
     diagnostics = []
     for check in getattr(evaluator, "limit_checks", []):
-        proxy_value = resolve_metric_value(proxy_surface, check["metric_key"])
-        exact_value = resolve_metric_value(exact_surface, check["metric_key"])
+        proxy_value = (
+            _suite_limit_metric_value(proxy_suite, check)
+            if proxy_suite is not None
+            else resolve_metric_value(proxy_surface, check["metric_key"])
+        )
+        exact_value = (
+            _suite_limit_metric_value(exact_suite, check)
+            if exact_suite is not None
+            else resolve_metric_value(exact_surface, check["metric_key"])
+        )
         entry = {
             "metric": check["metric"],
             "metric_key": check["metric_key"],
@@ -1648,8 +1832,18 @@ def run_backend(
         overrides_list,
         finalize_fn=_finalize_optimizer_vector_config,
     )
-    exchange = _validate_scope(proxy_config, evaluator)
-    coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
+    suite_enabled = bool(config.get("backtest", {}).get("suite_enabled"))
+    suite_inputs = (
+        _gpu_suite_scenario_inputs(proxy_config, evaluator_for_pool)
+        if suite_enabled
+        else []
+    )
+    if suite_enabled:
+        exchange = suite_inputs[0]["exchange"]
+        coin_count = 1
+    else:
+        exchange = _validate_scope(proxy_config, evaluator)
+        coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
     if strategy_kind == "ema_anchor" and coin_count > 1:
         multicoin_sides = [
             side
@@ -1845,17 +2039,46 @@ def run_backend(
             "use supported metrics or the CPU optimizer"
         )
 
-    proxy_cls = MpsMulticoinEmaProxy if coin_count > 1 else MpsSingleCoinProxy
-    proxy = proxy_cls(
-        config=proxy_config,
-        hlcvs=evaluator.shared_hlcvs_np[exchange],
-        mss=evaluator.msss[exchange],
-        btc=evaluator.shared_btc_np[exchange],
-        timestamps=evaluator.timestamps.get(exchange),
-        exchange=exchange,
-        batch_size=int(options["batch_size"]),
-        needed_metrics=needed_metrics,
-    )
+    if suite_enabled:
+        scenario_proxies = [
+            (
+                item["ctx"],
+                MpsSingleCoinProxy(
+                    config=item["config"],
+                    hlcvs=item["hlcvs"],
+                    mss=item["mss"],
+                    btc=item["btc"],
+                    timestamps=item["timestamps"],
+                    exchange=item["exchange"],
+                    batch_size=int(options["batch_size"]),
+                    needed_metrics=needed_metrics,
+                ),
+            )
+            for item in suite_inputs
+        ]
+
+        def evaluate_proxy(candidates):
+            return _evaluate_gpu_suite_proxies(
+                evaluator_for_pool,
+                scenario_proxies,
+                candidates,
+            )
+
+    else:
+        proxy_cls = MpsMulticoinEmaProxy if coin_count > 1 else MpsSingleCoinProxy
+        proxy = proxy_cls(
+            config=proxy_config,
+            hlcvs=evaluator.shared_hlcvs_np[exchange],
+            mss=evaluator.msss[exchange],
+            btc=evaluator.shared_btc_np[exchange],
+            timestamps=evaluator.timestamps.get(exchange),
+            exchange=exchange,
+            batch_size=int(options["batch_size"]),
+            needed_metrics=needed_metrics,
+        )
+
+        def evaluate_proxy(candidates):
+            return proxy.evaluate(candidates)
 
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
@@ -2104,6 +2327,18 @@ def run_backend(
         objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
         violations = np.empty(len(metric_rows), dtype=np.float64)
         for row, metrics in enumerate(metric_rows):
+            if _GPU_SUITE_OBJECTIVES_KEY in metrics:
+                objective_values = np.asarray(
+                    metrics[_GPU_SUITE_OBJECTIVES_KEY], dtype=np.float64
+                )
+                if len(objective_values) != len(specs):
+                    raise ValueError(
+                        "GPU suite proxy objective length mismatch: "
+                        f"expected {len(specs)}, got {len(objective_values)}"
+                    )
+                objectives[row] = objective_values
+                violations[row] = float(metrics[_GPU_SUITE_VIOLATION_KEY])
+                continue
             flattened = _single_scenario_metric_surface(metrics)
             objective_values = [
                 metrics[canonicalize_metric_name(spec.metric)] for spec in specs
@@ -2227,7 +2462,7 @@ def run_backend(
 
             population = algorithm.ask()
             rows = np.asarray(population.get("X"), dtype=np.float64)
-            metric_rows = proxy.evaluate(parameter_dicts(rows))
+            metric_rows = evaluate_proxy(parameter_dicts(rows))
             proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
             proxy_evaluations += len(rows)
             if objective_scale.median is None:

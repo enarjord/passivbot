@@ -1893,7 +1893,21 @@ class SuiteEvaluator:
                 ctx.attachments["btc"][exchange] = attachment
                 ctx.shared_btc_np[exchange] = attachment.array
 
-    def _build_scenario_candidate_config(self, config: Dict[str, Any], ctx: ScenarioEvalContext):
+    def get_prepared_context_data(
+        self, ctx: ScenarioEvalContext, exchange: str
+    ) -> tuple[np.ndarray, np.ndarray | None, list[int] | None]:
+        """Return the exact prepared arrays and active coin indices for a scenario."""
+
+        if self._uses_lazy_slicing(ctx, exchange):
+            return self._get_lazy_slice_data(ctx, exchange)
+        self._ensure_context_attachment(ctx, exchange)
+        return (
+            ctx.shared_hlcvs_np[exchange],
+            ctx.shared_btc_np.get(exchange),
+            ctx.coin_indices.get(exchange),
+        )
+
+    def build_scenario_candidate_config(self, config: Dict[str, Any], ctx: ScenarioEvalContext):
         scenario_config = dict(config)
         scenario_backtest = ctx.config.get("backtest", {})
         backtest_cfg = dict(config.get("backtest", {}))
@@ -1914,6 +1928,83 @@ class SuiteEvaluator:
             scenario_config = deepcopy(scenario_config)
             _apply_config_overrides(scenario_config, ctx.overrides)
         return scenario_config
+
+    def _build_scenario_candidate_config(
+        self, config: Dict[str, Any], ctx: ScenarioEvalContext
+    ):
+        """Compatibility wrapper for callers predating the public suite helper."""
+
+        return self.build_scenario_candidate_config(config, ctx)
+
+    def score_scenario_results(self, scenario_results: List[ScenarioResult]) -> Dict[str, Any]:
+        """Apply the canonical suite reducers, objectives, and limits to scenario stats."""
+
+        reduce_started = time.perf_counter()
+        reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
+        reduce_metrics_ms = (time.perf_counter() - reduce_started) * 1000.0
+        fitness_started = time.perf_counter()
+        suite_payload = build_suite_metrics_payload(scenario_results, reduced_summary)
+        reduced_stats = reduced_summary.get("stats", {})
+
+        reduced_stats_flat = flatten_metric_stats(reduced_stats)
+        flat_stats = dict(reduced_stats_flat)
+        # Override _mean with correctly aggregated values so calc_fitness
+        # and limit defaults respect the reducer config (e.g. "max" instead of "mean").
+        aggregated_values = reduced_summary.get("aggregated", {})
+        for metric, agg_value in aggregated_values.items():
+            flat_stats[f"{metric}_mean"] = agg_value
+        required_scenario_labels = {
+            basis.scenario for basis in self.objective_bases if basis.scenario is not None
+        }
+        required_scenario_labels.update(
+            check["scenario"]
+            for check in self.base.limit_checks
+            if check.get("scenario") is not None
+        )
+        scenario_stats_by_label = {
+            result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
+            for result in scenario_results
+            if result.scenario.label in required_scenario_labels
+        }
+        objective_values: List[float] = []
+        for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
+            if basis.scenario is not None:
+                source_stats = scenario_stats_by_label[basis.scenario]
+                reducer = "mean"
+            else:
+                source_stats = reduced_stats_flat
+                reducer = basis.reducer or "mean"
+            value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
+            if value is None and spec.metric.endswith(("_usd", "_btc")):
+                value = resolve_metric_value(
+                    source_stats,
+                    f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
+                )
+            if value is None:
+                basis_label = (
+                    f"scenario {basis.scenario!r}"
+                    if basis.scenario is not None
+                    else f"reducer {reducer!r}"
+                )
+                raise ValueError(
+                    "missing optimizer scoring metric "
+                    f"{spec.metric!r} for {basis_label}; "
+                    f"available metrics: {_format_available_metric_keys(source_stats)}"
+                )
+            objective_values.append(float(value))
+        objectives, total_penalty = self.base.calc_fitness(
+            flat_stats,
+            limit_metrics=flat_stats,
+            scenario_limit_metrics=scenario_stats_by_label,
+            objective_values=objective_values,
+        )
+        return {
+            "objectives": tuple(objectives),
+            "constraint_violation": float(total_penalty),
+            "suite_metrics": suite_payload,
+            "reduce_metrics_ms": reduce_metrics_ms,
+            "fitness_payload_ms": (time.perf_counter() - fitness_started) * 1000.0,
+        }
 
     def evaluate(self, individual, overrides_list):
         profile_enabled = _optimize_profile_enabled()
@@ -1985,7 +2076,7 @@ class SuiteEvaluator:
 
         for ctx in self.contexts:
             phase_start = _profile_start(profile_enabled)
-            scenario_config = self._build_scenario_candidate_config(config, ctx)
+            scenario_config = self.build_scenario_candidate_config(config, ctx)
             skip_btc_analysis = _optimizer_can_skip_btc_analysis(
                 scenario_config,
                 self.base.scoring_specs,
@@ -2013,16 +2104,9 @@ class SuiteEvaluator:
 
             analyses = {}
             for exchange in ctx.exchanges:
-                # Get data arrays - either from lazy slicing or cached SharedMemory
-                if self._uses_lazy_slicing(ctx, exchange):
-                    # Get time-sliced VIEW (O(1) memory) + coin indices
-                    # Coin subsetting is passed to Rust as active indices.
-                    hlcvs_data, btc_data, coin_indices = self._get_lazy_slice_data(ctx, exchange)
-                else:
-                    self._ensure_context_attachment(ctx, exchange)
-                    hlcvs_data = ctx.shared_hlcvs_np[exchange]
-                    btc_data = ctx.shared_btc_np.get(exchange)
-                    coin_indices = ctx.coin_indices.get(exchange)
+                hlcvs_data, btc_data, coin_indices = self.get_prepared_context_data(
+                    ctx, exchange
+                )
 
                 phase_start = _profile_start(profile_enabled)
                 payload = build_backtest_payload(
@@ -2146,67 +2230,14 @@ class SuiteEvaluator:
                 )
             )
 
-        phase_start = _profile_start(profile_enabled)
-        reduced_summary = reduce_metrics(scenario_results, self.reducer_cfg)
-        _profile_add(timings, "reduce_metrics_ms", phase_start)
-        phase_start = _profile_start(profile_enabled)
-        suite_payload = build_suite_metrics_payload(scenario_results, reduced_summary)
-        reduced_stats = reduced_summary.get("stats", {})
-
-        reduced_stats_flat = flatten_metric_stats(reduced_stats)
-        flat_stats = dict(reduced_stats_flat)
-        # Override _mean with correctly aggregated values so calc_fitness
-        # and limit defaults respect the reducer config (e.g. "max" instead of "mean").
-        aggregated_values = reduced_summary.get("aggregated", {})
-        for metric, agg_value in aggregated_values.items():
-            flat_stats[f"{metric}_mean"] = agg_value
-        required_scenario_labels = {
-            basis.scenario for basis in self.objective_bases if basis.scenario is not None
-        }
-        required_scenario_labels.update(
-            check["scenario"]
-            for check in self.base.limit_checks
-            if check.get("scenario") is not None
-        )
-        scenario_stats_by_label = {
-            result.scenario.label: flatten_metric_stats(result.metrics.get("stats", {}))
-            for result in scenario_results
-            if result.scenario.label in required_scenario_labels
-        }
-        objective_values: List[float] = []
-        for spec, basis in zip(self.base.scoring_specs, self.objective_bases):
-            if basis.scenario is not None:
-                source_stats = scenario_stats_by_label[basis.scenario]
-                reducer = "mean"
-            else:
-                source_stats = reduced_stats_flat
-                reducer = basis.reducer or "mean"
-            value = resolve_metric_value(source_stats, f"{spec.metric}_{reducer}")
-            if value is None and spec.metric.endswith(("_usd", "_btc")):
-                value = resolve_metric_value(
-                    source_stats,
-                    f"{spec.metric.rsplit('_', 1)[0]}_{reducer}",
-                )
-            if value is None:
-                basis_label = (
-                    f"scenario {basis.scenario!r}"
-                    if basis.scenario is not None
-                    else f"reducer {reducer!r}"
-                )
-                raise ValueError(
-                    "missing optimizer scoring metric "
-                    f"{spec.metric!r} for {basis_label}; "
-                    f"available metrics: {_format_available_metric_keys(source_stats)}"
-                )
-            objective_values.append(float(value))
-        objectives, total_penalty = self.base.calc_fitness(
-            flat_stats,
-            limit_metrics=flat_stats,
-            scenario_limit_metrics=scenario_stats_by_label,
-            objective_values=objective_values,
-        )
+        suite_fitness = self.score_scenario_results(scenario_results)
+        objectives = suite_fitness["objectives"]
+        total_penalty = suite_fitness["constraint_violation"]
+        suite_payload = suite_fitness["suite_metrics"]
+        if timings is not None:
+            timings["reduce_metrics_ms"] = suite_fitness["reduce_metrics_ms"]
+            timings["fitness_payload_ms"] = suite_fitness["fitness_payload_ms"]
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
-        _profile_add(timings, "fitness_payload_ms", phase_start)
 
         metrics_payload = {
             "objectives": objectives_map,

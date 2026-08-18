@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add experimental Apple MPS optimization suites for the existing single-coin EMA-anchor and
+  trailing-martingale scopes. Metal screens every candidate against each prepared scenario, while
+  the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and
+  unchanged exact Rust suite evaluations remain authoritative. This slice supports scenario date,
+  coin, ignored-coin, and single-exchange selection; scenario config overrides, multi-exchange
+  suites, and multi-coin scenarios still fail closed.
+
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
   durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the
