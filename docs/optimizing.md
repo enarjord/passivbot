@@ -111,8 +111,8 @@ The supported slice is intentionally narrow:
   prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
 - suite mode for single-coin scenarios on one shared exchange; scenario date, coin, ignored-coin,
-  and exchange selection are supported, while scenario config overrides and per-coin source
-  assignments remain unsupported
+  exchange selection, and fail-closed `bot.long`/`bot.short` config overrides are supported, while
+  non-bot override paths and per-coin source assignments remain unsupported
 - HSL and auto-unstuck disabled
 - BTC collateral, coin overrides, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
@@ -120,7 +120,7 @@ The supported slice is intentionally narrow:
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
-long+short runs, multi-coin or multi-exchange suites, suite scenario config overrides or per-coin
+long+short runs, multi-coin or multi-exchange suites, non-bot suite scenario overrides, per-coin
 source assignments, HSL, and auto-unstuck are not silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
@@ -129,8 +129,13 @@ for aggregate reducers, named-scenario objectives, and named-scenario or suite-r
 Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
 suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different
 single coin or date window, but every scenario must resolve to exactly one coin on the same
-exchange. Scenario `overrides` are rejected until their candidate-shadowing behavior is explicitly
-modeled by the proxy, and scenario `coin_sources` are rejected until per-coin source-exchange
+exchange. Scenario `overrides` require explicit candidate-shadowing behavior in the proxy. This
+slice models `bot.long` and `bot.short` overrides: the canonical exact
+suite evaluator still applies them last, after candidate materialization, while each scenario's
+Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
+overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
+enable HSL, auto-unstuck, an exposure enforcer, an invalid position count, or another unsupported
+behavior. Non-bot override paths and scenario `coin_sources` remain rejected until their proxy
 semantics are modeled. The effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
 prepared concrete dates, so resume fails closed if the definition or resolved window changes.

@@ -30,6 +30,7 @@ from optimization.backends.gpu_backend import (
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
     _gpu_suite_enabled,
+    _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
     _materialize_gpu_override_template,
     _DriftMonitor,
@@ -454,7 +455,7 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
 @pytest.mark.parametrize(
     ("overrides", "exchanges", "coin_indices", "message"),
     [
-        ({"bot.long.risk.n_positions": 1}, ["bybit"], [0], "config overrides"),
+        ({"backtest.starting_balance": 1_000}, ["bybit"], [0], "outside the supported"),
         ({}, ["bybit", "binance"], [0], "exactly one exchange"),
         ({}, ["combined"], [0], "combined multi-exchange"),
         ({}, ["bybit"], [0, 1], "exactly one prepared coin"),
@@ -485,6 +486,106 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             return copy.deepcopy(proxy_config)
 
     with pytest.raises(ValueError, match=message):
+        _gpu_suite_scenario_inputs(config, Suite())
+
+
+def test_gpu_suite_scenario_overrides_shadow_candidate_parameters_last():
+    config = _long_only_ema_config()
+    scenario = copy.deepcopy(config)
+    scenario["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] = 0.025
+    scenario["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.75
+
+    fixed_bounds, fixed_parameters = _gpu_suite_scenario_override_context(
+        config,
+        scenario,
+        {
+            "bot.long.strategy.ema_anchor.base_qty_pct": 0.025,
+            "bot.long.total_wallet_exposure_limit": 0.75,
+        },
+        {
+            "long_base_qty_pct",
+            "long_total_wallet_exposure_limit",
+            "long_n_positions",
+        },
+        {
+            "long_base_qty_pct": "long_base_qty_pct",
+            "long_total_wallet_exposure_limit": "long_total_wallet_exposure_limit",
+        },
+    )
+
+    assert fixed_bounds == {
+        "long_base_qty_pct": 0.025,
+        "long_total_wallet_exposure_limit": 0.75,
+    }
+    assert fixed_parameters == {
+        "long_base_qty_pct": 0.025,
+        "long_total_wallet_exposure_limit": 0.75,
+    }
+
+
+def test_gpu_suite_inputs_accept_and_preserve_bot_override_scope():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    overrides = {"bot.long.strategy.ema_anchor.base_qty_pct": 0.025}
+    ctx = SimpleNamespace(
+        label="fixed_qty",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["bot"]["long"]["strategy"]["ema_anchor"]["base_qty_pct"] = 0.025
+            return scenario
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["overrides"] == overrides
+    assert (
+        prepared[0]["config"]["bot"]["long"]["strategy"]["ema_anchor"][
+            "base_qty_pct"
+        ]
+        == 0.025
+    )
+
+
+def test_gpu_suite_inputs_revalidate_effective_bot_override_scope():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="unsupported_risk",
+        overrides={"bot.long.risk.total_exposure_enforcer_enabled": True},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["bot"]["long"]["risk"][
+                "total_exposure_enforcer_enabled"
+            ] = True
+            return scenario
+
+    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled=false"):
         _gpu_suite_scenario_inputs(config, Suite())
 
 
@@ -571,8 +672,8 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
     rows = _evaluate_gpu_suite_proxies(
         Suite(),
         [
-            (contexts[0], Proxy([0.10, 0.20])),
-            (contexts[1], Proxy([0.01, 0.02])),
+            (contexts[0], Proxy([0.10, 0.20]), {}),
+            (contexts[1], Proxy([0.01, 0.02]), {}),
         ],
         [{"x": 1}, {"x": 2}],
     )
@@ -589,6 +690,47 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
             _GPU_SUITE_METRICS_KEY: {"values": [0.20, 0.02]},
         },
     ]
+
+
+def test_gpu_suite_proxy_applies_scenario_parameter_overrides_without_mutating_candidates():
+    seen = []
+
+    class Proxy:
+        def evaluate(self, candidates):
+            seen.append(copy.deepcopy(candidates))
+            return [
+                {"adg_strategy_eq": candidate["long_base_qty_pct"]}
+                for candidate in candidates
+            ]
+
+    class Suite:
+        @staticmethod
+        def score_scenario_results(results):
+            return {
+                "objectives": (0.0,),
+                "constraint_violation": 0.0,
+                "suite_metrics": {},
+            }
+
+    candidates = [{"long_base_qty_pct": 0.01}]
+    _evaluate_gpu_suite_proxies(
+        Suite(),
+        [
+            (
+                SimpleNamespace(label="fixed"),
+                Proxy(),
+                {"long_base_qty_pct": 0.025},
+            ),
+            (SimpleNamespace(label="candidate"), Proxy(), {}),
+        ],
+        candidates,
+    )
+
+    assert seen == [
+        [{"long_base_qty_pct": 0.025}],
+        [{"long_base_qty_pct": 0.01}],
+    ]
+    assert candidates == [{"long_base_qty_pct": 0.01}]
 
 
 def test_suite_limit_metric_value_respects_reducer_and_scenario():
