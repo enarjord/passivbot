@@ -1284,6 +1284,48 @@ def test_combined_outputs_restore_both_destinations_when_interrupted(
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
 
 
+def test_combined_outputs_refuse_rollback_over_newer_selected_file(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+
+    def replace_selected_then_fail(candidate, destination):
+        destination = Path(destination)
+        if destination.parent.name.startswith(".filtered."):
+            newer = tmp_path / "newer.json"
+            newer.write_text('{"selected": "newer"}\n')
+            os.replace(newer, selected_output)
+            raise OSError("simulated filtered copy failure")
+        destination.write_bytes(candidate.source_bytes)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot", replace_selected_then_fail
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently; refusing rollback"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "newer"}
+    backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text()) == {"selected": "old"}
+    backups[0].unlink()
+
+
 def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1303,6 +1345,49 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
         return real_remove(path)
 
     monkeypatch.setattr(pareto_explorer, "_remove_output_tree", fail_backup_cleanup)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert not (filtered_output / "stale.json").exists()
+    assert (filtered_output / "selection.json").exists()
+    assert "old backup could not be removed" in capsys.readouterr().err
+    backups = [path for path in tmp_path.iterdir() if ".backup-" in path.name]
+    assert len(backups) == 1
+    real_remove(backups[0])
+
+
+def test_combined_outputs_remain_consistent_when_backup_cleanup_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
+    real_remove = pareto_explorer._remove_output_tree
+
+    def interrupt_backup_cleanup(path: Path):
+        if ".backup-" in path.name:
+            raise KeyboardInterrupt()
+        return real_remove(path)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_remove_output_tree", interrupt_backup_cleanup
+    )
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
@@ -1491,6 +1576,31 @@ def test_filtered_output_rechecks_directory_created_during_reservation(
 
     assert raced
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
+
+
+def test_new_filtered_output_retains_inherited_setgid_metadata(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output_parent = tmp_path / "exports"
+    output_parent.mkdir()
+    output_parent.chmod(stat.S_IMODE(output_parent.stat().st_mode) | stat.S_ISGID)
+    probe = output_parent / "probe"
+    probe.mkdir(mode=0o777)
+    inherited_setgid = bool(probe.stat().st_mode & stat.S_ISGID)
+    probe.rmdir()
+    if not inherited_setgid:
+        pytest.skip("filesystem does not inherit setgid on child directories")
+    output_dir = output_parent / "filtered"
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir)]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert output_dir.stat().st_mode & stat.S_ISGID
 
 
 def test_filtered_output_builds_before_applying_read_only_destination_mode(

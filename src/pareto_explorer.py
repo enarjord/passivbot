@@ -83,6 +83,12 @@ class ParetoCandidate:
 
 
 @dataclass(frozen=True)
+class _SelectedOutputInstall:
+    backup_path: Path | None
+    installed_identity: tuple[int, int]
+
+
+@dataclass(frozen=True)
 class SelectionResult:
     candidate: ParetoCandidate
     method: str
@@ -1724,7 +1730,9 @@ def _copy_file_metadata(source: Path, destination: Path) -> None:
     shutil.copystat(source, destination, follow_symlinks=False)
 
 
-def _warn_post_commit_cleanup_failure(label: str, path: Path, exc: OSError) -> None:
+def _warn_post_commit_cleanup_failure(
+    label: str, path: Path, exc: BaseException
+) -> None:
     print(
         f"Warning: {label} installed, but temporary path could not be removed: "
         f"{path} ({exc})",
@@ -1738,7 +1746,7 @@ def _write_selected_output(
     *,
     keep_backup: bool,
     overwrite: bool,
-) -> Path | None:
+) -> _SelectedOutputInstall:
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staging_name = tempfile.mkstemp(
         prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
@@ -1751,6 +1759,8 @@ def _write_selected_output(
         _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
             staging_path.chmod(_default_file_mode())
+            staging_stat = staging_path.stat(follow_symlinks=False)
+            installed_identity = staging_stat.st_dev, staging_stat.st_ino
             try:
                 os.link(staging_path, output)
             except FileExistsError as exc:
@@ -1765,7 +1775,7 @@ def _write_selected_output(
                 _warn_post_commit_cleanup_failure(
                     "selected output", staging_path, exc
                 )
-            return None
+            return _SelectedOutputInstall(None, installed_identity)
         if output.exists():
             if not output.is_file():
                 raise ValueError(f"Selected output must be a regular file: {output}")
@@ -1780,11 +1790,13 @@ def _write_selected_output(
             _copy_file_metadata(output, staging_path)
         else:
             staging_path.chmod(_default_file_mode())
+        staging_stat = staging_path.stat(follow_symlinks=False)
+        installed_identity = staging_stat.st_dev, staging_stat.st_ino
         os.replace(staging_path, output)
         if backup_path is not None and not keep_backup:
             backup_path.unlink()
             backup_path = None
-        return backup_path
+        return _SelectedOutputInstall(backup_path, installed_identity)
     except BaseException:
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
@@ -1794,24 +1806,34 @@ def _write_selected_output(
             staging_path.unlink(missing_ok=True)
 
 
-def _restore_selected_output(output: Path, backup_path: Path | None) -> None:
-    if backup_path is None:
+def _restore_selected_output(output: Path, install: _SelectedOutputInstall) -> None:
+    try:
+        output_stat = output.stat(follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Selected output changed concurrently; refusing rollback: {output}"
+        ) from exc
+    if (output_stat.st_dev, output_stat.st_ino) != install.installed_identity:
+        backup_note = (
+            f" Original backup retained at {install.backup_path}."
+            if install.backup_path is not None
+            else ""
+        )
+        raise RuntimeError(
+            f"Selected output changed concurrently; refusing rollback: {output}."
+            f"{backup_note}"
+        )
+    if install.backup_path is None:
         output.unlink(missing_ok=True)
     else:
-        os.replace(backup_path, output)
+        os.replace(install.backup_path, output)
 
 
 def _remove_selected_backup_after_commit(backup_path: Path) -> None:
     try:
         backup_path.unlink()
-    except OSError as exc:
+    except BaseException as exc:
         _warn_post_commit_cleanup_failure("selected output", backup_path, exc)
-
-
-def _default_directory_mode() -> int:
-    current_umask = os.umask(0)
-    os.umask(current_umask)
-    return 0o777 & ~current_umask
 
 
 def _remove_output_tree(path: Path) -> None:
@@ -1856,7 +1878,7 @@ def _replace_filtered_output_dir(
     else:
         try:
             _remove_output_tree(backup_dir)
-        except OSError as exc:
+        except BaseException as exc:
             print(
                 f"Warning: filtered output installed, but old backup could not be removed: "
                 f"{backup_dir} ({exc})",
@@ -1868,17 +1890,15 @@ def _ensure_filtered_output_dir(
     output_dir: Path,
     *,
     overwrite: bool,
-    new_output_mode: int,
 ) -> tuple[int, int] | None:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if output_dir.exists():
         return None
     try:
-        output_dir.mkdir(mode=new_output_mode)
+        output_dir.mkdir(mode=0o777)
     except FileExistsError:
         _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
         return None
-    output_dir.chmod(new_output_mode)
     output_stat = output_dir.stat(follow_symlinks=False)
     return output_stat.st_dev, output_stat.st_ino
 
@@ -1918,11 +1938,9 @@ def _write_filtered_outputs(
     overwrite: bool,
 ) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    new_output_mode = _default_directory_mode()
     reservation_identity = _ensure_filtered_output_dir(
         output_dir,
         overwrite=overwrite,
-        new_output_mode=new_output_mode,
     )
     staging_dir: Path | None = None
     try:
@@ -2057,9 +2075,9 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         raise ValueError(
             "Selected and filtered output paths must not overlap when both are saved."
         )
-    selected_backup: Path | None = None
+    selected_install: _SelectedOutputInstall | None = None
     if selected_output is not None:
-        selected_backup = _write_selected_output(
+        selected_install = _write_selected_output(
             result.candidate,
             selected_output,
             keep_backup=filtered_output_dir is not None,
@@ -2081,11 +2099,12 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             )
     except BaseException:
         if selected_output is not None:
-            _restore_selected_output(selected_output, selected_backup)
+            assert selected_install is not None
+            _restore_selected_output(selected_output, selected_install)
         raise
     else:
-        if selected_backup is not None:
-            _remove_selected_backup_after_commit(selected_backup)
+        if selected_install is not None and selected_install.backup_path is not None:
+            _remove_selected_backup_after_commit(selected_install.backup_path)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
