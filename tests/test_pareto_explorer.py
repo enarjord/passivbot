@@ -942,6 +942,49 @@ def test_saved_outputs_require_explicit_overwrite(
     ]
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_selected_output_refuses_existing_special_node(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected_output = tmp_path / "selected.json"
+    os.mkfifo(selected_output)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="must be a regular file"):
+        run_from_args(args)
+
+
+def test_selected_output_does_not_overwrite_racing_destination_without_permission(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    real_copy2 = shutil.copy2
+    destination_created = False
+
+    def create_destination_during_staging(source, destination, *args, **kwargs):
+        nonlocal destination_created
+        destination = Path(destination)
+        if not destination_created and destination.suffix == ".tmp":
+            selected_output.write_text('{"racing": true}\n')
+            destination_created = True
+        return real_copy2(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr("pareto_explorer.shutil.copy2", create_destination_during_staging)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    with pytest.raises(FileExistsError, match="use --overwrite"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"racing": True}
+
+
 def test_filtered_overwrite_refuses_non_json_entries(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1064,6 +1107,28 @@ def test_filtered_output_directory_uses_destination_permissions(
     capsys.readouterr()
 
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
+
+
+def test_filtered_output_builds_before_applying_read_only_destination_mode(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    (output_dir / "stale.json").write_text('{"stale": true}\n')
+    output_dir.chmod(0o555)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    try:
+        run_from_args(args)
+        capsys.readouterr()
+        assert stat.S_IMODE(output_dir.stat().st_mode) == 0o555
+        assert (output_dir / "selection.json").exists()
+    finally:
+        output_dir.chmod(0o755)
 
 
 def test_save_filtered_refuses_directory_containing_resolved_source_member(
@@ -1191,6 +1256,34 @@ def test_single_file_input_allows_sibling_outputs(
         "balanced.json",
         "selection.json",
     ]
+
+
+def test_single_file_symlink_member_path_normalizes_dot_dot_without_dereferencing(
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    pareto_dir = run_dir / "pareto"
+    pareto_dir.mkdir(parents=True)
+    (run_dir / "other").mkdir()
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    resolved_source = external_dir / "target.json"
+    _write_candidate(
+        external_dir,
+        "target",
+        {"metric_a": 0.7, "metric_b": 0.7, "metric_c": 0.7},
+    )
+    member_path = pareto_dir / "member.json"
+    member_path.symlink_to(resolved_source)
+    spelled_path = run_dir / "other" / ".." / "pareto" / "member.json"
+    args = build_parser().parse_args(
+        [str(spelled_path), "-f", str(pareto_dir), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="resolved source Pareto member"):
+        run_from_args(args)
+
+    assert member_path.is_symlink()
 
 
 def test_save_outputs_refuse_both_overlap_directions(

@@ -785,7 +785,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         candidates.append(
             ParetoCandidate(
                 path=entry_path.resolve(),
-                member_path=entry_path.absolute(),
+                member_path=Path(os.path.abspath(entry_path)),
                 member_name=entry_path.name,
                 entry=entry,
                 objectives=objectives,
@@ -1633,6 +1633,8 @@ def _prepare_selected_output(
     if output.exists():
         if output.is_dir():
             raise IsADirectoryError(f"Selected output path is a directory: {output}")
+        if not output.is_file():
+            raise ValueError(f"Selected output must be a regular file: {output}")
         if not overwrite:
             raise FileExistsError(
                 f"Selected output already exists: {output} (use --overwrite to replace it)"
@@ -1704,6 +1706,7 @@ def _write_selected_output(
     output: Path,
     *,
     keep_backup: bool,
+    overwrite: bool,
 ) -> Path | None:
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staging_name = tempfile.mkstemp(
@@ -1714,7 +1717,19 @@ def _write_selected_output(
     backup_path: Path | None = None
     try:
         shutil.copy2(candidate.path, staging_path)
-        if output.exists():
+        if not overwrite:
+            try:
+                os.link(staging_path, output)
+            except FileExistsError as exc:
+                raise FileExistsError(
+                    f"Selected output already exists: {output} "
+                    "(use --overwrite to replace it)"
+                ) from exc
+            staging_path.unlink()
+            return None
+        if output.exists() and keep_backup:
+            if not output.is_file():
+                raise ValueError(f"Selected output must be a regular file: {output}")
             backup_descriptor, backup_name = tempfile.mkstemp(
                 prefix=f".{output.name}.", suffix=".backup", dir=output.parent
             )
@@ -1747,6 +1762,12 @@ def _default_directory_mode() -> int:
     return 0o777 & ~current_umask
 
 
+def _remove_output_tree(path: Path) -> None:
+    if path.exists():
+        path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR | stat.S_IXUSR)
+        shutil.rmtree(path)
+
+
 def _replace_filtered_output_dir(
     staging_dir: Path,
     output_dir: Path,
@@ -1770,7 +1791,7 @@ def _replace_filtered_output_dir(
         os.replace(backup_dir, output_dir)
         raise
     else:
-        shutil.rmtree(backup_dir)
+        _remove_output_tree(backup_dir)
 
 
 def _write_filtered_outputs(
@@ -1795,7 +1816,6 @@ def _write_filtered_outputs(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent)
     )
     try:
-        staging_dir.chmod(output_mode)
         members: List[Dict[str, Any]] = []
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
@@ -1837,10 +1857,10 @@ def _write_filtered_outputs(
             json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        staging_dir.chmod(output_mode)
         _replace_filtered_output_dir(staging_dir, output_dir, overwrite=overwrite)
     finally:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir)
+        _remove_output_tree(staging_dir)
     return output_dir / FILTERED_SELECTION_MANIFEST
 
 
@@ -1919,6 +1939,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             result.candidate,
             selected_output,
             keep_backup=filtered_output_dir is not None,
+            overwrite=overwrite,
         )
     filtered_manifest: Path | None = None
     try:
