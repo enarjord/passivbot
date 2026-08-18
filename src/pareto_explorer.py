@@ -1724,6 +1724,14 @@ def _copy_file_metadata(source: Path, destination: Path) -> None:
     shutil.copystat(source, destination, follow_symlinks=False)
 
 
+def _warn_post_commit_cleanup_failure(label: str, path: Path, exc: OSError) -> None:
+    print(
+        f"Warning: {label} installed, but temporary path could not be removed: "
+        f"{path} ({exc})",
+        file=sys.stderr,
+    )
+
+
 def _write_selected_output(
     candidate: ParetoCandidate,
     output: Path,
@@ -1738,6 +1746,7 @@ def _write_selected_output(
     os.close(file_descriptor)
     staging_path = Path(staging_name)
     backup_path: Path | None = None
+    staging_cleanup_attempted = False
     try:
         _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
@@ -1749,7 +1758,13 @@ def _write_selected_output(
                     f"Selected output already exists: {output} "
                     "(use --overwrite to replace it)"
                 ) from exc
-            staging_path.unlink()
+            staging_cleanup_attempted = True
+            try:
+                staging_path.unlink()
+            except OSError as exc:
+                _warn_post_commit_cleanup_failure(
+                    "selected output", staging_path, exc
+                )
             return None
         if output.exists():
             if not output.is_file():
@@ -1760,7 +1775,8 @@ def _write_selected_output(
                 )
                 os.close(backup_descriptor)
                 backup_path = Path(backup_name)
-                shutil.copy2(output, backup_path)
+                backup_path.unlink()
+                os.link(output, backup_path)
             _copy_file_metadata(output, staging_path)
         else:
             staging_path.chmod(_default_file_mode())
@@ -1769,12 +1785,13 @@ def _write_selected_output(
             backup_path.unlink()
             backup_path = None
         return backup_path
-    except Exception:
+    except BaseException:
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
         raise
     finally:
-        staging_path.unlink(missing_ok=True)
+        if not staging_cleanup_attempted:
+            staging_path.unlink(missing_ok=True)
 
 
 def _restore_selected_output(output: Path, backup_path: Path | None) -> None:
@@ -1788,11 +1805,7 @@ def _remove_selected_backup_after_commit(backup_path: Path) -> None:
     try:
         backup_path.unlink()
     except OSError as exc:
-        print(
-            f"Warning: selected output installed, but old backup could not be removed: "
-            f"{backup_path} ({exc})",
-            file=sys.stderr,
-        )
+        _warn_post_commit_cleanup_failure("selected output", backup_path, exc)
 
 
 def _default_directory_mode() -> int:
@@ -1824,13 +1837,8 @@ def _replace_filtered_output_dir(
     output_dir: Path,
     *,
     overwrite: bool,
-    new_output_mode: int,
 ) -> None:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
-    if not output_dir.exists():
-        staging_dir.chmod(new_output_mode)
-        os.replace(staging_dir, output_dir)
-        return
 
     backup_name = tempfile.mkdtemp(
         prefix=f".{output_dir.name}.backup-", dir=output_dir.parent
@@ -1842,7 +1850,7 @@ def _replace_filtered_output_dir(
         _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
         _copy_directory_metadata(backup_dir, staging_dir)
         os.replace(staging_dir, output_dir)
-    except Exception:
+    except BaseException:
         os.replace(backup_dir, output_dir)
         raise
     else:
@@ -1854,6 +1862,47 @@ def _replace_filtered_output_dir(
                 f"{backup_dir} ({exc})",
                 file=sys.stderr,
             )
+
+
+def _ensure_filtered_output_dir(
+    output_dir: Path,
+    *,
+    overwrite: bool,
+    new_output_mode: int,
+) -> tuple[int, int] | None:
+    _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
+    if output_dir.exists():
+        return None
+    try:
+        output_dir.mkdir(mode=new_output_mode)
+    except FileExistsError:
+        _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
+        return None
+    output_dir.chmod(new_output_mode)
+    output_stat = output_dir.stat(follow_symlinks=False)
+    return output_stat.st_dev, output_stat.st_ino
+
+
+def _remove_filtered_reservation(
+    output_dir: Path,
+    reservation_identity: tuple[int, int] | None,
+) -> None:
+    if reservation_identity is None:
+        return
+    try:
+        output_stat = output_dir.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (output_stat.st_dev, output_stat.st_ino) != reservation_identity:
+        return
+    try:
+        output_dir.rmdir()
+    except OSError as exc:
+        print(
+            f"Warning: unused filtered output reservation could not be removed: "
+            f"{output_dir} ({exc})",
+            file=sys.stderr,
+        )
 
 
 def _write_filtered_outputs(
@@ -1870,10 +1919,22 @@ def _write_filtered_outputs(
 ) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     new_output_mode = _default_directory_mode()
-    staging_dir = Path(
-        tempfile.mkdtemp(prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent)
+    reservation_identity = _ensure_filtered_output_dir(
+        output_dir,
+        overwrite=overwrite,
+        new_output_mode=new_output_mode,
     )
+    staging_dir: Path | None = None
     try:
+        staging_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent
+            )
+        )
+        _copy_directory_metadata(output_dir, staging_dir)
+        staging_dir.chmod(
+            stat.S_IMODE(staging_dir.stat().st_mode) | stat.S_IWUSR | stat.S_IXUSR
+        )
         members: List[Dict[str, Any]] = []
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
@@ -1919,10 +1980,11 @@ def _write_filtered_outputs(
             staging_dir,
             output_dir,
             overwrite=overwrite,
-            new_output_mode=new_output_mode,
         )
     finally:
-        _remove_output_tree(staging_dir)
+        if staging_dir is not None:
+            _remove_output_tree(staging_dir)
+        _remove_filtered_reservation(output_dir, reservation_identity)
     return output_dir / FILTERED_SELECTION_MANIFEST
 
 
@@ -2017,7 +2079,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 result=result,
                 overwrite=overwrite,
             )
-    except Exception:
+    except BaseException:
         if selected_output is not None:
             _restore_selected_output(selected_output, selected_backup)
         raise

@@ -1040,6 +1040,48 @@ def test_selected_output_does_not_overwrite_racing_destination_without_permissio
     assert json.loads(selected_output.read_text()) == {"racing": True}
 
 
+def test_selected_output_continues_when_post_link_staging_cleanup_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    filtered_output = tmp_path / "filtered"
+    real_unlink = Path.unlink
+
+    def fail_selected_staging_cleanup(path: Path, *args, **kwargs):
+        if path.name.startswith(".selected.json.") and path.suffix == ".tmp":
+            raise OSError("simulated selected staging cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_selected_staging_cleanup)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert (filtered_output / "selection.json").exists()
+    assert "selected output installed, but temporary path could not be removed" in (
+        capsys.readouterr().err
+    )
+    staging_paths = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(".selected.json.") and path.suffix == ".tmp"
+    ]
+    assert len(staging_paths) == 1
+    real_unlink(staging_paths[0])
+
+
 def test_filtered_overwrite_refuses_non_json_entries(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1155,8 +1197,10 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
     selected_exists: bool,
 ):
     selected_output = tmp_path / "selected.json"
+    original_inode = None
     if selected_exists:
         selected_output.write_text('{"selected": "old"}\n')
+        original_inode = selected_output.stat().st_ino
     filtered_output = tmp_path / "filtered"
     filtered_output.mkdir()
     stale = filtered_output / "stale.json"
@@ -1189,8 +1233,52 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
 
     if selected_exists:
         assert json.loads(selected_output.read_text()) == {"selected": "old"}
+        assert selected_output.stat().st_ino == original_inode
     else:
         assert not selected_output.exists()
+    assert json.loads(stale.read_text()) == {"filtered": "old"}
+    assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_restore_both_destinations_when_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_inode = selected_output.stat().st_ino
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    stale = filtered_output / "stale.json"
+    stale.write_text('{"filtered": "old"}\n')
+    real_copy_metadata = pareto_explorer._copy_directory_metadata
+
+    def interrupt_after_filtered_move(source: Path, destination: Path):
+        if ".backup-" in source.name:
+            raise KeyboardInterrupt()
+        real_copy_metadata(source, destination)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_copy_directory_metadata", interrupt_after_filtered_move
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "old"}
+    assert selected_output.stat().st_ino == selected_inode
     assert json.loads(stale.read_text()) == {"filtered": "old"}
     assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
@@ -1247,10 +1335,14 @@ def test_combined_outputs_warn_when_selected_backup_cleanup_fails(
     selected_output.write_text('{"selected": "old"}\n')
     filtered_output = tmp_path / "filtered"
     real_unlink = Path.unlink
+    backup_unlinks = 0
 
     def fail_selected_backup_cleanup(path: Path, *args, **kwargs):
+        nonlocal backup_unlinks
         if path.suffix == ".backup":
-            raise OSError("simulated selected backup cleanup failure")
+            backup_unlinks += 1
+            if backup_unlinks == 2:
+                raise OSError("simulated selected backup cleanup failure")
         return real_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_selected_backup_cleanup)
@@ -1269,7 +1361,7 @@ def test_combined_outputs_warn_when_selected_backup_cleanup_fails(
 
     assert selected_output.read_bytes() == result.candidate.source_bytes
     assert (filtered_output / "selection.json").exists()
-    assert "selected output installed, but old backup could not be removed" in (
+    assert "selected output installed, but temporary path could not be removed" in (
         capsys.readouterr().err
     )
     backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
@@ -1330,6 +1422,75 @@ def test_filtered_output_preserves_existing_directory_metadata(
     assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
     if xattr_supported:
         assert os.getxattr(output_dir, xattr_name) == b"preserve"
+
+
+def test_filtered_output_applies_directory_metadata_before_writing_members(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    (output_dir / "stale.json").write_text('{"stale": true}\n')
+    real_copy_metadata = pareto_explorer._copy_directory_metadata
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot
+    metadata_ready = False
+
+    def track_metadata(source: Path, destination: Path):
+        nonlocal metadata_ready
+        real_copy_metadata(source, destination)
+        if source == output_dir and destination.name.endswith(".tmp"):
+            metadata_ready = True
+
+    def require_metadata_before_write(candidate, destination):
+        assert metadata_ready
+        real_write_snapshot(candidate, destination)
+
+    monkeypatch.setattr(pareto_explorer, "_copy_directory_metadata", track_metadata)
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot", require_metadata_before_write
+    )
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert metadata_ready
+    assert (output_dir / "selection.json").exists()
+
+
+def test_filtered_output_rechecks_directory_created_during_reservation(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    output_dir = tmp_path / "filtered"
+    real_mkdir = Path.mkdir
+    raced = False
+
+    def create_racing_destination(path: Path, *args, **kwargs):
+        nonlocal raced
+        if path == output_dir and not raced:
+            raced = True
+            os.mkdir(path, 0o750)
+            path.chmod(0o750)
+            raise FileExistsError(path)
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", create_racing_destination)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert raced
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
 
 
 def test_filtered_output_builds_before_applying_read_only_destination_mode(
