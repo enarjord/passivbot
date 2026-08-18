@@ -75,8 +75,6 @@ def _combine_hedged_multicoin_outputs(
     long: dict,
     short: dict,
     starting_balance: float,
-    first_ts_ms: int,
-    interval_ms: int,
 ):
     """Build a conservative portfolio surface from independent directional screens.
 
@@ -87,7 +85,7 @@ def _combine_hedged_multicoin_outputs(
 
     long_liquidated = long["liq_step"] >= 0
     short_liquidated = short["liq_step"] >= 0
-    liq_step = long["liq_step"].where(
+    liquidation_day = long["liq_step"].where(
         long_liquidated & ~short_liquidated,
         short["liq_step"].where(
             short_liquidated & ~long_liquidated,
@@ -97,12 +95,8 @@ def _combine_hedged_multicoin_outputs(
     active = long["day_min_eq"].isfinite() & short["day_min_eq"].isfinite()
     day_count = int(active.shape[1])
     day_ids = active.new_tensor(range(day_count), dtype=long["liq_step"].dtype)
-    first_day = int(first_ts_ms) // 86_400_000
-    terminal_day = (
-        (int(first_ts_ms) + liq_step * int(interval_ms)) // 86_400_000
-    ) - first_day
     active &= (~(long_liquidated | short_liquidated)).unsqueeze(1) | (
-        day_ids.unsqueeze(0) < terminal_day.unsqueeze(1)
+        day_ids.unsqueeze(0) < liquidation_day.unsqueeze(1)
     )
 
     combined = {}
@@ -145,7 +139,7 @@ def _combine_hedged_multicoin_outputs(
     )
     combined["last_eq_ts"] = _nan_min(long["last_eq_ts"], short["last_eq_ts"])
 
-    combined["liq_step"] = liq_step
+    combined["liq_step"] = liquidation_day
     return combined
 
 
@@ -762,8 +756,6 @@ class MpsMulticoinEmaProxy:
                     side_outputs["long"],
                     side_outputs["short"],
                     self.run.starting_balance,
-                    self.metrics_data["ts0"],
-                    self.run.interval_ms,
                 )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (

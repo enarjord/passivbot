@@ -126,9 +126,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     short["recovery_max_ms"] = torch.tensor([500.0])
     short["last_high_ts"] = torch.tensor([800.0])
 
-    combined = _combine_hedged_multicoin_outputs(
-        long, short, 1_000.0, 0, 60_000
-    )
+    combined = _combine_hedged_multicoin_outputs(long, short, 1_000.0)
 
     assert combined["day_end_eq"].tolist() == [[1_050.0, 1_100.0]]
     assert combined["day_min_eq"].tolist() == [[975.0, 950.0]]
@@ -143,9 +141,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
 
     short["day_min_eq"][0, 1] = float("inf")
     short["last_eq_ts"] = torch.tensor([800.0])
-    truncated = _combine_hedged_multicoin_outputs(
-        long, short, 1_000.0, 0, 60_000
-    )
+    truncated = _combine_hedged_multicoin_outputs(long, short, 1_000.0)
     assert truncated["day_end_eq"][0, 1].item() == 0.0
     assert torch.isinf(truncated["day_min_eq"][0, 1])
     assert truncated["day_volume"][0, 1].item() == 0.0
@@ -153,14 +149,12 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert truncated["last_eq_ts"].item() == 800.0
 
     short["day_min_eq"][0, 1] = 850.0
-    long["liq_step"] = torch.tensor([1_500])
-    liquidated = _combine_hedged_multicoin_outputs(
-        long, short, 1_000.0, 0, 60_000
-    )
+    long["liq_step"] = torch.tensor([1])
+    liquidated = _combine_hedged_multicoin_outputs(long, short, 1_000.0)
     assert torch.isfinite(liquidated["day_min_eq"][0, 0])
     assert torch.isinf(liquidated["day_min_eq"][0, 1])
     assert liquidated["day_end_eq"][0, 1].item() == 0.0
-    assert liquidated["liq_step"].item() == 1_500
+    assert liquidated["liq_step"].item() == 1
 
 
 def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
