@@ -2969,6 +2969,37 @@ def _materialize_gpu_suite_run_contract(
             backtest[key] = deepcopy(suite_cfg[key])
 
 
+def _materialize_resolved_gpu_suite_dates(
+    config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
+) -> None:
+    """Replace dynamic suite date tokens with the prepared concrete dates."""
+
+    if config.get("optimize", {}).get("backend") != "gpu" or not config.get(
+        "backtest", {}
+    ).get("suite_enabled"):
+        return
+    scenarios = config["backtest"].get("scenarios") or []
+    if len(scenarios) != len(scenario_contexts):
+        raise RuntimeError(
+            "GPU suite run contract does not match prepared scenario count: "
+            f"{len(scenarios)} != {len(scenario_contexts)}"
+        )
+    resolved_scenarios = []
+    for scenario, ctx in zip(scenarios, scenario_contexts):
+        resolved = deepcopy(scenario)
+        resolved["label"] = ctx.label
+        context_backtest = ctx.config.get("backtest", {})
+        for key in ("start_date", "end_date"):
+            value = context_backtest.get(key)
+            if value is None:
+                raise RuntimeError(
+                    f"GPU suite scenario {ctx.label!r} has no prepared {key}"
+                )
+            resolved[key] = value
+        resolved_scenarios.append(resolved)
+    config["backtest"]["scenarios"] = resolved_scenarios
+
+
 def _validate_optimizer_limit_suite_mode(
     config: Mapping[str, Any],
     *,
@@ -3336,6 +3367,7 @@ async def main():
             )
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
+            _materialize_resolved_gpu_suite_dates(config, scenario_contexts)
             logging.info("Optimizer suite enabled with %d scenario(s)", len(scenario_contexts))
             first_ctx = scenario_contexts[0]
             hlcvs_specs = first_ctx.hlcvs_specs

@@ -839,6 +839,44 @@ def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
     assert config["backtest"] == before
 
 
+def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [
+        {"label": "rolling", "start_date": "2026-01-01", "end_date": "now"}
+    ]
+    context = Mock(
+        label="rolling",
+        config={
+            "backtest": {
+                "start_date": "2026-01-01",
+                "end_date": "2026-08-18",
+            }
+        },
+    )
+
+    optimize._materialize_resolved_gpu_suite_dates(config, [context])
+
+    assert config["backtest"]["scenarios"] == [
+        {
+            "label": "rolling",
+            "start_date": "2026-01-01",
+            "end_date": "2026-08-18",
+        }
+    ]
+
+
+def test_materialize_resolved_gpu_suite_dates_rejects_context_count_mismatch():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [{"label": "base"}]
+
+    with pytest.raises(RuntimeError, match="prepared scenario count"):
+        optimize._materialize_resolved_gpu_suite_dates(config, [])
+
+
 def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
     config = optimize.get_template_config()
     config["optimize"]["limits"] = [

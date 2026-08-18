@@ -2253,6 +2253,8 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
     changed_scenario["scenarios"][0]["coins"] = ["ETH"]
     changed_reducer = copy.deepcopy(suite)
     changed_reducer["reducer"]["default"] = "min"
+    changed_date = copy.deepcopy(suite)
+    changed_date["scenarios"][0]["end_date"] = "2026-08-19"
 
     assert _checkpoint_signature(active, scoring) != original
     assert (
@@ -2261,6 +2263,10 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
     )
     assert (
         _checkpoint_signature(active, scoring, suite_contract=changed_reducer)
+        != original
+    )
+    assert (
+        _checkpoint_signature(active, scoring, suite_contract=changed_date)
         != original
     )
 

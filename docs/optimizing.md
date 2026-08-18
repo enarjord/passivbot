@@ -132,7 +132,8 @@ single coin or date window, but every scenario must resolve to exactly one coin 
 exchange. Scenario `overrides` are rejected until their candidate-shadowing behavior is explicitly
 modeled by the proxy, and scenario `coin_sources` are rejected until per-coin source-exchange
 semantics are modeled. The effective external suite definition and any `--scenarios` filter are
-stored in the run contract and checkpoint identity, so resume fails closed if either changes.
+stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
+prepared concrete dates, so resume fails closed if the definition or resolved window changes.
 
 Ordinary `-t/--start` seeding and fine-tuning with `-ft/--fine-tune-params` use the same optimizer
 shape as the CPU backends. When `-t` and `-ft` are combined, the GPU population includes the
