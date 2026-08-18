@@ -49,6 +49,92 @@ def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None
         )
 
 
+def _nan_min(left, right):
+    """Elementwise minimum which preserves the finite operand when only one exists."""
+
+    left_finite = left.isfinite()
+    right_finite = right.isfinite()
+    return left.where(
+        left_finite & ~right_finite,
+        right.where(right_finite & ~left_finite, left.minimum(right)),
+    )
+
+
+def _nan_max(left, right):
+    """Elementwise maximum which preserves the finite operand when only one exists."""
+
+    left_finite = left.isfinite()
+    right_finite = right.isfinite()
+    return left.where(
+        left_finite & ~right_finite,
+        right.where(right_finite & ~left_finite, left.maximum(right)),
+    )
+
+
+def _combine_hedged_multicoin_outputs(long: dict, short: dict, starting_balance: float):
+    """Build a conservative portfolio surface from independent directional screens.
+
+    This is deliberately only a ranking proxy. The unchanged Rust backtest remains
+    authoritative for every accepted result and the optimizer's drift gates halt on
+    material disagreement.
+    """
+
+    long_active = long["day_min_eq"].isfinite()
+    short_active = short["day_min_eq"].isfinite()
+    active = long_active & short_active
+
+    combined = {}
+    for key in ("day_end_eq", "day_min_eq"):
+        values = long[key] + short[key] - float(starting_balance)
+        if key == "day_min_eq":
+            values = values.where(active, values.new_full((), float("inf")))
+        else:
+            values = values.where(active, values.new_zeros(()))
+        combined[key] = values
+
+    combined["day_max_dd"] = long["day_max_dd"].maximum(
+        short["day_max_dd"]
+    ).where(active, long["day_max_dd"].new_zeros(()))
+    combined["day_volume"] = (long["day_volume"] + short["day_volume"]).where(
+        active, long["day_volume"].new_zeros(())
+    )
+    combined["day_has_fill"] = (
+        long["day_has_fill"] | short["day_has_fill"]
+    ) & active
+    combined["max_dd"] = long["max_dd"].maximum(short["max_dd"])
+    combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
+    combined["gap_hist"] = long["gap_hist"] + short["gap_hist"]
+    combined["gap_max_ms"] = long["gap_max_ms"].maximum(short["gap_max_ms"])
+    combined["first_fill_ts"] = _nan_min(
+        long["first_fill_ts"], short["first_fill_ts"]
+    )
+    combined["last_fill_ts"] = _nan_max(
+        long["last_fill_ts"], short["last_fill_ts"]
+    )
+    combined["recovery_max_ms"] = long["recovery_max_ms"].maximum(
+        short["recovery_max_ms"]
+    )
+    # The earlier directional high produces the longer, safer final-recovery estimate.
+    combined["last_high_ts"] = _nan_min(
+        long["last_high_ts"], short["last_high_ts"]
+    )
+    combined["first_eq_ts"] = _nan_max(
+        long["first_eq_ts"], short["first_eq_ts"]
+    )
+    combined["last_eq_ts"] = _nan_min(long["last_eq_ts"], short["last_eq_ts"])
+
+    long_liquidated = long["liq_step"] >= 0
+    short_liquidated = short["liq_step"] >= 0
+    combined["liq_step"] = long["liq_step"].where(
+        long_liquidated & ~short_liquidated,
+        short["liq_step"].where(
+            short_liquidated & ~long_liquidated,
+            long["liq_step"].minimum(short["liq_step"]),
+        ),
+    )
+    return combined
+
+
 class MpsSingleCoinProxy:
     """Batched directional screening proxy for supported single-coin strategies."""
 
@@ -326,7 +412,7 @@ def _build_multicoin_ema_coin_overrides(
 
 
 class MpsMulticoinEmaProxy:
-    """Batched single-side multi-coin EMA Anchor screening proxy."""
+    """Batched multi-coin EMA Anchor screening proxy for one or two sides."""
 
     def __init__(
         self,
@@ -384,11 +470,36 @@ class MpsMulticoinEmaProxy:
         enabled_sides = [
             side for side in ("long", "short") if gpu_side_enabled(config, side)
         ]
-        if len(enabled_sides) != 1:
+        if len(enabled_sides) not in (1, 2):
             raise ValueError(
-                "MPS multicoin proxy currently requires exactly one enabled side"
+                "MPS multicoin proxy requires one or two enabled sides"
             )
-        self.side = enabled_sides[0]
+        self.sides = enabled_sides
+        if len(enabled_sides) == 2 and not bool(
+            config.get("live", {}).get("hedge_mode")
+        ):
+            raise ValueError(
+                "MPS dual-side multicoin proxy currently requires live.hedge_mode=true; "
+                "one-way arbitration is not modeled"
+            )
+        if len(enabled_sides) == 2 and (config.get("coin_overrides") or {}):
+            raise ValueError(
+                "MPS dual-side multicoin proxy does not yet support coin_overrides"
+            )
+        if len(enabled_sides) == 2:
+            approved = config.get("live", {}).get("approved_coins", {}) or {}
+            ignored = config.get("live", {}).get("ignored_coins", {}) or {}
+            for label, values_by_side in (
+                ("approved", approved),
+                ("ignored", ignored),
+            ):
+                if set(values_by_side.get("long", []) or []) != set(
+                    values_by_side.get("short", []) or []
+                ):
+                    raise ValueError(
+                        "MPS dual-side multicoin proxy requires matching "
+                        f"long/short {label}_coins"
+                    )
 
         payload = build_backtest_payload(
             np.ascontiguousarray(values),
@@ -429,47 +540,6 @@ class MpsMulticoinEmaProxy:
         for last_valid_idx in backtest_params["last_valid_indices"]:
             _require_complete_valid_tail(int(last_valid_idx), len(values))
 
-        first_bot = payload.bot_params_list[0][self.side]
-        first_strategy = dict(payload.strategy_params_list[0][self.side])
-        if bool(first_bot.get("unstuck_enabled")) or bool(first_bot.get("hsl_enabled")):
-            raise ValueError(
-                f"MPS multicoin proxy requires {self.side} HSL and unstuck disabled"
-            )
-        weights = first_bot.get("forager_score_weights", {}) or {}
-        first_strategy.update(
-            {
-                "entry_cooldown_minutes": float(
-                    first_bot.get("entry_cooldown_minutes", 0.0) or 0.0
-                ),
-                "total_wallet_exposure_limit": float(
-                    first_bot["total_wallet_exposure_limit"]
-                ),
-                "forager_volume_ema_span_1m": float(
-                    first_bot.get("filter_volume_ema_span_1m", 0.0) or 0.0
-                ),
-                "forager_volatility_ema_span_1m": float(
-                    first_bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0
-                ),
-                "forager_volume_drop_pct": float(
-                    first_bot.get("filter_volume_drop_pct", 0.0) or 0.0
-                ),
-                "forager_score_weights_volume": float(weights.get("volume", 0.0)),
-                "forager_score_weights_ema_readiness": float(
-                    weights.get("ema_readiness", 0.0)
-                ),
-                "forager_score_weights_volatility": float(
-                    weights.get("volatility", 0.0)
-                ),
-                "n_positions": float(first_bot["n_positions"]),
-            }
-        )
-        missing = [
-            key for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS if key not in first_strategy
-        ]
-        if missing:
-            raise ValueError(f"MPS multicoin EMA payload is missing parameters: {missing}")
-        self.base_params = first_strategy
-
         comparable_bot_keys = (
             "total_wallet_exposure_limit",
             "filter_volume_ema_span_1m",
@@ -480,16 +550,67 @@ class MpsMulticoinEmaProxy:
             "unstuck_enabled",
             "hsl_enabled",
         )
-        for coin in range(1, coin_count):
-            strategy = payload.strategy_params_list[coin][self.side]
-            bot = payload.bot_params_list[coin][self.side]
-            if any(
-                bot.get(key) != first_bot.get(key) for key in comparable_bot_keys
+        self.base_params = {}
+        for side in self.sides:
+            first_bot = payload.bot_params_list[0][side]
+            first_strategy = dict(payload.strategy_params_list[0][side])
+            if bool(first_bot.get("unstuck_enabled")) or bool(
+                first_bot.get("hsl_enabled")
             ):
                 raise ValueError(
-                    "MPS multicoin proxy requires identical global "
-                    f"{self.side} forager/risk settings across coins"
+                    f"MPS multicoin proxy requires {side} HSL and unstuck disabled"
                 )
+            weights = first_bot.get("forager_score_weights", {}) or {}
+            first_strategy.update(
+                {
+                    "entry_cooldown_minutes": float(
+                        first_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+                    ),
+                    "total_wallet_exposure_limit": float(
+                        first_bot["total_wallet_exposure_limit"]
+                    ),
+                    "forager_volume_ema_span_1m": float(
+                        first_bot.get("filter_volume_ema_span_1m", 0.0) or 0.0
+                    ),
+                    "forager_volatility_ema_span_1m": float(
+                        first_bot.get("filter_volatility_ema_span_1m", 0.0) or 0.0
+                    ),
+                    "forager_volume_drop_pct": float(
+                        first_bot.get("filter_volume_drop_pct", 0.0) or 0.0
+                    ),
+                    "forager_score_weights_volume": float(
+                        weights.get("volume", 0.0)
+                    ),
+                    "forager_score_weights_ema_readiness": float(
+                        weights.get("ema_readiness", 0.0)
+                    ),
+                    "forager_score_weights_volatility": float(
+                        weights.get("volatility", 0.0)
+                    ),
+                    "n_positions": float(first_bot["n_positions"]),
+                }
+            )
+            missing = [
+                key
+                for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+                if key not in first_strategy
+            ]
+            if missing:
+                raise ValueError(
+                    f"MPS multicoin EMA {side} payload is missing parameters: {missing}"
+                )
+            self.base_params[side] = first_strategy
+
+            for coin in range(1, coin_count):
+                bot = payload.bot_params_list[coin][side]
+                if any(
+                    bot.get(key) != first_bot.get(key)
+                    for key in comparable_bot_keys
+                ):
+                    raise ValueError(
+                        "MPS multicoin proxy requires identical global "
+                        f"{side} forager/risk settings across coins"
+                    )
 
         coins = list(backtest_params.get("coins") or [])
         if len(coins) != coin_count:
@@ -497,16 +618,28 @@ class MpsMulticoinEmaProxy:
                 "MPS multicoin payload coin identity disagrees with prepared data: "
                 f"coins={coins}, prepared={coin_count}"
             )
-        per_coin_overrides, self.coin_override_contract = (
-            _build_multicoin_ema_coin_overrides(
-                config=config,
-                mss=mss,
-                exchange=exchange,
-                coins=coins,
-                payload=payload,
-                side=self.side,
+        per_side_coin_overrides = {}
+        if len(self.sides) == 1:
+            side = self.sides[0]
+            overrides, self.coin_override_contract = (
+                _build_multicoin_ema_coin_overrides(
+                    config=config,
+                    mss=mss,
+                    exchange=exchange,
+                    coins=coins,
+                    payload=payload,
+                    side=side,
+                )
             )
-        )
+            per_side_coin_overrides[side] = overrides
+        else:
+            self.coin_override_contract = {
+                "exchange": exchange,
+                "coins": coins,
+                "sides": list(self.sides),
+                "proxy_mode": "independent-side-hedge-v1",
+            }
+            per_side_coin_overrides = {side: None for side in self.sides}
 
         markets = [
             ProxyMarket(
@@ -556,22 +689,31 @@ class MpsMulticoinEmaProxy:
             values, timestamps, runs=runs, markets=markets
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
-        self.runner = MpsEmaAnchorMulticoinRunner(
-            self.run,
-            self.data,
-            side=self.side,
-            coin_overrides=per_coin_overrides,
-        )
+        self.runners = {
+            side: MpsEmaAnchorMulticoinRunner(
+                self.run,
+                self.data,
+                side=side,
+                coin_overrides=per_side_coin_overrides[side],
+            )
+            for side in self.sides
+        }
 
-    def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
+    def _parameter_matrix(
+        self, candidates: list[dict], side: str | None = None
+    ) -> np.ndarray:
+        if side is None:
+            if len(self.sides) != 1:
+                raise ValueError("side is required for dual-side multicoin parameters")
+            side = self.sides[0]
         rows = []
         for candidate in candidates:
-            merged = dict(self.base_params)
+            merged = dict(self.base_params[side])
             merged.update(
                 {
-                    key.removeprefix(f"{self.side}_"): value
+                    key.removeprefix(f"{side}_"): value
                     for key, value in candidate.items()
-                    if key.startswith(f"{self.side}_")
+                    if key.startswith(f"{side}_")
                 }
             )
             rows.append(
@@ -584,14 +726,29 @@ class MpsMulticoinEmaProxy:
         torch = self._torch
         for start in range(0, len(candidates), self.batch_size):
             chunk = candidates[start : start + self.batch_size]
-            output = self.runner.run(
-                self._parameter_matrix(chunk), profile=self.profile_enabled
-            )
-            output = {
-                key: value.cpu()
-                for key, value in output.items()
-                if key in CORE_OUTPUT_KEYS
+            raw_side_outputs = {
+                side: self.runners[side].run(
+                    self._parameter_matrix(chunk, side),
+                    profile=self.profile_enabled,
+                )
+                for side in self.sides
             }
+            side_outputs = {
+                side: {
+                    key: value.cpu()
+                    for key, value in raw_side_outputs[side].items()
+                    if key in CORE_OUTPUT_KEYS
+                }
+                for side in self.sides
+            }
+            if len(self.sides) == 1:
+                output = side_outputs[self.sides[0]]
+            else:
+                output = _combine_hedged_multicoin_outputs(
+                    side_outputs["long"],
+                    side_outputs["short"],
+                    self.run.starting_balance,
+                )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

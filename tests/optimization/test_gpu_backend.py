@@ -1044,15 +1044,61 @@ def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_multicoin_foundation_rejects_hedge_mode():
+def test_gpu_multicoin_foundation_accepts_dual_side_hedge_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
         "short": ["BTC", "ETH", "SOL"],
     }
+    config["live"]["hedge_mode"] = True
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = False
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="one-way arbitration is not modeled"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_coin_overrides():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+    }
+
     with pytest.raises(ValueError, match="exactly one enabled side"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="matching long/short approved_coins"):
         _validate_scope(config, _MulticoinEvaluator())
 
 

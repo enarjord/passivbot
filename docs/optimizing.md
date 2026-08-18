@@ -103,8 +103,9 @@ The supported slice is intentionally narrow:
 - one exchange using one-minute candles
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled for one coin
-- long-only or short-only multi-coin EMA-anchor runs for up to 64 coins, with dynamic wallet-
-  exposure allocation and Forager selection; multi-coin runs require
+- long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor runs for up to 64 coins,
+  with dynamic wallet-exposure allocation and independent per-side Forager selection; dual-side
+  runs require matching long/short approved and ignored coin sets, and all multi-coin runs require
   `backtest.dynamic_wel_by_tradability: true` and `live.forager_score_hysteresis_pct: 0`
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
@@ -125,8 +126,12 @@ The supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Multi-coin trailing-martingale or
-long+short runs and suites, multi-exchange suites, non-bot suite scenario overrides, per-coin source
+Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor uses one
+long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
+conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
+Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
+Dual-side one-way arbitration, dual-side multi-coin suites and coin overrides, multi-coin
+trailing-martingale, multi-exchange suites, non-bot suite scenario overrides, per-coin source
 assignments, HSL, and auto-unstuck are not silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
