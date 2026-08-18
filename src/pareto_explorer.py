@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import secrets
 import shutil
 import stat
 import sys
@@ -67,6 +68,10 @@ METHOD_DESCRIPTIONS = {
 
 
 FILTERED_SELECTION_MANIFEST = "selection.json"
+SELECTED_STAGING_PREFIX = ".pareto-selected-"
+SELECTED_BACKUP_PREFIX = ".pareto-selected-backup-"
+FILTERED_STAGING_PREFIX = ".pareto-filtered-"
+FILTERED_BACKUP_PREFIX = ".pareto-filtered-backup-"
 
 
 @dataclass(frozen=True)
@@ -1713,10 +1718,19 @@ def _write_candidate_snapshot(candidate: ParetoCandidate, destination: Path) -> 
     destination.write_bytes(candidate.source_bytes)
 
 
-def _default_file_mode() -> int:
-    current_umask = os.umask(0)
-    os.umask(current_umask)
-    return 0o666 & ~current_umask
+def _create_selected_staging_file(parent: Path) -> Path:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    for _ in range(100):
+        staging_path = parent / f"{SELECTED_STAGING_PREFIX}{secrets.token_hex(8)}.tmp"
+        try:
+            file_descriptor = os.open(staging_path, flags, 0o666)
+        except FileExistsError:
+            continue
+        os.close(file_descriptor)
+        return staging_path
+    raise FileExistsError(f"Could not reserve selected staging file in {parent}")
 
 
 def _copy_file_metadata(source: Path, destination: Path) -> None:
@@ -1755,18 +1769,13 @@ def _write_selected_output(
     overwrite: bool,
 ) -> _SelectedOutputInstall:
     output.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor, staging_name = tempfile.mkstemp(
-        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
-    )
-    os.close(file_descriptor)
-    staging_path = Path(staging_name)
+    staging_path = _create_selected_staging_file(output.parent)
     backup_path: Path | None = None
     staging_cleanup_attempted = False
     installed_identity: tuple[int, int] | None = None
     try:
         _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
-            staging_path.chmod(_default_file_mode())
             staging_stat = staging_path.stat(follow_symlinks=False)
             installed_identity = staging_stat.st_dev, staging_stat.st_ino
             try:
@@ -1791,15 +1800,15 @@ def _write_selected_output(
                 raise ValueError(f"Selected output must be a regular file: {output}")
             if keep_backup:
                 backup_descriptor, backup_name = tempfile.mkstemp(
-                    prefix=f".{output.name}.", suffix=".backup", dir=output.parent
+                    prefix=SELECTED_BACKUP_PREFIX,
+                    suffix=".backup",
+                    dir=output.parent,
                 )
                 os.close(backup_descriptor)
                 backup_path = Path(backup_name)
                 backup_path.unlink()
                 os.link(output, backup_path)
             _copy_file_metadata(output, staging_path)
-        else:
-            staging_path.chmod(_default_file_mode())
         staging_stat = staging_path.stat(follow_symlinks=False)
         installed_identity = staging_stat.st_dev, staging_stat.st_ino
         os.replace(staging_path, output)
@@ -1914,7 +1923,7 @@ def _replace_filtered_output_dir(
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
 
     backup_name = tempfile.mkdtemp(
-        prefix=f".{output_dir.name}.backup-", dir=output_dir.parent
+        prefix=FILTERED_BACKUP_PREFIX, dir=output_dir.parent
     )
     backup_dir = Path(backup_name)
     backup_dir.rmdir()
@@ -2006,6 +2015,19 @@ def _remove_filtered_reservation(
         )
 
 
+def _reserve_filtered_output_file(destination: Path, *, label: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        file_descriptor = os.open(destination, flags, 0o666)
+    except FileExistsError as exc:
+        raise ValueError(
+            f"{label} collides on the destination filesystem: {destination.name}"
+        ) from exc
+    os.close(file_descriptor)
+
+
 def _write_filtered_outputs(
     output_dir: Path,
     pareto_dir: Path,
@@ -2027,7 +2049,9 @@ def _write_filtered_outputs(
     try:
         staging_dir = Path(
             tempfile.mkdtemp(
-                prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent
+                prefix=FILTERED_STAGING_PREFIX,
+                suffix=".tmp",
+                dir=output_dir.parent,
             )
         )
         _copy_directory_metadata(output_dir, staging_dir)
@@ -2038,6 +2062,9 @@ def _write_filtered_outputs(
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
             final_destination = output_dir / candidate.member_name
+            _reserve_filtered_output_file(
+                staged_destination, label="Filtered member filename"
+            )
             _write_candidate_snapshot(candidate, staged_destination)
             members.append(
                 {
@@ -2071,7 +2098,11 @@ def _write_filtered_outputs(
             },
             "members": members,
         }
-        (staging_dir / FILTERED_SELECTION_MANIFEST).write_text(
+        manifest_path = staging_dir / FILTERED_SELECTION_MANIFEST
+        _reserve_filtered_output_file(
+            manifest_path, label="Filtered selection manifest"
+        )
+        manifest_path.write_text(
             json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )

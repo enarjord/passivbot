@@ -1015,6 +1015,55 @@ def test_selected_output_overwrite_uses_fresh_modification_time(
     assert selected_output.stat().st_mtime_ns > old_timestamp_ns
 
 
+def test_selected_staging_uses_normal_exclusive_file_creation(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    real_open = os.open
+    observed = []
+
+    def track_open(path, flags, mode=0o777, *args, **kwargs):
+        path = Path(path)
+        if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX):
+            observed.append((flags, mode))
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", track_open)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert observed
+    flags, mode = observed[0]
+    assert flags & os.O_CREAT
+    assert flags & os.O_EXCL
+    assert mode == 0o666
+
+
+def test_selected_output_supports_name_max_destination(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    suffix = ".json"
+    selected_output = tmp_path / ("x" * (name_max - len(suffix)) + suffix)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    result = run_from_args(args)
+    capsys.readouterr()
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_selected_output_refuses_existing_special_node(
     sample_pareto_dir: Path,
@@ -1070,7 +1119,7 @@ def test_selected_output_continues_when_post_link_staging_cleanup_fails(
     real_unlink = Path.unlink
 
     def fail_selected_staging_cleanup(path: Path, *args, **kwargs):
-        if path.name.startswith(".selected.json.") and path.suffix == ".tmp":
+        if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX) and path.suffix == ".tmp":
             raise OSError("simulated selected staging cleanup failure")
         return real_unlink(path, *args, **kwargs)
 
@@ -1095,7 +1144,7 @@ def test_selected_output_continues_when_post_link_staging_cleanup_fails(
     staging_paths = [
         path
         for path in tmp_path.iterdir()
-        if path.name.startswith(".selected.json.") and path.suffix == ".tmp"
+        if path.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX) and path.suffix == ".tmp"
     ]
     assert len(staging_paths) == 1
     real_unlink(staging_paths[0])
@@ -1117,6 +1166,40 @@ def test_filtered_overwrite_refuses_non_json_entries(
         run_from_args(args)
 
     assert note.read_text() == "keep me\n"
+
+
+def test_filtered_output_detects_destination_filesystem_filename_collision(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "filtered"
+    real_open = os.open
+    member_creations = 0
+
+    def collide_on_second_member(path, flags, mode=0o777, *args, **kwargs):
+        nonlocal member_creations
+        path = Path(path)
+        if (
+            path.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX)
+            and path.suffix == ".json"
+            and path.name != pareto_explorer.FILTERED_SELECTION_MANIFEST
+            and flags & os.O_EXCL
+        ):
+            member_creations += 1
+            if member_creations == 2:
+                raise FileExistsError(path)
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", collide_on_second_member)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir)]
+    )
+
+    with pytest.raises(ValueError, match="collides on the destination filesystem"):
+        run_from_args(args)
+
+    assert not output_dir.exists()
 
 
 @pytest.mark.parametrize("overwrite", [False, True])
@@ -1156,7 +1239,11 @@ def test_filtered_overwrite_revalidates_contents_after_move_aside(
         nonlocal injected
         source = Path(source)
         destination = Path(destination)
-        if source == output_dir and ".backup-" in destination.name and not injected:
+        if (
+            source == output_dir
+            and destination.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX)
+            and not injected
+        ):
             (output_dir / "notes.txt").write_text("preserve me\n")
             injected = True
         return real_replace(source, destination)
@@ -1205,7 +1292,11 @@ def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
 
     assert json.loads(stale.read_text()) == {"stale": True}
     assert sorted(path.name for path in output_dir.iterdir()) == ["stale.json"]
-    assert not [path for path in tmp_path.iterdir() if path.name.startswith(".filtered.")]
+    assert not [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX)
+    ]
 
 
 @pytest.mark.parametrize("selected_exists", [False, True])
@@ -1228,7 +1319,7 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
     def fail_during_filtered_staging(candidate, destination):
         destination = Path(destination)
         if destination.name == "b_extreme.json" and destination.parent.name.startswith(
-            ".filtered."
+            pareto_explorer.FILTERED_STAGING_PREFIX
         ):
             raise OSError("simulated filtered copy failure")
         destination.write_bytes(candidate.source_bytes)
@@ -1275,7 +1366,7 @@ def test_combined_outputs_restore_both_destinations_when_interrupted(
     real_copy_metadata = pareto_explorer._copy_directory_metadata
 
     def interrupt_after_filtered_move(source: Path, destination: Path):
-        if ".backup-" in source.name:
+        if source.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX):
             raise KeyboardInterrupt()
         real_copy_metadata(source, destination)
 
@@ -1314,7 +1405,7 @@ def test_combined_outputs_refuse_rollback_over_newer_selected_file(
 
     def replace_selected_then_fail(candidate, destination):
         destination = Path(destination)
-        if destination.parent.name.startswith(".filtered."):
+        if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
             newer = tmp_path / "newer.json"
             newer.write_text('{"selected": "newer"}\n')
             os.replace(newer, selected_output)
@@ -1356,7 +1447,7 @@ def test_combined_outputs_refuse_rollback_over_in_place_selected_edit(
 
     def edit_selected_then_fail(candidate, destination):
         destination = Path(destination)
-        if destination.parent.name.startswith(".filtered."):
+        if destination.parent.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX):
             selected_output.write_text('{"selected": "newer"}\n')
             raise OSError("simulated filtered copy failure")
         destination.write_bytes(candidate.source_bytes)
@@ -1406,7 +1497,7 @@ def test_combined_outputs_keep_committed_pair_when_filtered_rename_is_interrupte
         result = real_replace(source, destination)
         if (
             not interrupted
-            and source.name.startswith(".filtered.")
+            and source.name.startswith(pareto_explorer.FILTERED_STAGING_PREFIX)
             and source.name.endswith(".tmp")
             and destination == filtered_output
         ):
@@ -1455,7 +1546,7 @@ def test_combined_outputs_keep_committed_pair_when_selected_rename_is_interrupte
         result = real_replace(source, destination)
         if (
             not interrupted
-            and source.name.startswith(".selected.json.")
+            and source.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX)
             and source.name.endswith(".tmp")
             and destination == selected_output
         ):
@@ -1509,7 +1600,7 @@ def test_combined_outputs_restore_both_when_filtered_move_aside_is_interrupted(
         if (
             not interrupted
             and source == filtered_output
-            and ".backup-" in destination.name
+            and destination.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX)
         ):
             interrupted = True
             raise KeyboardInterrupt()
@@ -1552,7 +1643,7 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     real_remove = pareto_explorer._remove_output_tree
 
     def fail_backup_cleanup(path: Path):
-        if ".backup-" in path.name:
+        if path.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX):
             raise OSError("simulated backup cleanup failure")
         return real_remove(path)
 
@@ -1574,7 +1665,11 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     assert not (filtered_output / "stale.json").exists()
     assert (filtered_output / "selection.json").exists()
     assert "old backup could not be removed" in capsys.readouterr().err
-    backups = [path for path in tmp_path.iterdir() if ".backup-" in path.name]
+    backups = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX)
+    ]
     assert len(backups) == 1
     real_remove(backups[0])
 
@@ -1593,7 +1688,7 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_is_interrupted(
     real_remove = pareto_explorer._remove_output_tree
 
     def interrupt_backup_cleanup(path: Path):
-        if ".backup-" in path.name:
+        if path.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX):
             raise KeyboardInterrupt()
         return real_remove(path)
 
@@ -1617,7 +1712,11 @@ def test_combined_outputs_remain_consistent_when_backup_cleanup_is_interrupted(
     assert not (filtered_output / "stale.json").exists()
     assert (filtered_output / "selection.json").exists()
     assert "old backup could not be removed" in capsys.readouterr().err
-    backups = [path for path in tmp_path.iterdir() if ".backup-" in path.name]
+    backups = [
+        path
+        for path in tmp_path.iterdir()
+        if path.name.startswith(pareto_explorer.FILTERED_BACKUP_PREFIX)
+    ]
     assert len(backups) == 1
     real_remove(backups[0])
 
@@ -1833,6 +1932,23 @@ def test_new_filtered_output_retains_inherited_setgid_metadata(
     capsys.readouterr()
 
     assert output_dir.stat().st_mode & stat.S_ISGID
+
+
+def test_filtered_output_supports_name_max_destination(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    output_dir = tmp_path / ("x" * name_max)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir)]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert (output_dir / "selection.json").exists()
 
 
 def test_filtered_output_builds_before_applying_read_only_destination_mode(
