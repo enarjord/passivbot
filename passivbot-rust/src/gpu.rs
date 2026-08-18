@@ -69,6 +69,7 @@ mod tests {
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
         assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
+        assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("float total_cap = twel - 1.0e-7f"));
         assert!(source.contains("= fma("));

@@ -214,6 +214,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "coin_override_or" in source
     assert "const float score_hysteresis = fmax(run_settings[4], 0.0f)" in source
     assert "incumbent[c] = selected[c] && psize[c] <= 0.0f" in source
+    assert "if (!selected[c] || incumbent[c] || !survivor[c]) continue" in source
     assert "score[challenger] - score[incumbent_coin]" in source
     count = 512
     coin_count = 3

@@ -542,7 +542,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
                         int challenger = -1;
                         for (int c = 0; c < C; ++c) {
-                            if (!selected[c] || incumbent[c]) continue;
+                            if (!selected[c] || incumbent[c] || !survivor[c]) continue;
                             if (challenger < 0 || score[c] < score[challenger]
                                 || (score[c] == score[challenger] && c > challenger)) {
                                 challenger = c;
