@@ -178,7 +178,7 @@ PINNED_SCOPE_BOUND_VALUES = {
         "risk_position_exposure_enforcer_enabled": 0.0,
         "risk_total_exposure_enforcer_enabled": 0.0,
         "risk_total_exposure_entry_gate_enabled": 1.0,
-        "risk_total_exposure_enforcer_threshold": 1.0,
+        "risk_twel_enforcer_threshold": 1.0,
         "risk_we_excess_allowance_pct": 0.0,
     }.items()
 }

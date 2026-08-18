@@ -1532,11 +1532,41 @@ def test_gpu_rejects_pinned_unsupported_risk_behavior():
             {"long_risk_we_excess_allowance_pct": 0.2},
         )
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_threshold"):
+    with pytest.raises(ValueError, match="twel_enforcer_threshold"):
         _validate_pinned_scope_bounds(
-            {"long_risk_total_exposure_enforcer_threshold": Bound(0.8, 0.8, None)},
-            {"long_risk_total_exposure_enforcer_threshold": 0.8},
+            {"long_risk_twel_enforcer_threshold": Bound(0.8, 0.8, None)},
+            {"long_risk_twel_enforcer_threshold": 0.8},
         )
+
+def test_gpu_anchor_constant_twel_threshold_fails_closed():
+    config = {
+        ANCHOR_PLAN_KEY: {
+            "fixed_keys": ["long_risk_twel_enforcer_threshold"],
+            "anchors": [
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_twel_enforcer_threshold",
+                            "value": 0.8,
+                        }
+                    ]
+                },
+                {
+                    "fixed_values": [
+                        {
+                            "key": "long_risk_twel_enforcer_threshold",
+                            "value": 0.8,
+                        }
+                    ]
+                },
+            ],
+        }
+    }
+
+    _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
+
+    with pytest.raises(ValueError, match="twel_enforcer_threshold"):
+        _validate_pinned_scope_bounds(fixed_bounds, {}, {"long"})
 
 
 def test_gpu_directional_search_space_keeps_side_enablement_fixed():

@@ -3094,6 +3094,102 @@ class TestApplyFineTuneBounds:
         assert sorted(individual[0] for individual in streamed) == [1, 2]
         assert "failed to use starting config as optimizer seed" in caplog.text
 
+    def test_anchored_seed_stream_preserves_persisted_result_anchor_id(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {"source": "anchor_0.json", "fixed_values": []},
+                    {"source": "anchor_1.json", "fixed_values": []},
+                ],
+                "fixed_keys": [],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+        shape = build_optimization_shape(config)
+        durable_result = deepcopy(config)
+        durable_result.pop(ANCHOR_PLAN_KEY)
+        durable_result["optimizer_anchor"] = {
+            "id": 1,
+            "source": "anchor_1.json",
+        }
+
+        streamed, raw_count = configs_to_individuals_streaming(
+            [durable_result],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert raw_count == 1
+        assert len(streamed) == 1
+        assert streamed[0][0] == 1
+
+    def test_anchored_seed_stream_rejects_invalid_persisted_anchor_id(self, caplog):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {"source": "anchor_0.json", "fixed_values": []},
+                    {"source": "anchor_1.json", "fixed_values": []},
+                ],
+                "fixed_keys": [],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+        shape = build_optimization_shape(config)
+        durable_result = deepcopy(config)
+        durable_result.pop(ANCHOR_PLAN_KEY)
+        durable_result["optimizer_anchor"] = {"id": 2}
+
+        caplog.set_level(logging.WARNING)
+        streamed, raw_count = configs_to_individuals_streaming(
+            [durable_result],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert raw_count == 1
+        assert streamed == []
+        assert "persisted optimizer anchor id is outside" in caplog.text
+
     def test_starting_seed_values_are_clamped_to_base_bounds_with_logging(self, caplog):
         config = {
             "live": {"strategy_kind": "trailing_martingale"},
