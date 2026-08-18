@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import stat
 from pathlib import Path
 
 import pytest
+import pareto_explorer
 
 from pareto_explorer import (
     build_scenario_front,
@@ -963,18 +963,19 @@ def test_selected_output_does_not_overwrite_racing_destination_without_permissio
     monkeypatch,
 ):
     selected_output = tmp_path / "selected.json"
-    real_copy2 = shutil.copy2
     destination_created = False
 
-    def create_destination_during_staging(source, destination, *args, **kwargs):
+    def create_destination_during_staging(candidate, destination):
         nonlocal destination_created
         destination = Path(destination)
         if not destination_created and destination.suffix == ".tmp":
             selected_output.write_text('{"racing": true}\n')
             destination_created = True
-        return real_copy2(source, destination, *args, **kwargs)
+        destination.write_bytes(candidate.source_bytes)
 
-    monkeypatch.setattr("pareto_explorer.shutil.copy2", create_destination_during_staging)
+    monkeypatch.setattr(
+        "pareto_explorer._write_candidate_snapshot", create_destination_during_staging
+    )
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-s", str(selected_output)]
     )
@@ -1001,6 +1002,27 @@ def test_filtered_overwrite_refuses_non_json_entries(
         run_from_args(args)
 
     assert note.read_text() == "keep me\n"
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_save_filtered_refuses_ds_store(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    overwrite: bool,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    ds_store = output_dir / ".DS_Store"
+    ds_store.write_bytes(b"metadata")
+    command = [str(sample_pareto_dir), "-f", str(output_dir)]
+    if overwrite:
+        command.append("--overwrite")
+    args = build_parser().parse_args(command)
+
+    with pytest.raises(FileExistsError, match=r"non-JSON entries: \.DS_Store"):
+        run_from_args(args)
+
+    assert ds_store.read_bytes() == b"metadata"
 
 
 def test_filtered_overwrite_revalidates_contents_after_move_aside(
@@ -1049,17 +1071,16 @@ def test_filtered_overwrite_preserves_previous_set_when_staging_fails(
     output_dir.mkdir()
     stale = output_dir / "stale.json"
     stale.write_text('{"stale": true}\n')
-    real_copy2 = shutil.copy2
     copies = 0
 
-    def fail_on_second_copy(source, destination, *args, **kwargs):
+    def fail_on_second_copy(candidate, destination):
         nonlocal copies
         copies += 1
         if copies == 2:
             raise OSError("simulated copy failure")
-        return real_copy2(source, destination, *args, **kwargs)
+        Path(destination).write_bytes(candidate.source_bytes)
 
-    monkeypatch.setattr("pareto_explorer.shutil.copy2", fail_on_second_copy)
+    monkeypatch.setattr("pareto_explorer._write_candidate_snapshot", fail_on_second_copy)
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
     )
@@ -1086,17 +1107,18 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
     filtered_output.mkdir()
     stale = filtered_output / "stale.json"
     stale.write_text('{"filtered": "old"}\n')
-    real_copy2 = shutil.copy2
 
-    def fail_during_filtered_staging(source, destination, *args, **kwargs):
+    def fail_during_filtered_staging(candidate, destination):
         destination = Path(destination)
         if destination.name == "b_extreme.json" and destination.parent.name.startswith(
             ".filtered."
         ):
             raise OSError("simulated filtered copy failure")
-        return real_copy2(source, destination, *args, **kwargs)
+        destination.write_bytes(candidate.source_bytes)
 
-    monkeypatch.setattr("pareto_explorer.shutil.copy2", fail_during_filtered_staging)
+    monkeypatch.setattr(
+        "pareto_explorer._write_candidate_snapshot", fail_during_filtered_staging
+    )
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
@@ -1118,6 +1140,47 @@ def test_combined_outputs_restore_selected_when_filtered_staging_fails(
     assert json.loads(stale.read_text()) == {"filtered": "old"}
     assert sorted(path.name for path in filtered_output.iterdir()) == ["stale.json"]
     assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
+def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
+    real_remove = pareto_explorer._remove_output_tree
+
+    def fail_backup_cleanup(path: Path):
+        if ".backup-" in path.name:
+            raise OSError("simulated backup cleanup failure")
+        return real_remove(path)
+
+    monkeypatch.setattr(pareto_explorer, "_remove_output_tree", fail_backup_cleanup)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert not (filtered_output / "stale.json").exists()
+    assert (filtered_output / "selection.json").exists()
+    assert "old backup could not be removed" in capsys.readouterr().err
+    backups = [path for path in tmp_path.iterdir() if ".backup-" in path.name]
+    assert len(backups) == 1
+    real_remove(backups[0])
 
 
 @pytest.mark.parametrize("output_exists", [False, True])
@@ -1144,6 +1207,35 @@ def test_filtered_output_directory_uses_destination_permissions(
     capsys.readouterr()
 
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
+
+
+def test_filtered_output_preserves_existing_directory_metadata(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output_dir = tmp_path / "filtered"
+    output_dir.mkdir()
+    (output_dir / "stale.json").write_text('{"stale": true}\n')
+    before = output_dir.stat()
+    xattr_name = b"user.passivbot_test"
+    xattr_supported = hasattr(os, "setxattr") and hasattr(os, "getxattr")
+    if xattr_supported:
+        try:
+            os.setxattr(output_dir, xattr_name, b"preserve")
+        except OSError:
+            xattr_supported = False
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    after = output_dir.stat()
+    assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+    if xattr_supported:
+        assert os.getxattr(output_dir, xattr_name) == b"preserve"
 
 
 def test_filtered_output_builds_before_applying_read_only_destination_mode(
@@ -1228,6 +1320,47 @@ def test_save_filtered_preserves_symlink_member_name(
     assert member["hash"] == "aliased_member"
     assert member["source_path"] == str(resolved_source.resolve())
     assert member["output_path"] == str((output_dir / "aliased_member.json").resolve())
+
+
+def test_saved_outputs_use_candidate_snapshot_from_selection_time(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    source = sample_pareto_dir / "balanced.json"
+    original_bytes = source.read_bytes()
+    selected_output = tmp_path / "selected.json"
+    filtered_output = tmp_path / "filtered"
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot
+    source_changed = False
+
+    def change_source_before_export(candidate, destination):
+        nonlocal source_changed
+        if not source_changed:
+            source.write_text('{"changed": true}\n')
+            source_changed = True
+        return real_write_snapshot(candidate, destination)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot", change_source_before_export
+    )
+    args = build_parser().parse_args(
+        [
+            str(source),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+        ]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert source.read_bytes() != original_bytes
+    assert selected_output.read_bytes() == original_bytes
+    assert (filtered_output / "balanced.json").read_bytes() == original_bytes
 
 
 def test_save_filtered_refuses_manifest_filename_collision(

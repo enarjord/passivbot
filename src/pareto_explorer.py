@@ -6,6 +6,7 @@ import math
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ class ParetoCandidate:
     path: Path
     member_path: Path
     member_name: str
+    source_bytes: bytes
     entry: Dict[str, Any]
     objectives: Dict[str, float]
     stats_flat: Dict[str, float]
@@ -653,6 +655,7 @@ def project_candidates_to_scenario(
                 path=candidate.path,
                 member_path=candidate.member_path,
                 member_name=candidate.member_name,
+                source_bytes=candidate.source_bytes,
                 entry=candidate.entry,
                 objectives=objectives,
                 stats_flat={f"{metric}_mean": value for metric, value in values.items()},
@@ -750,8 +753,8 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     baseline_metrics: Optional[List[str]] = None
 
     for entry_path in json_paths:
-        with open(entry_path) as f:
-            entry = json.load(f)
+        source_bytes = entry_path.read_bytes()
+        entry = json.loads(source_bytes)
         if not isinstance(entry, Mapping):
             continue
         specs = extract_objective_specs(entry)
@@ -787,6 +790,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
                 path=entry_path.resolve(),
                 member_path=entry_path.parent.resolve() / entry_path.name,
                 member_name=entry_path.name,
+                source_bytes=source_bytes,
                 entry=entry,
                 objectives=objectives,
                 stats_flat=stats_flat,
@@ -1649,15 +1653,7 @@ def _validate_existing_filtered_output_dir(output_dir: Path, *, overwrite: bool)
         return
     if not output_dir.is_dir():
         raise NotADirectoryError(f"Filtered output path is not a directory: {output_dir}")
-    existing = sorted(
-        (path for path in output_dir.iterdir() if path.name != ".DS_Store"),
-        key=lambda path: path.name,
-    )
-    if existing and not overwrite:
-        raise FileExistsError(
-            f"Filtered output directory is not empty: {output_dir} "
-            "(use --overwrite to replace JSON outputs)"
-        )
+    existing = sorted(output_dir.iterdir(), key=lambda path: path.name)
     invalid = [
         path
         for path in existing
@@ -1668,6 +1664,11 @@ def _validate_existing_filtered_output_dir(output_dir: Path, *, overwrite: bool)
         raise FileExistsError(
             f"Refusing to overwrite filtered output directory containing non-JSON "
             f"entries: {preview}"
+        )
+    if existing and not overwrite:
+        raise FileExistsError(
+            f"Filtered output directory is not empty: {output_dir} "
+            "(use --overwrite to replace JSON outputs)"
         )
 
 
@@ -1701,6 +1702,10 @@ def _prepare_filtered_output_dir(
     return output_dir
 
 
+def _write_candidate_snapshot(candidate: ParetoCandidate, destination: Path) -> None:
+    destination.write_bytes(candidate.source_bytes)
+
+
 def _write_selected_output(
     candidate: ParetoCandidate,
     output: Path,
@@ -1716,7 +1721,7 @@ def _write_selected_output(
     staging_path = Path(staging_name)
     backup_path: Path | None = None
     try:
-        shutil.copy2(candidate.path, staging_path)
+        _write_candidate_snapshot(candidate, staging_path)
         if not overwrite:
             try:
                 os.link(staging_path, output)
@@ -1768,14 +1773,28 @@ def _remove_output_tree(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _copy_directory_metadata(source: Path, destination: Path) -> None:
+    source_stat = source.stat(follow_symlinks=False)
+    if hasattr(os, "chown"):
+        os.chown(
+            destination,
+            source_stat.st_uid,
+            source_stat.st_gid,
+            follow_symlinks=False,
+        )
+    shutil.copystat(source, destination, follow_symlinks=False)
+
+
 def _replace_filtered_output_dir(
     staging_dir: Path,
     output_dir: Path,
     *,
     overwrite: bool,
+    new_output_mode: int,
 ) -> None:
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if not output_dir.exists():
+        staging_dir.chmod(new_output_mode)
         os.replace(staging_dir, output_dir)
         return
 
@@ -1787,12 +1806,20 @@ def _replace_filtered_output_dir(
     os.replace(output_dir, backup_dir)
     try:
         _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
+        _copy_directory_metadata(backup_dir, staging_dir)
         os.replace(staging_dir, output_dir)
     except Exception:
         os.replace(backup_dir, output_dir)
         raise
     else:
-        _remove_output_tree(backup_dir)
+        try:
+            _remove_output_tree(backup_dir)
+        except OSError as exc:
+            print(
+                f"Warning: filtered output installed, but old backup could not be removed: "
+                f"{backup_dir} ({exc})",
+                file=sys.stderr,
+            )
 
 
 def _write_filtered_outputs(
@@ -1808,11 +1835,7 @@ def _write_filtered_outputs(
     overwrite: bool,
 ) -> Path:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    output_mode = (
-        stat.S_IMODE(output_dir.stat().st_mode)
-        if output_dir.exists()
-        else _default_directory_mode()
-    )
+    new_output_mode = _default_directory_mode()
     staging_dir = Path(
         tempfile.mkdtemp(prefix=f".{output_dir.name}.", suffix=".tmp", dir=output_dir.parent)
     )
@@ -1821,7 +1844,7 @@ def _write_filtered_outputs(
         for candidate in candidates:
             staged_destination = staging_dir / candidate.member_name
             final_destination = output_dir / candidate.member_name
-            shutil.copy2(candidate.path, staged_destination)
+            _write_candidate_snapshot(candidate, staged_destination)
             members.append(
                 {
                     "file": candidate.member_name,
@@ -1858,8 +1881,12 @@ def _write_filtered_outputs(
             json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        staging_dir.chmod(output_mode)
-        _replace_filtered_output_dir(staging_dir, output_dir, overwrite=overwrite)
+        _replace_filtered_output_dir(
+            staging_dir,
+            output_dir,
+            overwrite=overwrite,
+            new_output_mode=new_output_mode,
+        )
     finally:
         _remove_output_tree(staging_dir)
     return output_dir / FILTERED_SELECTION_MANIFEST
