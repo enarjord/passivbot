@@ -33,7 +33,12 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
   --target drawdown_worst_strategy_eq=0.25
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
-  -l 'adg_strategy_eq>0.0'
+  -l 'adg_strategy_eq>0.0' \
+  --save-selected configs/promoted_candidate.json
+passivbot tool pareto optimize_results/.../pareto \
+  -l 'drawdown_worst_strategy_eq<=0.35' \
+  -l 'adg_strategy_eq>0.0' \
+  --save-filtered filtered_pareto
 passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
@@ -70,6 +75,22 @@ recovered, so it is not the complete scenario Pareto front across all evaluated 
 
 The output also shows the retained front's ideal point: the best observed value for each active
 objective after any `--limit` filters are applied.
+
+Add `-s FILE` / `--save-selected FILE` to copy the selected member to an exact destination. The
+saved member is the winner of the active method after objectives, limits, weights, targets, and any
+scenario projection are applied; with the default method it is the ideal-point winner. The original
+Pareto JSON artifact is copied without reserialization. Add `-f DIR` / `--save-filtered DIR` to copy
+every member retained immediately after limits, preserving the source filenames, and write a
+`selection.json` manifest with the source, scenario, limits, counts, selected winner, and copied
+members. Without limits, `--save-filtered` copies the full loaded set. With `--scenario`, the
+exported set is filtered using that scenario's metrics before the scenario-specific nondominated
+front is rebuilt.
+
+Output destinations must be outside the source Pareto directory. Existing selected files and
+non-empty filtered directories fail by default. `--overwrite` replaces the selected file or clears
+existing JSON files from the filtered directory before writing the exact new set; filtered
+directories containing non-JSON entries are refused. Both save options may be used together when
+the selected file is outside the filtered directory.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON

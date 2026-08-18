@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,9 @@ METHOD_DESCRIPTIONS = {
     "lexicographic": "Strict priority chooser. Sorts by objective priority order.",
     "outranking": "Simplified PROMETHEE-style chooser based on pairwise net preference flow.",
 }
+
+
+FILTERED_SELECTION_MANIFEST = "selection.json"
 
 
 @dataclass(frozen=True)
@@ -318,7 +322,10 @@ def parse_method_name(raw_method: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool pareto",
-        description="Select a single candidate from a Pareto front directory.",
+        description=(
+            "Select a single candidate from a Pareto front directory and optionally copy the "
+            "winner or filtered set."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Methods:\n"
@@ -331,7 +338,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
             "  -l 'adg_strategy_eq>0.0'\n"
             "  -l 'drawdown_worst_strategy_eq<=0.35'\n"
-            "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n"
+            "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
+            "Outputs:\n"
+            "  -s selected.json      Copy the method winner.\n"
+            "  -f filtered_pareto    Copy every member retained after limits.\n"
         ),
     )
     parser.add_argument(
@@ -409,6 +419,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         metavar="N",
         help="Show the top N ranked candidates instead of only the winner. Default: 1.",
+    )
+    parser.add_argument(
+        "-s",
+        "--save-selected",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Copy the selected Pareto member to FILE.",
+    )
+    parser.add_argument(
+        "-f",
+        "--save-filtered",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Copy every member retained after limits to DIR and write selection.json. "
+            "Without limits, copies the full loaded set."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing selected FILE or JSON outputs in a filtered DIR. "
+            "A filtered DIR containing non-JSON entries is never replaced."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1515,6 +1552,153 @@ def format_selection_result(
     return "\n".join(lines)
 
 
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_output_outside_source(path: Path, pareto_dir: Path, *, label: str) -> None:
+    if _is_within(path, pareto_dir.resolve()):
+        raise ValueError(
+            f"Refusing to write {label} inside the source Pareto directory: {path}"
+        )
+
+
+def _prepare_selected_output(
+    raw_path: str | os.PathLike[str] | None,
+    pareto_dir: Path,
+    *,
+    overwrite: bool,
+) -> Path | None:
+    if raw_path is None:
+        return None
+    output = Path(raw_path).expanduser().resolve()
+    _validate_output_outside_source(output, pareto_dir, label="selected output")
+    if output.suffix.lower() != ".json":
+        raise ValueError(f"Selected output must use a .json filename: {output}")
+    if output.exists():
+        if output.is_dir():
+            raise IsADirectoryError(f"Selected output path is a directory: {output}")
+        if not overwrite:
+            raise FileExistsError(
+                f"Selected output already exists: {output} (use --overwrite to replace it)"
+            )
+    if output.parent.exists() and not output.parent.is_dir():
+        raise NotADirectoryError(f"Selected output parent is not a directory: {output.parent}")
+    return output
+
+
+def _prepare_filtered_output_dir(
+    raw_path: str | os.PathLike[str] | None,
+    pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+    *,
+    overwrite: bool,
+) -> Path | None:
+    if raw_path is None:
+        return None
+    output_dir = Path(raw_path).expanduser().resolve()
+    _validate_output_outside_source(output_dir, pareto_dir, label="filtered output")
+    names = [candidate.path.name for candidate in candidates]
+    normalized_names = [name.casefold() for name in names]
+    if len(normalized_names) != len(set(normalized_names)):
+        raise ValueError("Filtered members contain duplicate filenames; cannot copy safely.")
+    if FILTERED_SELECTION_MANIFEST.casefold() in normalized_names:
+        raise ValueError(
+            f"Filtered member filename conflicts with reserved manifest name "
+            f"{FILTERED_SELECTION_MANIFEST!r}."
+        )
+    if output_dir.exists():
+        if not output_dir.is_dir():
+            raise NotADirectoryError(f"Filtered output path is not a directory: {output_dir}")
+        existing = sorted(
+            (path for path in output_dir.iterdir() if path.name != ".DS_Store"),
+            key=lambda path: path.name,
+        )
+        if existing and not overwrite:
+            raise FileExistsError(
+                f"Filtered output directory is not empty: {output_dir} "
+                "(use --overwrite to replace JSON outputs)"
+            )
+        invalid = [
+            path
+            for path in existing
+            if not path.is_file() or path.suffix.lower() != ".json"
+        ]
+        if invalid:
+            preview = ", ".join(path.name for path in invalid[:5])
+            raise FileExistsError(
+                f"Refusing to overwrite filtered output directory containing non-JSON "
+                f"entries: {preview}"
+            )
+    elif output_dir.parent.exists() and not output_dir.parent.is_dir():
+        raise NotADirectoryError(
+            f"Filtered output parent is not a directory: {output_dir.parent}"
+        )
+    return output_dir
+
+
+def _write_selected_output(candidate: ParetoCandidate, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(candidate.path, output)
+
+
+def _write_filtered_outputs(
+    output_dir: Path,
+    pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+    *,
+    loaded_count: int,
+    active_limits: Sequence[Mapping[str, Any]],
+    scenario: str | None,
+    selected: ParetoCandidate,
+    overwrite: bool,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if overwrite:
+        for path in output_dir.iterdir():
+            if path.name != ".DS_Store" and path.is_file() and path.suffix.lower() == ".json":
+                path.unlink()
+
+    members: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        destination = output_dir / candidate.path.name
+        shutil.copy2(candidate.path, destination)
+        members.append(
+            {
+                "file": candidate.path.name,
+                "hash": candidate.path.stem,
+                "source_path": str(candidate.path),
+                "output_path": str(destination),
+            }
+        )
+
+    manifest_path = output_dir / FILTERED_SELECTION_MANIFEST
+    manifest = {
+        "tool": "passivbot tool pareto",
+        "mode": "filtered",
+        "pareto_dir": str(pareto_dir),
+        "loaded_count": int(loaded_count),
+        "retained_count": len(candidates),
+        "scenario": scenario,
+        "applied_limits": _json_ready(active_limits),
+        "selected_member": {
+            "file": selected.path.name,
+            "hash": selected.path.stem,
+            "source_path": str(selected.path),
+        },
+        "members": members,
+    }
+    manifest_path.write_text(
+        json.dumps(_json_ready(manifest), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 def run_from_args(args: argparse.Namespace) -> SelectionResult:
     method = parse_method_name(args.method)
     raw_path = getattr(args, "path", None)
@@ -1557,6 +1741,42 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         target_pairs=getattr(args, "target", None),
         priority_arg=getattr(args, "priority", None),
     )
+    overwrite = bool(getattr(args, "overwrite", False))
+    selected_output = _prepare_selected_output(
+        getattr(args, "save_selected", None),
+        pareto_dir,
+        overwrite=overwrite,
+    )
+    filtered_output_dir = _prepare_filtered_output_dir(
+        getattr(args, "save_filtered", None),
+        pareto_dir,
+        filtered_candidates,
+        overwrite=overwrite,
+    )
+    if (
+        selected_output is not None
+        and filtered_output_dir is not None
+        and _is_within(selected_output, filtered_output_dir)
+    ):
+        raise ValueError(
+            "Selected output must be outside the filtered output directory when both are saved."
+        )
+    if selected_output is not None:
+        _write_selected_output(result.candidate, selected_output)
+    filtered_manifest = (
+        _write_filtered_outputs(
+            filtered_output_dir,
+            pareto_dir,
+            filtered_candidates,
+            loaded_count=len(candidates),
+            active_limits=active_limits,
+            scenario=scenario,
+            selected=result.candidate,
+            overwrite=overwrite,
+        )
+        if filtered_output_dir is not None
+        else None
+    )
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
@@ -1596,21 +1816,44 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                     "scenario_front_complete": False,
                 }
             )
+        if selected_output is not None:
+            payload["selected"]["saved_path"] = str(selected_output)
+        if filtered_output_dir is not None and filtered_manifest is not None:
+            payload["saved_filtered"] = {
+                "directory": str(filtered_output_dir),
+                "manifest": str(filtered_manifest),
+                "count": len(filtered_candidates),
+                "stage": "post_limits",
+            }
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(
-            format_selection_result(
-                pareto_dir,
-                candidates=scenario_front,
-                loaded_count=len(candidates),
-                retained_count=len(filtered_candidates),
-                scenario=scenario,
-                scenario_front_count=len(scenario_front) if scenario is not None else None,
-                active_limits=active_limits,
-                result=result,
-                show_top=show_top,
-            )
+        output = format_selection_result(
+            pareto_dir,
+            candidates=scenario_front,
+            loaded_count=len(candidates),
+            retained_count=len(filtered_candidates),
+            scenario=scenario,
+            scenario_front_count=len(scenario_front) if scenario is not None else None,
+            active_limits=active_limits,
+            result=result,
+            show_top=show_top,
         )
+        saved_lines: List[str] = []
+        if selected_output is not None:
+            saved_lines.append(
+                f"Saved selected member: {_display_path(selected_output)}"
+            )
+        if filtered_output_dir is not None and filtered_manifest is not None:
+            saved_lines.extend(
+                [
+                    f"Saved filtered members: {len(filtered_candidates)} to "
+                    f"{_display_path(filtered_output_dir)}",
+                    f"Filtered manifest: {_display_path(filtered_manifest)}",
+                ]
+            )
+        if saved_lines:
+            output += "\n" + "\n".join(saved_lines)
+        print(output)
     return result
 
 

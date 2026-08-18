@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Extend `passivbot tool pareto` with `--save-selected` for copying the method winner to a JSON
+  file and `--save-filtered` for copying the complete post-limit member set with a reproducible
+  selection manifest. Output writes protect source Pareto directories, require explicit overwrite
+  approval, and prevent stale or mixed filtered-directory contents.
 - Add `passivbot tool compose-coin-overrides` to validate and combine a directory of single-coin
   configs into a lean unified config with minimal inline per-coin patches. The tool canonicalizes
   parameters belonging only to features disabled in every input, reports account-wide conflicts,

@@ -80,6 +80,8 @@ cd passivbot-rust && cargo check --tests && cd ..
 
 ```bash
 passivbot tool pareto optimize_results/.../pareto
+passivbot tool pareto optimize_results/.../pareto -s configs/promoted_candidate.json
+passivbot tool pareto optimize_results/.../pareto -l 'adg_strategy_eq>0.0' -f filtered_pareto
 passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
 passivbot tool pareto-dash --data-root optimize_results
 passivbot tool verify-hlcvs-data
