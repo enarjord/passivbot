@@ -30,8 +30,10 @@ from optimization.backends.gpu_backend import (
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
     _gpu_suite_enabled,
+    _gpu_suite_checkpoint_contract,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
+    _gpu_suite_search_context,
     _materialize_gpu_override_template,
     _DriftMonitor,
     _ObjectiveScale,
@@ -48,7 +50,9 @@ from optimization.backends.gpu_backend import (
     _select_validation_indices,
     _update_probe_shortfall_log,
     _validate_directional_search_space,
+    _validate_dual_multicoin_metrics,
     _validate_gpu_optimizer_overrides,
+    _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
@@ -450,6 +454,88 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
     assert len(prepared) == 1
     assert prepared[0]["hlcvs"].shape == (10, 1, 4)
     assert np.array_equal(prepared[0]["hlcvs"][:, 0], master[:, 1])
+    assert prepared[0]["coin_count"] == 1
+
+
+def test_gpu_suite_inputs_materialize_multicoin_subset():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    master = np.arange(10 * 4 * 4, dtype=np.float64).reshape(10, 4, 4)
+    ctx = SimpleNamespace(
+        label="three_coins",
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {coin: {} for coin in ("BTC", "ETH", "SOL")}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return master, np.ones(10), [0, 2, 3]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["coin_count"] == 3
+    assert prepared[0]["hlcvs"].shape == (10, 3, 4)
+    assert np.array_equal(prepared[0]["hlcvs"][:, 1], master[:, 2])
+
+
+def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.02
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    config["bot"]["short"]["risk"]["n_positions"] = 2
+    master = np.zeros((10, 3, 4), dtype=np.float64)
+    ctx = SimpleNamespace(
+        label="dual",
+        overrides={},
+        exchanges=["bybit"],
+        msss={
+            "bybit": {
+                "BTC": {},
+                "ETH": {},
+                "SOL": {},
+                "__meta__": {},
+            }
+        },
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return master, np.ones(10), [0, 1, 2]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert _gpu_suite_search_context(prepared) == (
+        3,
+        3,
+        ("long", "short"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -458,7 +544,6 @@ def test_gpu_suite_inputs_materialize_one_selected_coin():
         ({"backtest.starting_balance": 1_000}, ["bybit"], [0], "outside the supported"),
         ({}, ["bybit", "binance"], [0], "exactly one exchange"),
         ({}, ["combined"], [0], "combined multi-exchange"),
-        ({}, ["bybit"], [0, 1], "exactly one prepared coin"),
     ],
 )
 def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
@@ -487,6 +572,82 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
 
     with pytest.raises(ValueError, match=message):
         _gpu_suite_scenario_inputs(config, Suite())
+
+
+def _suite_search_input(label, config, coin_count):
+    return {
+        "ctx": SimpleNamespace(label=label),
+        "config": config,
+        "coin_count": coin_count,
+    }
+
+
+def test_gpu_suite_search_context_reports_coin_count_range():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("broad", config, 4),
+            _suite_search_input("narrow", config, 2),
+        ]
+    ) == (2, 4, ("long",))
+
+
+def test_gpu_suite_search_context_allows_legacy_single_coin_topologies():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("base", config, 1),
+            _suite_search_input("stress", config, 1),
+        ]
+    ) == (1, 1, None)
+
+
+def test_gpu_suite_search_context_rejects_multicoin_trailing_martingale():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+
+    with pytest.raises(ValueError, match="strategy_kind=ema_anchor"):
+        _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+
+
+def test_gpu_suite_search_context_accepts_multicoin_dual_side_scenarios():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = True
+
+    assert _gpu_suite_search_context(
+        [
+            _suite_search_input("broad", config, 4),
+            _suite_search_input("narrow", config, 2),
+        ]
+    ) == (2, 4, ("long", "short"))
+
+
+def test_gpu_suite_search_context_rejects_different_side_topologies():
+    long_config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    short_config = _directional_ema_config(long_enabled=False, short_enabled=True)
+
+    with pytest.raises(ValueError, match="same enabled-side topology"):
+        _gpu_suite_search_context(
+            [
+                _suite_search_input("long", long_config, 3),
+                _suite_search_input("short", short_config, 2),
+            ]
+        )
+
+
+def test_gpu_suite_search_context_rejects_single_vs_dual_side_topology():
+    long_config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    dual_config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    dual_config["live"]["hedge_mode"] = True
+
+    with pytest.raises(ValueError, match="same enabled-side topology"):
+        _gpu_suite_search_context(
+            [
+                _suite_search_input("long", long_config, 3),
+                _suite_search_input("dual", dual_config, 3),
+            ]
+        )
 
 
 def test_gpu_suite_scenario_overrides_shadow_candidate_parameters_last():
@@ -862,6 +1023,59 @@ def test_gpu_foundation_accepts_ema_single_side_multicoin(side):
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
+    config = _directional_ema_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                side: {
+                    "strategy": {"ema_anchor": {"offset": 0.02, "ema_span_0": 90}},
+                    "risk": {"entry_cooldown_minutes": 15},
+                    "wallet_exposure_limit": 0.4,
+                }
+            }
+        }
+    }
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"live": {"leverage": 3}},
+        {"bot": {"long": {"risk": {"n_positions": 2}}}},
+        {"bot": {"long": {"unstuck": {"enabled": True}}}},
+        {"bot": {"short": {"strategy": {"ema_anchor": {"offset": 0.02}}}}},
+    ],
+)
+def test_gpu_multicoin_coin_overrides_reject_unmodeled_leaves(patch):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {"ETH": patch}
+
+    with pytest.raises(ValueError, match="do not model these paths yet"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
+def test_gpu_coin_overrides_reject_single_coin_scope():
+    config = _long_only_ema_config()
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+    }
+
+    with pytest.raises(ValueError, match="require multi-coin EMA Anchor"):
+        _validate_scope(config, _Evaluator())
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -876,12 +1090,6 @@ def test_gpu_foundation_accepts_ema_single_side_multicoin(side):
                 "dynamic_wel_by_tradability", False
             ),
             "dynamic_wel_by_tradability",
-        ),
-        (
-            lambda config: config["live"].__setitem__(
-                "forager_score_hysteresis_pct", 0.01
-            ),
-            "forager_score_hysteresis_pct",
         ),
     ],
 )
@@ -898,16 +1106,100 @@ def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_multicoin_foundation_rejects_hedge_mode():
+def test_gpu_multicoin_foundation_accepts_dual_side_hedge_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
         "short": ["BTC", "ETH", "SOL"],
     }
+    config["live"]["hedge_mode"] = True
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["forager_score_hysteresis_pct"] = 0.02
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = False
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="one-way arbitration is not modeled"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_coin_overrides():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+    }
+
     with pytest.raises(ValueError, match="exactly one enabled side"):
         _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="matching long/short approved_coins"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "fills_gap_longest_days",
+        "strategy_eq_recovery_days_max",
+        "volume_pct_per_day_avg",
+    ],
+)
+def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
+    with pytest.raises(ValueError, match=metric):
+        _validate_dual_multicoin_metrics(
+            {metric, "adg_strategy_eq"},
+            coin_count=3,
+            enabled_sides={"long", "short"},
+        )
+
+
+def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
+    _validate_dual_multicoin_metrics(
+        {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        },
+        coin_count=3,
+        enabled_sides={"long"},
+    )
 
 
 @pytest.mark.parametrize(
@@ -2411,6 +2703,89 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
         _checkpoint_signature(active, scoring, suite_contract=changed_date)
         != original
     )
+
+
+def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    contract = {
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "side": "long",
+        "values": [[None] * 12, [None] * 11 + [0.4]],
+    }
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=contract
+    )
+    edited = copy.deepcopy(contract)
+    edited["values"][1][11] = 0.5
+
+    assert _checkpoint_signature(active, scoring) != original
+    assert (
+        _checkpoint_signature(active, scoring, runtime_contract=edited)
+        != original
+    )
+    hysteresis_edited = copy.deepcopy(contract)
+    hysteresis_edited["forager_score_hysteresis_pct"] = 0.02
+    assert (
+        _checkpoint_signature(
+            active, scoring, runtime_contract=hysteresis_edited
+        )
+        != original
+    )
+
+
+def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000, 3000]),
+    }
+    original = _gpu_suite_checkpoint_contract(config, [item])
+
+    assert original["prepared_scenarios"] == [
+        {
+            "label": "stress",
+            "exchange": "bybit",
+            "coins": ["BTC", "ETH"],
+            "coin_count": 2,
+            "strategy_kind": "ema_anchor",
+            "enabled_sides": ["long"],
+            "candle_count": 3,
+            "first_timestamp": 1000,
+            "last_timestamp": 3000,
+            "coin_overrides": {},
+        }
+    ]
+
+    changed_coins = copy.deepcopy(item)
+    changed_coins["coins"] = ["BTC", "SOL"]
+    changed_window = copy.deepcopy(item)
+    changed_window["timestamps"] = np.array([1000, 2000, 4000])
+
+    assert _gpu_suite_checkpoint_contract(config, [changed_coins]) != original
+    assert _gpu_suite_checkpoint_contract(config, [changed_window]) != original
+
+
+def test_gpu_suite_checkpoint_contract_rejects_timestamp_shape_mismatch():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    item = {
+        "ctx": SimpleNamespace(label="stress"),
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "coin_count": 2,
+        "config": config,
+        "hlcvs": np.zeros((3, 2, 4)),
+        "timestamps": np.array([1000, 2000]),
+    }
+
+    with pytest.raises(ValueError, match="timestamp identity mismatch"):
+        _gpu_suite_checkpoint_contract(config, [item])
 
 
 def test_gpu_rejects_pinned_unsupported_risk_behavior():

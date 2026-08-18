@@ -4,6 +4,25 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS optimizer suite support for dual-side hedge-mode multi-coin EMA Anchor scenarios
+  sharing one exchange and a consistent long/short topology.
+
+- Added Apple MPS multi-coin EMA Anchor optimizer support for Forager score hysteresis, retaining
+  flat incumbent candidates when challenger scores are only marginally better.
+
+- Add dual-side hedge-mode multi-coin EMA-anchor optimization to the experimental Apple MPS
+  backend. Metal screens long and short independently and combines their compact outputs into a
+  conservative portfolio proxy, while unchanged exact Rust backtests remain authoritative and the
+  existing constraint, rank, and drift gates fail closed on disagreement. Dual-side one-way mode,
+  suites, coin overrides, and metrics requiring cross-side fill or recovery event streams remain
+  explicitly unsupported in this slice.
+
+- Add static per-coin overrides to experimental Apple MPS multi-coin EMA-anchor optimization.
+  The enabled side may override EMA-anchor parameters, entry cooldown, and an explicit per-coin
+  wallet-exposure limit. Metal applies those values after every candidate gene, matching exact
+  Rust precedence; unsupported override leaves still fail closed, and checkpoint identity now
+  includes the prepared effective override table.
+
 - Add `-s/--save-selected` and `-f/--save-filtered` to `passivbot tool pareto` for copying the
   selected member or the post-limit member set, with fail-if-present destinations and a filtered
   export manifest.
@@ -18,6 +37,12 @@ All notable user-facing changes will be documented in this file.
   multi-exchange suites, multi-coin scenarios, and per-coin source assignments still fail closed.
   Effective external suite definitions, scenario filters, overrides, and resolved date windows are
   persisted and checked on resume.
+
+- Extend experimental Apple MPS EMA-anchor suites to multi-coin scenarios on one shared exchange.
+  Scenarios may select different coin subsets and independently dispatch to the single-coin or
+  multicoin Metal kernel, while the canonical suite reducer and exact Rust validations remain
+  authoritative. Multicoin suites require every effective scenario to share one enabled side, and
+  each scenario revalidates `n_positions` against its own prepared coin count.
 
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in

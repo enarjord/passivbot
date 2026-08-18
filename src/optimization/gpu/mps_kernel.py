@@ -17,6 +17,7 @@ from optimization.gpu.model import (
 
 
 MPS_DAILY_COLS = 5
+MPS_MULTICOIN_DAILY_COLS = 6
 MPS_SCALAR_COLS = 18
 
 
@@ -70,6 +71,11 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "day_max_dd": daily[:, :, 2],
         "day_volume": daily[:, :, 3],
         "day_has_fill": daily[:, :, 4] > 0.0,
+        "day_min_balance": torch.where(
+            active_days,
+            daily[:, :, 5],
+            torch.full_like(daily[:, :, 5], float("inf")),
+        ),
         "max_dd": scalars[:, 0],
         "held_max_ms": scalars[:, 1],
         "gap_hist": gaps,
@@ -297,7 +303,15 @@ class MpsEmaAnchorRunner:
 class MpsEmaAnchorMulticoinRunner:
     """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
-    def __init__(self, run: ProxyRun, data: dict, *, side: str):
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        side: str,
+        coin_overrides: np.ndarray | None = None,
+        forager_score_hysteresis_pct: float = 0.0,
+    ):
         if side not in {"long", "short"}:
             raise ValueError(
                 f"MPS multicoin EMA runner side must be long or short, got {side!r}"
@@ -311,11 +325,35 @@ class MpsEmaAnchorMulticoinRunner:
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
         self.coin_settings = data["coin_settings"]
+        if coin_overrides is None:
+            coin_overrides = np.full((self.n_coins, 12), np.nan, dtype=np.float32)
+        coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
+        if coin_overrides.shape != (self.n_coins, 12):
+            raise ValueError(
+                "expected multicoin EMA override matrix shaped "
+                f"({self.n_coins}, 12), got {coin_overrides.shape}"
+            )
+        self.coin_overrides = torch.as_tensor(
+            np.ascontiguousarray(coin_overrides), device="mps"
+        )
+        forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
+        if not np.isfinite(forager_score_hysteresis_pct) or (
+            forager_score_hysteresis_pct < 0.0
+        ):
+            raise ValueError(
+                "forager_score_hysteresis_pct must be finite and non-negative"
+            )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
         self.settings = torch.tensor(
-            [run.starting_balance, liq_floor, run.interval_ms, float(side == "short")],
+            [
+                run.starting_balance,
+                liq_floor,
+                run.interval_ms,
+                float(side == "short"),
+                forager_score_hysteresis_pct,
+            ],
             dtype=torch.float32,
             device="mps",
         )
@@ -346,7 +384,7 @@ class MpsEmaAnchorMulticoinRunner:
             self._buffers = {
                 batch_size: (
                     torch.zeros(
-                        (batch_size, self.n_days, MPS_DAILY_COLS),
+                        (batch_size, self.n_days, MPS_MULTICOIN_DAILY_COLS),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -364,6 +402,7 @@ class MpsEmaAnchorMulticoinRunner:
             for buffer in self._buffers[batch_size]:
                 buffer.zero_()
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
+        self._buffers[batch_size][0][:, :, 5].fill_(float("inf"))
         return self._buffers[batch_size]
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
@@ -402,6 +441,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.fill_ticks,
             self.touch_ticks,
             self.coin_settings,
+            self.coin_overrides,
             params_mps,
             self.settings,
             self._sizes[sizes_key],

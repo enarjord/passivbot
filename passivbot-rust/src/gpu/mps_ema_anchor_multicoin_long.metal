@@ -4,7 +4,8 @@ using namespace metal;
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 19;
 constant int COIN_COLS = 11;
-constant int DAILY_COLS = 5;
+constant int OVERRIDE_COLS = 12;
+constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
 
@@ -38,11 +39,19 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+inline float coin_override_or(
+    constant float* coin_overrides, int coin, int column, float fallback
+) {
+    float value = coin_overrides[coin * OVERRIDE_COLS + column];
+    return isfinite(value) ? value : fallback;
+}
+
 inline void passivbot_ema_anchor_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -111,6 +120,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
+    const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -134,8 +144,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int entry_tick[MAX_COINS];
     int close_tick[MAX_COINS];
     bool selected[MAX_COINS];
+    bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
+    float alpha0_coin[MAX_COINS];
+    float alpha1_coin[MAX_COINS];
+    float alpha2_coin[MAX_COINS];
+    float alpha_1h_coin[MAX_COINS];
+    float alpha_1m_coin[MAX_COINS];
 
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < C ? coin_settings[c * COIN_COLS + 9] : 0.0f;
@@ -165,8 +181,33 @@ inline void passivbot_ema_anchor_multicoin_impl(
         entry_tick[c] = 0;
         close_tick[c] = 0;
         selected[c] = false;
+        incumbent[c] = false;
         survivor[c] = false;
         entry_candidate[c] = false;
+        if (c < C) {
+            float coin_span_a = coin_override_or(coin_overrides, c, 1, span_a);
+            float coin_span_b = coin_override_or(coin_overrides, c, 2, span_b);
+            float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
+            float coin_span_lo = fmin(coin_span_a, fmin(coin_span_b, coin_span_c));
+            float coin_span_hi = fmax(coin_span_a, fmax(coin_span_b, coin_span_c));
+            float coin_span_mid = coin_span_a + coin_span_b + coin_span_c
+                - coin_span_lo - coin_span_hi;
+            alpha0_coin[c] = clamp(2.0f / (coin_span_lo + 1.0f), 0.0f, 1.0f);
+            alpha1_coin[c] = clamp(2.0f / (coin_span_mid + 1.0f), 0.0f, 1.0f);
+            alpha2_coin[c] = clamp(2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f);
+            float coin_span_1h = coin_override_or(coin_overrides, c, 8, span_1h);
+            float coin_span_1m = coin_override_or(coin_overrides, c, 9, span_1m);
+            alpha_1h_coin[c] = coin_span_1h > 0.0f
+                ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
+            alpha_1m_coin[c] = coin_span_1m > 0.0f
+                ? clamp(2.0f / (coin_span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
+        } else {
+            alpha0_coin[c] = alpha0;
+            alpha1_coin[c] = alpha1;
+            alpha2_coin[c] = alpha2;
+            alpha_1h_coin[c] = alpha_1h;
+            alpha_1m_coin[c] = alpha_1m;
+        }
     }
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -197,6 +238,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_dd = 0.0f;
     float day_volume = 0.0f;
     float day_has_fill = 0.0f;
+    float day_min_balance = INFINITY;
 
     for (int k = 1; k < T - 1; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
@@ -208,6 +250,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 2] = day_dd;
                 daily[output + 3] = day_volume;
                 daily[output + 4] = day_has_fill;
+                daily[output + 5] = day_min_balance;
             }
             current_day = day_index;
             day_touched = false;
@@ -216,6 +259,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_dd = 0.0f;
             day_volume = 0.0f;
             day_has_fill = 0.0f;
+            day_min_balance = INFINITY;
         }
 
         bool any_fill = false;
@@ -312,10 +356,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 && finite_positive(high) && finite_positive(low) && finite_positive(close);
             if (hour_boundary) {
                 if (hour_high[c] > 0.0f && isfinite(hour_low[c]) && hour_low[c] > 0.0f
-                    && alpha_1h > 0.0f) {
+                    && alpha_1h_coin[c] > 0.0f) {
                     float hour_range = log(hour_high[c] / hour_low[c]);
                     volatility_1h[c] = fma(
-                        alpha_1h, hour_range - volatility_1h[c], volatility_1h[c]
+                        alpha_1h_coin[c], hour_range - volatility_1h[c], volatility_1h[c]
                     );
                 }
                 hour_high[c] = -INFINITY;
@@ -325,12 +369,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
             hour_high[c] = fmax(hour_high[c], high);
             hour_low[c] = fmin(hour_low[c], low);
             float log_range = log(high / low);
-            ema0[c] = fma(alpha0, close - ema0[c], ema0[c]);
-            ema1[c] = fma(alpha1, close - ema1[c], ema1[c]);
-            ema2[c] = fma(alpha2, close - ema2[c], ema2[c]);
-            if (alpha_1m > 0.0f) {
+            ema0[c] = fma(alpha0_coin[c], close - ema0[c], ema0[c]);
+            ema1[c] = fma(alpha1_coin[c], close - ema1[c], ema1[c]);
+            ema2[c] = fma(alpha2_coin[c], close - ema2[c], ema2[c]);
+            if (alpha_1m_coin[c] > 0.0f) {
                 volatility_1m[c] = fma(
-                    alpha_1m, log_range - volatility_1m[c], volatility_1m[c]
+                    alpha_1m_coin[c], log_range - volatility_1m[c], volatility_1m[c]
                 );
             }
             if (alpha_forager_volatility > 0.0f) {
@@ -356,9 +400,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
+            float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
             if (k >= int(coin_settings[coin_offset + 8])
                 && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close)) {
+                && finite_positive(close) && coin_wel != 0.0f) {
                 tradable_count += 1;
             }
         }
@@ -377,6 +422,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             if (reselect) {
                 int active_count = 0;
                 for (int c = 0; c < C; ++c) {
+                    incumbent[c] = selected[c] && psize[c] <= 0.0f;
                     selected[c] = psize[c] > 0.0f;
                     if (selected[c]) active_count += 1;
                     survivor[c] = false;
@@ -386,10 +432,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 for (int c = 0; c < C; ++c) {
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
+                    float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
                     bool enabled = !selected[c]
                         && k >= int(coin_settings[coin_offset + 8])
                         && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(bars[bar_offset + 2]);
+                        && finite_positive(bars[bar_offset + 2]) && coin_wel != 0.0f;
                     survivor[c] = enabled;
                     if (enabled) enabled_count += 1;
                 }
@@ -422,9 +469,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                     float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float coin_offset_pct = coin_override_or(
+                        coin_overrides, c, 4, offset
+                    );
                     float threshold = short_side
-                        ? upper * (1.0f + offset)
-                        : lower * (1.0f - offset);
+                        ? upper * (1.0f + coin_offset_pct)
+                        : lower * (1.0f - coin_offset_pct);
                     float readiness = threshold > 0.0f
                         ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
                         : INFINITY;
@@ -442,9 +492,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                     float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float coin_offset_pct = coin_override_or(
+                        coin_overrides, c, 4, offset
+                    );
                     float threshold = short_side
-                        ? upper * (1.0f + offset)
-                        : lower * (1.0f - offset);
+                        ? upper * (1.0f + coin_offset_pct)
+                        : lower * (1.0f - coin_offset_pct);
                     float readiness = threshold > 0.0f
                         ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
                         : INFINITY;
@@ -470,6 +523,43 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     }
                     if (best >= 0) selected[best] = true;
                 }
+                if (score_hysteresis > 0.0f) {
+                    // Match Rust's score hysteresis: consider incumbent flat
+                    // candidates from best to worst, then displace only the
+                    // weakest selected non-incumbent challenger when its
+                    // normalized-score lead is within the configured gap.
+                    for (int rank = 0; rank < C; ++rank) {
+                        int incumbent_coin = -1;
+                        for (int c = 0; c < C; ++c) {
+                            if (!survivor[c] || !incumbent[c] || selected[c]) continue;
+                            if (incumbent_coin < 0 || score[c] > score[incumbent_coin]
+                                || (score[c] == score[incumbent_coin]
+                                    && c < incumbent_coin)) {
+                                incumbent_coin = c;
+                            }
+                        }
+                        if (incumbent_coin < 0) break;
+
+                        int challenger = -1;
+                        for (int c = 0; c < C; ++c) {
+                            if (!selected[c] || incumbent[c] || !survivor[c]) continue;
+                            if (challenger < 0 || score[c] < score[challenger]
+                                || (score[c] == score[challenger] && c > challenger)) {
+                                challenger = c;
+                            }
+                        }
+                        if (challenger < 0) break;
+                        if (score[challenger] - score[incumbent_coin]
+                            <= score_hysteresis) {
+                            selected[challenger] = false;
+                            selected[incumbent_coin] = true;
+                        } else {
+                            // Rust continues to lower-scored incumbents, but
+                            // none can satisfy the gap once the best cannot.
+                            break;
+                        }
+                    }
+                }
                 selection_initialized = true;
                 previous_effective_n_positions = effective_n_positions;
             }
@@ -492,9 +582,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 int bar_offset = (k * C + c) * 4;
                 int tick_offset = (k * C + c) * 2;
                 float price_now = bars[bar_offset + 2];
+                float fixed_coin_wel = coin_override_or(
+                    coin_overrides, c, 11, -1.0f
+                );
+                float coin_wel = fixed_coin_wel >= 0.0f
+                    ? fixed_coin_wel : effective_wel;
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])
-                    && finite_positive(price_now);
+                    && finite_positive(price_now) && coin_wel > 0.0f;
                 if (!tradable) continue;
                 float qty_step = coin_settings[coin_offset + 0];
                 float price_step = coin_settings[coin_offset + 1];
@@ -503,26 +598,38 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 float c_mult = coin_settings[coin_offset + 4];
                 float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                 float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                float coin_weight_1h = coin_override_or(
+                    coin_overrides, c, 6, weight_1h
+                );
+                float coin_weight_1m = coin_override_or(
+                    coin_overrides, c, 7, weight_1m
+                );
                 float multiplier = fmax(
-                    1.0f + volatility_1h[c] * weight_1h
-                        + volatility_1m[c] * weight_1m,
+                    1.0f + volatility_1h[c] * coin_weight_1h
+                        + volatility_1m[c] * coin_weight_1m,
                     1.0f
                 );
                 float wallet_ratio = psize[c] > 0.0f && balance > 0.0f
                     ? (psize[c] * price_now * c_mult / balance)
-                        / fmax(effective_wel, 1.0e-12f) : 0.0f;
+                        / fmax(coin_wel, 1.0e-12f) : 0.0f;
                 float signed_wallet_ratio = short_side ? -wallet_ratio : wallet_ratio;
-                float inventory_shift = signed_wallet_ratio * psize_weight;
+                float coin_psize_weight = coin_override_or(
+                    coin_overrides, c, 5, psize_weight
+                );
+                float coin_offset_pct = coin_override_or(
+                    coin_overrides, c, 4, offset
+                );
+                float inventory_shift = signed_wallet_ratio * coin_psize_weight;
                 int bid_tick = min(
                     int(floor(
-                        lower * (1.0f - offset * multiplier - inventory_shift)
+                        lower * (1.0f - coin_offset_pct * multiplier - inventory_shift)
                             / price_step + 1.0e-6f
                     )),
                     touch_ticks[tick_offset + 0]
                 );
                 int ask_tick = max(
                     int(ceil(
-                        upper * (1.0f + offset * multiplier - inventory_shift)
+                        upper * (1.0f + coin_offset_pct * multiplier - inventory_shift)
                             / price_step - 1.0e-6f
                     )),
                     touch_ticks[tick_offset + 1]
@@ -537,20 +644,27 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     entry_price, qty_step, min_qty, min_cost, c_mult
                 );
                 minimum_entry[c] = minimum;
-                bool cooldown = cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
-                    && float(k) < last_increase_k[c] + cooldown_min;
+                float coin_cooldown_min = ceil(coin_override_or(
+                    coin_overrides, c, 10, cooldown_min
+                ));
+                bool cooldown = coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
+                    && float(k) < last_increase_k[c] + coin_cooldown_min;
                 float cost_we = psize[c] > 0.0f && balance > 0.0f
                     ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
-                float position_cap = effective_wel - 1.0e-7f;
+                float position_cap = coin_wel - 1.0e-7f;
+                float coin_base_qty_pct = coin_override_or(
+                    coin_overrides, c, 0, base_qty_pct
+                );
+                float coin_ddf = coin_override_or(coin_overrides, c, 3, ddf);
                 if (selected[c] && !cooldown && entry_price > 0.0f && balance > 0.0f
-                    && cost_we < position_cap && base_qty_pct > 0.0f) {
+                    && cost_we < position_cap && coin_base_qty_pct > 0.0f) {
                     float base_qty = fmax(minimum, round_step(
-                        balance * effective_wel * base_qty_pct
+                        balance * coin_wel * coin_base_qty_pct
                             / fmax(entry_price * c_mult, 1.0e-12f),
                         qty_step
                     ));
                     float quantity = round_step(
-                        base_qty * fmax(1.0f + fmax(wallet_ratio, 0.0f) * ddf, 1.0f),
+                        base_qty * fmax(1.0f + fmax(wallet_ratio, 0.0f) * coin_ddf, 1.0f),
                         qty_step
                     );
                     float headroom = (
@@ -573,7 +687,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         close_price, qty_step, min_qty, min_cost, c_mult
                     );
                     float clip = fmin(psize[c], fmax(minimum_close, round_step(
-                        balance * effective_wel * base_qty_pct
+                        balance * coin_wel * coin_base_qty_pct
                             / fmax(close_price * c_mult, 1.0e-12f),
                         qty_step
                     )));
@@ -677,6 +791,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             max_dd = fmax(max_dd, drawdown);
             day_end = effective_equity;
             day_min = fmin(day_min, effective_equity);
+            day_min_balance = fmin(day_min_balance, balance);
             day_dd = fmax(day_dd, drawdown);
             day_touched = true;
             if (liquidated) {
@@ -693,6 +808,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 2] = day_dd;
         daily[output + 3] = day_volume;
         daily[output + 4] = day_has_fill;
+        daily[output + 5] = day_min_balance;
     }
 
     float total_size = 0.0f;
@@ -737,6 +853,7 @@ kernel void passivbot_ema_anchor_multicoin(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -747,7 +864,7 @@ kernel void passivbot_ema_anchor_multicoin(
 ) {
     const bool short_side = run_settings[3] > 0.5f;
     passivbot_ema_anchor_multicoin_impl(
-        bars, fill_ticks, touch_ticks, coin_settings, params, run_settings,
+        bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
         sizes, daily, scalars, gap_hist, b, short_side
     );
 }
@@ -757,6 +874,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -766,7 +884,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_impl(
-        bars, fill_ticks, touch_ticks, coin_settings, params, run_settings,
+        bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
         sizes, daily, scalars, gap_hist, b, false
     );
 }

@@ -702,8 +702,6 @@ def _validate_scope_config(
         )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
-    if config.get("coin_overrides"):
-        raise ValueError("GPU foundation does not support coin_overrides")
     if float(config.get("live", {}).get("max_realized_loss_pct", 1.0)) != 1.0:
         raise ValueError(
             "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
@@ -742,26 +740,39 @@ def _validate_scope_config(
             raise ValueError(
                 "GPU multicoin foundation currently supports strategy_kind=ema_anchor only"
             )
-        if len(enabled_sides) != 1:
+        if len(enabled_sides) not in (1, 2):
             raise ValueError(
-                "GPU multicoin foundation currently supports exactly one enabled side"
+                "GPU multicoin foundation requires one or two enabled sides"
             )
+        if len(enabled_sides) == 2 and not bool(
+            config.get("live", {}).get("hedge_mode")
+        ):
+            raise ValueError(
+                "GPU dual-side multicoin EMA Anchor currently requires "
+                "live.hedge_mode=true; one-way arbitration is not modeled"
+            )
+        if len(enabled_sides) == 2:
+            approved = config.get("live", {}).get("approved_coins", {}) or {}
+            ignored = config.get("live", {}).get("ignored_coins", {}) or {}
+            for label, values in (("approved", approved), ("ignored", ignored)):
+                if set(values.get("long", []) or []) != set(
+                    values.get("short", []) or []
+                ):
+                    raise ValueError(
+                        "GPU dual-side multicoin EMA Anchor currently requires "
+                        f"matching long/short {label}_coins"
+                    )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "GPU multicoin foundation requires "
                 "backtest.dynamic_wel_by_tradability=true"
             )
-        if (
-            float(
-                config.get("live", {}).get("forager_score_hysteresis_pct", 0.0)
-                or 0.0
-            )
-            != 0.0
-        ):
-            raise ValueError(
-                "GPU multicoin foundation requires "
-                "live.forager_score_hysteresis_pct=0"
-            )
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind=strategy_kind,
+        enabled_sides=enabled_sides,
+        coin_count=coin_count,
+    )
     for side in enabled_sides:
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
@@ -785,6 +796,86 @@ def _validate_scope_config(
                 f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
             )
     return exchange
+
+
+def _validate_dual_multicoin_metrics(
+    needed_metrics, *, coin_count: int, enabled_sides
+) -> None:
+    """Reject metrics which cannot be reconstructed from directional summaries."""
+
+    if int(coin_count) <= 1 or len(set(enabled_sides)) != 2:
+        return
+    unsupported = sorted(
+        set(needed_metrics)
+        & {
+            "fills_gap_longest_days",
+            "strategy_eq_recovery_days_max",
+            "volume_pct_per_day_avg",
+        }
+    )
+    if unsupported:
+        raise ValueError(
+            "GPU dual-side multicoin EMA Anchor cannot safely reconstruct proxy "
+            f"metrics {unsupported} from independent directional summaries; "
+            "use other metrics or the CPU optimizer"
+        )
+
+
+def _validate_gpu_coin_overrides(
+    config: dict,
+    *,
+    strategy_kind: str,
+    enabled_sides,
+    coin_count: int,
+) -> None:
+    """Accept only the static per-coin leaves modeled by the MPS proxy."""
+
+    overrides = config.get("coin_overrides") or {}
+    if not overrides:
+        return
+    if coin_count <= 1 or strategy_kind != "ema_anchor" or len(enabled_sides) != 1:
+        raise ValueError(
+            "GPU coin_overrides currently require multi-coin EMA Anchor with "
+            "exactly one enabled side"
+        )
+    enabled_side = next(iter(enabled_sides))
+    from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS
+
+    strategy_keys = set(EMA_ANCHOR_PARAM_KEYS) - {
+        "entry_cooldown_minutes",
+        "total_wallet_exposure_limit",
+    }
+
+    def leaves(value, prefix=()):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield from leaves(child, (*prefix, str(key)))
+        else:
+            yield prefix
+
+    allowed = {
+        ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+        ("bot", enabled_side, "wallet_exposure_limit"),
+    } | {
+        ("bot", enabled_side, "strategy", "ema_anchor", key)
+        for key in strategy_keys
+    }
+    unsupported = []
+    for coin, patch in overrides.items():
+        if not isinstance(patch, dict):
+            unsupported.append(f"coin_overrides.{coin}")
+            continue
+        unsupported.extend(
+            ".".join(("coin_overrides", str(coin), *path))
+            for path in leaves(patch)
+            if path not in allowed
+        )
+    if unsupported:
+        raise ValueError(
+            "GPU coin_overrides do not model these paths yet: "
+            f"{sorted(unsupported)}; supported leaves are enabled-side EMA Anchor "
+            "parameters, risk.entry_cooldown_minutes, and wallet_exposure_limit"
+        )
 
 
 def _validate_scope(
@@ -812,7 +903,7 @@ def _validate_scope(
 
 
 def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict]:
-    """Materialize fail-closed single-coin suite inputs for MPS screening."""
+    """Materialize fail-closed suite inputs for MPS screening."""
 
     from config.param_paths import require_existing_config_path
 
@@ -871,11 +962,6 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             values = np.take(values, list(coin_indices), axis=1)
         values = np.ascontiguousarray(values)
         coin_count = int(values.shape[1])
-        if coin_count != 1:
-            raise ValueError(
-                "GPU suite foundation currently requires exactly one prepared coin "
-                f"per scenario; {ctx.label!r} prepared {coin_count}"
-            )
         scenario_config = build_config(proxy_config, ctx)
         _validate_scope_config(
             scenario_config,
@@ -883,12 +969,22 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             coin_count=coin_count,
             allow_suite=True,
         )
+        effective_coins = [
+            str(coin) for coin in ctx.msss[exchange] if coin != "__meta__"
+        ]
+        if len(effective_coins) != coin_count:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} prepared coin identity "
+                f"mismatch: hlcvs={coin_count}, market_settings={effective_coins}"
+            )
         prepared.append(
             {
                 "ctx": ctx,
                 "config": scenario_config,
                 "overrides": deepcopy(overrides),
                 "exchange": exchange,
+                "coin_count": coin_count,
+                "coins": effective_coins,
                 "hlcvs": values,
                 "mss": ctx.msss[exchange],
                 "btc": btc,
@@ -896,6 +992,56 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             }
         )
     return prepared
+
+
+def _gpu_suite_search_context(
+    suite_inputs: list[dict],
+) -> tuple[int, int, tuple[str, ...] | None]:
+    """Return the common candidate-space coin range and multicoin side topology."""
+
+    if not suite_inputs:
+        raise ValueError("GPU suite mode requires at least one prepared scenario")
+    coin_counts = [int(item["coin_count"]) for item in suite_inputs]
+    min_coin_count = min(coin_counts)
+    max_coin_count = max(coin_counts)
+    if max_coin_count == 1:
+        return min_coin_count, max_coin_count, None
+
+    strategy_kinds = {
+        str(item["config"].get("live", {}).get("strategy_kind", ""))
+        .strip()
+        .lower()
+        for item in suite_inputs
+    }
+    if strategy_kinds != {"ema_anchor"}:
+        raise ValueError(
+            "GPU multicoin suites currently require strategy_kind=ema_anchor in "
+            f"every scenario; got {sorted(strategy_kinds)}"
+        )
+    sides_by_label = {}
+    for item in suite_inputs:
+        sides = tuple(
+            side
+            for side in ("long", "short")
+            if gpu_side_enabled(item["config"], side)
+        )
+        sides_by_label[item["ctx"].label] = sides
+        if len(sides) not in (1, 2):
+            raise ValueError(
+                "GPU multicoin suites require one or two enabled sides in every "
+                f"scenario; {item['ctx'].label!r} has {list(sides)}"
+            )
+    common_topologies = set(sides_by_label.values())
+    if len(common_topologies) != 1:
+        details = ", ".join(
+            f"{label}={list(sides)}" for label, sides in sides_by_label.items()
+        )
+        raise ValueError(
+            "GPU multicoin suites require the same enabled-side topology in every "
+            "scenario; "
+            f"got {details}"
+        )
+    return min_coin_count, max_coin_count, common_topologies.pop()
 
 
 def _gpu_suite_scenario_override_context(
@@ -1403,9 +1549,9 @@ def _update_novelty_stall(
     return current
 
 
-def _gpu_suite_checkpoint_contract(config: dict) -> dict:
+def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     backtest = config.get("backtest", {})
-    return {
+    contract = {
         key: deepcopy(backtest.get(key))
         for key in (
             "suite_enabled",
@@ -1415,6 +1561,46 @@ def _gpu_suite_checkpoint_contract(config: dict) -> dict:
             "volume_normalization",
         )
     }
+    if suite_inputs is not None:
+        prepared_scenarios = []
+        for item in suite_inputs:
+            timestamps = np.asarray(item["timestamps"]).reshape(-1)
+            if len(timestamps) != len(item["hlcvs"]):
+                raise ValueError(
+                    f"GPU suite scenario {item['ctx'].label!r} timestamp identity "
+                    f"mismatch: timestamps={len(timestamps)}, hlcvs={len(item['hlcvs'])}"
+                )
+            prepared_scenarios.append(
+                {
+                    "label": item["ctx"].label,
+                    "exchange": item["exchange"],
+                    "coins": list(item["coins"]),
+                    "coin_count": int(item["coin_count"]),
+                    "strategy_kind": str(
+                        item["config"].get("live", {}).get("strategy_kind", "")
+                    )
+                    .strip()
+                    .lower(),
+                    "enabled_sides": [
+                        side
+                        for side in ("long", "short")
+                        if gpu_side_enabled(item["config"], side)
+                    ],
+                    "candle_count": int(len(item["hlcvs"])),
+                    "first_timestamp": (
+                        int(timestamps[0]) if len(timestamps) else None
+                    ),
+                    "last_timestamp": (
+                        int(timestamps[-1]) if len(timestamps) else None
+                    ),
+                    "coin_overrides": deepcopy(
+                        item.get("coin_override_contract")
+                        or item["config"].get("coin_overrides", {})
+                    ),
+                }
+            )
+        contract["prepared_scenarios"] = prepared_scenarios
+    return contract
 
 
 def _checkpoint_signature(
@@ -1423,6 +1609,7 @@ def _checkpoint_signature(
     *,
     anchor_plan=None,
     suite_contract=None,
+    runtime_contract=None,
 ) -> str:
     payload = {
         "active": [
@@ -1446,6 +1633,8 @@ def _checkpoint_signature(
         }
     if suite_contract is not None:
         payload["suite_contract"] = suite_contract
+    if runtime_contract is not None:
+        payload["runtime_contract"] = runtime_contract
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -1982,23 +2171,43 @@ def run_backend(
     )
     if suite_enabled:
         exchange = suite_inputs[0]["exchange"]
-        coin_count = 1
+        min_coin_count, max_coin_count, suite_multicoin_sides = (
+            _gpu_suite_search_context(suite_inputs)
+        )
+        logging.info(
+            "GPU suite prepared %d scenarios | coins=%d..%d | multicoin_sides=%s",
+            len(suite_inputs),
+            min_coin_count,
+            max_coin_count,
+            ",".join(suite_multicoin_sides or ()) or "n/a",
+        )
     else:
         exchange = _validate_scope(proxy_config, evaluator)
-        coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
-    if strategy_kind == "ema_anchor" and coin_count > 1:
-        multicoin_sides = [
-            side
-            for side in ("long", "short")
-            if gpu_side_enabled(proxy_config, side)
-        ]
-        if len(multicoin_sides) != 1:
-            raise ValueError(
-                "GPU multicoin foundation requires exactly one enabled side"
-            )
-        bound_map = _ema_multicoin_bound_map(
-            multicoin_sides[0], gpu_optimizer_overrides
+        min_coin_count = max_coin_count = int(
+            evaluator.shared_hlcvs_np[exchange].shape[1]
         )
+        suite_multicoin_sides = None
+    if strategy_kind == "ema_anchor" and max_coin_count > 1:
+        multicoin_sides = (
+            list(suite_multicoin_sides)
+            if suite_multicoin_sides is not None
+            else [
+                side
+                for side in ("long", "short")
+                if gpu_side_enabled(proxy_config, side)
+            ]
+        )
+        if len(multicoin_sides) not in (1, 2):
+            raise ValueError(
+                "GPU multicoin foundation requires one or two enabled sides"
+            )
+        bound_map = {}
+        for multicoin_side in multicoin_sides:
+            bound_map.update(
+                _ema_multicoin_bound_map(
+                    multicoin_side, gpu_optimizer_overrides
+                )
+            )
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
@@ -2038,9 +2247,14 @@ def run_backend(
     def side_approved(side: str) -> bool:
         return bool(approved.get(side, [])) if isinstance(approved, dict) else True
 
-    config_enabled_sides = {
+    base_config_enabled_sides = {
         side for side in ("long", "short") if gpu_side_enabled(proxy_config, side)
     }
+    config_enabled_sides = (
+        set(suite_multicoin_sides)
+        if suite_multicoin_sides is not None
+        else base_config_enabled_sides
+    )
     base_by_key = {
         bound_key: float(base_vector[index])
         for index, (bound_key, _path) in enumerate(key_paths)
@@ -2073,7 +2287,13 @@ def run_backend(
         enabled_sides = {
             side for side in ("long", "short") if vector_side_enabled(side)
         }
-        _validate_seed_side_match(config_enabled_sides, enabled_sides)
+        if suite_multicoin_sides is None:
+            _validate_seed_side_match(config_enabled_sides, enabled_sides)
+        else:
+            # CPU suite setup requires symmetric approved coin lists. Effective
+            # scenario overrides establish the common side topology and
+            # are validated below after shadowing candidate bounds.
+            enabled_sides = set(suite_multicoin_sides)
     if not enabled_sides:
         raise ValueError(
             "GPU bounds would disable both sides for exact validation; "
@@ -2128,13 +2348,14 @@ def run_backend(
         _mirror_short_mapping(bound_by_key)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
-    _validate_directional_search_space(
-        bound_by_key,
-        base_by_key,
-        approved,
-        enabled_sides,
-        coin_count=coin_count,
-    )
+    if suite_multicoin_sides is None:
+        _validate_directional_search_space(
+            bound_by_key,
+            base_by_key,
+            approved,
+            enabled_sides,
+            coin_count=max_coin_count,
+        )
 
     for item in suite_inputs:
         fixed_scenario_bounds, parameter_overrides = (
@@ -2166,7 +2387,7 @@ def run_backend(
             scenario_base_by_key,
             item["config"].get("live", {}).get("approved_coins", {}),
             scenario_enabled_sides,
-            coin_count=1,
+            coin_count=item["coin_count"],
         )
         item["parameter_overrides"] = parameter_overrides
 
@@ -2176,7 +2397,7 @@ def run_backend(
         side = bound_key.split("_", 1)[0]
         if side in {"long", "short"} and side not in enabled_sides:
             continue
-        if coin_count == 1 and any(
+        if max_coin_count == 1 and any(
             bound_key.startswith(f"{side}_forager_") for side in enabled_sides
         ):
             # Forager ranking cannot affect a one-coin backtest.
@@ -2191,7 +2412,7 @@ def run_backend(
             # either the exact Rust backtest or the proxy.
             continue
         if (
-            coin_count == 1
+            max_coin_count == 1
             and bound_key in {f"{side}_n_positions" for side in enabled_sides}
         ):
             continue
@@ -2214,25 +2435,35 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
+    _validate_dual_multicoin_metrics(
+        needed_metrics,
+        coin_count=max_coin_count,
+        enabled_sides=enabled_sides,
+    )
 
     if suite_enabled:
-        scenario_proxies = [
-            (
-                item["ctx"],
-                MpsSingleCoinProxy(
-                    config=item["config"],
-                    hlcvs=item["hlcvs"],
-                    mss=item["mss"],
-                    btc=item["btc"],
-                    timestamps=item["timestamps"],
-                    exchange=item["exchange"],
-                    batch_size=int(options["batch_size"]),
-                    needed_metrics=needed_metrics,
-                ),
-                item["parameter_overrides"],
+        scenario_proxies = []
+        for item in suite_inputs:
+            scenario_proxy = (
+                MpsMulticoinEmaProxy
+                if item["coin_count"] > 1
+                else MpsSingleCoinProxy
+            )(
+                config=item["config"],
+                hlcvs=item["hlcvs"],
+                mss=item["mss"],
+                btc=item["btc"],
+                timestamps=item["timestamps"],
+                exchange=item["exchange"],
+                batch_size=int(options["batch_size"]),
+                needed_metrics=needed_metrics,
             )
-            for item in suite_inputs
-        ]
+            item["coin_override_contract"] = getattr(
+                scenario_proxy, "coin_override_contract", {}
+            )
+            scenario_proxies.append(
+                (item["ctx"], scenario_proxy, item["parameter_overrides"])
+            )
 
         def evaluate_proxy(candidates):
             return _evaluate_gpu_suite_proxies(
@@ -2242,7 +2473,7 @@ def run_backend(
             )
 
     else:
-        proxy_cls = MpsMulticoinEmaProxy if coin_count > 1 else MpsSingleCoinProxy
+        proxy_cls = MpsMulticoinEmaProxy if max_coin_count > 1 else MpsSingleCoinProxy
         proxy = proxy_cls(
             config=proxy_config,
             hlcvs=evaluator.shared_hlcvs_np[exchange],
@@ -2359,7 +2590,14 @@ def run_backend(
         config["optimize"]["scoring"],
         anchor_plan=get_anchor_plan(config),
         suite_contract=(
-            _gpu_suite_checkpoint_contract(config) if suite_enabled else None
+            _gpu_suite_checkpoint_contract(config, suite_inputs)
+            if suite_enabled
+            else None
+        ),
+        runtime_contract=(
+            None
+            if suite_enabled
+            else getattr(proxy, "coin_override_contract", None)
         ),
     )
     budget = int(config["optimize"]["iters"])
