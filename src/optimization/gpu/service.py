@@ -75,6 +75,9 @@ def _combine_hedged_multicoin_outputs(
     long: dict,
     short: dict,
     starting_balance: float,
+    liquidation_threshold: float,
+    start_minute_of_day: int,
+    interval_ms: int,
 ):
     """Build a conservative portfolio surface from independent directional screens.
 
@@ -83,25 +86,41 @@ def _combine_hedged_multicoin_outputs(
     material disagreement.
     """
 
-    long_liquidated = long["liq_step"] >= 0
-    short_liquidated = short["liq_step"] >= 0
-    liquidation_day = long["liq_step"].where(
-        long_liquidated & ~short_liquidated,
-        short["liq_step"].where(
-            short_liquidated & ~long_liquidated,
-            long["liq_step"].minimum(short["liq_step"]),
-        ),
-    )
     active = long["day_min_eq"].isfinite() & short["day_min_eq"].isfinite()
     day_count = int(active.shape[1])
     day_ids = active.new_tensor(range(day_count), dtype=long["liq_step"].dtype)
-    active &= (~(long_liquidated | short_liquidated)).unsqueeze(1) | (
-        day_ids.unsqueeze(0) < liquidation_day.unsqueeze(1)
+    no_liquidation = long["liq_step"].new_full(long["liq_step"].shape, day_count)
+    directional_liquidation_day = long["liq_step"].where(
+        long["liq_step"] >= 0, no_liquidation
+    ).minimum(
+        short["liq_step"].where(short["liq_step"] >= 0, no_liquidation)
+    )
+    raw_combined_min = (
+        long["day_min_eq"] + short["day_min_eq"] - float(starting_balance)
+    )
+    portfolio_floor = max(0.0, float(starting_balance)) * max(
+        0.0, float(liquidation_threshold)
+    )
+    portfolio_breach = active & (raw_combined_min <= portfolio_floor)
+    portfolio_liquidation_day = portfolio_breach.to(
+        dtype=long["liq_step"].dtype
+    ).argmax(dim=1).where(
+        portfolio_breach.any(dim=1), no_liquidation
+    )
+    terminal_day = directional_liquidation_day.minimum(portfolio_liquidation_day)
+    liquidated = terminal_day < day_count
+    liquidation_day = terminal_day.where(
+        liquidated, -no_liquidation.new_ones(())
+    )
+    active &= (~liquidated).unsqueeze(1) | (
+        day_ids.unsqueeze(0) < terminal_day.unsqueeze(1)
     )
 
     combined = {}
     for key in ("day_end_eq", "day_min_eq"):
-        values = long[key] + short[key] - float(starting_balance)
+        values = raw_combined_min if key == "day_min_eq" else (
+            long[key] + short[key] - float(starting_balance)
+        )
         if key == "day_min_eq":
             values = values.where(active, values.new_full((), float("inf")))
         else:
@@ -137,7 +156,22 @@ def _combine_hedged_multicoin_outputs(
     combined["first_eq_ts"] = _nan_max(
         long["first_eq_ts"], short["first_eq_ts"]
     )
-    combined["last_eq_ts"] = _nan_min(long["last_eq_ts"], short["last_eq_ts"])
+    last_eq_ts = _nan_min(long["last_eq_ts"], short["last_eq_ts"])
+    # Daily summaries do not reveal the exact intra-day portfolio breach. Stop at
+    # the final complete candle before that UTC day so completion cannot imply
+    # coverage beyond the conservative combined-equity liquidation surface.
+    terminal_day_start_ms = (
+        terminal_day.to(last_eq_ts.dtype) * 86_400_000.0
+        - float(start_minute_of_day) * 60_000.0
+    ).clamp(min=0.0)
+    complete_tail_ms = (terminal_day_start_ms - float(interval_ms)).clamp(min=0.0)
+    first_eq_ts = combined["first_eq_ts"]
+    complete_tail_ms = complete_tail_ms.maximum(first_eq_ts).where(
+        first_eq_ts.isfinite(), complete_tail_ms
+    )
+    combined["last_eq_ts"] = last_eq_ts.minimum(complete_tail_ms).where(
+        liquidated, last_eq_ts
+    )
 
     combined["liq_step"] = liquidation_day
     return combined
@@ -756,6 +790,9 @@ class MpsMulticoinEmaProxy:
                     side_outputs["long"],
                     side_outputs["short"],
                     self.run.starting_balance,
+                    self.run.liquidation_threshold,
+                    self.runners["long"].start_minute_of_day,
+                    self.run.interval_ms,
                 )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
