@@ -1296,10 +1296,10 @@ def _optimizer_anchor_id(config: dict) -> int | None:
         anchor_meta = config.get("optimizer_anchor")
     if not isinstance(anchor_meta, dict):
         return None
-    try:
-        return int(anchor_meta["id"])
-    except (KeyError, TypeError, ValueError):
+    anchor_id = anchor_meta.get("id")
+    if isinstance(anchor_id, bool) or not isinstance(anchor_id, int):
         return None
+    return anchor_id
 
 
 def _canonicalize_optimizer_individual(

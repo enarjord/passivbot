@@ -3143,7 +3143,10 @@ class TestApplyFineTuneBounds:
         assert len(streamed) == 1
         assert streamed[0][0] == 1
 
-    def test_anchored_seed_stream_rejects_invalid_persisted_anchor_id(self, caplog):
+    @pytest.mark.parametrize("anchor_id", [2, 1.9, True, "1"])
+    def test_anchored_seed_stream_rejects_invalid_persisted_anchor_id(
+        self, caplog, anchor_id
+    ):
         config = {
             "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
@@ -3176,7 +3179,7 @@ class TestApplyFineTuneBounds:
         shape = build_optimization_shape(config)
         durable_result = deepcopy(config)
         durable_result.pop(ANCHOR_PLAN_KEY)
-        durable_result["optimizer_anchor"] = {"id": 2}
+        durable_result["optimizer_anchor"] = {"id": anchor_id}
 
         caplog.set_level(logging.WARNING)
         streamed, raw_count = configs_to_individuals_streaming(
@@ -3188,7 +3191,7 @@ class TestApplyFineTuneBounds:
 
         assert raw_count == 1
         assert streamed == []
-        assert "persisted optimizer anchor id is outside" in caplog.text
+        assert "optimizer anchor id" in caplog.text
 
     def test_starting_seed_values_are_clamped_to_base_bounds_with_logging(self, caplog):
         config = {
