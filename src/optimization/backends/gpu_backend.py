@@ -702,8 +702,6 @@ def _validate_scope_config(
         )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
-    if config.get("coin_overrides"):
-        raise ValueError("GPU foundation does not support coin_overrides")
     if float(config.get("live", {}).get("max_realized_loss_pct", 1.0)) != 1.0:
         raise ValueError(
             "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
@@ -762,6 +760,12 @@ def _validate_scope_config(
                 "GPU multicoin foundation requires "
                 "live.forager_score_hysteresis_pct=0"
             )
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind=strategy_kind,
+        enabled_sides=enabled_sides,
+        coin_count=coin_count,
+    )
     for side in enabled_sides:
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
@@ -785,6 +789,63 @@ def _validate_scope_config(
                 f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
             )
     return exchange
+
+
+def _validate_gpu_coin_overrides(
+    config: dict,
+    *,
+    strategy_kind: str,
+    enabled_sides,
+    coin_count: int,
+) -> None:
+    """Accept only the static per-coin leaves modeled by the MPS proxy."""
+
+    overrides = config.get("coin_overrides") or {}
+    if not overrides:
+        return
+    if coin_count <= 1 or strategy_kind != "ema_anchor" or len(enabled_sides) != 1:
+        raise ValueError(
+            "GPU coin_overrides currently require multi-coin EMA Anchor with "
+            "exactly one enabled side"
+        )
+    enabled_side = next(iter(enabled_sides))
+    from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS
+
+    strategy_keys = set(EMA_ANCHOR_PARAM_KEYS) - {
+        "entry_cooldown_minutes",
+        "total_wallet_exposure_limit",
+    }
+
+    def leaves(value, prefix=()):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield from leaves(child, (*prefix, str(key)))
+        else:
+            yield prefix
+
+    allowed = {
+        ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+        ("bot", enabled_side, "wallet_exposure_limit"),
+    } | {
+        ("bot", enabled_side, "strategy", "ema_anchor", key)
+        for key in strategy_keys
+    }
+    unsupported = []
+    for coin, patch in overrides.items():
+        if not isinstance(patch, dict):
+            unsupported.append(f"coin_overrides.{coin}")
+            continue
+        unsupported.extend(
+            ".".join(("coin_overrides", str(coin), *path))
+            for path in leaves(patch)
+            if path not in allowed
+        )
+    if unsupported:
+        raise ValueError(
+            "GPU coin_overrides do not model these paths yet: "
+            f"{sorted(unsupported)}; supported leaves are enabled-side EMA Anchor "
+            "parameters, risk.entry_cooldown_minutes, and wallet_exposure_limit"
+        )
 
 
 def _validate_scope(
@@ -1499,6 +1560,10 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                     "last_timestamp": (
                         int(timestamps[-1]) if len(timestamps) else None
                     ),
+                    "coin_overrides": deepcopy(
+                        item.get("coin_override_contract")
+                        or item["config"].get("coin_overrides", {})
+                    ),
                 }
             )
         contract["prepared_scenarios"] = prepared_scenarios
@@ -1511,6 +1576,7 @@ def _checkpoint_signature(
     *,
     anchor_plan=None,
     suite_contract=None,
+    runtime_contract=None,
 ) -> str:
     payload = {
         "active": [
@@ -1534,6 +1600,8 @@ def _checkpoint_signature(
         }
     if suite_contract is not None:
         payload["suite_contract"] = suite_contract
+    if runtime_contract is not None:
+        payload["runtime_contract"] = runtime_contract
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -2332,23 +2400,28 @@ def run_backend(
         )
 
     if suite_enabled:
-        scenario_proxies = [
-            (
-                item["ctx"],
-                (MpsMulticoinEmaProxy if item["coin_count"] > 1 else MpsSingleCoinProxy)(
-                    config=item["config"],
-                    hlcvs=item["hlcvs"],
-                    mss=item["mss"],
-                    btc=item["btc"],
-                    timestamps=item["timestamps"],
-                    exchange=item["exchange"],
-                    batch_size=int(options["batch_size"]),
-                    needed_metrics=needed_metrics,
-                ),
-                item["parameter_overrides"],
+        scenario_proxies = []
+        for item in suite_inputs:
+            scenario_proxy = (
+                MpsMulticoinEmaProxy
+                if item["coin_count"] > 1
+                else MpsSingleCoinProxy
+            )(
+                config=item["config"],
+                hlcvs=item["hlcvs"],
+                mss=item["mss"],
+                btc=item["btc"],
+                timestamps=item["timestamps"],
+                exchange=item["exchange"],
+                batch_size=int(options["batch_size"]),
+                needed_metrics=needed_metrics,
             )
-            for item in suite_inputs
-        ]
+            item["coin_override_contract"] = getattr(
+                scenario_proxy, "coin_override_contract", {}
+            )
+            scenario_proxies.append(
+                (item["ctx"], scenario_proxy, item["parameter_overrides"])
+            )
 
         def evaluate_proxy(candidates):
             return _evaluate_gpu_suite_proxies(
@@ -2478,6 +2551,11 @@ def run_backend(
             _gpu_suite_checkpoint_contract(config, suite_inputs)
             if suite_enabled
             else None
+        ),
+        runtime_contract=(
+            None
+            if suite_enabled
+            else getattr(proxy, "coin_override_contract", None)
         ),
     )
     budget = int(config["optimize"]["iters"])

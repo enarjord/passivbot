@@ -116,8 +116,11 @@ The supported slice is intentionally narrow:
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported, while non-bot override paths and per-coin source assignments
   remain unsupported
+- static `coin_overrides` for the enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
+  parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
+  other sides and override leaves fail closed
 - HSL and auto-unstuck disabled
-- BTC collateral, coin overrides, realized-loss gating, and exposure enforcers disabled
+- BTC collateral, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle

@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 
 from optimization.gpu.model import (
@@ -10,6 +13,7 @@ from optimization.gpu.model import (
 from optimization.gpu.service import (
     MpsEmaAnchorProxy,
     MpsMulticoinEmaProxy,
+    _build_multicoin_ema_coin_overrides,
     _require_complete_valid_tail,
 )
 
@@ -55,6 +59,57 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
     assert matrix.shape == (1, len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS))
     offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
     assert matrix[0, offset_index] == 0.125
+
+
+def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
+    strategy_base = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
+    strategy_override = dict(strategy_base, offset=0.25, ema_span_0=90.0)
+    payload = SimpleNamespace(
+        strategy_params_list=[
+            {"long": strategy_base},
+            {"long": strategy_override},
+        ],
+        bot_params_list=[
+            {"long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0}},
+            {"long": {"entry_cooldown_minutes": 15.0, "wallet_exposure_limit": 0.4}},
+        ],
+    )
+    config = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {
+                            "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
+                        },
+                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "wallet_exposure_limit": 0.4,
+                    }
+                }
+            }
+        }
+    }
+
+    matrix, contract = _build_multicoin_ema_coin_overrides(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda config, _mss, _exchange, coin: config[
+            "coin_overrides"
+        ].get(coin, {}),
+    )
+
+    assert matrix.shape == (2, 12)
+    assert np.isnan(matrix[0]).all()
+    assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
+    assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
+    assert matrix[1, 10] == pytest.approx(15.0)
+    assert matrix[1, 11] == pytest.approx(0.4)
+    assert contract["coins"] == ["BTC", "ETH"]
+    assert contract["values"][0] == [None] * 12
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

@@ -297,7 +297,14 @@ class MpsEmaAnchorRunner:
 class MpsEmaAnchorMulticoinRunner:
     """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
-    def __init__(self, run: ProxyRun, data: dict, *, side: str):
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        side: str,
+        coin_overrides: np.ndarray | None = None,
+    ):
         if side not in {"long", "short"}:
             raise ValueError(
                 f"MPS multicoin EMA runner side must be long or short, got {side!r}"
@@ -311,6 +318,17 @@ class MpsEmaAnchorMulticoinRunner:
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
         self.coin_settings = data["coin_settings"]
+        if coin_overrides is None:
+            coin_overrides = np.full((self.n_coins, 12), np.nan, dtype=np.float32)
+        coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
+        if coin_overrides.shape != (self.n_coins, 12):
+            raise ValueError(
+                "expected multicoin EMA override matrix shaped "
+                f"({self.n_coins}, 12), got {coin_overrides.shape}"
+            )
+        self.coin_overrides = torch.as_tensor(
+            np.ascontiguousarray(coin_overrides), device="mps"
+        )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
@@ -402,6 +420,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.fill_ticks,
             self.touch_ticks,
             self.coin_settings,
+            self.coin_overrides,
             params_mps,
             self.settings,
             self._sizes[sizes_key],

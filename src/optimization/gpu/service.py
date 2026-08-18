@@ -7,6 +7,7 @@ import os
 import numpy as np
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_PARAM_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GPU_STRATEGY_PARAM_KEYS,
     MPS_MULTICOIN_MAX_COINS,
@@ -278,6 +279,52 @@ class MpsSingleCoinProxy:
 MpsEmaAnchorProxy = MpsSingleCoinProxy
 
 
+def _build_multicoin_ema_coin_overrides(
+    *,
+    config: dict,
+    mss: dict,
+    exchange: str,
+    coins: list[str],
+    payload,
+    side: str,
+    resolve_override=None,
+) -> tuple[np.ndarray, dict]:
+    """Pack exact-last static coin overrides for the Metal EMA proxy."""
+
+    if resolve_override is None:
+        from backtest import _get_backtest_coin_override
+
+        resolve_override = _get_backtest_coin_override
+
+    override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
+    matrix = np.full((len(coins), 12), np.nan, dtype=np.float32)
+    for coin_index, coin in enumerate(coins):
+        patch = resolve_override(config, mss, exchange, coin) or {}
+        side_patch = patch.get("bot", {}).get(side, {})
+        strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
+        effective_strategy = payload.strategy_params_list[coin_index][side]
+        effective_bot = payload.bot_params_list[coin_index][side]
+        for column, key in enumerate(override_keys):
+            if key in strategy_patch:
+                matrix[coin_index, column] = float(effective_strategy[key])
+        if "entry_cooldown_minutes" in (side_patch.get("risk", {}) or {}):
+            matrix[coin_index, 10] = float(
+                effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+            )
+        if "wallet_exposure_limit" in side_patch:
+            matrix[coin_index, 11] = float(effective_bot["wallet_exposure_limit"])
+    contract = {
+        "exchange": exchange,
+        "coins": coins,
+        "side": side,
+        "values": [
+            [None if not np.isfinite(value) else float(value) for value in row]
+            for row in matrix
+        ],
+    }
+    return matrix, contract
+
+
 class MpsMulticoinEmaProxy:
     """Batched single-side multi-coin EMA Anchor screening proxy."""
 
@@ -424,7 +471,6 @@ class MpsMulticoinEmaProxy:
         self.base_params = first_strategy
 
         comparable_bot_keys = (
-            "entry_cooldown_minutes",
             "total_wallet_exposure_limit",
             "filter_volume_ema_span_1m",
             "filter_volatility_ema_span_1m",
@@ -437,13 +483,30 @@ class MpsMulticoinEmaProxy:
         for coin in range(1, coin_count):
             strategy = payload.strategy_params_list[coin][self.side]
             bot = payload.bot_params_list[coin][self.side]
-            if strategy != payload.strategy_params_list[0][self.side] or any(
+            if any(
                 bot.get(key) != first_bot.get(key) for key in comparable_bot_keys
             ):
                 raise ValueError(
-                    "MPS multicoin proxy requires identical "
-                    f"{self.side} strategy/forager settings across coins"
+                    "MPS multicoin proxy requires identical global "
+                    f"{self.side} forager/risk settings across coins"
                 )
+
+        coins = list(backtest_params.get("coins") or [])
+        if len(coins) != coin_count:
+            raise ValueError(
+                "MPS multicoin payload coin identity disagrees with prepared data: "
+                f"coins={coins}, prepared={coin_count}"
+            )
+        per_coin_overrides, self.coin_override_contract = (
+            _build_multicoin_ema_coin_overrides(
+                config=config,
+                mss=mss,
+                exchange=exchange,
+                coins=coins,
+                payload=payload,
+                side=self.side,
+            )
+        )
 
         markets = [
             ProxyMarket(
@@ -494,7 +557,10 @@ class MpsMulticoinEmaProxy:
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
         self.runner = MpsEmaAnchorMulticoinRunner(
-            self.run, self.data, side=self.side
+            self.run,
+            self.data,
+            side=self.side,
+            coin_overrides=per_coin_overrides,
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
