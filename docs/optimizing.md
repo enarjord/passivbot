@@ -130,6 +130,14 @@ against the GPU scope: an anchor cannot change enabled sides or introduce unsupp
 behavior. Base-config runtime policy fields still win over anchor configs as described in
 [Fine-Tuning Specific Parameters](#fine-tuning-specific-parameters).
 
+The V8 `optimize.enable_overrides` values `mirror_short_from_long` and
+`lossless_close_trailing` are applied to Metal candidates in the same order as exact candidate
+materialization. Mirroring may be used with the supported single-coin directional scopes; short
+genes that exact materialization overwrites are omitted from the proxy search dimensions.
+`lossless_close_trailing` is available only with `strategy_kind: trailing_martingale`. The legacy
+`forward_tp_grid` and `backward_tp_grid` values remain unsupported because the GPU backend does not
+support `trailing_grid_v7`.
+
 Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
 `adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
 `sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,

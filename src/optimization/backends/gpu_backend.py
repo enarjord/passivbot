@@ -133,6 +133,101 @@ GPU_STRATEGY_BOUND_MAPS = {
     "trailing_martingale": TRAILING_MARTINGALE_BOUND_MAP,
 }
 
+GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
+    "lossless_close_trailing",
+    "mirror_short_from_long",
+}
+
+
+def _validate_gpu_optimizer_overrides(overrides_list, strategy_kind: str) -> set[str]:
+    overrides = set(overrides_list or [])
+    unsupported = sorted(overrides - GPU_SUPPORTED_OPTIMIZER_OVERRIDES)
+    if unsupported:
+        raise ValueError(
+            "GPU optimizer does not support optimize.enable_overrides values "
+            f"{unsupported}"
+        )
+    if (
+        "lossless_close_trailing" in overrides
+        and strategy_kind != "trailing_martingale"
+    ):
+        raise ValueError(
+            "GPU optimizer override lossless_close_trailing requires "
+            "live.strategy_kind='trailing_martingale'"
+        )
+    return overrides
+
+
+def _materialize_gpu_override_template(
+    config: dict,
+    overrides_list,
+    overrides_fn,
+) -> dict:
+    """Apply the exact candidate override contract to the proxy's base config."""
+
+    proxy_config = deepcopy(config)
+    if not overrides_list:
+        return proxy_config
+    if not callable(overrides_fn):
+        raise ValueError(
+            "GPU optimizer requires the exact optimizer override materializer"
+        )
+    proxy_config = overrides_fn(overrides_list, proxy_config, None)
+    for side in ("long", "short"):
+        proxy_config = overrides_fn(overrides_list, proxy_config, side)
+    return proxy_config
+
+
+def _mirror_short_mapping(mapping: dict) -> None:
+    """Mirror effective long values/bounds into existing short-side keys."""
+
+    for long_key, value in list(mapping.items()):
+        if not long_key.startswith("long_"):
+            continue
+        short_key = f"short_{long_key[len('long_') :]}"
+        if short_key in mapping:
+            mapping[short_key] = value
+
+
+def _apply_gpu_optimizer_overrides(
+    parameters: dict[str, float],
+    overrides: set[str],
+) -> dict[str, float]:
+    """Apply candidate-dependent V8 overrides without materializing Python configs."""
+
+    if "mirror_short_from_long" in overrides:
+        _mirror_short_mapping(parameters)
+    if "lossless_close_trailing" in overrides:
+        for side in ("long", "short"):
+            threshold_key = f"{side}_close_threshold_base_pct"
+            retracement_key = f"{side}_close_retracement_base_pct"
+            if threshold_key in parameters and retracement_key in parameters:
+                parameters[threshold_key] = max(
+                    float(parameters[threshold_key]),
+                    float(parameters[retracement_key]),
+                )
+    return parameters
+
+
+def _gpu_candidate_source_sides(
+    enabled_sides: set[str], overrides: set[str]
+) -> set[str]:
+    """Return sides whose genes can affect an enabled exact-trading side."""
+
+    source_sides = set(enabled_sides)
+    if "mirror_short_from_long" in overrides and "short" in enabled_sides:
+        source_sides.add("long")
+    return source_sides
+
+
+def _ema_multicoin_bound_map(target_side: str, overrides: set[str]) -> dict:
+    """Include all bound families that can feed the enabled multicoin side."""
+
+    bound_map = dict(EMA_MULTICOIN_BOUND_MAPS[target_side])
+    if "mirror_short_from_long" in overrides and target_side == "short":
+        bound_map.update(EMA_MULTICOIN_BOUND_MAPS["long"])
+    return bound_map
+
 
 def _minimum_rank_evidence_samples(halt: float) -> int:
     """Total samples needed to guarantee eight comparable at agreement >= halt."""
@@ -1046,6 +1141,62 @@ def _canonical_vector_hash(vector, bounds, sig_digits: int) -> str:
     return hashlib.sha256(json.dumps(canonical).encode()).hexdigest()
 
 
+def _canonicalize_mirrored_hash_vector(vector, base_vector, key_paths) -> list[float]:
+    """Erase short genes whose exact values are overwritten by mirroring."""
+
+    canonical = [float(value) for value in vector]
+    index_by_key = {
+        bound_key: index for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    for short_key, short_index in index_by_key.items():
+        if not short_key.startswith("short_"):
+            continue
+        canonical[short_index] = float(base_vector[short_index])
+    return canonical
+
+
+def _canonicalize_optimizer_override_hash_vector(
+    vector,
+    base_vector,
+    key_paths,
+    overrides: set[str],
+    *,
+    anchor_parameter_overrides: list[dict[str, float]] | None = None,
+) -> list[float]:
+    """Hash the effective candidate while neutralizing mirrored shadow genes."""
+
+    canonical = [float(value) for value in vector]
+    index_by_key = {
+        bound_key: index for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    parameters = {}
+    if anchor_parameter_overrides is not None:
+        anchor_index = index_by_key.get(ANCHOR_GENE_KEY)
+        anchor_id = (
+            int(round(canonical[anchor_index])) if anchor_index is not None else 0
+        )
+        if anchor_id < 0 or anchor_id >= len(anchor_parameter_overrides):
+            raise ValueError(
+                "GPU anchored fine-tune selected invalid anchor id while hashing "
+                f"{anchor_id}; available={len(anchor_parameter_overrides)}"
+            )
+        parameters.update(anchor_parameter_overrides[anchor_id])
+    parameters.update(
+        {bound_key: canonical[index] for bound_key, index in index_by_key.items()}
+    )
+    _apply_gpu_optimizer_overrides(parameters, overrides)
+    for bound_key, value in parameters.items():
+        if bound_key in index_by_key:
+            canonical[index_by_key[bound_key]] = float(value)
+    if "mirror_short_from_long" in overrides:
+        canonical = _canonicalize_mirrored_hash_vector(
+            canonical,
+            base_vector,
+            key_paths,
+        )
+    return canonical
+
+
 def _build_proxy_parameter_dicts(
     base_vector,
     mapped,
@@ -1053,6 +1204,7 @@ def _build_proxy_parameter_dicts(
     active_values,
     *,
     anchor_parameter_overrides: list[dict[str, float]] | None = None,
+    optimizer_overrides: set[str] | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
@@ -1088,7 +1240,9 @@ def _build_proxy_parameter_dicts(
                 if name != ANCHOR_GENE_KEY
             }
         )
-        result.append(parameters)
+        result.append(
+            _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
+        )
     return result
 
 
@@ -1392,8 +1546,6 @@ def run_backend(
     from optimization.gpu.metrics import SUPPORTED_METRICS
     from optimization.gpu.service import MpsMulticoinEmaProxy, MpsSingleCoinProxy
 
-    exchange = _validate_scope(config, evaluator)
-    coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
 
@@ -1418,15 +1570,29 @@ def run_backend(
     base_vector = [float(value) for value in template_vectors[0]]
 
     strategy_kind = str(config["live"]["strategy_kind"]).strip().lower()
+    gpu_optimizer_overrides = _validate_gpu_optimizer_overrides(
+        overrides_list, strategy_kind
+    )
+    proxy_config = _materialize_gpu_override_template(
+        config,
+        overrides_list,
+        overrides_fn,
+    )
+    exchange = _validate_scope(proxy_config, evaluator)
+    coin_count = int(evaluator.shared_hlcvs_np[exchange].shape[1])
     if strategy_kind == "ema_anchor" and coin_count > 1:
         multicoin_sides = [
-            side for side in ("long", "short") if gpu_side_enabled(config, side)
+            side
+            for side in ("long", "short")
+            if gpu_side_enabled(proxy_config, side)
         ]
         if len(multicoin_sides) != 1:
             raise ValueError(
                 "GPU multicoin foundation requires exactly one enabled side"
             )
-        bound_map = EMA_MULTICOIN_BOUND_MAPS[multicoin_sides[0]]
+        bound_map = _ema_multicoin_bound_map(
+            multicoin_sides[0], gpu_optimizer_overrides
+        )
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
@@ -1454,27 +1620,33 @@ def run_backend(
                 "GPU anchored fine-tune could not resolve fixed proxy parameters "
                 f"for {missing_from_anchors}"
             )
-    approved = config.get("live", {}).get("approved_coins", {})
+    approved = proxy_config.get("live", {}).get("approved_coins", {})
 
     def side_approved(side: str) -> bool:
         return bool(approved.get(side, [])) if isinstance(approved, dict) else True
 
     config_enabled_sides = {
-        side for side in ("long", "short") if gpu_side_enabled(config, side)
+        side for side in ("long", "short") if gpu_side_enabled(proxy_config, side)
     }
+    base_by_key = {
+        bound_key: float(base_vector[index])
+        for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    if "mirror_short_from_long" in gpu_optimizer_overrides:
+        _mirror_short_mapping(base_by_key)
     if anchor_parameter_overrides is not None:
         enabled_sides = set(config_enabled_sides)
         side_values = {}
     else:
         side_values = {}
-        for index, (bound_key, _path) in enumerate(key_paths):
+        for bound_key, value in base_by_key.items():
             if bound_key in {
                 "long_total_wallet_exposure_limit",
                 "long_n_positions",
                 "short_total_wallet_exposure_limit",
                 "short_n_positions",
             }:
-                side_values[bound_key] = float(base_vector[index])
+                side_values[bound_key] = value
 
         def vector_side_enabled(side: str) -> bool:
             return (
@@ -1493,15 +1665,22 @@ def run_backend(
             "GPU bounds would disable both sides for exact validation; "
             f"effective seed values: {side_values}"
         )
+    candidate_source_sides = _gpu_candidate_source_sides(
+        enabled_sides, gpu_optimizer_overrides
+    )
     mapped = {
         name: value
         for name, value in mapped_all.items()
-        if name.split("_", 1)[0] in enabled_sides
+        if name.split("_", 1)[0] in candidate_source_sides
     }
     active = [
         (name, index, bound)
         for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
         if bound.high > bound.low
+        and not (
+            "mirror_short_from_long" in gpu_optimizer_overrides
+            and name.startswith("short_")
+        )
     ]
     active.extend(
         (ANCHOR_GENE_KEY, index, bounds[index])
@@ -1524,10 +1703,8 @@ def run_backend(
             f"{overlap}"
         )
     bound_by_key.update(anchor_fixed_bounds)
-    base_by_key = {
-        bound_key: float(base_vector[index])
-        for index, (bound_key, _path) in enumerate(key_paths)
-    }
+    if "mirror_short_from_long" in gpu_optimizer_overrides:
+        _mirror_short_mapping(bound_by_key)
     _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
 
     _validate_directional_search_space(
@@ -1585,7 +1762,7 @@ def run_backend(
 
     proxy_cls = MpsMulticoinEmaProxy if coin_count > 1 else MpsSingleCoinProxy
     proxy = proxy_cls(
-        config=config,
+        config=proxy_config,
         hlcvs=evaluator.shared_hlcvs_np[exchange],
         mss=evaluator.msss[exchange],
         btc=evaluator.shared_btc_np[exchange],
@@ -1617,6 +1794,7 @@ def run_backend(
             active,
             values,
             anchor_parameter_overrides=anchor_parameter_overrides,
+            optimizer_overrides=gpu_optimizer_overrides,
         )
 
     def full_vector(row: np.ndarray) -> list[float]:
@@ -1633,6 +1811,13 @@ def run_backend(
         return np.clip((values - active_low) / active_span, 0.0, 1.0)
 
     def vector_hash(vector) -> str:
+        vector = _canonicalize_optimizer_override_hash_vector(
+            vector,
+            base_vector,
+            key_paths,
+            gpu_optimizer_overrides,
+            anchor_parameter_overrides=anchor_parameter_overrides,
+        )
         return _canonical_vector_hash(vector, bounds, sig_digits)
 
     from pymoo.core.problem import Problem

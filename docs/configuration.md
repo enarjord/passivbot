@@ -663,7 +663,8 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **backend**: Optimizer backend. Default is `pymoo`. Supported values are `deap`, `pymoo`, and
   experimental `gpu`. The GPU backend currently supports Apple MPS, single-coin EMA-anchor and
   trailing-martingale runs in long-only, short-only, and long+short modes; single-side multi-coin
-  EMA-anchor runs; and anchored fine-tuning with `--start` plus `--fine-tune-params`. See
+  EMA-anchor runs; anchored fine-tuning with `--start` plus `--fine-tune-params`; and the V8
+  `mirror_short_from_long` and `lossless_close_trailing` optimizer overrides. See
   `docs/optimizing.md` for its fail-closed scope and `optimize.gpu` settings.
   With the default `optimize.pymoo.algorithm: "auto"`, Passivbot uses `nsga2` for `3` or fewer
   objectives and `nsga3` for `4+`.
