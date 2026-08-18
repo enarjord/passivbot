@@ -86,6 +86,7 @@ class ParetoCandidate:
 class _SelectedOutputInstall:
     backup_path: Path | None
     installed_identity: tuple[int, int]
+    installed_bytes: bytes
 
 
 @dataclass(frozen=True)
@@ -1775,7 +1776,9 @@ def _write_selected_output(
                 _warn_post_commit_cleanup_failure(
                     "selected output", staging_path, exc
                 )
-            return _SelectedOutputInstall(None, installed_identity)
+            return _SelectedOutputInstall(
+                None, installed_identity, candidate.source_bytes
+            )
         if output.exists():
             if not output.is_file():
                 raise ValueError(f"Selected output must be a regular file: {output}")
@@ -1796,7 +1799,9 @@ def _write_selected_output(
         if backup_path is not None and not keep_backup:
             backup_path.unlink()
             backup_path = None
-        return _SelectedOutputInstall(backup_path, installed_identity)
+        return _SelectedOutputInstall(
+            backup_path, installed_identity, candidate.source_bytes
+        )
     except BaseException:
         if backup_path is not None:
             backup_path.unlink(missing_ok=True)
@@ -1814,6 +1819,22 @@ def _restore_selected_output(output: Path, install: _SelectedOutputInstall) -> N
             f"Selected output changed concurrently; refusing rollback: {output}"
         ) from exc
     if (output_stat.st_dev, output_stat.st_ino) != install.installed_identity:
+        backup_note = (
+            f" Original backup retained at {install.backup_path}."
+            if install.backup_path is not None
+            else ""
+        )
+        raise RuntimeError(
+            f"Selected output changed concurrently; refusing rollback: {output}."
+            f"{backup_note}"
+        )
+    try:
+        output_bytes = output.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Selected output could not be verified; refusing rollback: {output}"
+        ) from exc
+    if output_bytes != install.installed_bytes:
         backup_note = (
             f" Original backup retained at {install.backup_path}."
             if install.backup_path is not None
@@ -1868,11 +1889,35 @@ def _replace_filtered_output_dir(
     backup_dir = Path(backup_name)
     backup_dir.rmdir()
     os.replace(output_dir, backup_dir)
+    staging_stat = staging_dir.stat(follow_symlinks=False)
+    staging_identity = staging_stat.st_dev, staging_stat.st_ino
     try:
         _validate_existing_filtered_output_dir(backup_dir, overwrite=overwrite)
         _copy_directory_metadata(backup_dir, staging_dir)
         os.replace(staging_dir, output_dir)
-    except BaseException:
+    except BaseException as exc:
+        try:
+            output_stat = output_dir.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            output_stat = None
+        if output_stat is not None and (
+            output_stat.st_dev,
+            output_stat.st_ino,
+        ) == staging_identity:
+            print(
+                f"Warning: filtered output install committed before interruption; "
+                f"keeping installed output: {output_dir} ({exc})",
+                file=sys.stderr,
+            )
+            try:
+                _remove_output_tree(backup_dir)
+            except BaseException as cleanup_exc:
+                print(
+                    f"Warning: filtered output installed, but old backup could not be "
+                    f"removed: {backup_dir} ({cleanup_exc})",
+                    file=sys.stderr,
+                )
+            return
         os.replace(backup_dir, output_dir)
         raise
     else:

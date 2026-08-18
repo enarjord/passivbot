@@ -1326,6 +1326,97 @@ def test_combined_outputs_refuse_rollback_over_newer_selected_file(
     backups[0].unlink()
 
 
+def test_combined_outputs_refuse_rollback_over_in_place_selected_edit(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+
+    def edit_selected_then_fail(candidate, destination):
+        destination = Path(destination)
+        if destination.parent.name.startswith(".filtered."):
+            selected_output.write_text('{"selected": "newer"}\n')
+            raise OSError("simulated filtered copy failure")
+        destination.write_bytes(candidate.source_bytes)
+
+    monkeypatch.setattr(
+        pareto_explorer, "_write_candidate_snapshot", edit_selected_then_fail
+    )
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="changed concurrently; refusing rollback"):
+        run_from_args(args)
+
+    assert json.loads(selected_output.read_text()) == {"selected": "newer"}
+    backups = [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text()) == {"selected": "old"}
+    backups[0].unlink()
+
+
+def test_combined_outputs_keep_committed_pair_when_filtered_rename_is_interrupted(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    filtered_output = tmp_path / "filtered"
+    filtered_output.mkdir()
+    (filtered_output / "stale.json").write_text('{"filtered": "old"}\n')
+    real_replace = os.replace
+    interrupted = False
+
+    def interrupt_after_filtered_commit(source, destination):
+        nonlocal interrupted
+        source = Path(source)
+        destination = Path(destination)
+        result = real_replace(source, destination)
+        if (
+            not interrupted
+            and source.name.startswith(".filtered.")
+            and source.name.endswith(".tmp")
+            and destination == filtered_output
+        ):
+            interrupted = True
+            raise KeyboardInterrupt()
+        return result
+
+    monkeypatch.setattr(os, "replace", interrupt_after_filtered_commit)
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-s",
+            str(selected_output),
+            "-f",
+            str(filtered_output),
+            "--overwrite",
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert interrupted
+    assert selected_output.read_bytes() == result.candidate.source_bytes
+    assert not (filtered_output / "stale.json").exists()
+    assert (filtered_output / "selection.json").exists()
+    assert "install committed before interruption" in capsys.readouterr().err
+    assert not [path for path in tmp_path.iterdir() if ".backup" in path.name]
+
+
 def test_combined_outputs_remain_consistent_when_backup_cleanup_fails(
     sample_pareto_dir: Path,
     tmp_path: Path,
