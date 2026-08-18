@@ -1142,7 +1142,7 @@ def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode():
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_multicoin_foundation_rejects_dual_side_coin_overrides():
+def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1152,11 +1152,21 @@ def test_gpu_multicoin_foundation_rejects_dual_side_coin_overrides():
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
     config["coin_overrides"] = {
-        "ETH": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
+        "ETH": {
+            "bot": {
+                "long": {
+                    "strategy": {"ema_anchor": {"offset": 0.02}},
+                    "wallet_exposure_limit": 0.5,
+                },
+                "short": {
+                    "strategy": {"ema_anchor": {"offset": 0.03}},
+                    "risk": {"entry_cooldown_minutes": 15},
+                },
+            }
+        }
     }
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
@@ -2731,6 +2741,32 @@ def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
         _checkpoint_signature(
             active, scoring, runtime_contract=hysteresis_edited
         )
+        != original
+    )
+
+
+def test_gpu_checkpoint_signature_tracks_dual_side_coin_override_contract():
+    active = [
+        ("long_offset", 0, Bound(0.01, 0.1, 0.01)),
+        ("short_offset", 1, Bound(0.01, 0.1, 0.01)),
+    ]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    contract = {
+        "exchange": "bybit",
+        "coins": ["BTC", "ETH"],
+        "sides": ["long", "short"],
+        "values_by_side": {
+            "long": [[None] * 12, [None] * 11 + [0.4]],
+            "short": [[None] * 12, [None] * 10 + [30.0, None]],
+        },
+        "proxy_mode": "independent-side-hedge-v1",
+    }
+    original = _checkpoint_signature(active, scoring, runtime_contract=contract)
+    edited = copy.deepcopy(contract)
+    edited["values_by_side"]["short"][1][10] = 45.0
+
+    assert (
+        _checkpoint_signature(active, scoring, runtime_contract=edited)
         != original
     )
 

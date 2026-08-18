@@ -833,12 +833,12 @@ def _validate_gpu_coin_overrides(
     overrides = config.get("coin_overrides") or {}
     if not overrides:
         return
-    if coin_count <= 1 or strategy_kind != "ema_anchor" or len(enabled_sides) != 1:
+    if coin_count <= 1 or strategy_kind != "ema_anchor" or not enabled_sides:
         raise ValueError(
-            "GPU coin_overrides currently require multi-coin EMA Anchor with "
-            "exactly one enabled side"
+            "GPU coin_overrides currently require multi-coin EMA Anchor with at "
+            "least one enabled side"
         )
-    enabled_side = next(iter(enabled_sides))
+    enabled_sides = set(enabled_sides)
     from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS
 
     strategy_keys = set(EMA_ANCHOR_PARAM_KEYS) - {
@@ -853,13 +853,18 @@ def _validate_gpu_coin_overrides(
         else:
             yield prefix
 
-    allowed = {
-        ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
-        ("bot", enabled_side, "wallet_exposure_limit"),
-    } | {
-        ("bot", enabled_side, "strategy", "ema_anchor", key)
-        for key in strategy_keys
-    }
+    allowed = set()
+    for enabled_side in enabled_sides:
+        allowed.update(
+            {
+                ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+                ("bot", enabled_side, "wallet_exposure_limit"),
+            }
+        )
+        allowed.update(
+            ("bot", enabled_side, "strategy", "ema_anchor", key)
+            for key in strategy_keys
+        )
     unsupported = []
     for coin, patch in overrides.items():
         if not isinstance(patch, dict):
