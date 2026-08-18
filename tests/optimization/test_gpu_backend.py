@@ -777,7 +777,7 @@ def test_gpu_suite_inputs_reject_effective_coin_sources():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
-def test_gpu_suite_inputs_require_one_shared_exchange_across_scenarios():
+def test_gpu_suite_inputs_accept_one_exchange_per_scenario():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
     contexts = [
@@ -802,8 +802,9 @@ def test_gpu_suite_inputs_require_one_shared_exchange_across_scenarios():
 
     Suite.contexts = contexts
 
-    with pytest.raises(ValueError, match="one shared exchange"):
-        _gpu_suite_scenario_inputs(config, Suite())
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert [item["exchange"] for item in prepared] == ["bybit", "binance"]
 
 
 def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
