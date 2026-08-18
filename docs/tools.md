@@ -85,8 +85,10 @@ set before the scenario-specific nondominated front is rebuilt.
 Destinations must not overlap the source Pareto directory and must not already exist unless
 `--overwrite` is supplied. Replacing a filtered directory is allowed only when all of its entries
 are JSON files. Writes are staged before installation to protect existing output from ordinary
-copy failures. The tool does not promise transactional behavior against concurrent modification
-of the source or destination by another process.
+copy failures. When both save options are used, all member copies are staged before either output
+is installed. The two destinations are then installed independently: an installation failure for
+one does not roll back the other. The tool does not promise transactional behavior against
+concurrent modification of the source or destination by another process.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON

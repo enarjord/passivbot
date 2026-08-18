@@ -1601,6 +1601,8 @@ def _prepare_filtered_output(
         return None
     output = Path(raw_path).expanduser().resolve()
     _validate_output_path(output, pareto_dir, directory=True)
+    if overwrite and output == Path.cwd().resolve():
+        raise ValueError("Refusing to replace the current working directory.")
     names = [candidate.path.name for candidate in candidates]
     folded_names = [name.casefold() for name in names]
     if len(folded_names) != len(set(folded_names)):
@@ -1633,7 +1635,7 @@ def _prepare_filtered_output(
     return output
 
 
-def _copy_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool) -> None:
+def _stage_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         dir=output.parent,
@@ -1644,6 +1646,16 @@ def _copy_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool)
     temporary = Path(temporary_name)
     try:
         shutil.copyfile(candidate.path, temporary)
+        mode_source = output if overwrite and output.exists() else candidate.path
+        shutil.copymode(mode_source, temporary)
+        return temporary
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _install_selected(temporary: Path, output: Path, *, overwrite: bool) -> None:
+    try:
         if overwrite:
             os.replace(temporary, output)
         else:
@@ -1653,7 +1665,7 @@ def _copy_selected(candidate: ParetoCandidate, output: Path, *, overwrite: bool)
         temporary.unlink(missing_ok=True)
 
 
-def _copy_filtered(
+def _stage_filtered(
     output: Path,
     pareto_dir: Path,
     candidates: Sequence[ParetoCandidate],
@@ -1662,11 +1674,9 @@ def _copy_filtered(
     active_limits: Sequence[Mapping[str, Any]],
     scenario: str | None,
     selected: ParetoCandidate,
-    overwrite: bool,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=f".{output.name}.tmp-"))
-    backup: Path | None = None
     try:
         for candidate in candidates:
             shutil.copyfile(candidate.path, stage / candidate.path.name)
@@ -1684,7 +1694,15 @@ def _copy_filtered(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        return stage
+    except Exception:
+        shutil.rmtree(stage)
+        raise
 
+
+def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
+    backup: Path | None = None
+    try:
         if output.exists():
             if not overwrite:
                 raise FileExistsError(
@@ -1767,22 +1785,41 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         and _is_within(selected_output, filtered_output)
     ):
         raise ValueError("Selected output must be outside the filtered output directory.")
-    if selected_output is not None:
-        _copy_selected(result.candidate, selected_output, overwrite=overwrite)
-    filtered_manifest = (
-        _copy_filtered(
-            filtered_output,
-            pareto_dir,
-            filtered_candidates,
-            loaded_count=len(candidates),
-            active_limits=active_limits,
-            scenario=scenario,
-            selected=result.candidate,
-            overwrite=overwrite,
-        )
-        if filtered_output is not None
-        else None
-    )
+    selected_stage: Path | None = None
+    filtered_stage: Path | None = None
+    filtered_manifest: Path | None = None
+    try:
+        if selected_output is not None:
+            selected_stage = _stage_selected(
+                result.candidate,
+                selected_output,
+                overwrite=overwrite,
+            )
+        if filtered_output is not None:
+            filtered_stage = _stage_filtered(
+                filtered_output,
+                pareto_dir,
+                filtered_candidates,
+                loaded_count=len(candidates),
+                active_limits=active_limits,
+                scenario=scenario,
+                selected=result.candidate,
+            )
+        if selected_output is not None and selected_stage is not None:
+            _install_selected(selected_stage, selected_output, overwrite=overwrite)
+            selected_stage = None
+        if filtered_output is not None and filtered_stage is not None:
+            filtered_manifest = _install_filtered(
+                filtered_stage,
+                filtered_output,
+                overwrite=overwrite,
+            )
+            filtered_stage = None
+    finally:
+        if selected_stage is not None:
+            selected_stage.unlink(missing_ok=True)
+        if filtered_stage is not None and filtered_stage.exists():
+            shutil.rmtree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
