@@ -72,32 +72,28 @@ def _canonical_dead_value(flat_bounds: dict, bound_key: str, canonical_value: fl
     return enforce_bounds([canonical_value], [bound], sig_digits=None)[0]
 
 
-def _canonicalize_path_value(
+def optimizer_dead_param_values(
     config: dict,
-    flat_bounds: dict,
     *,
-    bound_key: str,
-    path: Sequence[str],
-    canonical_value: float,
-) -> None:
-    if _try_get_path(config, path) is None:
-        return
-    _set_path(
-        config,
-        path,
-        _canonical_dead_value(flat_bounds, bound_key, canonical_value),
-    )
+    globally_dead_only: bool = False,
+) -> dict[str, float]:
+    """Return exact canonical values for optimizer genes made semantically dead."""
 
-
-def canonicalize_dead_optimizer_params(config: dict) -> None:
     live_cfg = config.get("live", {})
     strategy_kind = str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
     if strategy_kind != "trailing_martingale":
-        return
+        return {}
     flat_bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
         strategy_kind=strategy_kind,
     )
+    result: dict[str, float] = {}
+    fixed_paths = set()
+    if globally_dead_only:
+        for dotted_path in (
+            config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
+        ):
+            fixed_paths.add(tuple(require_existing_config_path(config, dotted_path)))
     for pside in ("long", "short"):
         close_root = ("bot", pside, "strategy", strategy_kind, "close")
         retracement_base_path = (*close_root, "retracement_base_pct")
@@ -107,25 +103,50 @@ def canonicalize_dead_optimizer_params(config: dict) -> None:
             continue
         if retracement_base > 0.0:
             continue
+        raw_base_bound = flat_bounds.get(f"{pside}_close_retracement_base_pct")
+        base_bound = (
+            None
+            if raw_base_bound is None
+            else Bound.from_config(
+                f"{pside}_close_retracement_base_pct", raw_base_bound
+            )
+        )
+        if (
+            globally_dead_only
+            and tuple(retracement_base_path) not in fixed_paths
+            and (base_bound is None or base_bound.high > 0.0)
+        ):
+            continue
         canonical_base = _canonical_dead_value(
             flat_bounds,
             f"{pside}_close_retracement_base_pct",
             0.0,
         )
         if float(canonical_base) > 0.0:
-            continue
-        _set_path(config, retracement_base_path, canonical_base)
+            # A fixed runtime override may intentionally disable retracement
+            # outside a positive-only search bound. The exact effective value,
+            # not the inactive gene bound, owns that case.
+            canonical_base = retracement_base
+        result[f"{pside}_close_retracement_base_pct"] = float(canonical_base)
         for field in (
             "retracement_volatility_1h_weight",
             "retracement_volatility_1m_weight",
         ):
-            _canonicalize_path_value(
-                config,
-                flat_bounds,
-                bound_key=f"{pside}_close_{field}",
-                path=(*close_root, field),
-                canonical_value=0.0,
+            path = (*close_root, field)
+            if _try_get_path(config, path) is None:
+                continue
+            bound_key = f"{pside}_close_{field}"
+            result[bound_key] = float(
+                _canonical_dead_value(flat_bounds, bound_key, 0.0)
             )
+    return result
+
+
+def canonicalize_dead_optimizer_params(config: dict) -> None:
+    for bound_key, value in optimizer_dead_param_values(config).items():
+        path = resolve_optimization_bound_path(config, bound_key)
+        if path is not None:
+            _set_path(config, path, value)
 
 
 def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict:
@@ -144,17 +165,25 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         no_restart = pside_cfg.get("hsl_no_restart_drawdown_threshold")
         if red_threshold is not None and no_restart is not None:
             if float(no_restart) < float(red_threshold):
-                pside_cfg["hsl_no_restart_drawdown_threshold"] = float(red_threshold)
+                clamped = float(red_threshold)
+                pside_cfg["hsl_no_restart_drawdown_threshold"] = clamped
+                hsl_cfg = pside_cfg.get("hsl")
+                if isinstance(hsl_cfg, dict):
+                    hsl_cfg["no_restart_drawdown_threshold"] = clamped
     for pside in sorted(config.get("bot", {})):
         config = optimizer_overrides(overrides_list or [], config, pside)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         if not isinstance(pside_cfg, dict) or "forager_score_weights" not in pside_cfg:
             continue
-        pside_cfg["forager_score_weights"] = normalize_forager_score_weights(
+        normalized = normalize_forager_score_weights(
             pside_cfg["forager_score_weights"],
             path=f"bot.{pside}.forager_score_weights",
         )
+        pside_cfg["forager_score_weights"] = normalized
+        forager_cfg = pside_cfg.get("forager")
+        if isinstance(forager_cfg, dict):
+            forager_cfg["score_weights"] = deepcopy(normalized)
     canonicalize_dead_optimizer_params(config)
     return config
 
@@ -222,7 +251,10 @@ def build_optimizer_vector_config(
 def build_optimizer_max_config(config: dict) -> dict:
     bounds = extract_bounds_tuple_list_from_config(config)
     if not bounds:
-        return deepcopy(config)
+        return _finalize_optimizer_vector_config(
+            deepcopy(config),
+            overrides_list=config.get("optimize", {}).get("enable_overrides", []) or [],
+        )
     overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
     shape = build_optimization_shape(config)
     max_vector = [bound.high for bound in shape.bounds]
@@ -250,6 +282,22 @@ def _build_optimizer_boundary_configs(config: dict) -> list[dict]:
         )
         for anchor_id in range(len(anchor_plan.get("anchors") or []))
     ]
+
+
+def validate_optimizer_effective_configs(config: dict) -> None:
+    """Validate exact finalized optimizer boundary configs before backend work."""
+
+    from config.validate import validate_config
+
+    for candidate in _build_optimizer_boundary_configs(config):
+        effective = deepcopy(candidate)
+        effective.setdefault("optimize", {})["fixed_runtime_overrides"] = {}
+        validate_config(
+            effective,
+            raw_optimize=effective.get("optimize", {}),
+            verbose=False,
+            tracker=None,
+        )
 
 
 def build_optimizer_data_config(config: dict) -> dict:
@@ -324,5 +372,7 @@ __all__ = [
     "canonicalize_dead_optimizer_params",
     "compute_optimizer_backtest_warmup_minutes",
     "compute_optimizer_per_coin_warmup_minutes",
+    "optimizer_dead_param_values",
     "stamp_warmup_metadata",
+    "validate_optimizer_effective_configs",
 ]

@@ -23,6 +23,7 @@ Path = tuple[str, ...]
 PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("backtest", "reducer"),
     ("live", "startup_phase_budgets"),
+    ("optimize", "fixed_runtime_overrides"),
 }
 BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
     "fee_pct_fallback",

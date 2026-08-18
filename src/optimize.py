@@ -197,6 +197,7 @@ from optimization.warmup import (
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
+    validate_optimizer_effective_configs,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
@@ -3236,6 +3237,7 @@ async def main():
         )
     else:
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
+    validate_optimizer_effective_configs(config)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
