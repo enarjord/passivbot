@@ -1572,6 +1572,13 @@ def _is_within_by_identity(path: Path, directory: Path) -> bool:
         current = current.parent
 
 
+def _same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        return left.samefile(right)
+    except FileNotFoundError:
+        return False
+
+
 def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> None:
     if (
         _is_within(path, pareto_dir)
@@ -1624,7 +1631,8 @@ def _prepare_filtered_output(
         return None
     output = Path(raw_path).expanduser().resolve()
     _validate_output_path(output, pareto_dir, directory=True)
-    if overwrite and output == Path.cwd().resolve():
+    cwd = Path.cwd().resolve()
+    if overwrite and (output == cwd or _same_existing_path(output, cwd)):
         raise ValueError("Refusing to replace the current working directory.")
     names = [candidate.path.name for candidate in candidates]
     folded_names = [name.casefold() for name in names]
@@ -1645,7 +1653,9 @@ def _prepare_filtered_output(
         invalid = [
             entry
             for entry in output.iterdir()
-            if not entry.is_file() or entry.suffix.lower() != ".json"
+            if entry.is_symlink()
+            or not entry.is_file()
+            or entry.suffix.lower() != ".json"
         ]
         if invalid:
             preview = ", ".join(sorted(entry.name for entry in invalid)[:5])
@@ -1686,7 +1696,7 @@ def _install_selected(temporary: Path, output: Path, *, overwrite: bool) -> None
                 raise FileExistsError(f"Selected output already exists: {output}")
             temporary.rename(output)
     finally:
-        temporary.unlink(missing_ok=True)
+        _remove_export_file(temporary)
 
 
 def _stage_filtered(
@@ -1705,6 +1715,11 @@ def _stage_filtered(
     try:
         for candidate in candidates:
             destination = stage / candidate.path.name
+            if destination.exists():
+                raise ValueError(
+                    f"Filtered member filename collides on the destination filesystem: "
+                    f"{candidate.path.name}"
+                )
             shutil.copyfile(candidate.path, destination)
             shutil.copymode(candidate.path, destination)
         manifest = {
@@ -1717,7 +1732,12 @@ def _stage_filtered(
             "selected_member": selected.path.name,
             "members": [candidate.path.name for candidate in candidates],
         }
-        (stage / FILTERED_SELECTION_MANIFEST).write_text(
+        manifest_path = stage / FILTERED_SELECTION_MANIFEST
+        if manifest_path.exists():
+            raise ValueError(
+                f"Filtered member filename conflicts with {FILTERED_SELECTION_MANIFEST!r}."
+            )
+        manifest_path.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
@@ -1734,6 +1754,12 @@ def _remove_export_tree(path: Path) -> None:
         child.chmod(child.stat().st_mode | 0o200)
     path.chmod(path.stat().st_mode | 0o200)
     shutil.rmtree(path)
+
+
+def _remove_export_file(path: Path) -> None:
+    if path.exists():
+        path.chmod(path.stat().st_mode | 0o200)
+        path.unlink()
 
 
 def _install_filtered(stage: Path, output: Path, *, overwrite: bool) -> Path:
@@ -1859,7 +1885,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             filtered_stage = None
     finally:
         if selected_stage is not None:
-            selected_stage.unlink(missing_ok=True)
+            _remove_export_file(selected_stage)
         if filtered_stage is not None and filtered_stage.exists():
             _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
