@@ -209,6 +209,17 @@ def _apply_gpu_optimizer_overrides(
     return parameters
 
 
+def _gpu_candidate_source_sides(
+    enabled_sides: set[str], overrides: set[str]
+) -> set[str]:
+    """Return sides whose genes can affect an enabled exact-trading side."""
+
+    source_sides = set(enabled_sides)
+    if "mirror_short_from_long" in overrides and "short" in enabled_sides:
+        source_sides.add("long")
+    return source_sides
+
+
 def _minimum_rank_evidence_samples(halt: float) -> int:
     """Total samples needed to guarantee eight comparable at agreement >= halt."""
 
@@ -1137,6 +1148,33 @@ def _canonicalize_mirrored_hash_vector(vector, base_vector, key_paths) -> list[f
     return canonical
 
 
+def _canonicalize_optimizer_override_hash_vector(
+    vector,
+    base_vector,
+    key_paths,
+    overrides: set[str],
+) -> list[float]:
+    """Hash the effective candidate while neutralizing mirrored shadow genes."""
+
+    canonical = [float(value) for value in vector]
+    index_by_key = {
+        bound_key: index for index, (bound_key, _path) in enumerate(key_paths)
+    }
+    parameters = {
+        bound_key: canonical[index] for bound_key, index in index_by_key.items()
+    }
+    _apply_gpu_optimizer_overrides(parameters, overrides)
+    for bound_key, value in parameters.items():
+        canonical[index_by_key[bound_key]] = float(value)
+    if "mirror_short_from_long" in overrides:
+        canonical = _canonicalize_mirrored_hash_vector(
+            canonical,
+            base_vector,
+            key_paths,
+        )
+    return canonical
+
+
 def _build_proxy_parameter_dicts(
     base_vector,
     mapped,
@@ -1603,10 +1641,13 @@ def run_backend(
             "GPU bounds would disable both sides for exact validation; "
             f"effective seed values: {side_values}"
         )
+    candidate_source_sides = _gpu_candidate_source_sides(
+        enabled_sides, gpu_optimizer_overrides
+    )
     mapped = {
         name: value
         for name, value in mapped_all.items()
-        if name.split("_", 1)[0] in enabled_sides
+        if name.split("_", 1)[0] in candidate_source_sides
     }
     active = [
         (name, index, bound)
@@ -1746,12 +1787,12 @@ def run_backend(
         return np.clip((values - active_low) / active_span, 0.0, 1.0)
 
     def vector_hash(vector) -> str:
-        if "mirror_short_from_long" in gpu_optimizer_overrides:
-            vector = _canonicalize_mirrored_hash_vector(
-                vector,
-                base_vector,
-                key_paths,
-            )
+        vector = _canonicalize_optimizer_override_hash_vector(
+            vector,
+            base_vector,
+            key_paths,
+            gpu_optimizer_overrides,
+        )
         return _canonical_vector_hash(vector, bounds, sig_digits)
 
     from pymoo.core.problem import Problem

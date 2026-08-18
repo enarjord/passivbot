@@ -15,6 +15,7 @@ from optimization.backends.gpu_backend import (
     _apply_gpu_optimizer_overrides,
     _canonical_candidate_values,
     _canonicalize_mirrored_hash_vector,
+    _canonicalize_optimizer_override_hash_vector,
     _canonical_vector_hash,
     _build_anchor_parameter_context,
     _build_gpu_nsga2,
@@ -23,6 +24,7 @@ from optimization.backends.gpu_backend import (
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _format_constraint_diagnostics,
+    _gpu_candidate_source_sides,
     _materialize_gpu_override_template,
     _DriftMonitor,
     _ObjectiveScale,
@@ -1229,6 +1231,77 @@ def test_gpu_mirror_hash_ignores_shadowed_short_genes_during_recovery():
     assert _canonical_vector_hash(submitted, bounds, 6) == _canonical_vector_hash(
         recovered, bounds, 6
     )
+
+
+def test_gpu_lossless_hash_uses_effective_threshold_and_mirror_ordering():
+    key_paths = [
+        (
+            "long_close_threshold_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "threshold_base_pct",
+            ),
+        ),
+        (
+            "long_close_retracement_base_pct",
+            (
+                "bot",
+                "long",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "retracement_base_pct",
+            ),
+        ),
+        (
+            "short_close_threshold_base_pct",
+            (
+                "bot",
+                "short",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "threshold_base_pct",
+            ),
+        ),
+        (
+            "short_close_retracement_base_pct",
+            (
+                "bot",
+                "short",
+                "strategy",
+                "trailing_martingale",
+                "close",
+                "retracement_base_pct",
+            ),
+        ),
+    ]
+    base_vector = [0.01, 0.02, 0.7, 0.8]
+    submitted = [0.01, 0.04, 0.6, 0.9]
+    recovered = [0.04, 0.04, 0.04, 0.04]
+    overrides = {"mirror_short_from_long", "lossless_close_trailing"}
+
+    submitted = _canonicalize_optimizer_override_hash_vector(
+        submitted, base_vector, key_paths, overrides
+    )
+    recovered = _canonicalize_optimizer_override_hash_vector(
+        recovered, base_vector, key_paths, overrides
+    )
+
+    assert submitted == recovered == [0.04, 0.04, 0.7, 0.8]
+
+
+def test_gpu_short_only_mirror_keeps_long_source_genes_active():
+    assert _gpu_candidate_source_sides(
+        {"short"}, {"mirror_short_from_long"}
+    ) == {"long", "short"}
+    assert _gpu_candidate_source_sides(
+        {"long"}, {"mirror_short_from_long"}
+    ) == {"long"}
 
 
 def test_proxy_parameters_include_canonical_pinned_ema_values():
