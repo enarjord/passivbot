@@ -15,6 +15,12 @@ All notable user-facing changes will be documented in this file.
   Effective external suite definitions, scenario filters, overrides, and resolved date windows are
   persisted and checked on resume.
 
+- Extend experimental Apple MPS EMA-anchor suites to multi-coin scenarios on one shared exchange.
+  Scenarios may select different coin subsets and independently dispatch to the single-coin or
+  multicoin Metal kernel, while the canonical suite reducer and exact Rust validations remain
+  authoritative. Multicoin suites require every effective scenario to share one enabled side, and
+  each scenario revalidates `n_positions` against its own prepared coin count.
+
 - Apply `optimize.fixed_runtime_overrides` to experimental Apple MPS candidates in the same order
   as the exact CPU optimizer. Fixed values shadow corresponding Metal search genes, participate in
   durable candidate hashing, and remain subordinate to later `optimize.enable_overrides`; the
