@@ -75,6 +75,7 @@ SELECTED_STAGING_PREFIX = ".pareto-selected-"
 SELECTED_BACKUP_PREFIX = ".pareto-selected-backup-"
 FILTERED_STAGING_PREFIX = ".pareto-filtered-"
 FILTERED_BACKUP_PREFIX = ".pareto-filtered-backup-"
+FILTERED_RESERVATION_PREFIX = ".pareto-filtered-reservation-"
 
 
 @dataclass(frozen=True)
@@ -1797,7 +1798,9 @@ def _write_candidate_snapshot_fd(
         destination_file.write(candidate.source_bytes)
 
 
-def _create_selected_staging_file(parent: Path) -> tuple[Path, BinaryIO]:
+def _create_selected_staging_file(
+    parent: Path,
+) -> tuple[Path, BinaryIO, tuple[int, int]]:
     for _ in range(100):
         staging_path = parent / f"{SELECTED_STAGING_PREFIX}{secrets.token_hex(8)}.tmp"
         try:
@@ -1807,7 +1810,8 @@ def _create_selected_staging_file(parent: Path) -> tuple[Path, BinaryIO]:
         except BaseException:
             staging_path.unlink(missing_ok=True)
             raise
-        return staging_path, staging_file
+        staging_stat = os.fstat(staging_file.fileno())
+        return staging_path, staging_file, (staging_stat.st_dev, staging_stat.st_ino)
     raise FileExistsError(f"Could not reserve selected staging file in {parent}")
 
 
@@ -1877,6 +1881,7 @@ def _install_selected_without_overwrite(
     metadata_source: Path | None = None,
     preserve_metadata_timestamps: bool = False,
     commit_identity_sink: List[tuple[int, int]] | None = None,
+    expected_staging_identity: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     def record_commit(identity: tuple[int, int]) -> tuple[int, int]:
         if commit_identity_sink is not None and not commit_identity_sink:
@@ -1884,6 +1889,15 @@ def _install_selected_without_overwrite(
         return identity
 
     staging_stat = staging_path.stat(follow_symlinks=False)
+    staging_identity = staging_stat.st_dev, staging_stat.st_ino
+    if (
+        expected_staging_identity is not None
+        and staging_identity != expected_staging_identity
+    ):
+        raise RuntimeError(
+            f"Selected staging file changed concurrently; refusing install: "
+            f"{staging_path}"
+        )
     try:
         os.link(staging_path, output)
     except FileExistsError as exc:
@@ -1989,7 +2003,23 @@ def _install_selected_without_overwrite(
                 ) from exc
             raise
         return created_identity
-    return record_commit((staging_stat.st_dev, staging_stat.st_ino))
+    output_stat = output.stat(follow_symlinks=False)
+    output_identity = output_stat.st_dev, output_stat.st_ino
+    if output_identity != staging_identity or output.read_bytes() != source_bytes:
+        failed_descriptor, failed_name = tempfile.mkstemp(
+            prefix=SELECTED_BACKUP_PREFIX,
+            suffix=".failed",
+            dir=output.parent,
+        )
+        os.close(failed_descriptor)
+        failed_path = Path(failed_name)
+        failed_path.unlink()
+        os.replace(output, failed_path)
+        raise RuntimeError(
+            f"Selected staging file changed during install; installed object retained "
+            f"at {failed_path}"
+        )
+    return record_commit(staging_identity)
 
 
 def _write_selected_output(
@@ -1999,6 +2029,8 @@ def _write_selected_output(
     keep_backup: bool,
     overwrite: bool,
     install_sink: List[_SelectedOutputInstall] | None = None,
+    protected_source_dir: Path | None = None,
+    source_candidates: Sequence[ParetoCandidate] = (),
 ) -> _SelectedOutputInstall:
     def record_install(install: _SelectedOutputInstall) -> _SelectedOutputInstall:
         if install_sink is not None and not install_sink:
@@ -2006,24 +2038,40 @@ def _write_selected_output(
         return install
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    _validate_output_outside_source(
+        output, protected_source_dir, label="selected output"
+    )
+    _validate_selected_output_not_source(output, source_candidates)
     if candidate.source_bytes is None:
         raise RuntimeError("Pareto source snapshot was not captured for export.")
     source_bytes = candidate.source_bytes
-    staging_path, staging_descriptor = _create_selected_staging_file(output.parent)
+    staging_path, staging_descriptor, staging_identity = (
+        _create_selected_staging_file(output.parent)
+    )
     backup_path: Path | None = None
     staging_cleanup_attempted = False
     installed_identity: tuple[int, int] | None = None
     committed_identities: List[tuple[int, int]] = []
     try:
         _write_candidate_snapshot_fd(candidate, staging_path, staging_descriptor)
+        staged_stat = staging_path.stat(follow_symlinks=False)
+        if (
+            (staged_stat.st_dev, staged_stat.st_ino) != staging_identity
+            or staging_path.read_bytes() != source_bytes
+        ):
+            staging_cleanup_attempted = True
+            raise RuntimeError(
+                f"Selected staging file changed concurrently; refusing install: "
+                f"{staging_path}"
+            )
         if not overwrite:
-            staging_stat = staging_path.stat(follow_symlinks=False)
-            installed_identity = staging_stat.st_dev, staging_stat.st_ino
+            installed_identity = staging_identity
             installed_identity = _install_selected_without_overwrite(
                 staging_path,
                 output,
                 source_bytes,
                 commit_identity_sink=committed_identities,
+                expected_staging_identity=staging_identity,
             )
             staging_cleanup_attempted = True
             try:
@@ -2043,7 +2091,6 @@ def _write_selected_output(
             observed_stat = output.stat(follow_symlinks=False)
             observed_identity = observed_stat.st_dev, observed_stat.st_ino
             observed_bytes = output.read_bytes()
-            _copy_file_metadata(output, staging_path)
             backup_descriptor, backup_name = tempfile.mkstemp(
                 prefix=SELECTED_BACKUP_PREFIX,
                 suffix=".backup",
@@ -2069,14 +2116,19 @@ def _write_selected_output(
                 raise RuntimeError(
                     f"Selected output changed concurrently; refusing install: {output}"
                 )
-        staging_stat = staging_path.stat(follow_symlinks=False)
-        installed_identity = staging_stat.st_dev, staging_stat.st_ino
+            _copy_file_metadata(backup_path, staging_path)
+        _validate_output_outside_source(
+            output, protected_source_dir, label="selected output"
+        )
+        _validate_selected_output_not_source(output, source_candidates)
+        installed_identity = staging_identity
         installed_identity = _install_selected_without_overwrite(
             staging_path,
             output,
             source_bytes,
             metadata_source=backup_path,
             commit_identity_sink=committed_identities,
+            expected_staging_identity=staging_identity,
         )
         staging_cleanup_attempted = True
         try:
@@ -2327,24 +2379,45 @@ def _ensure_filtered_output_dir(
     _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
     if output_dir.exists():
         return None, _snapshot_filtered_output_dir(output_dir)
-    already_existed = False
-    created_identity: tuple[int, int] | None = None
-    try:
+    reservation_path: Path | None = None
+    for _ in range(100):
+        candidate_path = output_dir.parent / (
+            f"{FILTERED_RESERVATION_PREFIX}{secrets.token_hex(8)}.tmp"
+        )
         try:
-            output_dir.mkdir(mode=0o777)
+            candidate_path.mkdir(mode=0o777)
         except FileExistsError:
-            already_existed = True
-    finally:
-        if not already_existed and output_dir.exists():
-            output_stat = output_dir.stat(follow_symlinks=False)
-            created_identity = output_stat.st_dev, output_stat.st_ino
-            if reservation_sink is not None and not reservation_sink:
-                reservation_sink.append(created_identity)
-    if already_existed:
-        _validate_existing_filtered_output_dir(output_dir, overwrite=overwrite)
-        return None, _snapshot_filtered_output_dir(output_dir)
-    assert created_identity is not None
-    return created_identity, _FilteredOutputSnapshot(created_identity, ())
+            continue
+        except BaseException:
+            try:
+                candidate_path.rmdir()
+            except OSError:
+                pass
+            raise
+        reservation_path = candidate_path
+        break
+    if reservation_path is None:
+        raise FileExistsError(
+            f"Could not create filtered output reservation in {output_dir.parent}"
+        )
+    reservation_stat = reservation_path.stat(follow_symlinks=False)
+    reservation_identity = reservation_stat.st_dev, reservation_stat.st_ino
+    if reservation_sink is not None and not reservation_sink:
+        reservation_sink.append(reservation_identity)
+    try:
+        os.replace(reservation_path, output_dir)
+    except BaseException:
+        try:
+            reservation_path.rmdir()
+        except OSError:
+            pass
+        raise
+    output_stat = output_dir.stat(follow_symlinks=False)
+    if (output_stat.st_dev, output_stat.st_ino) != reservation_identity:
+        raise RuntimeError(
+            f"Filtered output reservation changed concurrently: {output_dir}"
+        )
+    return reservation_identity, _FilteredOutputSnapshot(reservation_identity, ())
 
 
 def _remove_filtered_reservation(
@@ -2353,20 +2426,36 @@ def _remove_filtered_reservation(
 ) -> None:
     if reservation_identity is None:
         return
+    cleanup_name = tempfile.mkdtemp(
+        prefix=FILTERED_RESERVATION_PREFIX,
+        suffix=".cleanup",
+        dir=output_dir.parent,
+    )
+    cleanup_path = Path(cleanup_name)
+    cleanup_path.rmdir()
     try:
-        output_stat = output_dir.stat(follow_symlinks=False)
+        os.replace(output_dir, cleanup_path)
     except FileNotFoundError:
         return
-    if (output_stat.st_dev, output_stat.st_ino) != reservation_identity:
+    cleanup_stat = cleanup_path.stat(follow_symlinks=False)
+    if (cleanup_stat.st_dev, cleanup_stat.st_ino) == reservation_identity:
+        try:
+            cleanup_path.rmdir()
+        except OSError as exc:
+            print(
+                f"Warning: unused filtered output reservation could not be removed: "
+                f"{cleanup_path} ({exc})",
+                file=sys.stderr,
+            )
         return
-    try:
-        output_dir.rmdir()
-    except OSError as exc:
+    if output_dir.exists():
         print(
-            f"Warning: unused filtered output reservation could not be removed: "
-            f"{output_dir} ({exc})",
+            f"Warning: filtered output reservation changed concurrently; moved directory "
+            f"retained at {cleanup_path}",
             file=sys.stderr,
         )
+        return
+    os.replace(cleanup_path, output_dir)
 
 
 def _reserve_filtered_output_file(destination: Path, *, label: str) -> int:
@@ -2394,6 +2483,8 @@ def _write_filtered_outputs(
     result: SelectionResult,
     overwrite: bool,
     commit_sink: List[Path] | None = None,
+    protected_source_dir: Path | None = None,
+    source_candidates: Sequence[ParetoCandidate] = (),
 ) -> Path:
     manifest_output = output_dir / FILTERED_SELECTION_MANIFEST
 
@@ -2402,6 +2493,12 @@ def _write_filtered_outputs(
             commit_sink.append(manifest_output)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
+    _validate_output_outside_source(
+        output_dir, protected_source_dir, label="filtered output"
+    )
+    _validate_filtered_output_contains_no_sources(
+        output_dir, source_candidates
+    )
     reservation_identities: List[tuple[int, int]] = []
     reservation_identity: tuple[int, int] | None = None
     observed_output: _FilteredOutputSnapshot | None = None
@@ -2603,6 +2700,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 keep_backup=filtered_output_dir is not None,
                 overwrite=overwrite,
                 install_sink=selected_installs,
+                protected_source_dir=protected_source_dir,
+                source_candidates=candidates,
             )
             selected_install = selected_installs[0]
         if filtered_output_dir is not None:
@@ -2617,6 +2716,8 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 result=result,
                 overwrite=overwrite,
                 commit_sink=filtered_commits,
+                protected_source_dir=protected_source_dir,
+                source_candidates=candidates,
             )
     except BaseException:
         if (

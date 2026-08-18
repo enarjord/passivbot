@@ -1114,6 +1114,43 @@ def test_selected_staging_creation_cleans_up_when_interrupted(
     ]
 
 
+def test_selected_output_refuses_replaced_staging_inode(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    selected_output = tmp_path / "selected.json"
+    real_write_snapshot = pareto_explorer._write_candidate_snapshot_fd
+    replaced_staging: Path | None = None
+
+    def replace_staging_after_write(candidate, destination, file_descriptor):
+        nonlocal replaced_staging
+        destination = Path(destination)
+        real_write_snapshot(candidate, destination, file_descriptor)
+        if destination.name.startswith(pareto_explorer.SELECTED_STAGING_PREFIX):
+            attacker = tmp_path / "attacker.json"
+            attacker.write_text('{"attacker": true}\n')
+            os.replace(attacker, destination)
+            replaced_staging = destination
+
+    monkeypatch.setattr(
+        pareto_explorer,
+        "_write_candidate_snapshot_fd",
+        replace_staging_after_write,
+    )
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output)]
+    )
+
+    with pytest.raises(RuntimeError, match="staging file changed concurrently"):
+        run_from_args(args)
+
+    assert not selected_output.exists()
+    assert replaced_staging is not None
+    assert json.loads(replaced_staging.read_text()) == {"attacker": True}
+    replaced_staging.unlink()
+
+
 @pytest.mark.parametrize(
     ("error_number", "winerror"),
     [(errno.EOPNOTSUPP, None), (errno.EINVAL, 1)],
@@ -1297,6 +1334,39 @@ def test_selected_overwrite_detects_in_place_edit_before_commit(
     assert selected_output.stat().st_ino == original_inode
     assert json.loads(selected_output.read_text()) == {"selected": "newer"}
     assert not [path for path in tmp_path.iterdir() if path.suffix == ".backup"]
+
+
+def test_selected_overwrite_transfers_metadata_after_validated_move(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    selected_output = tmp_path / "selected.json"
+    selected_output.write_text('{"selected": "old"}\n')
+    selected_output.chmod(0o644)
+    real_replace = os.replace
+    edited = False
+
+    def edit_metadata_before_move(source, destination):
+        nonlocal edited
+        source = Path(source)
+        destination = Path(destination)
+        if source == selected_output and destination.suffix == ".backup" and not edited:
+            selected_output.chmod(0o600)
+            edited = True
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", edit_metadata_before_move)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    run_from_args(args)
+    capsys.readouterr()
+
+    assert edited
+    assert stat.S_IMODE(selected_output.stat().st_mode) == 0o600
 
 
 def test_selected_output_supports_name_max_destination(
@@ -1802,7 +1872,10 @@ def test_combined_outputs_record_filtered_reservation_at_mkdir_boundary(
     def interrupt_after_filtered_mkdir(path: Path, *args, **kwargs):
         nonlocal interrupted
         result = real_mkdir(path, *args, **kwargs)
-        if path == filtered_output and not interrupted:
+        if (
+            path.name.startswith(pareto_explorer.FILTERED_RESERVATION_PREFIX)
+            and not interrupted
+        ):
             interrupted = True
             raise KeyboardInterrupt()
         return result
@@ -2562,31 +2635,35 @@ def test_filtered_output_rechecks_directory_created_during_reservation(
     sample_pareto_dir: Path,
     tmp_path: Path,
     monkeypatch,
-    capsys,
 ):
     output_dir = tmp_path / "filtered"
-    real_mkdir = Path.mkdir
+    real_replace = os.replace
     raced = False
 
-    def create_racing_destination(path: Path, *args, **kwargs):
+    def create_racing_destination(source, destination):
         nonlocal raced
-        if path == output_dir and not raced:
+        source = Path(source)
+        destination = Path(destination)
+        if (
+            destination == output_dir
+            and source.name.startswith(pareto_explorer.FILTERED_RESERVATION_PREFIX)
+            and not raced
+        ):
             raced = True
-            os.mkdir(path, 0o750)
-            path.chmod(0o750)
-            raise FileExistsError(path)
-        return real_mkdir(path, *args, **kwargs)
+            output_dir.mkdir(mode=0o750)
+            (output_dir / "racing.json").write_text('{"racing": true}\n')
+        return real_replace(source, destination)
 
-    monkeypatch.setattr(Path, "mkdir", create_racing_destination)
+    monkeypatch.setattr(os, "replace", create_racing_destination)
     args = build_parser().parse_args(
         [str(sample_pareto_dir), "-f", str(output_dir), "--overwrite"]
     )
 
-    run_from_args(args)
-    capsys.readouterr()
+    with pytest.raises(OSError):
+        run_from_args(args)
 
     assert raced
-    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o750
+    assert json.loads((output_dir / "racing.json").read_text()) == {"racing": True}
 
 
 def test_new_filtered_output_retains_inherited_setgid_metadata(
@@ -2874,6 +2951,38 @@ def test_save_outputs_refuse_descendants_of_source_directory_alias(
 
     preserved = output / "notes.json" if output_kind == "filtered" else output
     assert json.loads(preserved.read_text()) == {"unrelated": True}
+
+
+def test_selected_output_revalidates_parent_created_as_source_alias(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output_parent = tmp_path / "late-parent"
+    selected_output = output_parent / "balanced.json"
+    source = sample_pareto_dir / "balanced.json"
+    original_bytes = source.read_bytes()
+    real_mkdir = Path.mkdir
+    aliased = False
+
+    def create_source_alias_parent(path: Path, *args, **kwargs):
+        nonlocal aliased
+        if path == output_parent and not aliased:
+            path.symlink_to(sample_pareto_dir, target_is_directory=True)
+            aliased = True
+            return None
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", create_source_alias_parent)
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(selected_output), "--overwrite"]
+    )
+
+    with pytest.raises(ValueError, match="source Pareto"):
+        run_from_args(args)
+
+    assert aliased
+    assert source.read_bytes() == original_bytes
 
 
 def test_single_file_input_allows_sibling_outputs(
