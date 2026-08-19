@@ -172,10 +172,24 @@ async def prepare_suite_contexts(
         raise ValueError("No coins available after preparing master datasets.")
 
     has_combined = "combined" in datasets
-    # Available exchanges exclude "combined" pseudo-exchange
+    # A combined dataset may cover exchanges for which no individual dataset
+    # was prepared. Include its full source identity when deciding whether an
+    # explicit scenario restriction truly selects the whole exchange pool.
+    # Otherwise a bybit-only scenario can be misclassified as "all exchanges"
+    # merely because bybit is the only separately materialized dataset, and it
+    # may then consume combined candles selected from another exchange.
     dataset_available_exchanges = sorted(
-        set(ds.exchange for ds in datasets.values() if ds.exchange != "combined")
-    ) or (datasets["combined"].available_exchanges if has_combined else [])
+        {
+            exchange
+            for dataset in datasets.values()
+            for exchange in (
+                dataset.available_exchanges
+                if dataset.exchange == "combined"
+                else [dataset.exchange]
+            )
+            if exchange != "combined"
+        }
+    )
 
     contexts: List[ScenarioEvalContext] = []
 
