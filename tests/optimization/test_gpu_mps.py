@@ -32,20 +32,28 @@ def _single_coin_exposure_fields(
     ]
 
 
-def _multicoin_exposure_fixture(strategy_kind, side, coin_overrides=None):
-    count = 64
+def _multicoin_exposure_fixture(
+    strategy_kind,
+    side,
+    coin_overrides=None,
+    *,
+    count=64,
+    markets=None,
+    closes=(100.0, 120.0),
+):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
-    for coin, close in enumerate((100.0, 120.0)):
+    for coin, close in enumerate(closes):
         hlcvs[:, coin, 0] = close * 1.01
         hlcvs[:, coin, 1] = close * 0.99
         hlcvs[:, coin, 2] = close
         hlcvs[:, coin, 3] = 100.0 * (coin + 1)
-    markets = [
-        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
-        for _ in range(coin_count)
-    ]
+    if markets is None:
+        markets = [
+            ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+            for _ in range(coin_count)
+        ]
     runs = [
         ProxyRun(
             1_000.0,
@@ -725,6 +733,50 @@ def test_mps_multicoin_twel_threshold_reduces_entry_volume(strategy_kind):
 
     assert volume[0] > 0.0
     assert 0.0 < volume[1] < volume[0] * 0.75
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_multicoin_equal_distance_twel_tie_keeps_higher_coin_index(
+    strategy_kind,
+):
+    override_cols = 14 if strategy_kind == "ema_anchor" else 27
+    wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[0, wallet_exposure_column] = 0.4
+    overrides[1, wallet_exposure_column] = 0.5
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 300.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    runner, candidate = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        overrides,
+        count=6,
+        markets=markets,
+        closes=(100.0, 100.0),
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    candidate[keys.index("twel_enforcer_threshold")] = 0.5
+
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+    volume = output["day_volume"].sum().item()
+
+    # Exact Rust removes equal-distance entries by ascending symbol index.
+    # That leaves the higher-index coin's 0.5-WEL order. Keeping index zero
+    # instead would admit only its 0.4-WEL order because the residual is dust.
+    # EMA Anchor also closes the selected flat-price order in this short fixture,
+    # so it reports the matching entry and exit volume.
+    expected_volume = 1.0 if strategy_kind == "ema_anchor" else 0.5
+    assert expected_volume - 0.05 < volume < expected_volume + 0.05
 
 
 @pytest.mark.skipif(

@@ -84,6 +84,7 @@ mod tests {
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("allowed_wallet_exposure_limit"));
         assert!(source.contains("twel_entry_gate_enabled"));
+        assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));
         assert!(!source.contains("hard_stop"));
@@ -151,6 +152,7 @@ mod tests {
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains("allowed_wallet_exposure_limit"));
         assert!(source.contains("twel_entry_gate_enabled"));
+        assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("entry_retracement_base"));
         assert!(source.contains("close_retracement_base"));
         assert!(source.contains("touch_nearest_ticks[k * C + c]"));

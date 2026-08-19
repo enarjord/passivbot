@@ -6813,6 +6813,65 @@ mod core {
         }
 
         #[test]
+        fn twel_gating_equal_distance_retains_higher_symbol_first() {
+            let balance = 1000.0;
+            let total_wel = 0.0105; // $10.50: room for one $10 entry, not two
+            let exchange = ExchangeParams {
+                qty_step: 0.1,
+                price_step: 0.1,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = (0..2)
+                .map(|idx| {
+                    let mut symbol = make_basic_symbol(idx);
+                    symbol.order_book = OrderBook {
+                        bid: 20.0,
+                        ask: 20.0,
+                    };
+                    symbol.exchange = exchange.clone();
+                    symbol
+                })
+                .collect::<Vec<_>>();
+            let positions: Vec<GateEntriesPosition> = Vec::new();
+            let mut entries = (0..2)
+                .map(|symbol_idx| IdealOrder {
+                    symbol_idx,
+                    pside: PositionSide::Long,
+                    qty: 1.0,
+                    price: 10.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                })
+                .collect::<Vec<_>>();
+            let mut current_positions = Vec::new();
+            let mut scratch = Vec::new();
+            let mut keep = Vec::new();
+            let mut qty_by_order_idx = Vec::new();
+            let mut out = Vec::new();
+
+            gate_entries_by_twel_deterministic(
+                PositionSide::Long,
+                balance,
+                total_wel,
+                &make_basic_global(),
+                &positions,
+                &mut entries,
+                &symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].symbol_idx, 1);
+            assert!((entries[0].qty - 1.0).abs() < 1e-12);
+        }
+
+        #[test]
         fn twel_gating_prices_promoted_market_long_entries_at_executable_ask() {
             let balance = 100.0;
             let total_wel = 0.995;

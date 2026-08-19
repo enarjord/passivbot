@@ -136,10 +136,11 @@ The supported slice is intentionally narrow:
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
   suites. For multi-coin runs, allowance is applied to each symbol's dynamic or overridden WEL;
-  bounded mode caps that per-symbol result at the side TWEL, while legacy-raw mode applies the raw
-  multiplier. The optional side-wide entry gate then caps aggregate entries at TWEL times its
-  positive threshold (never above raw TWEL). Disabling the gate permits aggregate entries beyond
-  TWEL while each symbol remains subject to its allowed WEL
+  bounded mode limits only the added allowance: when the base WEL is at or below the side TWEL,
+  the allowance cannot raise it past TWEL; an explicit base WEL already above TWEL is left
+  unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
+  aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate
+  permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
 - BTC collateral, realized-loss gating, position-exposure enforcement, and total-exposure repair
   remain disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the

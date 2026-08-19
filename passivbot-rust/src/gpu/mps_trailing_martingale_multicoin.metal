@@ -1016,8 +1016,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         float distance = (short_side
                             ? entry_price - price_now
                             : price_now - entry_price) / fmax(price_now, 1.0e-12f);
+                        // Exact Rust removes equal-distance entries in ascending
+                        // symbol order, so the retained order is descending.
                         if (best < 0 || distance < best_distance
-                            || (distance == best_distance && c < best)) {
+                            || (distance == best_distance && c > best)) {
                             best = c;
                             best_distance = distance;
                         }
