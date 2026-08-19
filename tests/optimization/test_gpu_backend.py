@@ -1373,6 +1373,15 @@ def test_gpu_foundation_accepts_single_coin_min_effective_cost_filter(
     )
 
 
+def test_gpu_foundation_rejects_min_effective_cost_without_positive_liquidation_floor():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["liquidation_threshold"] = 0.0
+
+    with pytest.raises(ValueError, match="proven lower balance bound"):
+        _validate_scope(config, _Evaluator())
+
+
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("suite_enabled", [False, True])
 @pytest.mark.parametrize("dual_side", [False, True])

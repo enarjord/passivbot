@@ -3,8 +3,6 @@ using namespace metal;
 
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
-// Allow 32 float32 unit roundoffs for each encoded PnL/fee balance update.
-constant float MIN_COST_BALANCE_ERROR_RATE = 1.9073486328125e-6f;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 12;
 
@@ -35,26 +33,17 @@ inline float min_entry_qty(
 }
 
 inline bool passes_min_effective_cost(
-    bool enabled, float balance, float balance_error_bound, float wel,
+    bool enabled, float guaranteed_balance_lower, float wel,
     float initial_qty_pct, float max_effective_min_cost
 ) {
     if (!enabled) return true;
-    float balance_lower = fmax(balance - balance_error_bound, 0.0f);
-    float rounded_projected_cost = balance_lower * wel * initial_qty_pct;
+    float rounded_projected_cost = guaranteed_balance_lower * wel * initial_qty_pct;
     // Discount by 16 float32 unit roundoffs. This covers upward encoding and
     // multiply rounding of all three operands before the conservative compare.
     float projected_cost_lower = rounded_projected_cost
         * (1.0f - 9.5367431640625e-7f);
     return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
         && projected_cost_lower >= max_effective_min_cost;
-}
-
-inline void accumulate_min_cost_balance_error(
-    thread float& error_bound, float balance_before, float pnl, float fee
-) {
-    float scale = fabs(balance_before) + fabs(pnl) + fabs(fee) + error_bound;
-    error_bound = (error_bound + scale * MIN_COST_BALANCE_ERROR_RATE)
-        * (1.0f + MIN_COST_BALANCE_ERROR_RATE);
 }
 
 struct EmaSide {
@@ -337,8 +326,6 @@ inline void passivbot_single_coin_impl(
     EmaSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
 
     float balance = starting_balance;
-    float min_cost_balance_error = filter_by_min_effective_cost
-        ? fabs(starting_balance) * MIN_COST_BALANCE_ERROR_RATE : 0.0f;
     bool alive = true;
     int liq_day = -1;
     float held_max_min = 0.0f;
@@ -352,9 +339,6 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
-    bool min_cost_eligibility_initialized = false;
-    bool long_min_cost_eligible = true;
-    bool short_min_cost_eligible = true;
 
     int cur_day = flags[2];
     bool day_touched = false;
@@ -412,11 +396,7 @@ inline void passivbot_single_coin_impl(
             float adj = fmin(round_step(long_side.close_qty, qty_step), long_side.psize);
             float pnl = adj * c_mult * (cp - long_side.pprice);
             float fee = adj * cp * c_mult * maker_fee;
-            float balance_before = balance;
             balance += pnl - fee;
-            if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
-                min_cost_balance_error, balance_before, pnl, fee
-            );
             float new_psize = fmax(round_step(long_side.psize - adj, qty_step), 0.0f);
             bool went_flat = new_psize <= 0.0f;
             long_side.psize = new_psize;
@@ -438,11 +418,7 @@ inline void passivbot_single_coin_impl(
             float ep = float(long_side.entry_ticks) * price_step;
             float eq = round_step(long_side.entry_qty, qty_step);
             float fee = eq * ep * c_mult * maker_fee;
-            float balance_before = balance;
             balance -= fee;
-            if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
-                min_cost_balance_error, balance_before, 0.0f, fee
-            );
             bool was_flat = long_side.psize <= 0.0f;
             float new_psize = round_step(long_side.psize + eq, qty_step);
             float new_pprice = was_flat ? ep
@@ -464,11 +440,7 @@ inline void passivbot_single_coin_impl(
             float adj = fmin(round_step(short_side.close_qty, qty_step), short_side.psize);
             float pnl = adj * c_mult * (short_side.pprice - cp);
             float fee = adj * cp * c_mult * maker_fee;
-            float balance_before = balance;
             balance += pnl - fee;
-            if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
-                min_cost_balance_error, balance_before, pnl, fee
-            );
             float new_psize = fmax(round_step(short_side.psize - adj, qty_step), 0.0f);
             bool went_flat = new_psize <= 0.0f;
             short_side.psize = new_psize;
@@ -490,11 +462,7 @@ inline void passivbot_single_coin_impl(
             float ep = float(short_side.entry_ticks) * price_step;
             float eq = round_step(short_side.entry_qty, qty_step);
             float fee = eq * ep * c_mult * maker_fee;
-            float balance_before = balance;
             balance -= fee;
-            if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
-                min_cost_balance_error, balance_before, 0.0f, fee
-            );
             bool was_flat = short_side.psize <= 0.0f;
             float new_psize = round_step(short_side.psize + eq, qty_step);
             float new_pprice = was_flat ? ep
@@ -535,17 +503,20 @@ inline void passivbot_single_coin_impl(
         bool gen = can_gen && alive;
         eq_started = eq_started || gen;
         if (gen) {
-            if (!min_cost_eligibility_initialized || any_fill) {
-                long_min_cost_eligible = passes_min_effective_cost(
-                    filter_by_min_effective_cost, balance, min_cost_balance_error,
-                    long_side.twel, long_side.base_qty_pct, max_effective_min_cost
-                );
-                short_min_cost_eligible = passes_min_effective_cost(
-                    filter_by_min_effective_cost, balance, min_cost_balance_error,
-                    short_side.twel, short_side.base_qty_pct, max_effective_min_cost
-                );
-                min_cost_eligibility_initialized = true;
-            }
+            // When both sides are flat, an exact Rust path that remains alive has
+            // balance above liq_floor. If either side is open, equity cannot bound
+            // exact cash balance, so flat-side eligibility uses zero and fails closed.
+            float guaranteed_balance_lower =
+                long_side.psize <= 0.0f && short_side.psize <= 0.0f
+                ? liq_floor : 0.0f;
+            bool long_min_cost_eligible = passes_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                long_side.twel, long_side.base_qty_pct, max_effective_min_cost
+            );
+            bool short_min_cost_eligible = passes_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                short_side.twel, short_side.base_qty_pct, max_effective_min_cost
+            );
             bool block_long_initial = !long_min_cost_eligible;
             bool block_short_initial = !short_min_cost_eligible;
             if (long_enabled && short_enabled && !hedge_mode) {

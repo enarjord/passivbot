@@ -8,10 +8,11 @@ All notable user-facing changes will be documented in this file.
   and Trailing Martingale single-coin matrix, including long, short, dual-side, and compatible
   suites. The Metal proxy conservatively compares projected initial
   cost against the highest executable exchange minimum in each prepared coin window, using the
-  effective dynamic or per-coin wallet-exposure limit, a downward arithmetic bound for the
-  float32 projection, an allowance for balance error accumulated across fills, and excluding only
-  flat sides from new entries. Exact Rust retains its current-close rule and remains authoritative
-  through the normal validation and drift gates.
+  configured wallet-exposure limit, a downward arithmetic bound for the float32 projection, and
+  the liquidation floor as a path-independent lower balance bound whenever both sides are flat.
+  If either side is open, new entries on a flat side fail closed because equity cannot bound exact
+  cash balance. Exact Rust retains its current-close rule and remains authoritative through the
+  normal validation and drift gates. A finite positive liquidation threshold is required.
   Multi-coin filtering remains fail-closed because the approximate proxy path cannot
   conservatively bound exact Rust's portfolio balance.
 

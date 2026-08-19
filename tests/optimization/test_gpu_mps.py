@@ -159,7 +159,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
     assert "projected_cost_lower" in source
-    assert source.count("accumulate_min_cost_balance_error(") == 5
+    assert "float guaranteed_balance_lower" in source
+    assert "accumulate_min_cost_balance_error" not in source
     assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
         "(run_peak - eqf) / fmax(fabs(run_peak)"
     )
@@ -815,7 +816,7 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
     high = np.full(count, 100.0)
     low = np.array([100.0, 100.0, 100.0, 98.0, 100.0])
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    market = ProxyMarket(1.0e-9, 0.01, 1.0e-9, 9.9999998, 1.0, 0.0002)
+    market = ProxyMarket(1.0e-9, 0.01, 1.0e-9, 10.0, 1.0, 0.0002)
     run = ProxyRun(
         1_000.0,
         1,
@@ -829,7 +830,7 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    base_qty_pct = 0.0099999997
+    base_qty_pct = 0.199999999
     row = [
         base_qty_pct,
         2.0,
@@ -844,9 +845,12 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
         0.0,
         1.0,
     ]
-    rounded_projection = np.float32(1_000.0) * np.float32(base_qty_pct)
+    guaranteed_balance_lower = run.starting_balance * run.liquidation_threshold
+    rounded_projection = np.float32(guaranteed_balance_lower) * np.float32(
+        base_qty_pct
+    )
 
-    assert 1_000.0 * base_qty_pct < 9.9999998
+    assert guaranteed_balance_lower * base_qty_pct < 10.0
     assert rounded_projection >= np.float32(data["max_effective_min_cost"])
 
     output = MpsEmaAnchorRunner(
@@ -873,7 +877,7 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
     high = np.array([100.0, 100.0, 100.0, 102.0, 100.0])
     low = np.array([100.0, 100.0, 100.0, 97.0, 100.0])
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    market = ProxyMarket(0.001, 0.01, 0.001, 50.0, 1.0, 0.0002)
+    market = ProxyMarket(0.001, 0.01, 0.001, 4.0, 1.0, 0.0002)
     run = ProxyRun(
         1_000.0,
         1,
@@ -944,9 +948,9 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
         high[3] = 102.0
         low[4] = 98.0
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    # Leave enough headroom above the conservative arithmetic margin to open
-    # the position; this test targets management after opening, not equality.
-    market = ProxyMarket(0.001, 0.01, 0.001, 99.0, 1.0, 0.0002)
+    # Leave enough headroom above the liquidation-floor projection to open the
+    # position; this test targets management after opening, not equality.
+    market = ProxyMarket(0.001, 0.01, 0.001, 4.0, 1.0, 0.0002)
     run = ProxyRun(
         1_000.0,
         1,
@@ -1091,6 +1095,11 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "for (int rung = 0; rung < 500; ++rung)" in source
     assert "ladder_side, ladder_balance" in source
     assert "recursive_close_groups" in source
+    assert "const bool filter_by_min_effective_cost" in source
+    assert "passes_min_effective_cost" in source
+    assert "projected_cost_lower" in source
+    assert "float guaranteed_balance_lower" in source
+    assert "accumulate_min_cost_balance_error" not in source
     assert "cooldown_min != 0.0f" in source
     assert "int entry_touch = is_long ? touch_down_ticks : touch_up_ticks" in source
     assert "int raw_reentry_ticks = reentry_target_is_touch" in source

@@ -726,6 +726,16 @@ def _validate_scope_config(
 ) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("GPU foundation does not support suite mode")
+    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
+        liquidation_threshold = float(
+            config.get("backtest", {}).get("liquidation_threshold", 0.0)
+        )
+        if not math.isfinite(liquidation_threshold) or liquidation_threshold <= 0.0:
+            raise ValueError(
+                "GPU min-effective-cost filtering requires a finite positive "
+                "backtest.liquidation_threshold so the proxy has a proven lower "
+                "balance bound"
+            )
     if bool(config.get("live", {}).get("market_orders_allowed")):
         raise ValueError(
             "GPU foundation requires live.market_orders_allowed=false because the "

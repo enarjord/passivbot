@@ -133,16 +133,17 @@ The supported slice is intentionally narrow:
 - HSL and auto-unstuck disabled
 - BTC collateral, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
-  projected initial-entry cost test with dynamic or static per-coin wallet-exposure limits. The
+  projected initial-entry cost test with the configured wallet-exposure limit. The
   screening proxy compares against the highest executable minimum observed for that coin in the
   prepared window, rounds that threshold upward, and discounts the projected float32 product so
-  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. A
-  conservative balance-error allowance grows on every proxy fill and is subtracted before that
-  comparison, covering accumulated float32 fee and realized-PnL rounding. Exact validation may
-  admit a conservative proxy false negative. A failing flat side is excluded from new-entry
-  selection while an open position remains managed. Multi-coin runs still require this option to
-  be disabled because their approximate selection and execution path cannot conservatively bound
-  exact Rust's portfolio balance
+  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. To
+  remain conservative across float32 proxy versus float64 Rust path divergence, Metal uses the
+  configured liquidation floor—not proxy balance—as the guaranteed balance lower bound while
+  both sides are flat. If either side is open, a flat side fails the screen because equity cannot
+  bound exact cash balance; open positions remain managed. This may produce proxy false negatives,
+  which exact validation may admit. A finite positive `backtest.liquidation_threshold` is required.
+  Multi-coin runs still require this option to be disabled because their approximate selection and
+  execution path cannot conservatively bound exact Rust's portfolio balance
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
