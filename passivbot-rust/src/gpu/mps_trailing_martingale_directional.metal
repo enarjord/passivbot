@@ -382,18 +382,21 @@ inline void generate_orders(
             float target_psize = wel_target * balance
                 / fmax(s.pprice * c_mult, 1.0e-12f);
             float reduce_qty = fmax(s.psize - target_psize, 0.0f);
-            if (reduce_qty <= 1.1920928955078125e-7f) reduce_qty = qty_step;
-            float reducer_qty = fmin(
-                s.psize,
-                fmax(reducer_min, ceil_step(reduce_qty, qty_step))
-            );
-            float new_we = fmax(s.psize - reducer_qty, 0.0f)
-                * s.pprice * c_mult / balance;
-            if (new_we >= wel_target - 1.0e-12f && reducer_qty < s.psize) {
+            if (reduce_qty <= 2.220446e-16f) reduce_qty = qty_step;
+            float reducer_qty = 0.0f;
+            for (int steps = 0; steps <= 10000; ++steps) {
                 reducer_qty = fmin(
                     s.psize,
-                    fmax(reducer_min, ceil_step(reducer_qty + qty_step, qty_step))
+                    fmax(reducer_min, ceil_step(reduce_qty, qty_step))
                 );
+                float new_psize = fmax(
+                    round_step(s.psize - reducer_qty, qty_step), 0.0f
+                );
+                if (new_psize < target_psize
+                    || new_psize <= 2.220446e-16f) {
+                    break;
+                }
+                reduce_qty += qty_step;
             }
             s.close_ticks = reducer_ticks;
             s.close_price = reducer_price;
@@ -666,6 +669,14 @@ inline void passivbot_single_coin_impl(
         bool long_scan_close_grid = long_close_ready
             && long_side.close_ticks <= high_fill_max_tick;
         if (long_close_ready && long_recursive_close
+            && long_side.close_is_wel_reducer) {
+            // A touch-clamped grid order uses nearest-tick quantization while
+            // the passive reducer rounds up.  The grid may therefore be one
+            // tick nearer and independently reachable.
+            long_scan_close_grid = long_scan_close_grid
+                || long_side.close_gen_touch_nearest_ticks <= high_fill_max_tick;
+        }
+        if (long_close_ready && long_recursive_close
             && long_side.close_threshold_we > 0.0f) {
             // Positive WE weight makes later generated long closes nearer.
             // The zero-WE target is a conservative lower bound: reconstruct
@@ -708,8 +719,10 @@ inline void passivbot_single_coin_impl(
                 min_qty, min_cost, c_mult, group
             );
             bool reverse = grid_source.close_threshold_we > 0.0f;
+            bool reducer_reachable = reducer_qty > 0.0f
+                && reducer_ticks <= high_fill_max_tick;
             bool merge_reducer_with_first = false;
-            if (reducer_qty > 0.0f && group_count > 0) {
+            if (reducer_reachable && group_count > 0) {
                 int first_wanted = reverse ? group_count - 1 : 0;
                 recursive_close_groups(
                     grid_source, true, first_wanted, qty_step, price_step,
@@ -717,7 +730,7 @@ inline void passivbot_single_coin_impl(
                 );
                 merge_reducer_with_first = group.ticks == reducer_ticks;
             }
-            if (reducer_qty > 0.0f && !merge_reducer_with_first) {
+            if (reducer_reachable && !merge_reducer_with_first) {
                 float pnl = reducer_qty * c_mult
                     * (reducer_price - long_side.pprice);
                 float fee = reducer_qty * reducer_price * c_mult * maker_fee;
@@ -857,6 +870,13 @@ inline void passivbot_single_coin_impl(
         bool short_scan_close_grid = short_close_ready
             && short_side.close_ticks > low_nonfill_max_tick;
         if (short_close_ready && short_recursive_close
+            && short_side.close_is_wel_reducer) {
+            // Mirror the long-side nearest-tick scan: a touch-clamped grid
+            // order can sit one tick above the down-rounded reducer.
+            short_scan_close_grid = short_scan_close_grid
+                || short_side.close_gen_touch_nearest_ticks > low_nonfill_max_tick;
+        }
+        if (short_close_ready && short_recursive_close
             && short_side.close_threshold_we > 0.0f) {
             // Positive WE weight makes later generated short closes nearer.
             // The zero-WE target is a conservative upper bound.
@@ -898,8 +918,10 @@ inline void passivbot_single_coin_impl(
                 min_qty, min_cost, c_mult, group
             );
             bool reverse = grid_source.close_threshold_we > 0.0f;
+            bool reducer_reachable = reducer_qty > 0.0f
+                && reducer_ticks > low_nonfill_max_tick;
             bool merge_reducer_with_first = false;
-            if (reducer_qty > 0.0f && group_count > 0) {
+            if (reducer_reachable && group_count > 0) {
                 int first_wanted = reverse ? group_count - 1 : 0;
                 recursive_close_groups(
                     grid_source, false, first_wanted, qty_step, price_step,
@@ -907,7 +929,7 @@ inline void passivbot_single_coin_impl(
                 );
                 merge_reducer_with_first = group.ticks == reducer_ticks;
             }
-            if (reducer_qty > 0.0f && !merge_reducer_with_first) {
+            if (reducer_reachable && !merge_reducer_with_first) {
                 float pnl = reducer_qty * c_mult
                     * (short_side.pprice - reducer_price);
                 float fee = reducer_qty * reducer_price * c_mult * maker_fee;

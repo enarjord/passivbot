@@ -479,11 +479,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             const float c_mult = coin_settings[coin_offset + 4];
             const float maker_fee = coin_settings[coin_offset + 5];
 
-            bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
+            bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
+            bool filled_close = close_ready
                 && (short_side
                     ? close_tick[c] > fill_ticks[tick_offset + 1]
                     : close_tick[c] <= fill_ticks[tick_offset + 0]);
-            if (filled_close) {
+            bool rebuild_grid = close_ready
+                && close_reconstruct_after_reducer[c];
+            if (filled_close || rebuild_grid) {
                 float fill_price = float(close_tick[c]) * price_step;
                 float reducer_qty = fmin(
                     round_step(close_qty[c], qty_step), psize[c]
@@ -501,9 +504,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 int group_count = 0;
                 bool reverse = false;
                 bool merge_reducer_with_first = false;
+                bool executed_close = false;
 
-                if (close_reconstruct_after_reducer[c]
-                    && grid_gen_psize > 0.0f) {
+                if (rebuild_grid && grid_gen_psize > 0.0f) {
                     gen_tick_offset = ((k - 1) * C + c) * 2;
                     coin_close_qty_pct = coin_override_or(
                         coin_overrides, c, 15, close_qty_pct
@@ -575,11 +578,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             first_wanted,
                             group
                         );
-                        merge_reducer_with_first = group.ticks == close_tick[c];
+                        merge_reducer_with_first = filled_close
+                            && group.ticks == close_tick[c];
                     }
                 }
 
-                if (!merge_reducer_with_first) {
+                if (filled_close && !merge_reducer_with_first) {
                     float pnl = reducer_qty * c_mult * (short_side
                         ? pprice[c] - fill_price
                         : fill_price - pprice[c]);
@@ -587,6 +591,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         - reducer_qty * fill_price * c_mult * maker_fee;
                     psize[c] = grid_gen_psize;
                     day_volume += reducer_qty * fill_price * c_mult / balance;
+                    executed_close = true;
                 }
 
                 for (int rank = 0; rank < group_count; ++rank) {
@@ -639,21 +644,26 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         round_step(psize[c] - grid_qty, qty_step), 0.0f
                     );
                     day_volume += grid_qty * group.price * c_mult / balance;
+                    executed_close = true;
                     if (psize[c] <= 0.0f) break;
                 }
 
-                bool went_flat = psize[c] <= 0.0f;
-                if (went_flat) {
-                    pprice[c] = 0.0f;
-                    if (position_open_k[c] >= 0.0f) {
-                        held_max_min = fmax(held_max_min, float(k) - position_open_k[c]);
+                if (executed_close) {
+                    bool went_flat = psize[c] <= 0.0f;
+                    if (went_flat) {
+                        pprice[c] = 0.0f;
+                        if (position_open_k[c] >= 0.0f) {
+                            held_max_min = fmax(
+                                held_max_min, float(k) - position_open_k[c]
+                            );
+                        }
+                        position_open_k[c] = -1.0f;
                     }
-                    position_open_k[c] = -1.0f;
+                    close_qty[c] = 0.0f;
+                    close_reconstruct_after_reducer[c] = false;
+                    filled_coin[c] = true;
+                    any_fill = true;
                 }
-                close_qty[c] = 0.0f;
-                close_reconstruct_after_reducer[c] = false;
-                filled_coin[c] = true;
-                any_fill = true;
             }
 
             bool was_flat = psize[c] <= 0.0f;
@@ -1213,24 +1223,29 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         float target_psize = wel_target * balance
                             / fmax(pprice[c] * c_mult, 1.0e-12f);
                         float reduce_qty = fmax(psize[c] - target_psize, 0.0f);
-                        if (reduce_qty <= 1.1920928955078125e-7f) {
+                        if (reduce_qty <= 2.220446e-16f) {
                             reduce_qty = qty_step;
                         }
-                        float reducer_qty = fmin(
-                            psize[c],
-                            fmax(reducer_min, ceil_step(reduce_qty, qty_step))
-                        );
-                        float new_we = fmax(psize[c] - reducer_qty, 0.0f)
-                            * pprice[c] * c_mult / balance;
-                        if (new_we >= wel_target - 1.0e-12f
-                            && reducer_qty < psize[c]) {
+                        float reducer_qty = 0.0f;
+                        for (int steps = 0; steps <= 10000; ++steps) {
                             reducer_qty = fmin(
                                 psize[c],
                                 fmax(
                                     reducer_min,
-                                    ceil_step(reducer_qty + qty_step, qty_step)
+                                    ceil_step(reduce_qty, qty_step)
                                 )
                             );
+                            float new_psize = fmax(
+                                round_step(
+                                    psize[c] - reducer_qty, qty_step
+                                ),
+                                0.0f
+                            );
+                            if (new_psize < target_psize
+                                || new_psize <= 2.220446e-16f) {
+                                break;
+                            }
+                            reduce_qty += qty_step;
                         }
                         if (coin_close_retracement_base <= 0.0f) {
                             close_reconstruct_after_reducer[c] = true;
