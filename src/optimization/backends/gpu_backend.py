@@ -29,6 +29,7 @@ from optimization.problem import (
     _evaluate_pymoo_worker_from_globals,
     initialize_pymoo_worker,
 )
+from utils import to_standard_exchange_name
 
 
 GPU_DEFAULTS = {
@@ -959,6 +960,23 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 f"got {exchanges}"
             )
         exchange = exchanges[0]
+        effective_coin_sources = (
+            getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources")
+            or {}
+        )
+        if exchange != "combined":
+            prepared_exchange = to_standard_exchange_name(exchange)
+            conflicting_sources = {
+                str(coin): str(source)
+                for coin, source in effective_coin_sources.items()
+                if to_standard_exchange_name(str(source)) != prepared_exchange
+            }
+            if conflicting_sources:
+                raise ValueError(
+                    f"GPU suite scenario {ctx.label!r} assigns coin_sources "
+                    f"outside prepared dataset {prepared_exchange!r}: "
+                    f"{conflicting_sources}"
+                )
         hlcvs, btc, coin_indices = get_data(ctx, exchange)
         values = np.asarray(hlcvs)
         if coin_indices is not None:

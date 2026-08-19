@@ -962,6 +962,62 @@ def test_gpu_suite_inputs_accept_combined_dataset_and_coin_sources():
     }
 
 
+@pytest.mark.parametrize("source", ["binance", "binanceusdm"])
+def test_gpu_suite_inputs_accept_matching_individual_dataset_coin_source(source):
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="binance_only",
+        config={"backtest": {"coin_sources": {"BTC": source}}},
+        overrides={},
+        exchanges=["binance"],
+        msss={"binance": {"BTC": {}, "__meta__": {}}},
+        timestamps={"binance": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["exchange"] == "binance"
+
+
+def test_gpu_suite_inputs_reject_coin_source_outside_individual_dataset():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="bybit_only",
+        config={"backtest": {"coin_sources": {"BTC": "binance"}}},
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            raise AssertionError("conflicting source must fail before data access")
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    with pytest.raises(ValueError, match="outside prepared dataset 'bybit'"):
+        _gpu_suite_scenario_inputs(config, Suite())
+
+
 def test_gpu_suite_inputs_accept_one_exchange_per_scenario():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
