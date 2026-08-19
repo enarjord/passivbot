@@ -421,7 +421,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Show the top N ranked candidates instead of only the winner. Default: 1.",
     )
-    parser.add_argument(
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "-s",
         "--save-selected",
         type=str,
@@ -429,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="Copy the selected Pareto member to FILE.",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "-f",
         "--save-filtered",
         type=str,
@@ -1583,15 +1584,6 @@ def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> N
         )
 
 
-def _outputs_overlap(selected_output: Path, filtered_output: Path) -> bool:
-    return (
-        _is_within(selected_output, filtered_output)
-        or _is_within(filtered_output, selected_output)
-        or _is_within_by_identity(selected_output, filtered_output)
-        or _is_within_by_identity(filtered_output, selected_output)
-    )
-
-
 def _prepare_selected_output(
     raw_path: str | os.PathLike[str] | None,
     pareto_dir: Path,
@@ -1785,12 +1777,6 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         pareto_dir,
         filtered_candidates,
     )
-    if (
-        selected_output is not None
-        and filtered_output is not None
-        and _outputs_overlap(selected_output, filtered_output)
-    ):
-        raise ValueError("Selected and filtered output paths must not overlap.")
     selected_stage: Path | None = None
     filtered_stage: Path | None = None
     filtered_manifest: Path | None = None
@@ -1810,12 +1796,6 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                 scenario=scenario,
                 selected=result.candidate,
             )
-        if (
-            selected_output is not None
-            and filtered_output is not None
-            and _outputs_overlap(selected_output, filtered_output)
-        ):
-            raise ValueError("Selected and filtered output paths must not overlap.")
         if selected_output is not None and selected_stage is not None:
             _install_selected(selected_stage, selected_output)
             selected_stage = None

@@ -443,10 +443,13 @@ def test_build_parser_accepts_scenario():
 
 def test_build_parser_accepts_save_outputs():
     parser = build_parser()
-    args = parser.parse_args(["-s", "selected.json", "-f", "filtered"])
+    selected_args = parser.parse_args(["-s", "selected.json"])
+    filtered_args = parser.parse_args(["-f", "filtered"])
 
-    assert args.save_selected == "selected.json"
-    assert args.save_filtered == "filtered"
+    assert selected_args.save_selected == "selected.json"
+    assert filtered_args.save_filtered == "filtered"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-s", "selected.json", "-f", "filtered"])
     help_text = parser.format_help()
     assert "configs/selected.local.json" in help_text
     assert "optimize_results/filtered_pareto" in help_text
@@ -834,15 +837,12 @@ def test_saved_outputs_are_reported_in_json(
     tmp_path: Path,
     capsys,
 ):
-    selected = tmp_path / "selected.json"
     filtered = tmp_path / "filtered"
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
             "-l",
             "metric_a>0.6",
-            "-s",
-            str(selected),
             "-f",
             str(filtered),
             "--json",
@@ -852,7 +852,6 @@ def test_saved_outputs_are_reported_in_json(
     run_from_args(args)
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["selected"]["saved_path"] == str(selected.resolve())
     assert payload["saved_filtered"] == {
         "count": 2,
         "directory": str(filtered.resolve()),
@@ -932,64 +931,6 @@ def test_identity_overlap_detects_existing_directory_alias(
     )
 
 
-def test_combined_outputs_refuse_overlap_in_either_direction(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-):
-    filtered = tmp_path / "filtered"
-    selected_inside = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-s",
-            str(filtered / "selected.json"),
-            "-f",
-            str(filtered),
-        ]
-    )
-    with pytest.raises(ValueError, match="must not overlap"):
-        run_from_args(selected_inside)
-
-    selected = tmp_path / "selected.json"
-    filtered_inside = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-s",
-            str(selected),
-            "-f",
-            str(selected / "filtered"),
-        ]
-    )
-    with pytest.raises(ValueError, match="must not overlap"):
-        run_from_args(filtered_inside)
-    assert not selected.exists()
-
-
-def test_combined_outputs_recheck_overlap_after_staging(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    checks = 0
-
-    def overlap_after_staging(_selected: Path, _filtered: Path) -> bool:
-        nonlocal checks
-        checks += 1
-        return checks > 1
-
-    monkeypatch.setattr(pareto_explorer, "_outputs_overlap", overlap_after_staging)
-    selected = tmp_path / "selected.json"
-    filtered = tmp_path / "filtered"
-    args = build_parser().parse_args(
-        [str(sample_pareto_dir), "-s", str(selected), "-f", str(filtered)]
-    )
-
-    with pytest.raises(ValueError, match="must not overlap"):
-        run_from_args(args)
-    assert checks == 2
-    assert not selected.exists()
-    assert not filtered.exists()
-
-
 def test_filtered_copy_failure_leaves_no_output(
     sample_pareto_dir: Path,
     tmp_path: Path,
@@ -1009,48 +950,11 @@ def test_filtered_copy_failure_leaves_no_output(
     assert not list(tmp_path.glob(".pareto-filtered-*"))
 
 
-def test_combined_copy_failure_happens_before_either_output_is_installed(
-    sample_pareto_dir: Path,
-    tmp_path: Path,
-    monkeypatch,
-):
-    selected = tmp_path / "selected.json"
-    filtered = tmp_path / "filtered"
-    (sample_pareto_dir / "balanced.json").chmod(0o444)
-    original_copyfile = pareto_explorer.shutil.copyfile
-    call_count = 0
-
-    def fail_second_copy(source, destination):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise OSError("simulated filtered copy failure")
-        return original_copyfile(source, destination)
-
-    monkeypatch.setattr(pareto_explorer.shutil, "copyfile", fail_second_copy)
-    args = build_parser().parse_args(
-        [
-            str(sample_pareto_dir),
-            "-s",
-            str(selected),
-            "-f",
-            str(filtered),
-        ]
-    )
-
-    with pytest.raises(OSError, match="simulated filtered copy failure"):
-        run_from_args(args)
-    assert not selected.exists()
-    assert not filtered.exists()
-    assert not list(tmp_path.glob(".pareto-selected-*"))
-
-
 def test_no_output_is_written_when_limits_reject_every_candidate(
     sample_pareto_dir: Path,
     tmp_path: Path,
 ):
     selected = tmp_path / "selected.json"
-    filtered = tmp_path / "filtered"
     args = build_parser().parse_args(
         [
             str(sample_pareto_dir),
@@ -1058,15 +962,12 @@ def test_no_output_is_written_when_limits_reject_every_candidate(
             "metric_a>2",
             "-s",
             str(selected),
-            "-f",
-            str(filtered),
         ]
     )
 
     with pytest.raises(ValueError, match="No Pareto candidates remained"):
         run_from_args(args)
     assert not selected.exists()
-    assert not filtered.exists()
 
 
 def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_dir: Path):

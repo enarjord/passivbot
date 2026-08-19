@@ -80,13 +80,11 @@ Use `-s FILE` / `--save-selected FILE` to copy the selected member without reser
 `-f DIR` / `--save-filtered DIR` to copy every member retained immediately after limits and write
 a `selection.json` manifest. Without limits, the filtered export contains every loaded member.
 Scenario limits use the selected scenario's metrics; the export still represents the post-limit
-set before the scenario-specific nondominated front is rebuilt.
+set before the scenario-specific nondominated front is rebuilt. The two save options are mutually
+exclusive.
 
 Destinations must not overlap the source Pareto directory and must not already exist. Writes are
-staged before installation. When both save options are used, all member copies are staged before
-either output is installed. The two destinations are then installed independently: an installation
-failure for one does not roll back the other. Concurrent destination mutation is outside the
-tool's contract.
+staged before installation. Concurrent destination mutation is outside the tool's contract.
 
 `-o` / `--objectives` is not limited to the original `optimize.scoring` list. You can also name
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
