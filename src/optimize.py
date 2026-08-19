@@ -183,6 +183,7 @@ from optimization.bounds import (
     round_to_sig_digits,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
+from optimization.interrupts import OptimizerInterruptLatch
 from optimization.backend_shared import cancel_pending_async_results, stream_async_results
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
@@ -3564,7 +3565,7 @@ async def main():
             starting_config_iter = lambda _path: iter(preselected_starting_configs)
         if get_anchor_plan(config) is not None:
             starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(config)
-        backend_result = backend_runner(
+        backend_kwargs = dict(
             config=config,
             evaluator=evaluator,
             evaluator_for_pool=evaluator_for_pool,
@@ -3586,12 +3587,23 @@ async def main():
             build_config_fn=individual_to_config,
             overrides_fn=optimizer_overrides,
         )
+        if backend_name == "gpu":
+            interrupt_latch = OptimizerInterruptLatch()
+            backend_kwargs["interrupt_check"] = interrupt_latch.raise_if_requested
+            with interrupt_latch:
+                backend_result = backend_runner(**backend_kwargs)
+        else:
+            backend_result = backend_runner(**backend_kwargs)
         pool = backend_result.get("pool")
         pool_terminated = backend_result.get("pool_terminated", False)
 
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         interrupted = True
         logging.info("SIGINT received; starting graceful shutdown")
+        pool = getattr(exc, "pool", pool)
+        pool_terminated = bool(
+            getattr(exc, "pool_terminated", pool_terminated)
+        )
         pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
     except Exception as e:
         failed = True

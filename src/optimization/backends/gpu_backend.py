@@ -18,11 +18,19 @@ import numpy as np
 from config.metrics import resolve_metric_value
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
-from optimization.backend_shared import load_starting_individuals
+from optimization.backend_shared import (
+    cancel_pending_async_results,
+    load_starting_individuals,
+)
 from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import gpu_side_enabled
+from optimization.interrupts import (
+    InterruptCheck,
+    OptimizerBackendInterrupted,
+    no_interrupt_requested,
+)
 from optimization.problem import (
     PymooAsyncRecordingRunner,
     PymooEvaluatorAdapter,
@@ -2284,6 +2292,7 @@ def run_backend(
     overrides_fn=None,
     checkpoint_path: str | None = None,
     resume: bool = False,
+    interrupt_check: InterruptCheck | None = None,
 ) -> dict[str, Any]:
     del duplicate_counter
     del constraint_fitness_cls
@@ -2299,6 +2308,8 @@ def run_backend(
         validate_optimizer_effective_configs,
     )
 
+    interrupt_check = interrupt_check or no_interrupt_requested
+    interrupt_check()
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
     validate_optimizer_effective_configs(config)
@@ -2665,6 +2676,10 @@ def run_backend(
         def evaluate_proxy(candidates):
             return proxy.evaluate(candidates)
 
+    def evaluate_proxy_interruptibly(candidates):
+        interrupt_check()
+        return evaluate_proxy(candidates)
+
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
     )
@@ -2968,6 +2983,7 @@ def run_backend(
     def consume_ready(*, wait_for_one: bool = False) -> None:
         nonlocal exact_done, last_warning, persisted_halt_reason
         while True:
+            interrupt_check()
             # Preserve submission/generation order in the durable evidence
             # stream. Workers may finish out of order, but later completions
             # wait behind the oldest pending result so resume guarantees match
@@ -2980,6 +2996,7 @@ def run_backend(
             PymooAsyncRecordingRunner._raise_if_pool_workers_exited(pool_workers)
             time.sleep(0.05)
         for result in ready:
+            interrupt_check()
             (
                 vector,
                 proxy_score,
@@ -3045,6 +3062,7 @@ def run_backend(
 
     try:
         while exact_done < budget:
+            interrupt_check()
             consume_ready()
             if exact_done + len(pending) >= budget:
                 consume_ready(wait_for_one=True)
@@ -3059,7 +3077,7 @@ def run_backend(
 
             population = algorithm.ask()
             rows = np.asarray(population.get("X"), dtype=np.float64)
-            metric_rows = evaluate_proxy(parameter_dicts(rows))
+            metric_rows = evaluate_proxy_interruptibly(parameter_dicts(rows))
             proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
             proxy_evaluations += len(rows)
             if objective_scale.median is None:
@@ -3076,6 +3094,11 @@ def run_backend(
             )
             algorithm.tell(infills=population)
             generation += 1
+            # PyTorch MPS may consume KeyboardInterrupt while waiting for a
+            # Metal dispatch. Finish the in-progress ask/tell transaction, then
+            # honor the latched signal before exact work is submitted. This is
+            # also a safe point for serializing a resumable checkpoint.
+            interrupt_check()
 
             probe_count = _validation_probe_count(
                 validation_count,
@@ -3149,6 +3172,19 @@ def run_backend(
             time.time() - start_time,
         )
         return {"pool": pool, "pool_terminated": False}
+    except KeyboardInterrupt:
+        cancel_pending_async_results(pending)
+        try:
+            maybe_save_checkpoint(force=True)
+            logging.info(
+                "Saved GPU interrupt checkpoint | generation=%d exact=%d",
+                generation,
+                exact_done,
+            )
+        except Exception:
+            logging.exception("Failed to save GPU checkpoint during interrupt shutdown")
+        pool.terminate()
+        raise OptimizerBackendInterrupted(pool=pool, pool_terminated=True)
     except BaseException:
         pool.terminate()
         pool.join()

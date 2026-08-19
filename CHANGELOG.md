@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- GPU optimization now latches Ctrl+C received during a native Metal dispatch,
+  stops before another generation or exact-validation submission, saves a
+  resumable checkpoint, and then cleans up optimizer workers and shared memory.
+
 - Added Trailing Martingale per-position exposure repair to the Apple MPS optimizer for single- and
   multi-coin long-only, short-only, dual-side, and compatible suite runs. The Metal proxy models
   the canonical enable toggle and tunable threshold, gives the passive repair close precedence
