@@ -685,31 +685,21 @@ inline void passivbot_single_coin_impl(
         }
         if (long_scan_close_grid && long_recursive_close) {
             TmSide grid_source = long_side;
+            float reducer_qty = 0.0f;
+            int reducer_ticks = 0;
+            float reducer_price = 0.0f;
             if (long_side.close_is_wel_reducer) {
-                float cp = long_side.close_price;
-                float adj = fmin(
+                reducer_qty = fmin(
                     round_step(long_side.close_qty, qty_step), long_side.psize
                 );
-                float pnl = adj * c_mult * (cp - long_side.pprice);
-                float fee = adj * cp * c_mult * maker_fee;
-                balance += pnl - fee;
-                float new_psize = fmax(
-                    round_step(long_side.psize - adj, qty_step), 0.0f
+                reducer_ticks = long_side.close_ticks;
+                reducer_price = long_side.close_price;
+                grid_source.close_gen_psize = fmax(
+                    round_step(
+                        long_side.close_gen_psize - reducer_qty, qty_step
+                    ),
+                    0.0f
                 );
-                bool went_flat = new_psize <= 0.0f;
-                long_side.psize = new_psize;
-                day_volume += fabs(adj) * cp / balance;
-                long_close_fill = true;
-                if (went_flat) {
-                    long_side.pprice = 0.0f;
-                    if (long_side.pos_open_k >= 0.0f) {
-                        held_max_min = fmax(
-                            held_max_min, kf - long_side.pos_open_k
-                        );
-                    }
-                    long_side.pos_open_k = -1.0f;
-                }
-                grid_source.close_gen_psize = new_psize;
                 grid_source.wel_enforcer_enabled = false;
             }
             CloseGroup group;
@@ -718,6 +708,26 @@ inline void passivbot_single_coin_impl(
                 min_qty, min_cost, c_mult, group
             );
             bool reverse = grid_source.close_threshold_we > 0.0f;
+            bool merge_reducer_with_first = false;
+            if (reducer_qty > 0.0f && group_count > 0) {
+                int first_wanted = reverse ? group_count - 1 : 0;
+                recursive_close_groups(
+                    grid_source, true, first_wanted, qty_step, price_step,
+                    min_qty, min_cost, c_mult, group
+                );
+                merge_reducer_with_first = group.ticks == reducer_ticks;
+            }
+            if (reducer_qty > 0.0f && !merge_reducer_with_first) {
+                float pnl = reducer_qty * c_mult
+                    * (reducer_price - long_side.pprice);
+                float fee = reducer_qty * reducer_price * c_mult * maker_fee;
+                balance += pnl - fee;
+                long_side.psize = fmax(
+                    round_step(long_side.psize - reducer_qty, qty_step), 0.0f
+                );
+                day_volume += reducer_qty * reducer_price / balance;
+                long_close_fill = true;
+            }
             for (int rank = 0; rank < group_count; ++rank) {
                 int wanted = reverse ? group_count - rank - 1 : rank;
                 recursive_close_groups(
@@ -725,7 +735,11 @@ inline void passivbot_single_coin_impl(
                     min_qty, min_cost, c_mult, group
                 );
                 if (group.qty <= 0.0f || group.ticks > high_fill_max_tick) break;
-                float adj = fmin(round_step(group.qty, qty_step), long_side.psize);
+                float group_qty = group.qty;
+                if (rank == 0 && merge_reducer_with_first) {
+                    group_qty = round_step(group_qty + reducer_qty, qty_step);
+                }
+                float adj = fmin(round_step(group_qty, qty_step), long_side.psize);
                 float pnl = adj * c_mult * (group.price - long_side.pprice);
                 float fee = adj * group.price * c_mult * maker_fee;
                 balance += pnl - fee;
@@ -746,6 +760,16 @@ inline void passivbot_single_coin_impl(
                     long_side.pos_open_k = -1.0f;
                     break;
                 }
+            }
+            if (long_close_fill && long_side.psize <= 0.0f
+                && long_side.pprice > 0.0f) {
+                long_side.pprice = 0.0f;
+                if (long_side.pos_open_k >= 0.0f) {
+                    held_max_min = fmax(
+                        held_max_min, kf - long_side.pos_open_k
+                    );
+                }
+                long_side.pos_open_k = -1.0f;
             }
             if (long_close_fill) long_side.close_qty = 0.0f;
         } else if (long_scan_close_grid) {
@@ -851,31 +875,21 @@ inline void passivbot_single_coin_impl(
         }
         if (short_scan_close_grid && short_recursive_close) {
             TmSide grid_source = short_side;
+            float reducer_qty = 0.0f;
+            int reducer_ticks = 0;
+            float reducer_price = 0.0f;
             if (short_side.close_is_wel_reducer) {
-                float cp = short_side.close_price;
-                float adj = fmin(
+                reducer_qty = fmin(
                     round_step(short_side.close_qty, qty_step), short_side.psize
                 );
-                float pnl = adj * c_mult * (short_side.pprice - cp);
-                float fee = adj * cp * c_mult * maker_fee;
-                balance += pnl - fee;
-                float new_psize = fmax(
-                    round_step(short_side.psize - adj, qty_step), 0.0f
+                reducer_ticks = short_side.close_ticks;
+                reducer_price = short_side.close_price;
+                grid_source.close_gen_psize = fmax(
+                    round_step(
+                        short_side.close_gen_psize - reducer_qty, qty_step
+                    ),
+                    0.0f
                 );
-                bool went_flat = new_psize <= 0.0f;
-                short_side.psize = new_psize;
-                day_volume += fabs(adj) * cp / balance;
-                short_close_fill = true;
-                if (went_flat) {
-                    short_side.pprice = 0.0f;
-                    if (short_side.pos_open_k >= 0.0f) {
-                        held_max_min = fmax(
-                            held_max_min, kf - short_side.pos_open_k
-                        );
-                    }
-                    short_side.pos_open_k = -1.0f;
-                }
-                grid_source.close_gen_psize = new_psize;
                 grid_source.wel_enforcer_enabled = false;
             }
             CloseGroup group;
@@ -884,6 +898,26 @@ inline void passivbot_single_coin_impl(
                 min_qty, min_cost, c_mult, group
             );
             bool reverse = grid_source.close_threshold_we > 0.0f;
+            bool merge_reducer_with_first = false;
+            if (reducer_qty > 0.0f && group_count > 0) {
+                int first_wanted = reverse ? group_count - 1 : 0;
+                recursive_close_groups(
+                    grid_source, false, first_wanted, qty_step, price_step,
+                    min_qty, min_cost, c_mult, group
+                );
+                merge_reducer_with_first = group.ticks == reducer_ticks;
+            }
+            if (reducer_qty > 0.0f && !merge_reducer_with_first) {
+                float pnl = reducer_qty * c_mult
+                    * (short_side.pprice - reducer_price);
+                float fee = reducer_qty * reducer_price * c_mult * maker_fee;
+                balance += pnl - fee;
+                short_side.psize = fmax(
+                    round_step(short_side.psize - reducer_qty, qty_step), 0.0f
+                );
+                day_volume += reducer_qty * reducer_price / balance;
+                short_close_fill = true;
+            }
             for (int rank = 0; rank < group_count; ++rank) {
                 int wanted = reverse ? group_count - rank - 1 : rank;
                 recursive_close_groups(
@@ -891,7 +925,11 @@ inline void passivbot_single_coin_impl(
                     min_qty, min_cost, c_mult, group
                 );
                 if (group.qty <= 0.0f || group.ticks <= low_nonfill_max_tick) break;
-                float adj = fmin(round_step(group.qty, qty_step), short_side.psize);
+                float group_qty = group.qty;
+                if (rank == 0 && merge_reducer_with_first) {
+                    group_qty = round_step(group_qty + reducer_qty, qty_step);
+                }
+                float adj = fmin(round_step(group_qty, qty_step), short_side.psize);
                 float pnl = adj * c_mult * (short_side.pprice - group.price);
                 float fee = adj * group.price * c_mult * maker_fee;
                 balance += pnl - fee;
@@ -912,6 +950,16 @@ inline void passivbot_single_coin_impl(
                     short_side.pos_open_k = -1.0f;
                     break;
                 }
+            }
+            if (short_close_fill && short_side.psize <= 0.0f
+                && short_side.pprice > 0.0f) {
+                short_side.pprice = 0.0f;
+                if (short_side.pos_open_k >= 0.0f) {
+                    held_max_min = fmax(
+                        held_max_min, kf - short_side.pos_open_k
+                    );
+                }
+                short_side.pos_open_k = -1.0f;
             }
             if (short_close_fill) short_side.close_qty = 0.0f;
         } else if (short_scan_close_grid) {

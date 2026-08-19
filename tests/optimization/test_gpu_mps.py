@@ -1248,6 +1248,70 @@ def test_mps_tm_position_reducer_reachability_survives_grid_pruning(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_same_tick_reducer_and_grid_merge_before_volume(side):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    candidate = _tm_single_row(
+        wel_enforcer_enabled=True, wel_enforcer_threshold=0.5
+    )
+    candidate[6] = 1.0
+    candidate[7] = 10.0
+    candidate[11] = 0.0
+    candidate[16] = 0.0
+    candidate[17] = 0.0
+    candidate[20] = 0.0
+    candidate[23] = 100.0
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([candidate + candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # The initial EMA band places the long at 99 and the short at 101.  Qty is
+    # cropped to one wallet exposure at those prices.  The reducer and the
+    # reconstructed close grid both land at 100, so exact Rust executes their
+    # combined quantity as one fill with one post-fill volume denominator.
+    entry_price = 99.0 if side == "long" else 101.0
+    entry_qty = 10.101 if side == "long" else 9.901
+    balance_after_entry = 1_000.0 - entry_qty * entry_price * 0.001
+    pnl = entry_qty * (
+        100.0 - entry_price if side == "long" else entry_price - 100.0
+    )
+    balance_after_close = balance_after_entry + pnl - entry_qty * 100.0 * 0.001
+    expected_volume = entry_qty * entry_price / balance_after_entry
+    expected_volume += entry_qty * 100.0 / balance_after_close
+    assert output["balance"].item() == pytest.approx(
+        balance_after_close, abs=2.0e-4
+    )
+    assert output["day_volume"].sum().item() == pytest.approx(
+        expected_volume, rel=2.0e-5
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_global_position_exposure_repair(side):
     runner, baseline = _multicoin_exposure_fixture(
         "trailing_martingale", side, count=10
@@ -1423,6 +1487,54 @@ def test_mps_tm_multicoin_post_repair_grid_volume_uses_per_fill_balance(side):
     expected_volume += second_reducer_qty * reducer_price / balance_1
     expected_volume += grid_qty * grid_price / balance_2
 
+    assert output["day_volume"].sum().item() == pytest.approx(
+        expected_volume, rel=2.0e-5
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_same_tick_reducer_and_grid_merge_before_volume(side):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001),
+    ]
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=6,
+        markets=markets,
+        closes=(100.0, 100.0),
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "close_threshold_base_pct": 0.0,
+            "close_threshold_we_weight": 0.0,
+            "wel_enforcer_enabled": 1.0,
+            "wel_enforcer_threshold": 0.5,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    balance_after_first_entry = 999.5
+    balance_after_second_entry = 999.0001
+    balance_after_first_close = 998.5001
+    balance_after_second_close = 998.0002
+    expected_volume = 500.0 / balance_after_first_entry
+    expected_volume += 499.9 / balance_after_second_entry
+    expected_volume += 500.0 / balance_after_first_close
+    expected_volume += 499.9 / balance_after_second_close
+    assert output["balance"].item() == pytest.approx(
+        balance_after_second_close, abs=3.0e-4
+    )
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )

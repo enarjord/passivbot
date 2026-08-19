@@ -485,36 +485,42 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     : close_tick[c] <= fill_ticks[tick_offset + 0]);
             if (filled_close) {
                 float fill_price = float(close_tick[c]) * price_step;
-                float adjusted = fmin(round_step(close_qty[c], qty_step), psize[c]);
-                float pnl = adjusted * c_mult * (short_side
-                    ? pprice[c] - fill_price
-                    : fill_price - pprice[c]);
-                balance += pnl - adjusted * fill_price * c_mult * maker_fee;
-                psize[c] = fmax(
-                    round_step(psize[c] - adjusted, qty_step), 0.0f
+                float reducer_qty = fmin(
+                    round_step(close_qty[c], qty_step), psize[c]
                 );
-                day_volume += adjusted * fill_price * c_mult / balance;
+                float grid_gen_psize = fmax(
+                    round_step(psize[c] - reducer_qty, qty_step), 0.0f
+                );
+                int gen_tick_offset = 0;
+                float coin_close_qty_pct = 0.0f;
+                float coin_close_threshold_base = 0.0f;
+                float coin_close_threshold_we = 0.0f;
+                float coin_close_threshold_v1h = 0.0f;
+                float coin_close_threshold_v1m = 0.0f;
+                CloseGroup group;
+                int group_count = 0;
+                bool reverse = false;
+                bool merge_reducer_with_first = false;
 
-                if (close_reconstruct_after_reducer[c] && psize[c] > 0.0f) {
-                    const float grid_gen_psize = psize[c];
-                    const int gen_tick_offset = ((k - 1) * C + c) * 2;
-                    float coin_close_qty_pct = coin_override_or(
+                if (close_reconstruct_after_reducer[c]
+                    && grid_gen_psize > 0.0f) {
+                    gen_tick_offset = ((k - 1) * C + c) * 2;
+                    coin_close_qty_pct = coin_override_or(
                         coin_overrides, c, 15, close_qty_pct
                     );
-                    float coin_close_threshold_base = coin_override_or(
+                    coin_close_threshold_base = coin_override_or(
                         coin_overrides, c, 16, close_threshold_base
                     );
-                    float coin_close_threshold_we = coin_override_or(
+                    coin_close_threshold_we = coin_override_or(
                         coin_overrides, c, 17, close_threshold_we
                     );
-                    float coin_close_threshold_v1h = coin_override_or(
+                    coin_close_threshold_v1h = coin_override_or(
                         coin_overrides, c, 18, close_threshold_v1h
                     );
-                    float coin_close_threshold_v1m = coin_override_or(
+                    coin_close_threshold_v1m = coin_override_or(
                         coin_overrides, c, 19, close_threshold_v1m
                     );
-                    CloseGroup group;
-                    int group_count = recursive_grid_close_groups_after_reducer(
+                    group_count = recursive_grid_close_groups_after_reducer(
                         short_side,
                         grid_gen_psize,
                         pprice[c],
@@ -540,9 +546,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         -1,
                         group
                     );
-                    bool reverse = coin_close_threshold_we > 0.0f;
-                    for (int rank = 0; rank < group_count; ++rank) {
-                        int wanted = reverse ? group_count - rank - 1 : rank;
+                    reverse = coin_close_threshold_we > 0.0f;
+                    if (group_count > 0) {
+                        int first_wanted = reverse ? group_count - 1 : 0;
                         recursive_grid_close_groups_after_reducer(
                             short_side,
                             grid_gen_psize,
@@ -566,27 +572,74 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             min_qty,
                             min_cost,
                             c_mult,
-                            wanted,
+                            first_wanted,
                             group
                         );
-                        bool reachable = short_side
-                            ? group.ticks > fill_ticks[tick_offset + 1]
-                            : group.ticks <= fill_ticks[tick_offset + 0];
-                        if (group.qty <= 0.0f || !reachable) break;
-                        float grid_qty = fmin(
-                            round_step(group.qty, qty_step), psize[c]
-                        );
-                        float grid_pnl = grid_qty * c_mult * (short_side
-                            ? pprice[c] - group.price
-                            : group.price - pprice[c]);
-                        balance += grid_pnl
-                            - grid_qty * group.price * c_mult * maker_fee;
-                        psize[c] = fmax(
-                            round_step(psize[c] - grid_qty, qty_step), 0.0f
-                        );
-                        day_volume += grid_qty * group.price * c_mult / balance;
-                        if (psize[c] <= 0.0f) break;
+                        merge_reducer_with_first = group.ticks == close_tick[c];
                     }
+                }
+
+                if (!merge_reducer_with_first) {
+                    float pnl = reducer_qty * c_mult * (short_side
+                        ? pprice[c] - fill_price
+                        : fill_price - pprice[c]);
+                    balance += pnl
+                        - reducer_qty * fill_price * c_mult * maker_fee;
+                    psize[c] = grid_gen_psize;
+                    day_volume += reducer_qty * fill_price * c_mult / balance;
+                }
+
+                for (int rank = 0; rank < group_count; ++rank) {
+                    int wanted = reverse ? group_count - rank - 1 : rank;
+                    recursive_grid_close_groups_after_reducer(
+                        short_side,
+                        grid_gen_psize,
+                        pprice[c],
+                        close_gen_balance[c],
+                        close_gen_allowed_wel[c],
+                        touch_ticks[gen_tick_offset + 0],
+                        touch_ticks[gen_tick_offset + 1],
+                        touch_nearest_ticks[(k - 1) * C + c],
+                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                        touch_min_qty_relation[(k - 1) * C + c],
+                        coin_close_qty_pct,
+                        coin_close_threshold_base,
+                        coin_close_threshold_we,
+                        coin_close_threshold_v1h,
+                        coin_close_threshold_v1m,
+                        volatility_1h[c],
+                        volatility_1m[c],
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wanted,
+                        group
+                    );
+                    bool reachable = short_side
+                        ? group.ticks > fill_ticks[tick_offset + 1]
+                        : group.ticks <= fill_ticks[tick_offset + 0];
+                    if (group.qty <= 0.0f || !reachable) break;
+                    float group_qty = group.qty;
+                    if (rank == 0 && merge_reducer_with_first) {
+                        group_qty = round_step(
+                            group_qty + reducer_qty, qty_step
+                        );
+                    }
+                    float grid_qty = fmin(
+                        round_step(group_qty, qty_step), psize[c]
+                    );
+                    float grid_pnl = grid_qty * c_mult * (short_side
+                        ? pprice[c] - group.price
+                        : group.price - pprice[c]);
+                    balance += grid_pnl
+                        - grid_qty * group.price * c_mult * maker_fee;
+                    psize[c] = fmax(
+                        round_step(psize[c] - grid_qty, qty_step), 0.0f
+                    );
+                    day_volume += grid_qty * group.price * c_mult / balance;
+                    if (psize[c] <= 0.0f) break;
                 }
 
                 bool went_flat = psize[c] <= 0.0f;
