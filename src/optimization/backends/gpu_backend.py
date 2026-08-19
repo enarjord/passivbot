@@ -776,16 +776,11 @@ def _validate_scope_config(
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
             )
-        if strategy_kind == "trailing_martingale" and len(enabled_sides) != 1:
-            raise ValueError(
-                "GPU multi-coin Trailing Martingale currently requires exactly "
-                "one enabled side"
-            )
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
         ):
             raise ValueError(
-                "GPU dual-side multicoin EMA Anchor currently requires "
+                "GPU dual-side multicoin optimization currently requires "
                 "live.hedge_mode=true; one-way arbitration is not modeled"
             )
         if len(enabled_sides) == 2:
@@ -796,7 +791,7 @@ def _validate_scope_config(
                     values.get("short", []) or []
                 ):
                     raise ValueError(
-                        "GPU dual-side multicoin EMA Anchor currently requires "
+                        "GPU dual-side multicoin optimization currently requires "
                         f"matching long/short {label}_coins"
                     )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
@@ -852,7 +847,7 @@ def _validate_dual_multicoin_metrics(
     )
     if unsupported:
         raise ValueError(
-            "GPU dual-side multicoin EMA Anchor cannot safely reconstruct proxy "
+            "GPU dual-side multicoin optimization cannot safely reconstruct proxy "
             f"metrics {unsupported} from independent directional summaries; "
             "use other metrics or the CPU optimizer"
         )
@@ -1081,11 +1076,6 @@ def _gpu_suite_search_context(
             raise ValueError(
                 "GPU multicoin suites require one or two enabled sides in every "
                 f"scenario; {item['ctx'].label!r} has {list(sides)}"
-            )
-        if strategy_kind == "trailing_martingale" and len(sides) != 1:
-            raise ValueError(
-                "GPU multi-coin Trailing Martingale suites currently require "
-                f"exactly one enabled side; {item['ctx'].label!r} has {list(sides)}"
             )
     common_topologies = set(sides_by_label.values())
     if len(common_topologies) != 1:
@@ -2272,11 +2262,6 @@ def run_backend(
         if len(multicoin_sides) not in (1, 2):
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
-            )
-        if strategy_kind == "trailing_martingale" and len(multicoin_sides) != 1:
-            raise ValueError(
-                "GPU multi-coin Trailing Martingale currently requires exactly "
-                "one enabled side"
             )
         bound_map = {}
         for multicoin_side in multicoin_sides:

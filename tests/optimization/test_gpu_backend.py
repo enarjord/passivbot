@@ -781,11 +781,13 @@ def test_gpu_suite_search_context_accepts_single_side_multicoin_trailing_marting
     ) == (2, 2, ("long",))
 
 
-def test_gpu_suite_search_context_rejects_dual_side_multicoin_trailing_martingale():
+def test_gpu_suite_search_context_accepts_dual_side_multicoin_trailing_martingale():
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = True
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
-        _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+    assert _gpu_suite_search_context(
+        [_suite_search_input("multi", config, 2)]
+    ) == (2, 2, ("long", "short"))
 
 
 def test_gpu_suite_search_context_rejects_mixed_multicoin_strategy_kinds():
@@ -1434,7 +1436,7 @@ def test_gpu_multicoin_foundation_accepts_single_side_trailing_martingale(side):
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_multicoin_foundation_rejects_dual_side_trailing_martingale():
+def test_gpu_multicoin_foundation_accepts_dual_side_trailing_martingale():
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1444,8 +1446,7 @@ def test_gpu_multicoin_foundation_rejects_dual_side_trailing_martingale():
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_multicoin_foundation_accepts_dual_side_hedge_mode():
@@ -1470,8 +1471,14 @@ def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode():
-    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode(strategy_kind):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
         "short": ["BTC", "ETH", "SOL"],
@@ -1511,8 +1518,14 @@ def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins():
-    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_kind):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
         "short": ["BTC", "ETH"],

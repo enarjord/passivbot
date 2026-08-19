@@ -113,6 +113,33 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
     ] == 0.25
 
 
+def test_multicoin_tm_parameter_matrix_keeps_dual_side_values_separate():
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.sides = ["long", "short"]
+    proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    proxy.base_params = {
+        "long": {
+            key: 1.0 for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        },
+        "short": {
+            key: 2.0 for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        },
+    }
+    candidate = {
+        "long_entry_threshold_base_pct": 0.125,
+        "short_entry_threshold_base_pct": 0.25,
+    }
+
+    long_matrix = proxy._parameter_matrix([candidate], "long")
+    short_matrix = proxy._parameter_matrix([candidate], "short")
+
+    index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+        "entry_threshold_base_pct"
+    )
+    assert long_matrix[0, index] == 0.125
+    assert short_matrix[0, index] == 0.25
+
+
 def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     torch = pytest.importorskip("torch")
 

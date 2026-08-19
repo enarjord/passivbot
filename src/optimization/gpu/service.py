@@ -537,11 +537,6 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
-        if self.strategy_kind == "trailing_martingale" and len(enabled_sides) != 1:
-            raise ValueError(
-                "MPS multi-coin Trailing Martingale currently requires exactly "
-                "one enabled side"
-            )
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
         ):
