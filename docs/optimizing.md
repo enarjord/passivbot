@@ -110,6 +110,9 @@ The supported slice is intentionally narrow:
   `backtest.dynamic_wel_by_tradability: true`; `live.forager_score_hysteresis_pct` preserves flat
   incumbent candidates when a challenger's normalized Forager-score lead is within the configured
   gap
+- long-only or short-only multi-coin trailing-martingale runs for up to 64 coins, using the same
+  dynamic wallet-exposure and Forager-selection contract; dual-side multi-coin trailing martingale
+  remains unsupported
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count
@@ -117,11 +120,13 @@ The supported slice is intentionally narrow:
 - suite mode with exactly one prepared dataset per scenario, including individual-exchange
   comparisons and combined multi-exchange scenarios;
   single-coin EMA-anchor and trailing-martingale scenarios keep their existing directional
-  support, while EMA-anchor suites may also use different multi-coin subsets of up to 64 coins when
-  every effective scenario shares the same one-side or dual-side hedge-mode topology;
+  support, while EMA-anchor and single-side trailing-martingale suites may also use different
+  multi-coin subsets of up to 64 coins when every effective scenario shares the same supported
+  side topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
-  config overrides are supported; scenario-local `coin_overrides`, starting balance, maker fee,
-  liquidation threshold, Forager hysteresis, and hedge mode are also supported, while other
+  config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
+  EMA-anchor runs, starting balance, maker fee, liquidation threshold, Forager hysteresis, and
+  hedge mode are also supported, while other
   non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
   assignments, while an individual-exchange scenario fails closed if an effective assignment
   for one of its prepared coins selects another exchange
@@ -138,8 +143,9 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, multi-coin trailing-martingale, unmodeled non-bot suite scenario
-overrides, HSL, and auto-unstuck are not silently approximated by this release. Dual-side
+Dual-side one-way arbitration, dual-side multi-coin trailing martingale, trailing-martingale
+`coin_overrides`, unmodeled non-bot suite scenario overrides, HSL, and auto-unstuck are not
+silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
@@ -161,8 +167,9 @@ overridden scenario is rechecked against the directional GPU scope, so an overri
 enable HSL, auto-unstuck, an exposure enforcer, an invalid position count, or another unsupported
 behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
 range within that subset, either through common bounds or an explicit scenario override. Metal
-uses the single-coin or multicoin kernel independently for each scenario, then feeds all results to
-the same suite reducer. Scenario-local `coin_overrides`, `backtest.starting_balance`,
+uses the strategy-specific single-coin or multicoin kernel independently for each scenario, then
+feeds all results to the same suite reducer. Scenario-local `coin_overrides` for supported
+multi-coin EMA-anchor runs, `backtest.starting_balance`,
 `backtest.maker_fee_override`, `backtest.liquidation_threshold`,
 `live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
 proxy consumes them through the canonical backtest payload and then passes the same fail-closed
@@ -215,13 +222,19 @@ The backend is hybrid rather than a replacement backtester:
 1. pymoo NSGA-II proposes large normalized candidate batches.
 2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
    MPS; Python only prepares buffers and dispatches the program. EMA-anchor and
-   trailing-martingale use separate kernels. Directional runs keep separate long/short indicator,
+   trailing-martingale use separate single-coin and multi-coin kernels. Directional runs keep
+   separate long/short indicator,
    trailing, and position state with one shared balance and the exact Rust fill ordering. Python
    also precomputes strict high/low crossing boundaries as integer price ticks so float32 Metal
    comparisons preserve Rust's decimal-tick fill decisions. Candle-derived touches are classified
    from the original float64 data. EMA uses Rust-compatible directional ticks. Trailing-martingale
    uses those ticks to choose the controlling raw/target value before float32 can collapse nearby
    prices, then mirrors Rust's directional entry finalization and nearest-tick close finalization.
+   The multi-coin trailing-martingale screening kernel retains per-coin EMA, volatility, trailing,
+   position, cooldown, and pending-order state plus shared portfolio allocation. It stages one
+   entry and close per coin per candle; exact Rust validation remains responsible for authoritative
+   recursive same-candle ladders, and the normal constraint/rank/drift gates halt if that screening
+   approximation stops ordering candidates reliably.
    Raw-touch close minimum quantities are computed from the original float64 price before close-
    price finalization, and their ordering relative to aligned quantity steps is retained across
    float32 transport. Tick-aligned computed targets remain on their exchange tick; residual

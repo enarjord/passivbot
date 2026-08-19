@@ -66,6 +66,17 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
     "gate_reentry",
 )
 
+TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
+    *TRAILING_MARTINGALE_PARAM_KEYS,
+    "forager_volume_ema_span_1m",
+    "forager_volatility_ema_span_1m",
+    "forager_volume_drop_pct",
+    "forager_score_weights_volume",
+    "forager_score_weights_ema_readiness",
+    "forager_score_weights_volatility",
+    "n_positions",
+)
+
 GPU_STRATEGY_PARAM_KEYS = {
     "ema_anchor": EMA_ANCHOR_PARAM_KEYS,
     "trailing_martingale": TRAILING_MARTINGALE_PARAM_KEYS,
@@ -543,6 +554,9 @@ def build_mps_multicoin_data(
     bars[~np.isfinite(bars)] = 0.0
     fill_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
+    touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
+    touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
+    touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
     coin_settings = np.empty((coin_count, 11), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
@@ -553,13 +567,17 @@ def build_mps_multicoin_data(
         high_fill, low_nonfill = _strict_fill_tick_boundaries(
             high, low, market.price_step
         )
-        touch_down, touch_up, _touch_nearest = _directional_touch_ticks(
+        touch_down, touch_up, touch_nearest = _directional_touch_ticks(
             close, market.price_step
         )
         fill_ticks[:, coin, 0] = high_fill
         fill_ticks[:, coin, 1] = low_nonfill
         touch_ticks[:, coin, 0] = touch_down
         touch_ticks[:, coin, 1] = touch_up
+        touch_nearest_ticks[:, coin] = touch_nearest
+        min_qty_bits, min_qty_relation = _minimum_entry_qty_encoding(close, market)
+        touch_min_qty_bits[:, coin] = min_qty_bits
+        touch_min_qty_relation[:, coin] = min_qty_relation
         seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
         seed_close = float(close[seed_index])
         high_seed = float(values[seed_index, coin, 0])
@@ -584,7 +602,14 @@ def build_mps_multicoin_data(
             volume_seed * typical_seed,
         )
 
-    invariant_bytes = bars.nbytes + fill_ticks.nbytes + touch_ticks.nbytes
+    invariant_bytes = (
+        bars.nbytes
+        + fill_ticks.nbytes
+        + touch_ticks.nbytes
+        + touch_nearest_ticks.nbytes
+        + touch_min_qty_bits.nbytes
+        + touch_min_qty_relation.nbytes
+    )
     recommended = None
     recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
     if callable(recommended_fn):
@@ -605,6 +630,11 @@ def build_mps_multicoin_data(
         "bars": tensor(bars, dtype=torch.float32),
         "fill_ticks": tensor(fill_ticks, dtype=torch.int32),
         "touch_ticks": tensor(touch_ticks, dtype=torch.int32),
+        "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32),
+        "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32),
+        "touch_min_qty_relation": tensor(
+            touch_min_qty_relation, dtype=torch.int32
+        ),
         "coin_settings": tensor(coin_settings, dtype=torch.float32),
         "n": candle_count,
         "n_coins": coin_count,

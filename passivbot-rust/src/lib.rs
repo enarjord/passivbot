@@ -53,6 +53,11 @@ fn mps_trailing_martingale_source_py() -> &'static str {
     gpu::mps_trailing_martingale_source()
 }
 
+#[pyfunction]
+fn mps_trailing_martingale_multicoin_source_py() -> &'static str {
+    gpu::mps_trailing_martingale_multicoin_source()
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -67,6 +72,10 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(mps_trailing_martingale_source_py, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        mps_trailing_martingale_multicoin_source_py,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(round_, m)?)?;
     m.add_function(wrap_pyfunction!(round_up, m)?)?;
     m.add_function(wrap_pyfunction!(round_dn, m)?)?;

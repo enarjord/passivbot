@@ -13,6 +13,7 @@ from optimization.gpu.model import (
     MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
     flatten_trailing_martingale_params,
@@ -461,8 +462,8 @@ def _build_multicoin_ema_coin_overrides(
     return matrix, contract
 
 
-class MpsMulticoinEmaProxy:
-    """Batched multi-coin EMA Anchor screening proxy for one or two sides."""
+class MpsMulticoinProxy:
+    """Batched multi-coin MPS proxy for the supported strategy topology."""
 
     def __init__(
         self,
@@ -490,7 +491,10 @@ class MpsMulticoinEmaProxy:
 
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import compute_objectives
-        from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinRunner
+        from optimization.gpu.mps_kernel import (
+            MpsEmaAnchorMulticoinRunner,
+            MpsTrailingMartingaleMulticoinRunner,
+        )
 
         self._torch = torch
         self._compute_objectives = compute_objectives
@@ -512,11 +516,19 @@ class MpsMulticoinEmaProxy:
                 f"MPS multicoin proxy supports 2..{MPS_MULTICOIN_MAX_COINS} coins; "
                 f"got {coin_count}"
             )
-        if (
-            str(config.get("live", {}).get("strategy_kind", "")).lower()
-            != "ema_anchor"
-        ):
-            raise ValueError("MPS multicoin proxy currently supports ema_anchor only")
+        self.strategy_kind = (
+            str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+        )
+        if self.strategy_kind not in {"ema_anchor", "trailing_martingale"}:
+            raise ValueError(
+                "MPS multicoin proxy supports ema_anchor or "
+                f"trailing_martingale, got {self.strategy_kind!r}"
+            )
+        self.param_keys = (
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+            if self.strategy_kind == "trailing_martingale"
+            else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        )
         enabled_sides = [
             side for side in ("long", "short") if gpu_side_enabled(config, side)
         ]
@@ -525,6 +537,11 @@ class MpsMulticoinEmaProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
+        if self.strategy_kind == "trailing_martingale" and len(enabled_sides) != 1:
+            raise ValueError(
+                "MPS multi-coin Trailing Martingale currently requires exactly "
+                "one enabled side"
+            )
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
         ):
@@ -609,6 +626,10 @@ class MpsMulticoinEmaProxy:
                 raise ValueError(
                     f"MPS multicoin proxy requires {side} HSL and unstuck disabled"
                 )
+            if self.strategy_kind == "trailing_martingale":
+                first_strategy = flatten_trailing_martingale_params(
+                    first_strategy, first_bot
+                )
             weights = first_bot.get("forager_score_weights", {}) or {}
             first_strategy.update(
                 {
@@ -640,13 +661,12 @@ class MpsMulticoinEmaProxy:
                 }
             )
             missing = [
-                key
-                for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-                if key not in first_strategy
+                key for key in self.param_keys if key not in first_strategy
             ]
             if missing:
                 raise ValueError(
-                    f"MPS multicoin EMA {side} payload is missing parameters: {missing}"
+                    f"MPS multicoin {self.strategy_kind} {side} payload is "
+                    f"missing parameters: {missing}"
                 )
             self.base_params[side] = first_strategy
 
@@ -670,14 +690,24 @@ class MpsMulticoinEmaProxy:
         per_side_coin_overrides = {}
         per_side_override_contracts = {}
         for side in self.sides:
-            overrides, contract = _build_multicoin_ema_coin_overrides(
-                config=config,
-                mss=mss,
-                exchange=exchange,
-                coins=coins,
-                payload=payload,
-                side=side,
-            )
+            if self.strategy_kind == "ema_anchor":
+                overrides, contract = _build_multicoin_ema_coin_overrides(
+                    config=config,
+                    mss=mss,
+                    exchange=exchange,
+                    coins=coins,
+                    payload=payload,
+                    side=side,
+                )
+            else:
+                overrides = np.full((coin_count, 12), np.nan, dtype=np.float32)
+                contract = {
+                    "exchange": exchange,
+                    "coins": coins,
+                    "side": side,
+                    "values": {},
+                    "proxy_mode": "trailing-martingale-global-params-v1",
+                }
             per_side_coin_overrides[side] = overrides
             per_side_override_contracts[side] = contract
         if len(self.sides) == 1:
@@ -745,16 +775,24 @@ class MpsMulticoinEmaProxy:
             values, timestamps, runs=runs, markets=markets
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
-        self.runners = {
-            side: MpsEmaAnchorMulticoinRunner(
+        runner_cls = (
+            MpsTrailingMartingaleMulticoinRunner
+            if self.strategy_kind == "trailing_martingale"
+            else MpsEmaAnchorMulticoinRunner
+        )
+        self.runners = {}
+        for side in self.sides:
+            runner_kwargs = {
+                "side": side,
+                "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
+            }
+            if self.strategy_kind == "ema_anchor":
+                runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
+            self.runners[side] = runner_cls(
                 self.run,
                 self.data,
-                side=side,
-                coin_overrides=per_side_coin_overrides[side],
-                forager_score_hysteresis_pct=self.forager_score_hysteresis_pct,
+                **runner_kwargs,
             )
-            for side in self.sides
-        }
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None
@@ -763,6 +801,7 @@ class MpsMulticoinEmaProxy:
             if len(self.sides) != 1:
                 raise ValueError("side is required for dual-side multicoin parameters")
             side = self.sides[0]
+        param_keys = getattr(self, "param_keys", EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         rows = []
         for candidate in candidates:
             merged = dict(self.base_params[side])
@@ -774,7 +813,7 @@ class MpsMulticoinEmaProxy:
                 }
             )
             rows.append(
-                [float(merged[key]) for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
+                [float(merged[key]) for key in param_keys]
             )
         return np.asarray(rows, dtype=np.float64)
 
@@ -833,3 +872,7 @@ class MpsMulticoinEmaProxy:
                 for index in range(len(chunk))
             )
         return results
+
+
+# Compatibility alias retained for callers and tests from the EMA-only slices.
+MpsMulticoinEmaProxy = MpsMulticoinProxy

@@ -46,6 +46,7 @@ from optimization.backends.gpu_backend import (
     _restore_gpu_result_run_contract,
     _single_scenario_metric_surface,
     _suite_limit_metric_value,
+    _trailing_martingale_multicoin_bound_map,
     _select_novel_validations,
     _select_validation_indices,
     _update_probe_shortfall_log,
@@ -772,11 +773,32 @@ def test_gpu_suite_search_context_allows_legacy_single_coin_topologies():
     ) == (1, 1, None)
 
 
-def test_gpu_suite_search_context_rejects_multicoin_trailing_martingale():
+def test_gpu_suite_search_context_accepts_single_side_multicoin_trailing_martingale():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
 
-    with pytest.raises(ValueError, match="strategy_kind=ema_anchor"):
+    assert _gpu_suite_search_context(
+        [_suite_search_input("multi", config, 2)]
+    ) == (2, 2, ("long",))
+
+
+def test_gpu_suite_search_context_rejects_dual_side_multicoin_trailing_martingale():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+
+    with pytest.raises(ValueError, match="exactly one enabled side"):
         _gpu_suite_search_context([_suite_search_input("multi", config, 2)])
+
+
+def test_gpu_suite_search_context_rejects_mixed_multicoin_strategy_kinds():
+    ema = _directional_ema_config(long_enabled=True, short_enabled=False)
+    tm = _directional_tm_config(long_enabled=True, short_enabled=False)
+
+    with pytest.raises(ValueError, match="one supported strategy kind"):
+        _gpu_suite_search_context(
+            [
+                _suite_search_input("ema", ema, 2),
+                _suite_search_input("tm", tm, 2),
+            ]
+        )
 
 
 def test_gpu_suite_search_context_accepts_multicoin_dual_side_scenarios():
@@ -1350,15 +1372,34 @@ def test_gpu_coin_overrides_reject_single_coin_scope():
         _validate_scope(config, _Evaluator())
 
 
+def test_gpu_multicoin_tm_coin_overrides_fail_closed():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.02}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="require multi-coin EMA Anchor"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="trailing_martingale",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (
-            lambda config: config["live"].__setitem__(
-                "strategy_kind", "trailing_martingale"
-            ),
-            "ema_anchor only",
-        ),
         (
             lambda config: config["backtest"].__setitem__(
                 "dynamic_wel_by_tradability", False
@@ -1377,6 +1418,33 @@ def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
     mutate(config)
 
     with pytest.raises(ValueError, match=message):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_multicoin_foundation_accepts_single_side_trailing_martingale(side):
+    config = _directional_tm_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["live"]["approved_coins"][side] = ["BTC", "ETH", "SOL"]
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["bot"][side]["risk"]["n_positions"] = 2
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_foundation_rejects_dual_side_trailing_martingale():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match="exactly one enabled side"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -1507,6 +1575,25 @@ def test_gpu_multicoin_bound_map_exposes_forager_and_position_dimensions(
     ):
         key = f"{side}_{suffix}"
         assert bound_map[key] == key
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_tm_multicoin_bound_map_exposes_strategy_forager_and_positions(side):
+    bound_map = _trailing_martingale_multicoin_bound_map(side, set())
+
+    assert (
+        bound_map[f"{side}_entry_threshold_base_pct"]
+        == f"{side}_entry_threshold_base_pct"
+    )
+    assert (
+        bound_map[f"{side}_close_retracement_base_pct"]
+        == f"{side}_close_retracement_base_pct"
+    )
+    assert (
+        bound_map[f"{side}_forager_score_weights_ema_readiness"]
+        == f"{side}_forager_score_weights_ema_readiness"
+    )
+    assert bound_map[f"{side}_n_positions"] == f"{side}_n_positions"
 
 
 def test_gpu_short_multicoin_mirror_includes_long_forager_source_dimensions():

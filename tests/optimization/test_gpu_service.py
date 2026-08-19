@@ -6,6 +6,7 @@ import pytest
 from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
@@ -77,6 +78,39 @@ def test_multicoin_parameter_matrix_keeps_dual_side_values_separate():
     offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
     assert long_matrix[0, offset_index] == 0.125
     assert short_matrix[0, offset_index] == 0.25
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.sides = [side]
+    proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    proxy.base_params = {
+        side: {key: 1.0 for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS}
+    }
+
+    matrix = proxy._parameter_matrix(
+        [
+            {
+                f"{side}_entry_threshold_base_pct": 0.125,
+                f"{side}_forager_volume_drop_pct": 0.25,
+            }
+        ]
+    )
+
+    assert matrix.shape == (1, len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS))
+    assert matrix[
+        0,
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_threshold_base_pct"
+        ),
+    ] == 0.125
+    assert matrix[
+        0,
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "forager_volume_drop_pct"
+        ),
+    ] == 0.25
 
 
 def test_combine_hedged_multicoin_outputs_uses_conservative_surface():

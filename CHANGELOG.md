@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added long-only and short-only multi-coin Trailing Martingale optimization to the experimental
+  Apple MPS backend, including compatible suites. A dedicated Rust-owned Metal kernel combines
+  per-coin trailing-martingale state with the existing dynamic wallet-exposure and Forager
+  portfolio model; exact Rust backtests remain authoritative and the existing constraint, rank,
+  and drift gates fail closed on proxy disagreement. Dual-side multi-coin Trailing Martingale and
+  Trailing Martingale coin overrides remain explicitly unsupported.
+
 - Added canonical combined multi-exchange datasets and per-coin source assignments to Apple MPS
   optimizer suites. Metal consumes the same prepared per-coin candles and market settings as exact
   Rust, and checkpoint identity now records each coin's resolved OHLCV and market-settings source.
