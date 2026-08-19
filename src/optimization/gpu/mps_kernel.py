@@ -337,6 +337,8 @@ class MpsEmaAnchorMulticoinRunner:
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
         self.touch_nearest_ticks = data["touch_nearest_ticks"]
+        self.touch_min_qty_bits = data["touch_min_qty_bits"]
+        self.touch_min_qty_relation = data["touch_min_qty_relation"]
         self.coin_settings = data["coin_settings"]
         if coin_overrides is None:
             coin_overrides = np.full((self.n_coins, 12), np.nan, dtype=np.float32)
@@ -554,6 +556,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.fill_ticks,
             self.touch_ticks,
             self.touch_nearest_ticks,
+            self.touch_min_qty_bits,
+            self.touch_min_qty_relation,
             self.coin_settings,
             params_mps,
             self.settings,

@@ -38,11 +38,44 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+inline float calc_close_qty(
+    float psize, float pprice, float balance, float twel,
+    float minimum_close, int minimum_close_relation, float close_pct,
+    float qty_step, float c_mult
+) {
+    float full_size = balance * twel / fmax(pprice * c_mult, 1.0e-12f);
+    float quantity = fmin(
+        round_step(psize, qty_step),
+        fmax(
+            minimum_close,
+            ceil_step(
+                full_size * close_pct + fmax(psize - full_size, 0.0f),
+                qty_step
+            )
+        )
+    );
+    float remainder = psize - quantity;
+    bool remainder_below_minimum = remainder < minimum_close
+        || (remainder == minimum_close && minimum_close_relation > 0);
+    if (quantity > 0.0f && quantity < psize && remainder_below_minimum) {
+        quantity = psize;
+    }
+    if (psize < minimum_close * (1.0f - 1.0e-6f) && quantity > 0.0f) {
+        quantity = psize;
+    } else if (quantity > 0.0f
+        && quantity * (1.0f + 1.0e-6f) < minimum_close) {
+        quantity = 0.0f;
+    }
+    return quantity;
+}
+
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
     constant float* coin_settings,
     constant float* params,
     constant float* run_settings,
@@ -801,29 +834,20 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 int candidate_close_tick = close_touch_controls
                     ? touch_nearest_ticks[k * C + c] : target_close_tick;
                 float close_price = float(candidate_close_tick) * price_step;
-                float minimum_close = min_entry_qty(
-                    close_price, qty_step, min_qty, min_cost, c_mult
-                );
+                float minimum_close = close_touch_controls
+                    ? as_type<float>(touch_min_qty_bits[k * C + c])
+                    : min_entry_qty(
+                        close_price, qty_step, min_qty, min_cost, c_mult
+                    );
+                int minimum_close_relation = close_touch_controls
+                    ? touch_min_qty_relation[k * C + c] : 0;
                 float close_pct = trailing_close ? close_qty_pct
                     : (close_threshold_we == 0.0f ? 1.0f : close_qty_pct);
-                float full_size = balance * coin_wel
-                    / fmax(pprice[c] * c_mult, 1.0e-12f);
-                float clip = fmin(
-                    round_step(psize[c], qty_step),
-                    fmax(
-                        minimum_close,
-                        ceil_step(
-                            full_size * close_pct
-                                + fmax(psize[c] - full_size, 0.0f),
-                            qty_step
-                        )
-                    )
+                float clip = calc_close_qty(
+                    psize[c], pprice[c], balance, coin_wel,
+                    minimum_close, minimum_close_relation, close_pct,
+                    qty_step, c_mult
                 );
-                float remainder = psize[c] - clip;
-                if (clip > 0.0f && clip < psize[c]
-                    && remainder < minimum_close) {
-                    clip = psize[c];
-                }
                 close_qty[c] = psize[c] > 0.0f && close_price > 0.0f
                         && (!trailing_close || close_triggered)
                     ? clip : 0.0f;
@@ -985,6 +1009,8 @@ kernel void passivbot_trailing_martingale_multicoin(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
     constant float* coin_settings,
     constant float* params,
     constant float* run_settings,
@@ -996,7 +1022,8 @@ kernel void passivbot_trailing_martingale_multicoin(
 ) {
     const bool short_side = run_settings[3] > 0.5f;
     passivbot_trailing_martingale_multicoin_impl(
-        bars, fill_ticks, touch_ticks, touch_nearest_ticks, coin_settings,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         params, run_settings,
         sizes, daily, scalars, gap_hist, b, short_side
     );
@@ -1007,6 +1034,8 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     constant int* fill_ticks,
     constant int* touch_ticks,
     constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
     constant float* coin_settings,
     constant float* params,
     constant float* run_settings,
@@ -1017,7 +1046,8 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_trailing_martingale_multicoin_impl(
-        bars, fill_ticks, touch_ticks, touch_nearest_ticks, coin_settings,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         params, run_settings,
         sizes, daily, scalars, gap_hist, b, false
     );

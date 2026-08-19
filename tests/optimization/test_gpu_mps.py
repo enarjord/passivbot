@@ -350,6 +350,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
+    assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
 
     count = 512
     coin_count = 3
@@ -384,6 +385,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
     assert data["touch_nearest_ticks"].shape == (count, coin_count)
     assert data["touch_nearest_ticks"].dtype == torch.int32
+    assert data["touch_min_qty_bits"].shape == (count, coin_count)
+    assert data["touch_min_qty_relation"].shape == (count, coin_count)
     values = {
         "ema_span_0": 10.0,
         "ema_span_1": 30.0,
@@ -658,6 +661,78 @@ def _tm_row(*, initial_ema_dist=0.01, gate_initial=1.0, gate_reentry=1.0):
         gate_initial,
         gate_reentry,
     ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_finalization(
+    side,
+):
+    count = 6
+    coin_count = 2
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    hlcvs[:, 0, 0] = 100.004
+    hlcvs[:, 0, 1] = 100.004
+    if side == "long":
+        hlcvs[3, 0, 1] = 99.0
+        hlcvs[4, 0, 0] = 101.0
+    else:
+        hlcvs[3, 0, 0] = 101.0
+        hlcvs[4, 0, 1] = 99.0
+    hlcvs[:, 0, 2] = 100.004
+    hlcvs[:, 0, 3] = 100.0
+    hlcvs[:, 1, 0:3] = 200.0
+    hlcvs[:, 1, 3] = 1.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 10.0004, 1.0, 0.0),
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0),
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            1,
+            1,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row[15] = 0.01
+    row[16] = 0.199
+    row[17] = -2.0
+    row[20] = 0.0
+    row.extend(
+        [
+            60.0,  # forager volume span
+            60.0,  # forager volatility span
+            0.0,  # volume drop
+            1.0,  # volume score weight
+            0.0,  # EMA readiness score weight
+            0.0,  # volatility score weight
+            1.0,  # n_positions
+        ]
+    )
+
+    output = MpsTrailingMartingaleMulticoinRunner(
+        runs[0], data, side=side
+    ).run(np.array([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Exact Rust sizes against the raw 100.004 touch before finalizing the
+    # executable close to 100.00. The raw minimum is 0.100; recomputing it
+    # after finalization would yield 0.101 and leave the wrong remainder.
+    position_key = "psize" if side == "long" else "short_psize"
+    assert output[position_key].item() == pytest.approx(0.9, abs=1e-6)
 
 
 @pytest.mark.skipif(

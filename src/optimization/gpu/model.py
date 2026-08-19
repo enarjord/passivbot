@@ -555,6 +555,8 @@ def build_mps_multicoin_data(
     fill_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
+    touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
+    touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
     coin_settings = np.empty((coin_count, 11), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
@@ -573,6 +575,9 @@ def build_mps_multicoin_data(
         touch_ticks[:, coin, 0] = touch_down
         touch_ticks[:, coin, 1] = touch_up
         touch_nearest_ticks[:, coin] = touch_nearest
+        min_qty_bits, min_qty_relation = _minimum_entry_qty_encoding(close, market)
+        touch_min_qty_bits[:, coin] = min_qty_bits
+        touch_min_qty_relation[:, coin] = min_qty_relation
         seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
         seed_close = float(close[seed_index])
         high_seed = float(values[seed_index, coin, 0])
@@ -602,6 +607,8 @@ def build_mps_multicoin_data(
         + fill_ticks.nbytes
         + touch_ticks.nbytes
         + touch_nearest_ticks.nbytes
+        + touch_min_qty_bits.nbytes
+        + touch_min_qty_relation.nbytes
     )
     recommended = None
     recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
@@ -624,6 +631,10 @@ def build_mps_multicoin_data(
         "fill_ticks": tensor(fill_ticks, dtype=torch.int32),
         "touch_ticks": tensor(touch_ticks, dtype=torch.int32),
         "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32),
+        "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32),
+        "touch_min_qty_relation": tensor(
+            touch_min_qty_relation, dtype=torch.int32
+        ),
         "coin_settings": tensor(coin_settings, dtype=torch.float32),
         "n": candle_count,
         "n_coins": coin_count,

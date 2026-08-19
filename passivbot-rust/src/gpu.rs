@@ -138,6 +138,8 @@ mod tests {
         assert!(source.contains("entry_retracement_base"));
         assert!(source.contains("close_retracement_base"));
         assert!(source.contains("touch_nearest_ticks[k * C + c]"));
+        assert!(source.contains("as_type<float>(touch_min_qty_bits[k * C + c])"));
+        assert!(source.contains("minimum_close_relation > 0"));
         assert!(!source.contains("unstuck"));
         assert!(!source.contains("hard_stop"));
     }
