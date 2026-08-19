@@ -8,6 +8,8 @@ constant int COIN_COLS = 12;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
+// Allow 32 float32 unit roundoffs for each encoded PnL/fee balance update.
+constant float MIN_COST_BALANCE_ERROR_RATE = 1.9073486328125e-6f;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -40,17 +42,26 @@ inline bool finite_positive(float value) {
 }
 
 inline bool passes_min_effective_cost(
-    bool enabled, float balance, float wel, float initial_qty_pct,
-    float max_effective_min_cost
+    bool enabled, float balance, float balance_error_bound, float wel,
+    float initial_qty_pct, float max_effective_min_cost
 ) {
     if (!enabled) return true;
-    float rounded_projected_cost = balance * wel * initial_qty_pct;
+    float balance_lower = fmax(balance - balance_error_bound, 0.0f);
+    float rounded_projected_cost = balance_lower * wel * initial_qty_pct;
     // Discount by 16 float32 unit roundoffs. This covers upward encoding and
     // multiply rounding of all three operands before the conservative compare.
     float projected_cost_lower = rounded_projected_cost
         * (1.0f - 9.5367431640625e-7f);
     return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
         && projected_cost_lower >= max_effective_min_cost;
+}
+
+inline void accumulate_min_cost_balance_error(
+    thread float& error_bound, float balance_before, float pnl, float fee
+) {
+    float scale = fabs(balance_before) + fabs(pnl) + fabs(fee) + error_bound;
+    error_bound = (error_bound + scale * MIN_COST_BALANCE_ERROR_RATE)
+        * (1.0f + MIN_COST_BALANCE_ERROR_RATE);
 }
 
 inline float coin_override_or(
@@ -283,6 +294,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     }
 
     float balance = starting_balance;
+    float min_cost_balance_error = filter_by_min_effective_cost
+        ? fabs(starting_balance) * MIN_COST_BALANCE_ERROR_RATE : 0.0f;
     bool alive = true;
     bool equity_started = false;
     bool selection_initialized = false;
@@ -360,7 +373,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float pnl = adjusted * c_mult * (short_side
                     ? pprice[c] - fill_price
                     : fill_price - pprice[c]);
-                balance += pnl - adjusted * fill_price * c_mult * maker_fee;
+                float fee = adjusted * fill_price * c_mult * maker_fee;
+                float balance_before = balance;
+                balance += pnl - fee;
+                if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
+                    min_cost_balance_error, balance_before, pnl, fee
+                );
                 float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
                 bool went_flat = new_size <= 0.0f;
                 psize[c] = new_size;
@@ -385,7 +403,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             if (filled_entry) {
                 float fill_price = float(entry_tick[c]) * price_step;
                 float adjusted = round_step(entry_qty[c], qty_step);
-                balance -= adjusted * fill_price * c_mult * maker_fee;
+                float fee = adjusted * fill_price * c_mult * maker_fee;
+                float balance_before = balance;
+                balance -= fee;
+                if (filter_by_min_effective_cost) accumulate_min_cost_balance_error(
+                    min_cost_balance_error, balance_before, 0.0f, fee
+                );
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
                     : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
@@ -542,7 +565,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         && k <= int(coin_settings[coin_offset + 7])
                         && finite_positive(close) && coin_wel > 0.0f
                         && passes_min_effective_cost(
-                            filter_by_min_effective_cost, balance, coin_wel,
+                            filter_by_min_effective_cost, balance,
+                            min_cost_balance_error, coin_wel,
                             coin_initial_qty_pct, coin_settings[coin_offset + 11]
                         );
                     survivor[c] = enabled;

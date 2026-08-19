@@ -48,6 +48,7 @@ mod tests {
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
+        assert_eq!(source.matches("accumulate_min_cost_balance_error(").count(), 5);
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
@@ -83,6 +84,7 @@ mod tests {
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
+        assert_eq!(source.matches("accumulate_min_cost_balance_error(").count(), 3);
         assert!(source.contains("float total_cap = twel - 1.0e-7f"));
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));
@@ -125,6 +127,7 @@ mod tests {
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
+        assert_eq!(source.matches("accumulate_min_cost_balance_error(").count(), 7);
         assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));
         assert!(source.contains("cooldown_min != 0.0f"));
         assert!(!source.contains("price_now > rounded_target"));
@@ -155,6 +158,7 @@ mod tests {
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
+        assert_eq!(source.matches("accumulate_min_cost_balance_error(").count(), 3);
         assert!(!source.contains("unstuck"));
         assert!(!source.contains("hard_stop"));
     }

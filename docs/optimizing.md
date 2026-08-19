@@ -136,11 +136,12 @@ The supported slice is intentionally narrow:
   projected initial-entry cost test with dynamic or static per-coin wallet-exposure limits. The
   screening proxy compares against the highest executable minimum observed for that coin in the
   prepared window, rounds that threshold upward, and discounts the projected float32 product so
-  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. Exact
-  validation may admit a conservative proxy false negative. A failing flat side is excluded from
-  new-entry selection while an open position remains managed. Dual-side multi-coin runs still
-  require this option to be disabled because their separate side kernels do not share one
-  portfolio balance
+  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. A
+  conservative balance-error allowance grows on every proxy fill and is subtracted before that
+  comparison, covering accumulated float32 fee and realized-PnL rounding. Exact validation may
+  admit a conservative proxy false negative. A failing flat side is excluded from new-entry
+  selection while an open position remains managed. Dual-side multi-coin runs still require this
+  option to be disabled because their separate side kernels do not share one portfolio balance
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 

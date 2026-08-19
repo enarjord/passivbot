@@ -159,6 +159,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
     assert "projected_cost_lower" in source
+    assert source.count("accumulate_min_cost_balance_error(") == 5
     assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
         "(run_peak - eqf) / fmax(fabs(run_peak)"
     )
@@ -236,6 +237,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
     assert "projected_cost_lower" in source
+    assert source.count("accumulate_min_cost_balance_error(") == 3
     count = 512
     coin_count = 3
     phase = np.linspace(0.0, 12.0 * np.pi, count)
@@ -375,6 +377,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
     assert "projected_cost_lower" in source
+    assert source.count("accumulate_min_cost_balance_error(") == 3
 
     count = 512
     coin_count = 3
