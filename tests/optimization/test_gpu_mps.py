@@ -234,10 +234,6 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "incumbent[c] = selected[c] && psize[c] <= 0.0f" in source
     assert "if (!selected[c] || incumbent[c] || !survivor[c]) continue" in source
     assert "score[challenger] - score[incumbent_coin]" in source
-    assert "const bool filter_by_min_effective_cost" in source
-    assert "passes_min_effective_cost" in source
-    assert "projected_cost_lower" in source
-    assert source.count("accumulate_min_cost_balance_error(") == 3
     count = 512
     coin_count = 3
     phase = np.linspace(0.0, 12.0 * np.pi, count)
@@ -295,7 +291,6 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         runs[0], data, side=side, forager_score_hysteresis_pct=0.02
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
-    assert runner.settings.cpu()[5].item() == 0.0
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -374,10 +369,6 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
     assert "constant int OVERRIDE_COLS = 25" in source
     assert "coin_override_or" in source
-    assert "const bool filter_by_min_effective_cost" in source
-    assert "passes_min_effective_cost" in source
-    assert "projected_cost_lower" in source
-    assert source.count("accumulate_min_cost_balance_error(") == 3
 
     count = 512
     coin_count = 3
@@ -999,99 +990,6 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
     assert output["gap_hist"].sum().item() >= 1
     assert output["psize"].item() == 0.0
     assert output["short_psize"].item() == 0.0
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_min_effective_cost_uses_dynamic_and_override_wel(
-    strategy_kind, side
-):
-    count = 128
-    coin_count = 2
-    phase = np.linspace(0.0, 8.0 * np.pi, count)
-    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
-    for coin in range(coin_count):
-        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * 4.0
-        hlcvs[:, coin, 0] = close * 1.02
-        hlcvs[:, coin, 1] = close * 0.98
-        hlcvs[:, coin, 2] = close
-        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
-    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    markets = [
-        ProxyMarket(0.001, 0.01, 0.001, 60.0, 1.0, 0.0002)
-        for _ in range(coin_count)
-    ]
-    runs = [
-        ProxyRun(
-            1_000.0,
-            10,
-            10,
-            int(timestamps[0]),
-            int(timestamps[0]),
-            int(timestamps[0]),
-            60_000,
-            0.05,
-            0,
-            count - 1,
-        )
-        for _ in range(coin_count)
-    ]
-    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
-    ema_row = [
-        0.1,
-        10.0,
-        30.0,
-        1.5,
-        0.01,
-        0.0,
-        0.0,
-        0.0,
-        60.0,
-        60.0,
-        0.0,
-        1.0,
-        60.0,
-        60.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        2.0,
-    ]
-    tm_row = _tm_row() + [60.0, 60.0, 0.0, 1.0, 0.0, 0.0, 2.0]
-    row = tm_row if strategy_kind == "trailing_martingale" else ema_row
-    runner_cls = (
-        MpsTrailingMartingaleMulticoinRunner
-        if strategy_kind == "trailing_martingale"
-        else MpsEmaAnchorMulticoinRunner
-    )
-    override_cols = 25 if strategy_kind == "trailing_martingale" else 12
-    wel_col = 24 if strategy_kind == "trailing_martingale" else 11
-
-    dynamic_runner = runner_cls(
-        runs[0],
-        data,
-        side=side,
-        filter_by_min_effective_cost=True,
-    )
-    dynamic = dynamic_runner.run(np.array([row], dtype=np.float64))
-    overrides = np.full((coin_count, override_cols), np.nan, dtype=np.float32)
-    overrides[0, wel_col] = 1.0
-    overridden = runner_cls(
-        runs[0],
-        data,
-        side=side,
-        coin_overrides=overrides,
-        filter_by_min_effective_cost=True,
-    ).run(np.array([row], dtype=np.float64))
-    torch.mps.synchronize()
-
-    assert dynamic_runner.settings.cpu()[5].item() == 1.0
-    assert dynamic["day_has_fill"].sum().item() == 0
-    assert overridden["day_has_fill"].sum().item() > 0
 
 
 @pytest.mark.skipif(

@@ -5,15 +5,15 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Added `backtest.filter_by_min_effective_cost` support across the Apple MPS optimizer's EMA Anchor
-  and Trailing Martingale single-coin and single-side multi-coin matrix, including dual-side
-  single-coin runs and compatible suites. The Metal proxy conservatively compares projected initial
+  and Trailing Martingale single-coin matrix, including long, short, dual-side, and compatible
+  suites. The Metal proxy conservatively compares projected initial
   cost against the highest executable exchange minimum in each prepared coin window, using the
   effective dynamic or per-coin wallet-exposure limit, a downward arithmetic bound for the
   float32 projection, an allowance for balance error accumulated across fills, and excluding only
   flat sides from new entries. Exact Rust retains its current-close rule and remains authoritative
   through the normal validation and drift gates.
-  Dual-side multi-coin filtering remains fail-closed until both side kernels share a portfolio
-  balance.
+  Multi-coin filtering remains fail-closed because the approximate proxy path cannot
+  conservatively bound exact Rust's portfolio balance.
 
 - Added static per-coin Trailing Martingale overrides to single-side and dual-side multi-coin Apple
   MPS optimization and compatible suites. The Metal proxy consumes exact-last per-coin strategy,

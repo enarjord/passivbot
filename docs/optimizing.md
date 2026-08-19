@@ -140,8 +140,9 @@ The supported slice is intentionally narrow:
   conservative balance-error allowance grows on every proxy fill and is subtracted before that
   comparison, covering accumulated float32 fee and realized-PnL rounding. Exact validation may
   admit a conservative proxy false negative. A failing flat side is excluded from new-entry
-  selection while an open position remains managed. Dual-side multi-coin runs still require this
-  option to be disabled because their separate side kernels do not share one portfolio balance
+  selection while an open position remains managed. Multi-coin runs still require this option to
+  be disabled because their approximate selection and execution path cannot conservatively bound
+  exact Rust's portfolio balance
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 

@@ -329,7 +329,6 @@ class MpsEmaAnchorMulticoinRunner:
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
-        filter_by_min_effective_cost: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -378,7 +377,6 @@ class MpsEmaAnchorMulticoinRunner:
                 run.interval_ms,
                 float(side == "short"),
                 forager_score_hysteresis_pct,
-                float(bool(filter_by_min_effective_cost)),
             ],
             dtype=torch.float32,
             device="mps",
@@ -517,7 +515,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
-        filter_by_min_effective_cost: bool = False,
     ):
         super().__init__(
             run,
@@ -525,7 +522,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             side=side,
             coin_overrides=coin_overrides,
             forager_score_hysteresis_pct=forager_score_hysteresis_pct,
-            filter_by_min_effective_cost=filter_by_min_effective_cost,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
