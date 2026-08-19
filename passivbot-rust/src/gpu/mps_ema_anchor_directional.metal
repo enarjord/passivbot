@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 12;
+constant int SIDE_PARAMS = 16;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -60,6 +60,8 @@ struct EmaSide {
     float w1m;
     float cooldown_min;
     float twel;
+    float allowed_wel;
+    float entry_cap;
     float ema0;
     float ema1;
     float ema2;
@@ -99,6 +101,18 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.w1m = params[po + 7];
     side.cooldown_min = ceil(params[po + 10]);
     side.twel = params[po + 11];
+    float allowance_pct = fmax(params[po + 12], 0.0f);
+    bool legacy_raw_allowance = params[po + 13] > 0.5f;
+    side.allowed_wel = side.twel * (
+        1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
+    );
+    bool twel_entry_gate_enabled = params[po + 14] > 0.5f;
+    float twel_threshold = params[po + 15];
+    float gate_cap = side.twel;
+    if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
+        gate_cap = fmin(side.twel, side.twel * twel_threshold);
+    }
+    side.entry_cap = twel_entry_gate_enabled ? gate_cap : INFINITY;
     side.ema0 = seed_close;
     side.ema1 = seed_close;
     side.ema2 = seed_close;
@@ -169,7 +183,7 @@ inline void generate_long_orders(
     float bid_price = float(bid_ticks) * price_step;
     float min_q = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
     float base_q = fmax(min_q, round_step(
-        balance * side.twel * side.base_qty_pct
+        balance * side.allowed_wel * side.base_qty_pct
             / fmax(bid_price, 1.0e-12f) / c_mult,
         qty_step
     ));
@@ -178,7 +192,7 @@ inline void generate_long_orders(
     );
     bool cooldown = side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
         && kf < side.last_inc_k + side.cooldown_min;
-    float cap = side.twel - 1.0e-7f;
+    float cap = side.entry_cap - 1.0e-7f;
     float headroom = (cap * balance - side.psize * side.pprice * c_mult)
         / fmax(bid_price * c_mult, 1.0e-12f);
     bool over = (side.psize * side.pprice + e_qty * bid_price) * c_mult
@@ -200,7 +214,7 @@ inline void generate_long_orders(
     float ask_price = float(ask_ticks) * price_step;
     float min_cq = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
     float clip = fmin(side.psize, fmax(min_cq, round_step(
-        balance * side.twel * side.base_qty_pct
+        balance * side.allowed_wel * side.base_qty_pct
             / fmax(ask_price, 1.0e-12f) / c_mult,
         qty_step
     )));
@@ -243,7 +257,7 @@ inline void generate_short_orders(
     float ask_price = float(ask_ticks) * price_step;
     float min_q = min_entry_qty(ask_price, qty_step, min_qty, min_cost, c_mult);
     float base_q = fmax(min_q, round_step(
-        balance * side.twel * side.base_qty_pct
+        balance * side.allowed_wel * side.base_qty_pct
             / fmax(ask_price, 1.0e-12f) / c_mult,
         qty_step
     ));
@@ -252,7 +266,7 @@ inline void generate_short_orders(
     );
     bool cooldown = side.cooldown_min > 0.0f && side.last_inc_k >= 0.0f
         && kf < side.last_inc_k + side.cooldown_min;
-    float cap = side.twel - 1.0e-7f;
+    float cap = side.entry_cap - 1.0e-7f;
     float headroom = (cap * balance - side.psize * side.pprice * c_mult)
         / fmax(ask_price * c_mult, 1.0e-12f);
     bool over = (side.psize * side.pprice + e_qty * ask_price) * c_mult
@@ -274,7 +288,7 @@ inline void generate_short_orders(
     float bid_price = float(bid_ticks) * price_step;
     float min_cq = min_entry_qty(bid_price, qty_step, min_qty, min_cost, c_mult);
     float clip = fmin(side.psize, fmax(min_cq, round_step(
-        balance * side.twel * side.base_qty_pct
+        balance * side.allowed_wel * side.base_qty_pct
             / fmax(bid_price, 1.0e-12f) / c_mult,
         qty_step
     )));
@@ -511,11 +525,11 @@ inline void passivbot_single_coin_impl(
                 ? liq_floor : 0.0f;
             bool long_min_cost_eligible = passes_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
-                long_side.twel, long_side.base_qty_pct, max_effective_min_cost
+                long_side.allowed_wel, long_side.base_qty_pct, max_effective_min_cost
             );
             bool short_min_cost_eligible = passes_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
-                short_side.twel, short_side.base_qty_pct, max_effective_min_cost
+                short_side.allowed_wel, short_side.base_qty_pct, max_effective_min_cost
             );
             bool block_long_initial = !long_min_cost_eligible;
             bool block_short_initial = !short_min_cost_eligible;

@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added single-coin exposure-headroom policy support to the Apple MPS optimizer for EMA Anchor and
+  Trailing Martingale, including long-only, short-only, dual-side, and compatible suite runs.
+  Metal now models bounded and legacy-raw `we_excess_allowance_pct`, the
+  `total_exposure_entry_gate_enabled` toggle, and `total_exposure_enforcer_threshold`; exact Rust
+  backtests and the existing classification, rank, and drift gates remain authoritative.
+  Multi-coin runs retain their previous fail-closed exposure-policy requirements.
+
 - Added `backtest.filter_by_min_effective_cost` support across the Apple MPS optimizer's EMA Anchor
   and Trailing Martingale single-coin, single-side matrix, including long, short, and compatible
   suites. The Metal proxy conservatively compares projected initial cost against the highest

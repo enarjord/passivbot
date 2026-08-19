@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 27;
+constant int SIDE_PARAMS = 31;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -56,7 +56,7 @@ struct TmSide {
     float close_qty_pct, close_threshold_base, close_threshold_we;
     float close_threshold_v1h, close_threshold_v1m;
     float close_retracement_base, close_retracement_v1h, close_retracement_v1m;
-    float cooldown_min, twel;
+    float cooldown_min, twel, allowed_wel, entry_cap;
     bool gate_initial, gate_reentry;
     float ema0, ema1, ema2, vol1m, vol1h;
     float psize, pprice, last_inc_k, pos_open_k;
@@ -112,6 +112,19 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.twel = p[o + 24];
     s.gate_initial = p[o + 25] > 0.5f;
     s.gate_reentry = p[o + 26] > 0.5f;
+    float allowance_pct = fmax(p[o + 27], 0.0f);
+    bool legacy_raw_allowance = p[o + 28] > 0.5f;
+    s.allowed_wel = s.twel * (
+        1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
+    );
+    bool twel_entry_gate_enabled = p[o + 29] > 0.5f;
+    float twel_threshold = p[o + 30];
+    float gate_cap = s.twel;
+    if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
+        gate_cap = fmin(s.twel, s.twel * twel_threshold);
+    }
+    s.entry_cap = twel_entry_gate_enabled
+        ? fmin(s.allowed_wel, gate_cap) : s.allowed_wel;
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
     s.vol1m = 0.0f; s.vol1h = 0.0f;
     s.psize = 0.0f; s.pprice = 0.0f;
@@ -176,9 +189,9 @@ inline float crop_entry(
     if (qty <= 0.0f) return 0.0f;
     float cost = s.psize * s.pprice * c_mult;
     float we_if = (cost + qty * price * c_mult) / fmax(balance, 1.0e-9f);
-    if (we_if <= s.twel * 1.01f) return qty;
+    if (we_if <= s.entry_cap * 1.01f) return qty;
     float q = round_step(
-        (s.twel * balance - cost) / fmax(price * c_mult, 1.0e-12f), qty_step
+        (s.entry_cap * balance - cost) / fmax(price * c_mult, 1.0e-12f), qty_step
     );
     float mq = min_entry_qty(price, qty_step, min_qty, min_cost, c_mult);
     q = fmax(q, mq);
@@ -189,7 +202,7 @@ inline float calc_close_qty(
     thread TmSide& s, float balance, float mq, int mq_relation, float pct,
     float qty_step, float c_mult
 ) {
-    float full = balance * s.twel / fmax(s.pprice * c_mult, 1.0e-12f);
+    float full = balance * s.allowed_wel / fmax(s.pprice * c_mult, 1.0e-12f);
     float qty = fmin(
         round_step(s.psize, qty_step),
         fmax(mq, ceil_step(full * pct + fmax(s.psize - full, 0.0f), qty_step))
@@ -248,7 +261,7 @@ inline void generate_orders(
     float initial_price = float(initial_ticks) * price_step;
     float min_iq = min_entry_qty(initial_price, qty_step, min_qty, min_cost, c_mult);
     float iq = fmax(min_iq, round_step(
-        balance * s.twel * s.initial_qty_pct
+        balance * s.allowed_wel * s.initial_qty_pct
             / fmax(initial_price * c_mult, 1.0e-12f), qty_step
     ));
     bool flat = s.psize <= 0.0f;
@@ -258,7 +271,7 @@ inline void generate_orders(
         ? fmax(round_step(s.psize, qty_step), min_iq) : iq;
     float we = !flat && balance > 0.0f
         ? s.psize * s.pprice * c_mult / balance : 0.0f;
-    float wer = we / fmax(s.twel, 1.0e-12f);
+    float wer = we / fmax(s.allowed_wel, 1.0e-12f);
     float tm = fmax(
         1.0f + s.vol1h * s.entry_threshold_v1h
             + s.vol1m * s.entry_threshold_v1m + wer * s.entry_threshold_we,
@@ -317,16 +330,17 @@ inline void generate_orders(
     float rq = fmax(iq_effective, fmax(min_rq, round_step(
         fmax(
             s.psize * s.ddf,
-            balance * s.twel * s.initial_qty_pct
+            balance * s.allowed_wel * s.initial_qty_pct
                 / fmax(reentry_price * c_mult, 1.0e-12f)
         ), qty_step
     )));
     float we_if = (s.psize * s.pprice + rq * reentry_price)
         * c_mult / fmax(balance, 1.0e-9f);
-    float crop_fraction = (s.twel - we) / fmax(we_if - we, 1.0e-12f);
+    float crop_fraction = (s.entry_cap - we) / fmax(we_if - we, 1.0e-12f);
     float rq_crop = fmax(round_step(rq * crop_fraction, qty_step), min_rq);
-    if (we_if > s.twel * 1.01f && rq_crop < rq) rq = rq_crop;
-    bool cap_hit = trailing_entry ? we > s.twel * 0.999f : we >= s.twel * 0.999f;
+    if (we_if > s.entry_cap * 1.01f && rq_crop < rq) rq = rq_crop;
+    bool cap_hit = trailing_entry
+        ? we > s.entry_cap * 0.999f : we >= s.entry_cap * 0.999f;
     bool reentry_ok = !flat && !partial && !cap_hit && reentry_ticks > 1
         && (!trailing_entry || entry_triggered);
     float eqty = flat ? iq : (partial ? iq_partial : (reentry_ok ? rq : 0.0f));
@@ -335,7 +349,7 @@ inline void generate_orders(
     bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
-        || s.twel <= 0.0f || eticks <= 1
+        || s.allowed_wel <= 0.0f || s.entry_cap <= 0.0f || eticks <= 1
         || (block_initial && flat)) eqty = 0.0f;
     s.entry_ticks = eticks;
     s.entry_price = eprice;
@@ -922,12 +936,12 @@ inline void passivbot_single_coin_impl(
                 ? liq_floor : 0.0f;
             bool long_min_cost_eligible = passes_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
-                long_side.twel, long_side.initial_qty_pct,
+                long_side.allowed_wel, long_side.initial_qty_pct,
                 max_effective_min_cost
             );
             bool short_min_cost_eligible = passes_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
-                short_side.twel, short_side.initial_qty_pct,
+                short_side.allowed_wel, short_side.initial_qty_pct,
                 max_effective_min_cost
             );
             bool block_long_initial = !long_min_cost_eligible;

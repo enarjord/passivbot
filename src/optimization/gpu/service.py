@@ -43,6 +43,32 @@ CORE_OUTPUT_KEYS = {
 }
 
 
+def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
+    allowance_mode = str(
+        risk.get("we_excess_allowance_mode", "bounded")
+    ).strip().lower()
+    if allowance_mode not in {"bounded", "legacy_raw"}:
+        raise ValueError(
+            "MPS single-coin proxy requires "
+            f"bot.{side}.risk.we_excess_allowance_mode to be bounded or "
+            f"legacy_raw, got {allowance_mode!r}"
+        )
+    return {
+        "we_excess_allowance_pct": float(
+            risk.get("we_excess_allowance_pct", 0.0) or 0.0
+        ),
+        "we_excess_allowance_legacy_raw": float(
+            allowance_mode == "legacy_raw"
+        ),
+        "twel_entry_gate_enabled": float(
+            bool(risk.get("total_exposure_entry_gate_enabled", True))
+        ),
+        "twel_enforcer_threshold": float(
+            risk.get("total_exposure_enforcer_threshold", 1.0) or 0.0
+        ),
+    }
+
+
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
     if int(last_valid_idx) != int(candle_count) - 1:
         raise ValueError(
@@ -295,6 +321,7 @@ class MpsSingleCoinProxy:
                 strategy["total_wallet_exposure_limit"] = float(
                     risk["total_wallet_exposure_limit"]
                 )
+            strategy.update(_single_coin_exposure_params(risk, side=side))
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(

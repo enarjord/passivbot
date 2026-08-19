@@ -64,10 +64,24 @@ _EMA_SIDE_BOUND_SUFFIXES = {
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
-EMA_BOUND_MAP = {
+_SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
+    "risk_we_excess_allowance_pct": "we_excess_allowance_pct",
+    "risk_twel_enforcer_threshold": "twel_enforcer_threshold",
+}
+
+EMA_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
     for bound_suffix, parameter in _EMA_SIDE_BOUND_SUFFIXES.items()
+}
+
+EMA_BOUND_MAP = {
+    **EMA_STRATEGY_BOUND_MAP,
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
 }
 
 _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES = {
@@ -82,7 +96,7 @@ _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES = {
 
 EMA_MULTICOIN_BOUND_MAPS = {
     side: {
-        **EMA_BOUND_MAP,
+        **EMA_STRATEGY_BOUND_MAP,
         **{
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
@@ -123,15 +137,24 @@ _TM_SIDE_BOUND_SUFFIXES = {
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
-TRAILING_MARTINGALE_BOUND_MAP = {
+TRAILING_MARTINGALE_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
     for bound_suffix, parameter in _TM_SIDE_BOUND_SUFFIXES.items()
 }
 
+TRAILING_MARTINGALE_BOUND_MAP = {
+    **TRAILING_MARTINGALE_STRATEGY_BOUND_MAP,
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
+}
+
 TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS = {
     side: {
-        **TRAILING_MARTINGALE_BOUND_MAP,
+        **TRAILING_MARTINGALE_STRATEGY_BOUND_MAP,
         **{
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
@@ -376,6 +399,13 @@ PINNED_SCOPE_BOUND_VALUES = {
         "unstuck_enabled": 0.0,
         "risk_position_exposure_enforcer_enabled": 0.0,
         "risk_total_exposure_enforcer_enabled": 0.0,
+    }.items()
+}
+
+MULTICOIN_PINNED_SCOPE_BOUND_VALUES = {
+    f"{side}_{suffix}": expected
+    for side in ("long", "short")
+    for suffix, expected in {
         "risk_total_exposure_entry_gate_enabled": 1.0,
         "risk_twel_enforcer_threshold": 1.0,
         "risk_we_excess_allowance_pct": 0.0,
@@ -837,16 +867,22 @@ def _validate_scope_config(
         for key, expected in (
             ("position_exposure_enforcer_enabled", False),
             ("total_exposure_enforcer_enabled", False),
-            ("total_exposure_entry_gate_enabled", True),
         ):
             if bool(risk.get(key, expected)) != expected:
                 raise ValueError(
                     f"GPU foundation requires bot.{side}.risk.{key}={str(expected).lower()}"
                 )
-        if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
-            raise ValueError(
-                f"GPU foundation requires bot.{side}.risk.we_excess_allowance_pct=0.0"
-            )
+        if coin_count > 1:
+            if not bool(risk.get("total_exposure_entry_gate_enabled", True)):
+                raise ValueError(
+                    "GPU multicoin foundation requires "
+                    f"bot.{side}.risk.total_exposure_entry_gate_enabled=true"
+                )
+            if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
+                raise ValueError(
+                    "GPU multicoin foundation requires "
+                    f"bot.{side}.risk.we_excess_allowance_pct=0.0"
+                )
     return exchange
 
 
@@ -1946,9 +1982,14 @@ def _build_anchor_parameter_context(
     return parameter_overrides, fixed_bounds
 
 
-def _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides=None) -> None:
+def _validate_pinned_scope_bounds(
+    bound_by_key, base_by_key, enabled_sides=None, *, coin_count: int = 1
+) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
-    for key, expected in PINNED_SCOPE_BOUND_VALUES.items():
+    pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    if int(coin_count) > 1:
+        pinned.update(MULTICOIN_PINNED_SCOPE_BOUND_VALUES)
+    for key, expected in pinned.items():
         if key.split("_", 1)[0] not in enabled_sides:
             continue
         bound = bound_by_key.get(key)
@@ -2449,7 +2490,12 @@ def run_backend(
     )
     if "mirror_short_from_long" in gpu_optimizer_overrides:
         _mirror_short_mapping(bound_by_key)
-    _validate_pinned_scope_bounds(bound_by_key, base_by_key, enabled_sides)
+    _validate_pinned_scope_bounds(
+        bound_by_key,
+        base_by_key,
+        enabled_sides,
+        coin_count=max_coin_count,
+    )
 
     if suite_multicoin_sides is None:
         _validate_directional_search_space(
@@ -2484,6 +2530,7 @@ def run_backend(
             scenario_bound_by_key,
             scenario_base_by_key,
             scenario_enabled_sides,
+            coin_count=item["coin_count"],
         )
         _validate_directional_search_space(
             scenario_bound_by_key,

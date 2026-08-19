@@ -131,7 +131,14 @@ The supported slice is intentionally narrow:
   `wallet_exposure_limit` are supported; trailing-martingale `entry.ema_gate_mode`, disabled sides,
   and other override leaves fail closed
 - HSL and auto-unstuck disabled
-- BTC collateral, realized-loss gating, and exposure enforcers disabled
+- single-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
+  `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
+  `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
+  suites. Bounded allowance cannot raise a single coin above its side TWEL; legacy-raw allowance
+  may do so when the entry gate is disabled. Multi-coin runs still require zero excess allowance,
+  an enabled entry gate, and a threshold pinned to `1.0`
+- BTC collateral, realized-loss gating, position-exposure enforcement, and total-exposure repair
+  remain disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
   screening proxy compares against the highest executable minimum observed for that coin in the

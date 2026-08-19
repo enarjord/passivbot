@@ -5,9 +5,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+    TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     _build_hourly_log_range,
     _directional_touch_ticks,
     _maximum_effective_min_cost,
@@ -16,6 +18,17 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
 )
+
+
+def _single_coin_exposure_fields(
+    *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
+):
+    return [
+        allowance_pct,
+        float(legacy_raw),
+        float(entry_gate),
+        threshold,
+    ]
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
@@ -206,6 +219,7 @@ def test_mps_ema_anchor_shader_smoke():
         0.0,
         1.0,
     ]
+    row += _single_coin_exposure_fields()
     parameters = np.array([row + row, row + row], dtype=np.float64)
 
     output = MpsEmaAnchorRunner(market, run, data).run(parameters)
@@ -532,6 +546,7 @@ def test_mps_ema_anchor_preserves_tick_aligned_computed_target():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+    row += _single_coin_exposure_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -567,6 +582,7 @@ def test_mps_ema_anchor_directionally_rounds_non_aligned_candle_touch():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, -0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+    row += _single_coin_exposure_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -609,6 +625,7 @@ def test_mps_volume_uses_raw_non_positive_post_fill_balance():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+    row += _single_coin_exposure_fields()
     parameters = np.array(
         [row + row],
         dtype=np.float64,
@@ -653,6 +670,7 @@ def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+    row += _single_coin_exposure_fields()
 
     output = MpsEmaAnchorRunner(
         market,
@@ -692,6 +710,7 @@ def test_mps_short_only_opens_short_position():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+    row += _single_coin_exposure_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=False, short_enabled=True
@@ -732,6 +751,117 @@ def _tm_row(*, initial_ema_dist=0.01, gate_initial=1.0, gate_reentry=1.0):
         gate_initial,
         gate_reentry,
     ]
+
+
+def _tm_single_row(
+    *,
+    initial_ema_dist=0.01,
+    gate_initial=1.0,
+    gate_reentry=1.0,
+    allowance_pct=0.0,
+    legacy_raw=False,
+    entry_gate=True,
+    threshold=1.0,
+):
+    return _tm_row(
+        initial_ema_dist=initial_ema_dist,
+        gate_initial=gate_initial,
+        gate_reentry=gate_reentry,
+    ) + _single_coin_exposure_fields(
+        allowance_pct=allowance_pct,
+        legacy_raw=legacy_raw,
+        entry_gate=entry_gate,
+        threshold=threshold,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_exposure_headroom_and_entry_gate(
+    strategy_kind, side
+):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 100.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 100.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+
+    def row(*, legacy_raw, entry_gate):
+        exposure = _single_coin_exposure_fields(
+            allowance_pct=0.5,
+            legacy_raw=legacy_raw,
+            entry_gate=entry_gate,
+            threshold=0.5,
+        )
+        if strategy_kind == "trailing_martingale":
+            values = _tm_row(
+                initial_ema_dist=0.01,
+                gate_initial=1.0,
+                gate_reentry=1.0,
+            )
+            values[6] = 1.0
+            return values + exposure
+        values = [
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+            0.01,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            0.0,
+            1.0,
+        ]
+        return values + exposure
+
+    runner_cls = (
+        MpsTrailingMartingaleRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorRunner
+    )
+    runner = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    )
+    rows = [
+        row(legacy_raw=False, entry_gate=False),
+        row(legacy_raw=True, entry_gate=False),
+        row(legacy_raw=True, entry_gate=True),
+    ]
+    output = runner.run(
+        np.asarray([values + values for values in rows], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+    sizes = (
+        output["psize"] if side == "long" else output["short_psize"]
+    ).cpu().numpy()
+
+    assert sizes[0] > 0.0
+    assert sizes[1] > sizes[0] * 1.4
+    assert sizes[2] < sizes[0] * 0.6
 
 
 @pytest.mark.skipif(
@@ -775,7 +905,8 @@ def test_mps_single_coin_min_effective_cost_filter_blocks_only_flat_entries(
         0.0,
         1.0,
     ]
-    row = _tm_row() if strategy_kind == "trailing_martingale" else ema_row
+    ema_row += _single_coin_exposure_fields()
+    row = _tm_single_row() if strategy_kind == "trailing_martingale" else ema_row
     runner_cls = (
         MpsTrailingMartingaleRunner
         if strategy_kind == "trailing_martingale"
@@ -845,6 +976,7 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
         0.0,
         1.0,
     ]
+    row += _single_coin_exposure_fields()
     guaranteed_balance_lower = run.starting_balance * run.liquidation_threshold
     rounded_projection = np.float32(guaranteed_balance_lower) * np.float32(
         base_qty_pct
@@ -892,8 +1024,8 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     if strategy_kind == "trailing_martingale":
-        long_row = _tm_row(initial_ema_dist=0.02)
-        short_row = _tm_row(initial_ema_dist=0.01)
+        long_row = _tm_single_row(initial_ema_dist=0.02)
+        short_row = _tm_single_row(initial_ema_dist=0.01)
         short_row[6] = 0.01
         runner_cls = MpsTrailingMartingaleRunner
     else:
@@ -911,6 +1043,7 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
             0.0,
             1.0,
         ]
+        long_row += _single_coin_exposure_fields()
         short_row = list(long_row)
         short_row[0] = 0.01
         short_row[4] = 0.01
@@ -978,6 +1111,7 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
         0.0,
         1.0,
     ]
+    row += _single_coin_exposure_fields()
 
     output = MpsEmaAnchorRunner(
         market,
@@ -1083,7 +1217,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 27" in source
+    assert "constant int SIDE_PARAMS = 31" in source
+    assert "s.allowed_wel" in source
+    assert "s.entry_cap" in source
     assert "min_since_open" in source
     assert "max_since_min" in source
     assert "max_since_open" in source
@@ -1127,7 +1263,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row()
+    row = _tm_single_row()
 
     output = MpsTrailingMartingaleRunner(
         market,
@@ -1176,7 +1312,7 @@ def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long):
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[4] = 1.5  # entry double-down factor
     row[6] = 0.05  # initial entry uses 5% of the exposure budget
     row[11] = 0.0  # recursive entry mode
@@ -1225,7 +1361,7 @@ def test_mps_trailing_martingale_fills_recursive_entry_ladders_in_hedge_mode():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[4], row[6], row[11], row[16] = 1.5, 0.05, 0.0, 1.0
 
     output = MpsTrailingMartingaleRunner(
@@ -1277,7 +1413,7 @@ def test_mps_trailing_martingale_fills_sorted_recursive_close_grid(
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[6] = 0.1  # Open a 1-unit position.
     row[7] = 0.01  # Exposure cap prevents reentries in this fixture.
     row[15] = 0.05  # Two recursive close rungs at the standard lower bound.
@@ -1328,7 +1464,7 @@ def test_mps_trailing_martingale_fills_recursive_close_grids_in_hedge_mode():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[6], row[7], row[15] = 1.0, 1.0, 0.2
     row[16], row[17], row[20] = 0.005, 0.005, 0.0
 
@@ -1371,7 +1507,7 @@ def test_mps_trailing_martingale_preserves_tick_aligned_computed_target():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0)
 
     output = MpsTrailingMartingaleRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -1406,7 +1542,7 @@ def test_mps_trailing_martingale_quantizes_non_aligned_entry_down():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
 
     output = MpsTrailingMartingaleRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -1444,7 +1580,7 @@ def test_mps_trailing_martingale_quantizes_non_aligned_short_entry_up():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
 
     output = MpsTrailingMartingaleRunner(
         market, run, data, long_enabled=False, short_enabled=True
@@ -1486,7 +1622,7 @@ def test_mps_trailing_entry_quantizes_before_strict_fill():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
 
     output = MpsTrailingMartingaleRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -1528,7 +1664,7 @@ def test_mps_trailing_initial_gate_chooses_tick_before_float32_collapse():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=1.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=1.0)
 
     output = MpsTrailingMartingaleRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -1574,7 +1710,7 @@ def test_mps_trailing_quantizes_selected_raw_close_to_nearest_tick():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
     row[16] = 0.0  # tick-aligned close target at the float32 position price
     row[20] = 0.0  # disable trailing-close touch override
 
@@ -1614,7 +1750,7 @@ def test_mps_trailing_sizes_raw_touch_close_before_price_finalization():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
     row[15] = 0.01
     row[16] = 0.199
     row[17] = -2.0  # keep later grid closes above this fixture's high
@@ -1657,7 +1793,7 @@ def test_mps_trailing_preserves_just_above_aligned_raw_touch_minimum():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
     row[15] = 0.05
     row[16] = 0.299
     row[17] = -3.0  # keep a possible second grid close above the high
@@ -1713,7 +1849,7 @@ def test_mps_trailing_quantizes_selected_short_close_to_nearest_tick():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
     row[16] = 0.0
     row[20] = 0.0
 
@@ -1753,7 +1889,7 @@ def test_mps_trailing_martingale_one_way_arbitrates_initial_entry():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row()
+    row = _tm_single_row()
 
     output = MpsTrailingMartingaleRunner(
         market,
@@ -1796,7 +1932,7 @@ def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[6] = 2.0  # Oversize the initial order so the exposure cap crops it.
     row[7] = 0.5  # Keep any subsequent reentry far below the fixture market.
     row[16] = 0.5  # Keep the close above the fixture market.
@@ -1880,7 +2016,7 @@ def test_mps_trailing_martingale_touch_close_preserves_raw_price():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[7] = 0.5  # Prevent another entry in this fixture.
     row[16] = 0.0  # Use the current touch after the close trail retraces.
     row[20] = 0.000001
