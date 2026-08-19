@@ -1638,11 +1638,15 @@ def _prepare_filtered_output(
 def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-selected-"))
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=stage,
-        prefix="candidate-",
-        suffix=".tmp",
-    )
+    try:
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=stage,
+            prefix="candidate-",
+            suffix=".tmp",
+        )
+    except Exception:
+        _remove_export_tree(stage)
+        raise
     temporary = Path(temporary_name)
     try:
         with os.fdopen(file_descriptor, "wb") as destination:

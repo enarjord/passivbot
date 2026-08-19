@@ -818,6 +818,23 @@ def test_selected_member_stages_in_private_directory(
         pareto_explorer._remove_selected_stage(stage)
 
 
+def test_selected_stage_cleans_directory_when_file_creation_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
+    monkeypatch.setattr(
+        pareto_explorer.tempfile,
+        "mkstemp",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("too many open files")),
+    )
+
+    with pytest.raises(OSError, match="too many open files"):
+        pareto_explorer._stage_selected(candidates[0], tmp_path / "selected.json")
+    assert not list(tmp_path.glob(".pareto-selected-*"))
+
+
 def test_run_from_args_saves_post_limit_members_and_manifest(
     sample_pareto_dir: Path,
     tmp_path: Path,
