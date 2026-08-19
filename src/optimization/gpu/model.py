@@ -25,12 +25,15 @@ EMA_ANCHOR_PARAM_KEYS = (
     "total_wallet_exposure_limit",
 )
 
-SINGLE_COIN_EXPOSURE_PARAM_KEYS = (
+EXPOSURE_PARAM_KEYS = (
     "we_excess_allowance_pct",
     "we_excess_allowance_legacy_raw",
     "twel_entry_gate_enabled",
     "twel_enforcer_threshold",
 )
+
+# Compatibility name retained for imports from the first exposure-policy slice.
+SINGLE_COIN_EXPOSURE_PARAM_KEYS = EXPOSURE_PARAM_KEYS
 
 EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
@@ -46,6 +49,7 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     "forager_score_weights_ema_readiness",
     "forager_score_weights_volatility",
     "n_positions",
+    *EXPOSURE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -92,6 +96,7 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     "forager_score_weights_ema_readiness",
     "forager_score_weights_volatility",
     "n_positions",
+    *EXPOSURE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (

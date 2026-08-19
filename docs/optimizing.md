@@ -128,15 +128,21 @@ The supported slice is intentionally narrow:
   for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
   runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
-  `wallet_exposure_limit` are supported; trailing-martingale `entry.ema_gate_mode`, disabled sides,
-  and other override leaves fail closed
+  `wallet_exposure_limit` and `risk.we_excess_allowance_pct` are supported; per-coin
+  `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
+  other override leaves fail closed
 - HSL and auto-unstuck disabled
-- single-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
+- single- and multi-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
-  suites. Bounded allowance cannot raise a single coin above its side TWEL; legacy-raw allowance
-  may do so when the entry gate is disabled. Multi-coin runs still require zero excess allowance,
-  an enabled entry gate, and a threshold pinned to `1.0`
+  suites. For multi-coin runs, allowance is applied to each symbol's dynamic or overridden WEL;
+  the configured side-level bounded or legacy-raw mode applies to all symbols. Per-coin mode
+  overrides remain outside the canonical config contract.
+  Bounded mode limits only the added allowance: when the base WEL is at or below the side TWEL,
+  the allowance cannot raise it past TWEL; an explicit base WEL already above TWEL is left
+  unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
+  aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate
+  permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
 - BTC collateral, realized-loss gating, position-exposure enforcement, and total-exposure repair
   remain disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
@@ -185,7 +191,7 @@ behavior. In a multicoin suite, a scenario with fewer coins must keep the effect
 range within that subset, either through common bounds or an explicit scenario override. Metal
 uses the strategy-specific single-coin or multicoin kernel independently for each scenario, then
 feeds all results to the same suite reducer. Scenario-local `coin_overrides` for supported
-multi-coin EMA-anchor runs, `backtest.starting_balance`,
+multi-coin EMA Anchor and Trailing Martingale runs, `backtest.starting_balance`,
 `backtest.maker_fee_override`, `backtest.liquidation_threshold`,
 `live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
 proxy consumes them through the canonical backtest payload and then passes the same fail-closed

@@ -5,6 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     ProxyMarket,
     ProxyRun,
@@ -29,6 +30,122 @@ def _single_coin_exposure_fields(
         float(entry_gate),
         threshold,
     ]
+
+
+def _multicoin_exposure_fixture(
+    strategy_kind,
+    side,
+    coin_overrides=None,
+    *,
+    count=64,
+    markets=None,
+    closes=(100.0, 120.0),
+):
+    coin_count = 2
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin, close in enumerate(closes):
+        hlcvs[:, coin, 0] = close * 1.01
+        hlcvs[:, coin, 1] = close * 0.99
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    if markets is None:
+        markets = [
+            ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+            for _ in range(coin_count)
+        ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            1,
+            1,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    if strategy_kind == "ema_anchor":
+        values = {
+            "base_qty_pct": 1.0,
+            "ema_span_0": 2.0,
+            "ema_span_1": 3.0,
+            "entry_double_down_factor": 0.0,
+            "offset": 0.0,
+            "offset_psize_weight": 0.0,
+            "offset_volatility_1h_weight": 0.0,
+            "offset_volatility_1m_weight": 0.0,
+            "offset_volatility_ema_span_1h": 2.0,
+            "offset_volatility_ema_span_1m": 2.0,
+            "entry_cooldown_minutes": 0.0,
+            "total_wallet_exposure_limit": 1.0,
+            "forager_volume_ema_span_1m": 2.0,
+            "forager_volatility_ema_span_1m": 2.0,
+            "forager_volume_drop_pct": 0.0,
+            "forager_score_weights_volume": 1.0,
+            "forager_score_weights_ema_readiness": 0.0,
+            "forager_score_weights_volatility": 0.0,
+            "n_positions": 2.0,
+            "we_excess_allowance_pct": 0.0,
+            "we_excess_allowance_legacy_raw": 0.0,
+            "twel_entry_gate_enabled": 1.0,
+            "twel_enforcer_threshold": 1.0,
+        }
+        row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
+        runner = MpsEmaAnchorMulticoinRunner(
+            runs[0], data, side=side, coin_overrides=coin_overrides
+        )
+    else:
+        values = {
+            "ema_span_0": 2.0,
+            "ema_span_1": 3.0,
+            "volatility_ema_span_1h": 2.0,
+            "volatility_ema_span_1m": 2.0,
+            "entry_double_down_factor": 0.0,
+            "entry_initial_ema_dist": 0.0,
+            "entry_initial_qty_pct": 1.0,
+            "entry_threshold_base_pct": 10.0,
+            "entry_threshold_we_weight": 0.0,
+            "entry_threshold_volatility_1h_weight": 0.0,
+            "entry_threshold_volatility_1m_weight": 0.0,
+            "entry_retracement_base_pct": 0.0,
+            "entry_retracement_we_weight": 0.0,
+            "entry_retracement_volatility_1h_weight": 0.0,
+            "entry_retracement_volatility_1m_weight": 0.0,
+            "close_qty_pct": 1.0,
+            "close_threshold_base_pct": 10.0,
+            "close_threshold_we_weight": 0.0,
+            "close_threshold_volatility_1h_weight": 0.0,
+            "close_threshold_volatility_1m_weight": 0.0,
+            "close_retracement_base_pct": 0.0,
+            "close_retracement_volatility_1h_weight": 0.0,
+            "close_retracement_volatility_1m_weight": 0.0,
+            "entry_cooldown_minutes": 0.0,
+            "total_wallet_exposure_limit": 1.0,
+            "gate_initial": 0.0,
+            "gate_reentry": 0.0,
+            "forager_volume_ema_span_1m": 2.0,
+            "forager_volatility_ema_span_1m": 2.0,
+            "forager_volume_drop_pct": 0.0,
+            "forager_score_weights_volume": 1.0,
+            "forager_score_weights_ema_readiness": 0.0,
+            "forager_score_weights_volatility": 0.0,
+            "n_positions": 2.0,
+            "we_excess_allowance_pct": 0.0,
+            "we_excess_allowance_legacy_raw": 0.0,
+            "twel_entry_gate_enabled": 1.0,
+            "twel_enforcer_threshold": 1.0,
+        }
+        row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
+        runner = MpsTrailingMartingaleMulticoinRunner(
+            runs[0], data, side=side, coin_overrides=coin_overrides
+        )
+    return runner, row
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
@@ -241,7 +358,10 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int OVERRIDE_COLS = 12" in source
+    assert "constant int PARAM_COLS = 23" in source
+    assert "constant int OVERRIDE_COLS = 13" in source
+    assert "allowed_wallet_exposure_limit" in source
+    assert "twel_entry_gate_enabled" in source
     assert "constant int DAILY_COLS = 6" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
@@ -301,6 +421,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         0.0,
         2.0,
     ]
+    row += _single_coin_exposure_fields()
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0], data, side=side, forager_score_hysteresis_pct=0.02
@@ -330,7 +451,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"
 
-    disabled = np.full((coin_count, 12), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 13), np.nan, dtype=np.float32)
     disabled[:, 11] = 0.0
     disabled_output = MpsEmaAnchorMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -339,7 +460,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 12), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 13), np.nan, dtype=np.float32)
     exact_last[:, :11] = np.asarray(row[:11], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:11] = [
@@ -376,13 +497,15 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 34" in source
+    assert "constant int PARAM_COLS = 38" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
-    assert "constant int OVERRIDE_COLS = 25" in source
+    assert "constant int OVERRIDE_COLS = 26" in source
+    assert "allowed_wallet_exposure_limit" in source
+    assert "twel_entry_gate_enabled" in source
     assert "coin_override_or" in source
 
     count = 512
@@ -455,6 +578,10 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "forager_score_weights_ema_readiness": 0.0,
         "forager_score_weights_volatility": 0.0,
         "n_positions": 2.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 1.0,
+        "twel_enforcer_threshold": 1.0,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -469,7 +596,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
 
-    disabled = np.full((coin_count, 25), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 26), np.nan, dtype=np.float32)
     disabled[:, 24] = 0.0
     disabled_output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -478,7 +605,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 25), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 26), np.nan, dtype=np.float32)
     exact_last[:, :25] = np.asarray(row[:25], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:25] = [
@@ -520,6 +647,134 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         exact_last_output["day_end_eq"][0],
         exact_last_output["day_end_eq"][1],
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_legacy_raw_allowance_with_gate_disabled_expands_volume(
+    strategy_kind, side
+):
+    runner, baseline = _multicoin_exposure_fixture(strategy_kind, side)
+    expanded = list(baseline)
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    expanded[keys.index("we_excess_allowance_pct")] = 0.5
+    expanded[keys.index("we_excess_allowance_legacy_raw")] = 1.0
+    expanded[keys.index("twel_entry_gate_enabled")] = 0.0
+
+    output = runner.run(np.asarray([baseline, expanded], dtype=np.float64))
+    torch.mps.synchronize()
+    volume = output["day_volume"].sum(dim=1).cpu().numpy()
+
+    assert volume[0] > 0.0
+    assert volume[1] > volume[0] * 1.1
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_multicoin_coin_override_allowance_expands_one_symbol(strategy_kind):
+    override_cols = 13 if strategy_kind == "ema_anchor" else 26
+    allowance_column = 12 if strategy_kind == "ema_anchor" else 25
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[0, allowance_column] = 1.0
+    baseline_runner, baseline = _multicoin_exposure_fixture(strategy_kind, "long")
+    override_runner, overridden = _multicoin_exposure_fixture(
+        strategy_kind, "long", overrides
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    baseline[keys.index("twel_entry_gate_enabled")] = 0.0
+    overridden[keys.index("twel_entry_gate_enabled")] = 0.0
+
+    baseline_output = baseline_runner.run(
+        np.asarray([baseline], dtype=np.float64)
+    )
+    override_output = override_runner.run(
+        np.asarray([overridden], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    baseline_volume = baseline_output["day_volume"].sum().item()
+    override_volume = override_output["day_volume"].sum().item()
+    assert baseline_volume > 0.0
+    assert override_volume > baseline_volume * 1.1
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_multicoin_twel_threshold_reduces_entry_volume(strategy_kind):
+    runner, full_cap = _multicoin_exposure_fixture(strategy_kind, "long")
+    reduced_cap = list(full_cap)
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    reduced_cap[keys.index("twel_enforcer_threshold")] = 0.5
+
+    output = runner.run(np.asarray([full_cap, reduced_cap], dtype=np.float64))
+    torch.mps.synchronize()
+    volume = output["day_volume"].sum(dim=1).cpu().numpy()
+
+    assert volume[0] > 0.0
+    assert 0.0 < volume[1] < volume[0] * 0.75
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_multicoin_equal_distance_twel_tie_keeps_higher_coin_index(
+    strategy_kind,
+):
+    override_cols = 13 if strategy_kind == "ema_anchor" else 26
+    wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[0, wallet_exposure_column] = 0.4
+    overrides[1, wallet_exposure_column] = 0.5
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 300.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    runner, candidate = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        overrides,
+        count=6,
+        markets=markets,
+        closes=(100.0, 100.0),
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    candidate[keys.index("twel_enforcer_threshold")] = 0.5
+
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+    volume = output["day_volume"].sum().item()
+
+    # Exact Rust removes equal-distance entries by ascending symbol index.
+    # That leaves the higher-index coin's 0.5-WEL order. Keeping index zero
+    # instead would admit only its 0.4-WEL order because the residual is dust.
+    # EMA Anchor also closes the selected flat-price order in this short fixture,
+    # so it reports the matching entry and exit volume.
+    expected_volume = 1.0 if strategy_kind == "ema_anchor" else 0.5
+    assert expected_volume - 0.05 < volume < expected_volume + 0.05
 
 
 @pytest.mark.skipif(
@@ -1189,6 +1444,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
             1.0,  # n_positions
         ]
     )
+    row.extend(_single_coin_exposure_fields())
 
     output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side

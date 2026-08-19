@@ -87,12 +87,25 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
 
     other_side = "short" if side == "long" else "long"
     matrix = proxy._parameter_matrix(
-        [{f"{side}_offset": 0.125, f"{other_side}_offset": 9.0}]
+        [
+            {
+                f"{side}_offset": 0.125,
+                f"{side}_we_excess_allowance_pct": 0.25,
+                f"{side}_twel_enforcer_threshold": 0.8,
+                f"{other_side}_offset": 9.0,
+            }
+        ]
     )
 
     assert matrix.shape == (1, len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS))
     offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
     assert matrix[0, offset_index] == 0.125
+    assert matrix[
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("we_excess_allowance_pct")
+    ] == pytest.approx(0.25)
+    assert matrix[
+        0, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+    ] == pytest.approx(0.8)
 
 
 def test_multicoin_parameter_matrix_keeps_dual_side_values_separate():
@@ -126,6 +139,8 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
             {
                 f"{side}_entry_threshold_base_pct": 0.125,
                 f"{side}_forager_volume_drop_pct": 0.25,
+                f"{side}_we_excess_allowance_pct": 0.4,
+                f"{side}_twel_enforcer_threshold": 0.75,
             }
         ]
     )
@@ -143,6 +158,18 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
             "forager_volume_drop_pct"
         ),
     ] == 0.25
+    assert matrix[
+        0,
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "we_excess_allowance_pct"
+        ),
+    ] == pytest.approx(0.4)
+    assert matrix[
+        0,
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_threshold"
+        ),
+    ] == pytest.approx(0.75)
 
 
 def test_multicoin_tm_parameter_matrix_keeps_dual_side_values_separate():
@@ -339,7 +366,13 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ],
         bot_params_list=[
             {"long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0}},
-            {"long": {"entry_cooldown_minutes": 15.0, "wallet_exposure_limit": 0.4}},
+            {
+                "long": {
+                    "entry_cooldown_minutes": 15.0,
+                    "wallet_exposure_limit": 0.4,
+                    "risk_we_excess_allowance_pct": 0.25,
+                }
+            },
         ],
     )
     config = {
@@ -350,7 +383,10 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "strategy": {
                             "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
                         },
-                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "risk": {
+                            "entry_cooldown_minutes": 15.0,
+                            "we_excess_allowance_pct": 0.25,
+                        },
                         "wallet_exposure_limit": 0.4,
                     }
                 }
@@ -370,14 +406,15 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 12)
+    assert matrix.shape == (2, 13)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
     assert matrix[1, 10] == pytest.approx(15.0)
     assert matrix[1, 11] == pytest.approx(0.4)
+    assert matrix[1, 12] == pytest.approx(0.25)
     assert contract["coins"] == ["BTC", "ETH"]
-    assert contract["values"][0] == [None] * 12
+    assert contract["values"][0] == [None] * 13
 
 
 def test_multicoin_coin_overrides_pack_dual_sides_independently():
@@ -505,6 +542,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "entry_cooldown_minutes": 15.0,
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.4,
+                    "risk_we_excess_allowance_pct": 0.25,
                 }
             },
         ],
@@ -520,7 +558,10 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                                 "close": {"qty_pct": 0.5},
                             }
                         },
-                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "risk": {
+                            "entry_cooldown_minutes": 15.0,
+                            "we_excess_allowance_pct": 0.25,
+                        },
                         "wallet_exposure_limit": 0.4,
                     }
                 }
@@ -540,13 +581,14 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 25)
+    assert matrix.shape == (2, 26)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 15] == pytest.approx(0.5)
     assert matrix[1, 23] == pytest.approx(15.0)
     assert matrix[1, 24] == pytest.approx(0.4)
-    assert contract["values"][0] == [None] * 25
+    assert matrix[1, 25] == pytest.approx(0.25)
+    assert contract["values"][0] == [None] * 26
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

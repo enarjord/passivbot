@@ -98,6 +98,10 @@ EMA_MULTICOIN_BOUND_MAPS = {
     side: {
         **EMA_STRATEGY_BOUND_MAP,
         **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+        },
+        **{
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
         },
@@ -155,6 +159,10 @@ TRAILING_MARTINGALE_BOUND_MAP = {
 TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS = {
     side: {
         **TRAILING_MARTINGALE_STRATEGY_BOUND_MAP,
+        **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+        },
         **{
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
@@ -399,16 +407,6 @@ PINNED_SCOPE_BOUND_VALUES = {
         "unstuck_enabled": 0.0,
         "risk_position_exposure_enforcer_enabled": 0.0,
         "risk_total_exposure_enforcer_enabled": 0.0,
-    }.items()
-}
-
-MULTICOIN_PINNED_SCOPE_BOUND_VALUES = {
-    f"{side}_{suffix}": expected
-    for side in ("long", "short")
-    for suffix, expected in {
-        "risk_total_exposure_entry_gate_enabled": 1.0,
-        "risk_twel_enforcer_threshold": 1.0,
-        "risk_we_excess_allowance_pct": 0.0,
     }.items()
 }
 
@@ -872,17 +870,6 @@ def _validate_scope_config(
                 raise ValueError(
                     f"GPU foundation requires bot.{side}.risk.{key}={str(expected).lower()}"
                 )
-        if coin_count > 1:
-            if not bool(risk.get("total_exposure_entry_gate_enabled", True)):
-                raise ValueError(
-                    "GPU multicoin foundation requires "
-                    f"bot.{side}.risk.total_exposure_entry_gate_enabled=true"
-                )
-            if float(risk.get("we_excess_allowance_pct", 0.0) or 0.0) != 0.0:
-                raise ValueError(
-                    "GPU multicoin foundation requires "
-                    f"bot.{side}.risk.we_excess_allowance_pct=0.0"
-                )
     return exchange
 
 
@@ -959,6 +946,7 @@ def _validate_gpu_coin_overrides(
         allowed.update(
             {
                 ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+                ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
         )
@@ -986,7 +974,8 @@ def _validate_gpu_coin_overrides(
         raise ValueError(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
-            f"{strategy_kind} parameters, risk.entry_cooldown_minutes, and "
+            f"{strategy_kind} parameters, risk.entry_cooldown_minutes, "
+            "risk.we_excess_allowance_pct, and "
             "wallet_exposure_limit"
         )
 
@@ -1986,10 +1975,7 @@ def _validate_pinned_scope_bounds(
     bound_by_key, base_by_key, enabled_sides=None, *, coin_count: int = 1
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
-    pinned = dict(PINNED_SCOPE_BOUND_VALUES)
-    if int(coin_count) > 1:
-        pinned.update(MULTICOIN_PINNED_SCOPE_BOUND_VALUES)
-    for key, expected in pinned.items():
+    for key, expected in PINNED_SCOPE_BOUND_VALUES.items():
         if key.split("_", 1)[0] not in enabled_sides:
             continue
         bound = bound_by_key.get(key)

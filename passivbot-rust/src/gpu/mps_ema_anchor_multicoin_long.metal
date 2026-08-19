@@ -2,9 +2,9 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 19;
+constant int PARAM_COLS = 23;
 constant int COIN_COLS = 11;
-constant int OVERRIDE_COLS = 12;
+constant int OVERRIDE_COLS = 13;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
@@ -44,6 +44,21 @@ inline float coin_override_or(
 ) {
     float value = coin_overrides[coin * OVERRIDE_COLS + column];
     return isfinite(value) ? value : fallback;
+}
+
+inline float allowed_wallet_exposure_limit(
+    float base_limit, float total_limit, float allowance_pct, bool legacy_raw
+) {
+    if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
+    float raw = fmax(allowance_pct, 0.0f);
+    float effective = raw;
+    if (!legacy_raw) {
+        float max_effective = (
+            isfinite(total_limit) && total_limit > 0.0f
+        ) ? fmax(total_limit / base_limit - 1.0f, 0.0f) : 0.0f;
+        effective = fmin(raw, max_effective);
+    }
+    return base_limit * (1.0f + effective);
 }
 
 inline void passivbot_ema_anchor_multicoin_impl(
@@ -102,6 +117,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float w_ready = params[po + 16];
     float w_volatility = params[po + 17];
     const int n_positions = max(1, int(rint(params[po + 18])));
+    const float allowance_pct = params[po + 19];
+    const bool legacy_raw_allowance = params[po + 20] > 0.5f;
+    const bool twel_entry_gate_enabled = params[po + 21] > 0.5f;
+    const float twel_threshold = params[po + 22];
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -587,9 +606,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 );
                 float coin_wel = fixed_coin_wel >= 0.0f
                     ? fixed_coin_wel : effective_wel;
+                float coin_allowance_pct = coin_override_or(
+                    coin_overrides, c, 12, allowance_pct
+                );
+                float allowed_coin_wel = allowed_wallet_exposure_limit(
+                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
+                );
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])
-                    && finite_positive(price_now) && coin_wel > 0.0f;
+                    && finite_positive(price_now) && allowed_coin_wel > 0.0f;
                 if (!tradable) continue;
                 float qty_step = coin_settings[coin_offset + 0];
                 float price_step = coin_settings[coin_offset + 1];
@@ -651,7 +676,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     && float(k) < last_increase_k[c] + coin_cooldown_min;
                 float cost_we = psize[c] > 0.0f && balance > 0.0f
                     ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
-                float position_cap = coin_wel - 1.0e-7f;
+                float position_cap = allowed_coin_wel - 1.0e-7f;
                 float coin_base_qty_pct = coin_override_or(
                     coin_overrides, c, 0, base_qty_pct
                 );
@@ -659,7 +684,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 if (selected[c] && !cooldown && entry_price > 0.0f && balance > 0.0f
                     && cost_we < position_cap && coin_base_qty_pct > 0.0f) {
                     float base_qty = fmax(minimum, round_step(
-                        balance * coin_wel * coin_base_qty_pct
+                        balance * allowed_coin_wel * coin_base_qty_pct
                             / fmax(entry_price * c_mult, 1.0e-12f),
                         qty_step
                     ));
@@ -687,7 +712,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         close_price, qty_step, min_qty, min_cost, c_mult
                     );
                     float clip = fmin(psize[c], fmax(minimum_close, round_step(
-                        balance * coin_wel * coin_base_qty_pct
+                        balance * allowed_coin_wel * coin_base_qty_pct
                             / fmax(close_price * c_mult, 1.0e-12f),
                         qty_step
                     )));
@@ -698,7 +723,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 }
             }
 
-            float total_cap = twel - 1.0e-7f;
+            float gated_twel = twel;
+            if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
+                gated_twel = fmin(twel, twel * twel_threshold);
+            }
+            float total_cap = twel_entry_gate_enabled
+                ? gated_twel - 1.0e-7f : INFINITY;
             float proposed_twe = current_twe;
             for (int c = 0; c < C; ++c) {
                 if (entry_candidate[c]) proposed_twe += contribution[c];
@@ -722,8 +752,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
                         float distance = (short_side
                             ? entry_price - price_now
                             : price_now - entry_price) / fmax(price_now, 1.0e-12f);
+                        // Exact Rust removes equal-distance entries in ascending
+                        // symbol order, so the retained order is descending.
                         if (best < 0 || distance < best_distance
-                            || (distance == best_distance && c < best)) {
+                            || (distance == best_distance && c > best)) {
                             best = c;
                             best_distance = distance;
                         }

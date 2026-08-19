@@ -49,7 +49,7 @@ def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
     ).strip().lower()
     if allowance_mode not in {"bounded", "legacy_raw"}:
         raise ValueError(
-            "MPS single-coin proxy requires "
+            "MPS proxy requires "
             f"bot.{side}.risk.we_excess_allowance_mode to be bounded or "
             f"legacy_raw, got {allowance_mode!r}"
         )
@@ -465,7 +465,7 @@ def _build_multicoin_ema_coin_overrides(
         resolve_override = _get_backtest_coin_override
 
     override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    matrix = np.full((len(coins), 12), np.nan, dtype=np.float32)
+    matrix = np.full((len(coins), 13), np.nan, dtype=np.float32)
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
         side_patch = patch.get("bot", {}).get(side, {})
@@ -475,12 +475,17 @@ def _build_multicoin_ema_coin_overrides(
         for column, key in enumerate(override_keys):
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
-        if "entry_cooldown_minutes" in (side_patch.get("risk", {}) or {}):
+        risk_patch = side_patch.get("risk", {}) or {}
+        if "entry_cooldown_minutes" in risk_patch:
             matrix[coin_index, 10] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
         if "wallet_exposure_limit" in side_patch:
             matrix[coin_index, 11] = float(effective_bot["wallet_exposure_limit"])
+        if "we_excess_allowance_pct" in risk_patch:
+            matrix[coin_index, 12] = float(
+                effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
+            )
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -512,8 +517,9 @@ def _build_multicoin_tm_coin_overrides(
 
     cooldown_column = len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
     wallet_exposure_column = cooldown_column + 1
+    allowance_pct_column = wallet_exposure_column + 1
     matrix = np.full(
-        (len(coins), wallet_exposure_column + 1),
+        (len(coins), allowance_pct_column + 1),
         np.nan,
         dtype=np.float32,
     )
@@ -541,13 +547,18 @@ def _build_multicoin_tm_coin_overrides(
                     break
             if value is not missing:
                 matrix[coin_index, column] = float(effective_strategy[key])
-        if "entry_cooldown_minutes" in (side_patch.get("risk", {}) or {}):
+        risk_patch = side_patch.get("risk", {}) or {}
+        if "entry_cooldown_minutes" in risk_patch:
             matrix[coin_index, cooldown_column] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
         if "wallet_exposure_limit" in side_patch:
             matrix[coin_index, wallet_exposure_column] = float(
                 effective_bot["wallet_exposure_limit"]
+            )
+        if "we_excess_allowance_pct" in risk_patch:
+            matrix[coin_index, allowance_pct_column] = float(
+                effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
             )
     contract = {
         "exchange": exchange,
@@ -707,6 +718,8 @@ class MpsMulticoinProxy:
             "filter_volume_drop_pct",
             "forager_score_weights",
             "n_positions",
+            "risk_twel_entry_gate_enabled",
+            "risk_twel_enforcer_threshold",
             "unstuck_enabled",
             "hsl_enabled",
         )
@@ -753,6 +766,11 @@ class MpsMulticoinProxy:
                     ),
                     "n_positions": float(first_bot["n_positions"]),
                 }
+            )
+            first_strategy.update(
+                _single_coin_exposure_params(
+                    config["bot"][side].get("risk", {}), side=side
+                )
             )
             missing = [
                 key for key in self.param_keys if key not in first_strategy
