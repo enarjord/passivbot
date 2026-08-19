@@ -7,7 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Added canonical combined multi-exchange datasets and per-coin source assignments to Apple MPS
   optimizer suites. Metal consumes the same prepared per-coin candles and market settings as exact
   Rust, and checkpoint identity now records each coin's resolved OHLCV and market-settings source.
-  Individual-exchange scenarios fail closed if a per-coin assignment selects another exchange.
+  Individual-exchange scenarios fail closed if an assignment for one of their prepared coins
+  selects another exchange.
 
 - Fixed optimizer-suite exchange routing so an explicitly restricted scenario uses its requested
   individual exchange dataset even when only that exchange needed separate materialization. It no

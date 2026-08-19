@@ -124,7 +124,7 @@ The supported slice is intentionally narrow:
   liquidation threshold, Forager hysteresis, and hedge mode are also supported, while other
   non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
   assignments, while an individual-exchange scenario fails closed if an effective assignment
-  selects another exchange
+  for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
   parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
   disabled sides and other override leaves fail closed

@@ -960,6 +960,11 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 f"got {exchanges}"
             )
         exchange = exchanges[0]
+        scenario_mss = ctx.msss[exchange]
+        effective_coins = [
+            str(coin) for coin in scenario_mss if coin != "__meta__"
+        ]
+        effective_coin_set = set(effective_coins)
         effective_coin_sources = (
             getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources")
             or {}
@@ -969,7 +974,8 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             conflicting_sources = {
                 str(coin): str(source)
                 for coin, source in effective_coin_sources.items()
-                if to_standard_exchange_name(str(source)) != prepared_exchange
+                if str(coin) in effective_coin_set
+                and to_standard_exchange_name(str(source)) != prepared_exchange
             }
             if conflicting_sources:
                 raise ValueError(
@@ -990,9 +996,6 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             coin_count=coin_count,
             allow_suite=True,
         )
-        effective_coins = [
-            str(coin) for coin in ctx.msss[exchange] if coin != "__meta__"
-        ]
         if len(effective_coins) != coin_count:
             raise ValueError(
                 f"GPU suite scenario {ctx.label!r} prepared coin identity "
@@ -1007,7 +1010,7 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                 "coin_count": coin_count,
                 "coins": effective_coins,
                 "hlcvs": values,
-                "mss": ctx.msss[exchange],
+                "mss": scenario_mss,
                 "btc": btc,
                 "timestamps": ctx.timestamps.get(exchange),
             }

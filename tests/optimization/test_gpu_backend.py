@@ -991,6 +991,38 @@ def test_gpu_suite_inputs_accept_matching_individual_dataset_coin_source(source)
     assert prepared[0]["exchange"] == "binance"
 
 
+def test_gpu_suite_inputs_ignore_conflicting_source_for_excluded_coin():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="bybit_btc_only",
+        config={
+            "backtest": {
+                "coin_sources": {"BTC": "bybit", "ETH": "binance"}
+            }
+        },
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["coins"] == ["BTC"]
+
+
 def test_gpu_suite_inputs_reject_coin_source_outside_individual_dataset():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
