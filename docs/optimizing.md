@@ -100,7 +100,8 @@ and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 The supported slice is intentionally narrow:
 
 - Apple Silicon with `torch.backends.mps.is_available()`
-- one exchange per independent run or suite scenario, using one-minute candles
+- one prepared dataset per independent run or suite scenario, using one-minute candles; the
+  dataset may be an individual exchange or the canonical combined multi-exchange dataset
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled for one coin
 - long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor runs for up to 64 coins,
@@ -113,14 +114,17 @@ The supported slice is intentionally narrow:
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count
 - hedge mode and one-way mode; one-way flat-side arbitration uses the active strategy's Rust rule
-- suite mode with exactly one exchange per scenario, including suites spanning exchanges;
+- suite mode with exactly one prepared dataset per scenario, including individual-exchange
+  comparisons and combined multi-exchange scenarios;
   single-coin EMA-anchor and trailing-martingale scenarios keep their existing directional
   support, while EMA-anchor suites may also use different multi-coin subsets of up to 64 coins when
   every effective scenario shares the same one-side or dual-side hedge-mode topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported; scenario-local `coin_overrides`, starting balance, maker fee,
   liquidation threshold, Forager hysteresis, and hedge mode are also supported, while other
-  non-bot override paths and per-coin source assignments remain unsupported
+  non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
+  assignments, while an individual-exchange scenario fails closed if an effective assignment
+  for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
   parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
   disabled sides and other override leaves fail closed
@@ -134,9 +138,8 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, multi-coin trailing-martingale, combined multi-exchange datasets,
-unmodeled non-bot suite scenario overrides, per-coin source assignments, HSL, and auto-unstuck are
-not silently approximated by this release. Dual-side
+Dual-side one-way arbitration, multi-coin trailing-martingale, unmodeled non-bot suite scenario
+overrides, HSL, and auto-unstuck are not silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
@@ -147,7 +150,8 @@ path then calls the same canonical suite reducer and scenario-selection logic as
 for aggregate reducers, named-scenario objectives, and named-scenario or suite-reduced limits.
 Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
 suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different coin
-subset, date window, or exchange, but each scenario must use exactly one exchange. Scenario
+subset, date window, individual exchange, or canonical combined multi-exchange dataset, but each
+scenario must resolve to exactly one prepared dataset. Scenario
 `overrides` require
 explicit candidate-shadowing behavior in the proxy. This slice models `bot.long` and `bot.short`
 overrides: the canonical exact
@@ -162,8 +166,10 @@ the same suite reducer. Scenario-local `coin_overrides`, `backtest.starting_bala
 `backtest.maker_fee_override`, `backtest.liquidation_threshold`,
 `live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
 proxy consumes them through the canonical backtest payload and then passes the same fail-closed
-scope checks. Other non-bot paths and scenario `coin_sources` remain rejected until their proxy
-semantics are modeled. The effective external suite definition and any `--scenarios` filter are
+scope checks. Combined scenario `coin_sources` use the same prepared per-coin candles and market
+settings as exact Rust; their resolved OHLCV and market-settings exchanges are part of checkpoint
+identity. Other non-bot paths remain rejected until their proxy semantics are modeled. The
+effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
 prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
 coins, side topology, and prepared candle window, so resume fails closed if preparation changes.

@@ -542,8 +542,7 @@ def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():
     ("overrides", "exchanges", "coin_indices", "message"),
     [
         ({"live.strategy_kind": "trailing_martingale"}, ["bybit"], [0], "outside the supported"),
-        ({}, ["bybit", "binance"], [0], "exactly one exchange"),
-        ({}, ["combined"], [0], "combined multi-exchange"),
+        ({}, ["bybit", "binance"], [0], "exactly one prepared dataset"),
     ],
 )
 def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
@@ -919,12 +918,89 @@ def test_gpu_suite_inputs_revalidate_effective_bot_override_scope():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
-def test_gpu_suite_inputs_reject_effective_coin_sources():
+def test_gpu_suite_inputs_accept_combined_dataset_and_coin_sources():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    config["backtest"]["coin_sources"] = {"BTC": "bybit", "ETH": "binance"}
+    ctx = SimpleNamespace(
+        label="mixed_sources",
+        config={
+            "backtest": {"coin_sources": {"BTC": "bybit", "ETH": "binance"}}
+        },
+        overrides={},
+        exchanges=["combined"],
+        msss={
+            "combined": {
+                "BTC": {"exchange": "bybit", "ohlcv_source": "bybit"},
+                "ETH": {"exchange": "binance", "ohlcv_source": "binance"},
+                "__meta__": {},
+            }
+        },
+        timestamps={"combined": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["exchange"] == "combined"
+    assert prepared[0]["coins"] == ["BTC", "ETH"]
+    assert prepared[0]["config"]["backtest"]["coin_sources"] == {
+        "BTC": "bybit",
+        "ETH": "binance",
+    }
+
+
+@pytest.mark.parametrize("source", ["binance", "binanceusdm"])
+def test_gpu_suite_inputs_accept_matching_individual_dataset_coin_source(source):
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
     ctx = SimpleNamespace(
-        label="stress",
-        config={"backtest": {"coin_sources": {"BTC": "binance"}}},
+        label="binance_only",
+        config={"backtest": {"coin_sources": {"BTC": source}}},
+        overrides={},
+        exchanges=["binance"],
+        msss={"binance": {"BTC": {}, "__meta__": {}}},
+        timestamps={"binance": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["exchange"] == "binance"
+
+
+def test_gpu_suite_inputs_ignore_conflicting_source_for_excluded_coin():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="bybit_btc_only",
+        config={
+            "backtest": {
+                "coin_sources": {"BTC": "bybit", "ETH": "binance"}
+            }
+        },
         overrides={},
         exchanges=["bybit"],
         msss={"bybit": {"BTC": {}, "__meta__": {}}},
@@ -942,7 +1018,35 @@ def test_gpu_suite_inputs_reject_effective_coin_sources():
         def build_scenario_candidate_config(proxy_config, _ctx):
             return copy.deepcopy(proxy_config)
 
-    with pytest.raises(ValueError, match="coin_sources"):
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["coins"] == ["BTC"]
+
+
+def test_gpu_suite_inputs_reject_coin_source_outside_individual_dataset():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="bybit_only",
+        config={"backtest": {"coin_sources": {"BTC": "binance"}}},
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            raise AssertionError("conflicting source must fail before data access")
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    with pytest.raises(ValueError, match="outside prepared dataset 'bybit'"):
         _gpu_suite_scenario_inputs(config, Suite())
 
 
@@ -2951,6 +3055,10 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
         "config": config,
         "hlcvs": np.zeros((3, 2, 4)),
         "timestamps": np.array([1000, 2000, 3000]),
+        "mss": {
+            "BTC": {"exchange": "binance", "ohlcv_source": "bybit"},
+            "ETH": {"exchange": "bybit"},
+        },
     }
     original = _gpu_suite_checkpoint_contract(config, [item])
 
@@ -2965,6 +3073,18 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
+            "coin_sources": [
+                {
+                    "coin": "BTC",
+                    "ohlcv_exchange": "bybit",
+                    "market_settings_exchange": "binance",
+                },
+                {
+                    "coin": "ETH",
+                    "ohlcv_exchange": "bybit",
+                    "market_settings_exchange": "bybit",
+                },
+            ],
             "coin_overrides": {},
         }
     ]
@@ -2973,9 +3093,12 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     changed_coins["coins"] = ["BTC", "SOL"]
     changed_window = copy.deepcopy(item)
     changed_window["timestamps"] = np.array([1000, 2000, 4000])
+    changed_source = copy.deepcopy(item)
+    changed_source["mss"]["BTC"]["ohlcv_source"] = "binance"
 
     assert _gpu_suite_checkpoint_contract(config, [changed_coins]) != original
     assert _gpu_suite_checkpoint_contract(config, [changed_window]) != original
+    assert _gpu_suite_checkpoint_contract(config, [changed_source]) != original
 
 
 def test_gpu_suite_checkpoint_contract_rejects_timestamp_shape_mismatch():
