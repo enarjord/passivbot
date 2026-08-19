@@ -6,6 +6,7 @@ import pytest
 from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
@@ -15,6 +16,7 @@ from optimization.gpu.service import (
     MpsEmaAnchorProxy,
     MpsMulticoinEmaProxy,
     _build_multicoin_ema_coin_overrides,
+    _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
     _require_complete_valid_tail,
 )
@@ -414,6 +416,107 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
     assert short_matrix[1, offset_index] == pytest.approx(0.5)
     assert short_matrix[1, 10] == pytest.approx(30.0)
     assert np.isnan(short_matrix[1, 11])
+
+
+def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
+    assert tuple(
+        key for key, _path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
+    ) == TRAILING_MARTINGALE_PARAM_KEYS[:23]
+    strategy_base = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "volatility_ema_span_1h": 30.0,
+        "volatility_ema_span_1m": 40.0,
+        "entry": {
+            "ema_gate_mode": "all",
+            "double_down_factor": 1.1,
+            "initial_ema_dist": 0.01,
+            "initial_qty_pct": 0.02,
+            "threshold_base_pct": 0.03,
+            "threshold_we_weight": 0.04,
+            "threshold_volatility_1h_weight": 0.05,
+            "threshold_volatility_1m_weight": 0.06,
+            "retracement_base_pct": 0.007,
+            "retracement_we_weight": 0.08,
+            "retracement_volatility_1h_weight": 0.09,
+            "retracement_volatility_1m_weight": 0.1,
+        },
+        "close": {
+            "qty_pct": 0.2,
+            "threshold_base_pct": 0.03,
+            "threshold_we_weight": 0.04,
+            "threshold_volatility_1h_weight": 0.05,
+            "threshold_volatility_1m_weight": 0.06,
+            "retracement_base_pct": 0.007,
+            "retracement_volatility_1h_weight": 0.09,
+            "retracement_volatility_1m_weight": 0.1,
+        },
+    }
+    strategy_override = {
+        **strategy_base,
+        "entry": {**strategy_base["entry"], "threshold_base_pct": 0.25},
+        "close": {**strategy_base["close"], "qty_pct": 0.5},
+    }
+    payload = SimpleNamespace(
+        strategy_params_list=[
+            {"long": strategy_base},
+            {"long": strategy_override},
+        ],
+        bot_params_list=[
+            {
+                "long": {
+                    "entry_cooldown_minutes": 0.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": -1.0,
+                }
+            },
+            {
+                "long": {
+                    "entry_cooldown_minutes": 15.0,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": 0.4,
+                }
+            },
+        ],
+    )
+    config = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": 0.25},
+                                "close": {"qty_pct": 0.5},
+                            }
+                        },
+                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "wallet_exposure_limit": 0.4,
+                    }
+                }
+            }
+        }
+    }
+
+    matrix, contract = _build_multicoin_tm_coin_overrides(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda config, _mss, _exchange, coin: config[
+            "coin_overrides"
+        ].get(coin, {}),
+    )
+
+    assert matrix.shape == (2, 25)
+    assert np.isnan(matrix[0]).all()
+    assert matrix[1, 7] == pytest.approx(0.25)
+    assert matrix[1, 15] == pytest.approx(0.5)
+    assert matrix[1, 23] == pytest.approx(15.0)
+    assert matrix[1, 24] == pytest.approx(0.4)
+    assert contract["values"][0] == [None] * 25
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

@@ -674,6 +674,58 @@ def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():
     ]["ema_anchor"]["offset"] == pytest.approx(0.012)
 
 
+def test_gpu_suite_inputs_accept_scenario_local_tm_coin_overrides():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    overrides = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": 0.012}
+                            }
+                        },
+                        "wallet_exposure_limit": 0.4,
+                    }
+                }
+            }
+        }
+    }
+    ctx = SimpleNamespace(
+        label="eth_tm_override",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "ETH": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["coin_overrides"] = copy.deepcopy(overrides["coin_overrides"])
+            return scenario
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["overrides"] == overrides
+    assert prepared[0]["config"]["coin_overrides"]["ETH"]["bot"]["long"][
+        "strategy"
+    ]["trailing_martingale"]["entry"]["threshold_base_pct"] == pytest.approx(
+        0.012
+    )
+
+
 def test_gpu_suite_inputs_reject_unmodeled_scenario_coin_override_leaves():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
@@ -1370,27 +1422,62 @@ def test_gpu_coin_overrides_reject_single_coin_scope():
         "BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
     }
 
-    with pytest.raises(ValueError, match="require multi-coin EMA Anchor"):
+    with pytest.raises(ValueError, match="require a supported multi-coin strategy"):
         _validate_scope(config, _Evaluator())
 
 
-def test_gpu_multicoin_tm_coin_overrides_fail_closed():
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    if side == "short":
+        config = _directional_tm_config(long_enabled=False, short_enabled=True)
     config["coin_overrides"] = {
         "ETH": {
             "bot": {
-                "long": {
+                side: {
                     "strategy": {
                         "trailing_martingale": {
-                            "entry": {"threshold_base_pct": 0.02}
+                            "entry": {
+                                "threshold_base_pct": 0.02,
+                                "retracement_base_pct": 0.005,
+                            },
+                            "close": {"qty_pct": 0.25},
                         }
-                    }
+                    },
+                    "risk": {"entry_cooldown_minutes": 15},
+                    "wallet_exposure_limit": 0.4,
                 }
             }
         }
     }
 
-    with pytest.raises(ValueError, match="require multi-coin EMA Anchor"):
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"live": {"leverage": 3}},
+        {"bot": {"long": {"risk": {"n_positions": 2}}}},
+        {"bot": {"long": {"unstuck": {"enabled": True}}}},
+        {
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"ema_gate_mode": "disabled"}
+                        }
+                    }
+                }
+            }
+        },
+    ],
+)
+def test_gpu_multicoin_tm_coin_overrides_reject_unmodeled_leaves(patch):
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {"ETH": patch}
+
+    with pytest.raises(ValueError, match="do not model these paths yet"):
         _validate_gpu_coin_overrides(
             config,
             strategy_kind="trailing_martingale",

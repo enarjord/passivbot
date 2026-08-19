@@ -13,6 +13,7 @@ from optimization.gpu.model import (
     MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
@@ -462,6 +463,74 @@ def _build_multicoin_ema_coin_overrides(
     return matrix, contract
 
 
+def _build_multicoin_tm_coin_overrides(
+    *,
+    config: dict,
+    mss: dict,
+    exchange: str,
+    coins: list[str],
+    payload,
+    side: str,
+    resolve_override=None,
+) -> tuple[np.ndarray, dict]:
+    """Pack exact-last static coin overrides for the Metal TM proxy."""
+
+    if resolve_override is None:
+        from backtest import _get_backtest_coin_override
+
+        resolve_override = _get_backtest_coin_override
+
+    cooldown_column = len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
+    wallet_exposure_column = cooldown_column + 1
+    matrix = np.full(
+        (len(coins), wallet_exposure_column + 1),
+        np.nan,
+        dtype=np.float32,
+    )
+    missing = object()
+    for coin_index, coin in enumerate(coins):
+        patch = resolve_override(config, mss, exchange, coin) or {}
+        side_patch = patch.get("bot", {}).get(side, {})
+        strategy_patch = (
+            side_patch.get("strategy", {}).get("trailing_martingale", {}) or {}
+        )
+        effective_strategy = flatten_trailing_martingale_params(
+            payload.strategy_params_list[coin_index][side],
+            payload.bot_params_list[coin_index][side],
+        )
+        effective_bot = payload.bot_params_list[coin_index][side]
+        for column, (key, path) in enumerate(
+            TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
+        ):
+            value = strategy_patch
+            for part in path:
+                value = (
+                    value.get(part, missing) if isinstance(value, dict) else missing
+                )
+                if value is missing:
+                    break
+            if value is not missing:
+                matrix[coin_index, column] = float(effective_strategy[key])
+        if "entry_cooldown_minutes" in (side_patch.get("risk", {}) or {}):
+            matrix[coin_index, cooldown_column] = float(
+                effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+            )
+        if "wallet_exposure_limit" in side_patch:
+            matrix[coin_index, wallet_exposure_column] = float(
+                effective_bot["wallet_exposure_limit"]
+            )
+    contract = {
+        "exchange": exchange,
+        "coins": coins,
+        "side": side,
+        "values": [
+            [None if not np.isfinite(value) else float(value) for value in row]
+            for row in matrix
+        ],
+    }
+    return matrix, contract
+
+
 class MpsMulticoinProxy:
     """Batched multi-coin MPS proxy for the supported strategy topology."""
 
@@ -695,14 +764,14 @@ class MpsMulticoinProxy:
                     side=side,
                 )
             else:
-                overrides = np.full((coin_count, 12), np.nan, dtype=np.float32)
-                contract = {
-                    "exchange": exchange,
-                    "coins": coins,
-                    "side": side,
-                    "values": {},
-                    "proxy_mode": "trailing-martingale-global-params-v1",
-                }
+                overrides, contract = _build_multicoin_tm_coin_overrides(
+                    config=config,
+                    mss=mss,
+                    exchange=exchange,
+                    coins=coins,
+                    payload=payload,
+                    side=side,
+                )
             per_side_coin_overrides[side] = overrides
             per_side_override_contracts[side] = contract
         if len(self.sides) == 1:
@@ -781,8 +850,7 @@ class MpsMulticoinProxy:
                 "side": side,
                 "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             }
-            if self.strategy_kind == "ema_anchor":
-                runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
+            runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
             self.runners[side] = runner_cls(
                 self.run,
                 self.data,

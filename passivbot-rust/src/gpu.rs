@@ -129,6 +129,8 @@ mod tests {
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 34"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 25"));
+        assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));

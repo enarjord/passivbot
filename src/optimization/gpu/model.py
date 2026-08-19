@@ -77,6 +77,56 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     "n_positions",
 )
 
+TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
+    ("ema_span_0", ("ema_span_0",)),
+    ("ema_span_1", ("ema_span_1",)),
+    ("volatility_ema_span_1h", ("volatility_ema_span_1h",)),
+    ("volatility_ema_span_1m", ("volatility_ema_span_1m",)),
+    ("entry_double_down_factor", ("entry", "double_down_factor")),
+    ("entry_initial_ema_dist", ("entry", "initial_ema_dist")),
+    ("entry_initial_qty_pct", ("entry", "initial_qty_pct")),
+    ("entry_threshold_base_pct", ("entry", "threshold_base_pct")),
+    ("entry_threshold_we_weight", ("entry", "threshold_we_weight")),
+    (
+        "entry_threshold_volatility_1h_weight",
+        ("entry", "threshold_volatility_1h_weight"),
+    ),
+    (
+        "entry_threshold_volatility_1m_weight",
+        ("entry", "threshold_volatility_1m_weight"),
+    ),
+    ("entry_retracement_base_pct", ("entry", "retracement_base_pct")),
+    ("entry_retracement_we_weight", ("entry", "retracement_we_weight")),
+    (
+        "entry_retracement_volatility_1h_weight",
+        ("entry", "retracement_volatility_1h_weight"),
+    ),
+    (
+        "entry_retracement_volatility_1m_weight",
+        ("entry", "retracement_volatility_1m_weight"),
+    ),
+    ("close_qty_pct", ("close", "qty_pct")),
+    ("close_threshold_base_pct", ("close", "threshold_base_pct")),
+    ("close_threshold_we_weight", ("close", "threshold_we_weight")),
+    (
+        "close_threshold_volatility_1h_weight",
+        ("close", "threshold_volatility_1h_weight"),
+    ),
+    (
+        "close_threshold_volatility_1m_weight",
+        ("close", "threshold_volatility_1m_weight"),
+    ),
+    ("close_retracement_base_pct", ("close", "retracement_base_pct")),
+    (
+        "close_retracement_volatility_1h_weight",
+        ("close", "retracement_volatility_1h_weight"),
+    ),
+    (
+        "close_retracement_volatility_1m_weight",
+        ("close", "retracement_volatility_1m_weight"),
+    ),
+)
+
 GPU_STRATEGY_PARAM_KEYS = {
     "ema_anchor": EMA_ANCHOR_PARAM_KEYS,
     "trailing_martingale": TRAILING_MARTINGALE_PARAM_KEYS,

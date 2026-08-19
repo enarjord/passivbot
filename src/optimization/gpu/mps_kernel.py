@@ -315,6 +315,9 @@ class MpsEmaAnchorRunner:
 class MpsEmaAnchorMulticoinRunner:
     """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
+    coin_override_cols = 12
+    coin_override_label = "EMA"
+
     def __init__(
         self,
         run: ProxyRun,
@@ -341,12 +344,15 @@ class MpsEmaAnchorMulticoinRunner:
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
         self.coin_settings = data["coin_settings"]
         if coin_overrides is None:
-            coin_overrides = np.full((self.n_coins, 12), np.nan, dtype=np.float32)
+            coin_overrides = np.full(
+                (self.n_coins, self.coin_override_cols), np.nan, dtype=np.float32
+            )
         coin_overrides = np.asarray(coin_overrides, dtype=np.float32)
-        if coin_overrides.shape != (self.n_coins, 12):
+        if coin_overrides.shape != (self.n_coins, self.coin_override_cols):
             raise ValueError(
-                "expected multicoin EMA override matrix shaped "
-                f"({self.n_coins}, 12), got {coin_overrides.shape}"
+                f"expected multicoin {self.coin_override_label} override matrix shaped "
+                f"({self.n_coins}, {self.coin_override_cols}), "
+                f"got {coin_overrides.shape}"
             )
         self.coin_overrides = torch.as_tensor(
             np.ascontiguousarray(coin_overrides), device="mps"
@@ -495,18 +501,23 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
+    coin_override_cols = 25
+    coin_override_label = "Trailing Martingale"
+
     def __init__(
         self,
         run: ProxyRun,
         data: dict,
         *,
         side: str,
+        coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
     ):
         super().__init__(
             run,
             data,
             side=side,
+            coin_overrides=coin_overrides,
             forager_score_hysteresis_pct=forager_score_hysteresis_pct,
         )
 
@@ -559,6 +570,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.touch_min_qty_bits,
             self.touch_min_qty_relation,
             self.coin_settings,
+            self.coin_overrides,
             params_mps,
             self.settings,
             self._sizes[sizes_key],

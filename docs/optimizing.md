@@ -121,14 +121,15 @@ The supported slice is intentionally narrow:
   coins when every effective scenario shares the same supported side topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
-  EMA-anchor runs, starting balance, maker fee, liquidation threshold, Forager hysteresis, and
-  hedge mode are also supported, while other
+  EMA-anchor and trailing-martingale runs, starting balance, maker fee, liquidation threshold,
+  Forager hysteresis, and hedge mode are also supported, while other
   non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
   assignments, while an individual-exchange scenario fails closed if an effective assignment
   for one of its prepared coins selects another exchange
-- static `coin_overrides` for each enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
-  parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
-  disabled sides and other override leaves fail closed
+- static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
+  runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
+  `wallet_exposure_limit` are supported; trailing-martingale `entry.ema_gate_mode`, disabled sides,
+  and other override leaves fail closed
 - HSL and auto-unstuck disabled
 - BTC collateral, realized-loss gating, and exposure enforcers disabled
 - `backtest.filter_by_min_effective_cost: false`
@@ -140,9 +141,8 @@ Trailing Martingale use one long and one short Metal dispatch per candidate in h
 directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, trailing-martingale `coin_overrides`, unmodeled non-bot suite
-scenario overrides, HSL, and auto-unstuck are not
-silently approximated by this release. Dual-side
+Dual-side one-way arbitration, unmodeled non-bot suite scenario overrides, HSL, and auto-unstuck
+are not silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
