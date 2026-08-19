@@ -778,6 +778,14 @@ def _validate_scope_config(
                 "GPU dual-side multicoin optimization currently requires "
                 "live.hedge_mode=true; one-way arbitration is not modeled"
             )
+        if len(enabled_sides) == 2 and bool(
+            config.get("backtest", {}).get("filter_by_min_effective_cost")
+        ):
+            raise ValueError(
+                "GPU dual-side multicoin optimization currently requires "
+                "backtest.filter_by_min_effective_cost=false because the separate "
+                "side kernels do not share one portfolio balance"
+            )
         if len(enabled_sides) == 2:
             approved = config.get("live", {}).get("approved_coins", {}) or {}
             ignored = config.get("live", {}).get("ignored_coins", {}) or {}

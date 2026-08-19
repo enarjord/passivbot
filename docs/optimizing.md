@@ -135,9 +135,12 @@ The supported slice is intentionally narrow:
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with dynamic or static per-coin wallet-exposure limits. The
   screening proxy compares against the highest executable minimum observed for that coin in the
-  prepared window, so it never admits an entry that exact Rust would reject at the current close;
-  exact validation may admit a conservative proxy false negative. A failing flat side is excluded
-  from new-entry selection while an open position remains managed
+  prepared window, rounds that threshold upward, and discounts the projected float32 product so
+  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. Exact
+  validation may admit a conservative proxy false negative. A failing flat side is excluded from
+  new-entry selection while an open position remains managed. Dual-side multi-coin runs still
+  require this option to be disabled because their separate side kernels do not share one
+  portfolio balance
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 

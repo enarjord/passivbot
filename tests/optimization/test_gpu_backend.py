@@ -1355,7 +1355,7 @@ def test_gpu_foundation_accepts_ema_long_single():
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("topology", ["single", "multicoin", "dual_multicoin"])
+@pytest.mark.parametrize("topology", ["single", "multicoin"])
 @pytest.mark.parametrize("suite_enabled", [False, True])
 def test_gpu_foundation_accepts_min_effective_cost_filter_across_supported_matrix(
     strategy_kind, topology, suite_enabled
@@ -1386,6 +1386,34 @@ def test_gpu_foundation_accepts_min_effective_cost_filter_across_supported_matri
     assert (
         _validate_scope(config, evaluator, allow_suite=suite_enabled) == "bybit"
     )
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_rejects_dual_multicoin_min_effective_cost_filter(
+    strategy_kind, suite_enabled
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    with pytest.raises(ValueError, match="do not share one portfolio balance"):
+        _validate_scope(
+            config,
+            _MulticoinEvaluator(),
+            allow_suite=suite_enabled,
+        )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

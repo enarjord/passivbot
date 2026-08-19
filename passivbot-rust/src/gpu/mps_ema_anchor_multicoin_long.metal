@@ -44,9 +44,13 @@ inline bool passes_min_effective_cost(
     float max_effective_min_cost
 ) {
     if (!enabled) return true;
-    float projected_cost = balance * wel * initial_qty_pct;
-    return isfinite(projected_cost) && projected_cost > 0.0f
-        && projected_cost >= max_effective_min_cost;
+    float rounded_projected_cost = balance * wel * initial_qty_pct;
+    // Discount by 16 float32 unit roundoffs. This covers upward encoding and
+    // multiply rounding of all three operands before the conservative compare.
+    float projected_cost_lower = rounded_projected_cost
+        * (1.0f - 9.5367431640625e-7f);
+    return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
+        && projected_cost_lower >= max_effective_min_cost;
 }
 
 inline float coin_override_or(
