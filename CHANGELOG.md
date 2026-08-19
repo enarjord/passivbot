@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Expanded Apple MPS optimizer suites with fail-closed scenario-local overrides for modeled
+  runtime inputs: `coin_overrides`, starting balance, maker fee, liquidation threshold, Forager
+  hysteresis, and hedge mode. Other non-bot overrides and per-coin source routing remain rejected.
+
 - Added Apple MPS optimizer suites spanning exchanges, while retaining exactly one exchange per
   scenario and rejecting combined or per-coin source datasets.
 

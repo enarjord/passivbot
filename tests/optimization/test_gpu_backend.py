@@ -541,7 +541,7 @@ def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():
 @pytest.mark.parametrize(
     ("overrides", "exchanges", "coin_indices", "message"),
     [
-        ({"backtest.starting_balance": 1_000}, ["bybit"], [0], "outside the supported"),
+        ({"live.strategy_kind": "trailing_martingale"}, ["bybit"], [0], "outside the supported"),
         ({}, ["bybit", "binance"], [0], "exactly one exchange"),
         ({}, ["combined"], [0], "combined multi-exchange"),
     ],
@@ -571,6 +571,175 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             return copy.deepcopy(proxy_config)
 
     with pytest.raises(ValueError, match=message):
+        _gpu_suite_scenario_inputs(config, Suite())
+
+
+@pytest.mark.parametrize(
+    ("dotted_path", "value", "resolved_path"),
+    [
+        ("backtest.starting_balance", 12_345.0, ("backtest", "starting_balance")),
+        ("backtest.maker_fee_override", 0.0002, ("backtest", "maker_fee_override")),
+        (
+            "backtest.liquidation_threshold",
+            0.1,
+            ("backtest", "liquidation_threshold"),
+        ),
+        (
+            "live.forager_score_hysteresis_pct",
+            0.03,
+            ("live", "forager_score_hysteresis_pct"),
+        ),
+        ("live.hedge_mode", True, ("live", "hedge_mode")),
+    ],
+)
+def test_gpu_suite_inputs_accept_modeled_non_bot_overrides(
+    dotted_path, value, resolved_path
+):
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    ctx = SimpleNamespace(
+        label="modeled_runtime",
+        overrides={dotted_path: value},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            target = scenario
+            for part in resolved_path[:-1]:
+                target = target[part]
+            target[resolved_path[-1]] = value
+            return scenario
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+    target = prepared[0]["config"]
+    for part in resolved_path:
+        target = target[part]
+    assert target == value
+
+
+def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    overrides = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {"ema_anchor": {"offset": 0.012}},
+                        "risk": {"entry_cooldown_minutes": 15.0},
+                    }
+                }
+            }
+        }
+    }
+    ctx = SimpleNamespace(
+        label="eth_override",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "ETH": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["coin_overrides"] = copy.deepcopy(overrides["coin_overrides"])
+            return scenario
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["overrides"] == overrides
+    assert prepared[0]["config"]["coin_overrides"]["ETH"]["bot"]["long"][
+        "strategy"
+    ]["ema_anchor"]["offset"] == pytest.approx(0.012)
+
+
+def test_gpu_suite_inputs_reject_unmodeled_scenario_coin_override_leaves():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    overrides = {
+        "coin_overrides": {
+            "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
+        }
+    }
+    ctx = SimpleNamespace(
+        label="unsupported_coin_risk",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "ETH": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["coin_overrides"] = copy.deepcopy(overrides["coin_overrides"])
+            return scenario
+
+    with pytest.raises(ValueError, match="coin_overrides do not model"):
+        _gpu_suite_scenario_inputs(config, Suite())
+
+
+def test_gpu_suite_inputs_revalidate_scenario_hedge_mode():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["live"]["hedge_mode"] = True
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH"],
+        "short": ["BTC", "ETH"],
+    }
+    ctx = SimpleNamespace(
+        label="one_way_multi",
+        overrides={"live.hedge_mode": False},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "ETH": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["live"]["hedge_mode"] = False
+            return scenario
+
+    with pytest.raises(ValueError, match="requires live.hedge_mode=true"):
         _gpu_suite_scenario_inputs(config, Suite())
 
 
