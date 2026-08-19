@@ -1301,6 +1301,130 @@ def test_mps_tm_grid_can_fill_without_off_tick_reducer(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_off_tick_grid_precedes_reducer_for_volume(side):
+    count = 6
+    generation_touch = 100.4 if side == "long" else 100.6
+    close = np.array([100.0, 100.0, 100.0, generation_touch, 100.0, 100.0])
+    high = np.array([100.0, 100.0, 100.0, 102.0, 101.5, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 99.5, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 1.0, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    candidate = _tm_single_row(
+        wel_enforcer_enabled=True, wel_enforcer_threshold=0.5
+    )
+    candidate[6] = 1.0
+    candidate[7] = 10.0
+    candidate[11] = 0.0
+    candidate[16] = 0.0
+    candidate[17] = 0.0
+    candidate[20] = 0.0
+    candidate[23] = 100.0
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([candidate + candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    entry_price = 99.0 if side == "long" else 101.0
+    entry_qty = 10.101 if side == "long" else 9.901
+    grid_price = 100.0 if side == "long" else 101.0
+    grid_qty = 5.045 if side == "long" else 4.945
+    reducer_price = 101.0 if side == "long" else 100.0
+    reducer_qty = entry_qty - grid_qty
+    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    expected_volume = entry_qty * entry_price / balance
+    grid_pnl = grid_qty * (
+        grid_price - entry_price if side == "long" else entry_price - grid_price
+    )
+    balance += grid_pnl - grid_qty * grid_price * market.maker_fee
+    expected_volume += grid_qty * grid_price / balance
+    reducer_pnl = reducer_qty * (
+        reducer_price - entry_price
+        if side == "long"
+        else entry_price - reducer_price
+    )
+    balance += reducer_pnl - reducer_qty * reducer_price * market.maker_fee
+    expected_volume += reducer_qty * reducer_price / balance
+
+    assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
+    assert output["day_volume"].sum().item() == pytest.approx(
+        expected_volume, rel=2.0e-5
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_reducer_consumes_one_recursive_close_slot(side):
+    count = 6
+    generation_touch = 100.4 if side == "long" else 100.6
+    close = np.array([100.0, 100.0, 100.0, generation_touch, 100.0, 100.0])
+    high = np.array([100.0, 100.0, 100.0, 102.0, 101.5, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 99.5, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 1.0, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    candidate = _tm_single_row(
+        wel_enforcer_enabled=True, wel_enforcer_threshold=0.5
+    )
+    candidate[6] = 1.0
+    candidate[7] = 10.0
+    candidate[11] = 0.0
+    candidate[15] = 0.0001
+    candidate[16] = 0.0
+    candidate[17] = 1.0e-6
+    candidate[20] = 0.0
+    candidate[23] = 100.0
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([candidate + candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # One reducer plus 499 ordinary closes exhausts Rust's shared 500-order
+    # generation loop.  A fresh 500-rung proxy loop would remove one extra
+    # quantity step here.
+    expected_size = 4.052 if side == "long" else 4.451
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key].item() == pytest.approx(expected_size, abs=2.0e-4)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_small_excess_reducer_crosses_strict_target(side):
     count = 6
     entry_price = 99.0 if side == "long" else 101.0
@@ -1413,6 +1537,127 @@ def test_mps_tm_same_tick_reducer_and_grid_merge_before_volume(side):
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )
+
+
+def _tm_multicoin_off_tick_reducer_case(
+    side, *, maker_fee, close_qty_pct=1.0, close_threshold_we=0.0
+):
+    count = 6
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    generation_touch = 100.4 if side == "long" else 100.6
+    hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
+    hlcvs[:, 0, 0] = [100.0, 100.0, 100.0, 102.0, 101.5, 100.0]
+    hlcvs[:, 0, 1] = [100.0, 100.0, 100.0, 98.0, 99.5, 100.0]
+    hlcvs[:, 0, 2] = [100.0, 100.0, 100.0, generation_touch, 100.0, 100.0]
+    hlcvs[:, 0, 3] = 100.0
+    hlcvs[:, 1, 0] = 121.0
+    hlcvs[:, 1, 1] = 119.0
+    hlcvs[:, 1, 2] = 120.0
+    hlcvs[:, 1, 3] = 100.0
+    market = ProxyMarket(0.001, 1.0, 0.001, 0.0, 1.0, maker_fee)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_multicoin_data(
+        hlcvs, timestamps, [run, run], [market, market]
+    )
+    _, row = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=count
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_initial_ema_dist": 0.01,
+            "entry_initial_qty_pct": 1.0,
+            "entry_threshold_base_pct": 10.0,
+            "entry_retracement_base_pct": 0.0,
+            "entry_cooldown_minutes": 100.0,
+            "gate_initial": 1.0,
+            "n_positions": 1.0,
+            "close_qty_pct": close_qty_pct,
+            "close_threshold_base_pct": 0.0,
+            "close_threshold_we_weight": close_threshold_we,
+            "close_retracement_base_pct": 0.0,
+            "wel_enforcer_enabled": 1.0,
+            "wel_enforcer_threshold": 0.5,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[1, 24] = 0.0
+    runner = MpsTrailingMartingaleMulticoinRunner(
+        run, data, side=side, coin_overrides=overrides
+    )
+    return runner, candidate, market
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_off_tick_grid_precedes_reducer_for_volume(side):
+    runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
+        side, maker_fee=0.001
+    )
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    entry_price = 99.0 if side == "long" else 101.0
+    # Multicoin's shared total-entry headroom floors the short by one step.
+    entry_qty = 10.101 if side == "long" else 9.9
+    grid_price = 100.0 if side == "long" else 101.0
+    grid_qty = 5.045 if side == "long" else 4.945
+    reducer_price = 101.0 if side == "long" else 100.0
+    reducer_qty = entry_qty - grid_qty
+    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    expected_volume = entry_qty * entry_price / balance
+    grid_pnl = grid_qty * (
+        grid_price - entry_price if side == "long" else entry_price - grid_price
+    )
+    balance += grid_pnl - grid_qty * grid_price * market.maker_fee
+    expected_volume += grid_qty * grid_price / balance
+    reducer_pnl = reducer_qty * (
+        reducer_price - entry_price
+        if side == "long"
+        else entry_price - reducer_price
+    )
+    balance += reducer_pnl - reducer_qty * reducer_price * market.maker_fee
+    expected_volume += reducer_qty * reducer_price / balance
+
+    assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
+    assert output["day_volume"].sum().item() == pytest.approx(
+        expected_volume, rel=2.0e-5
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_reducer_consumes_one_recursive_close_slot(side):
+    runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        side,
+        maker_fee=0.0,
+        close_qty_pct=0.0001,
+        close_threshold_we=1.0e-6,
+    )
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    expected_size = 4.052 if side == "long" else 4.451
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key].item() == pytest.approx(expected_size, abs=2.0e-4)
 
 
 @pytest.mark.skipif(

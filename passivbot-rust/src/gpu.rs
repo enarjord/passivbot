@@ -127,6 +127,11 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("int grid_rung_limit = long_side.close_is_wel_reducer ? 499 : 500"));
+        assert!(
+            source.contains("int grid_rung_limit = short_side.close_is_wel_reducer ? 499 : 500")
+        );
+        assert_eq!(source.matches("bool reducer_before_group").count(), 2);
         assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
         assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
         assert!(source.contains("const bool filter_by_min_effective_cost"));
@@ -151,6 +156,8 @@ mod tests {
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
+        assert!(source.contains("for (int rung = 0; rung < 499"));
+        assert!(source.contains("bool reducer_before_group"));
         assert!(source.contains("close_reconstruct_after_reducer"));
         assert!(source.contains("close_gen_allowed_wel"));
         assert!(source.contains("coin_override_or"));
