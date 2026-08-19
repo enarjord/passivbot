@@ -104,15 +104,12 @@ The supported slice is intentionally narrow:
   dataset may be an individual exchange or the canonical combined multi-exchange dataset
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled for one coin
-- long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor runs for up to 64 coins,
-  with dynamic wallet-exposure allocation and independent per-side Forager selection; dual-side
-  runs require matching long/short approved and ignored coin sets, and all multi-coin runs require
-  `backtest.dynamic_wel_by_tradability: true`; `live.forager_score_hysteresis_pct` preserves flat
-  incumbent candidates when a challenger's normalized Forager-score lead is within the configured
-  gap
-- long-only or short-only multi-coin trailing-martingale runs for up to 64 coins, using the same
-  dynamic wallet-exposure and Forager-selection contract; dual-side multi-coin trailing martingale
-  remains unsupported
+- long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor and trailing-martingale runs
+  for up to 64 coins, with dynamic wallet-exposure allocation and independent per-side Forager
+  selection; dual-side runs require matching long/short approved and ignored coin sets, and all
+  multi-coin runs require `backtest.dynamic_wel_by_tradability: true`;
+  `live.forager_score_hysteresis_pct` preserves flat incumbent candidates when a challenger's
+  normalized Forager-score lead is within the configured gap
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
   for single-coin runs; supported multi-coin bounds may vary `n_positions` between `1` and the
   prepared coin count
@@ -120,9 +117,8 @@ The supported slice is intentionally narrow:
 - suite mode with exactly one prepared dataset per scenario, including individual-exchange
   comparisons and combined multi-exchange scenarios;
   single-coin EMA-anchor and trailing-martingale scenarios keep their existing directional
-  support, while EMA-anchor and single-side trailing-martingale suites may also use different
-  multi-coin subsets of up to 64 coins when every effective scenario shares the same supported
-  side topology;
+  support, while both strategies' suites may also use different multi-coin subsets of up to 64
+  coins when every effective scenario shares the same supported side topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
   EMA-anchor runs, starting balance, maker fee, liquidation threshold, Forager hysteresis, and
@@ -139,12 +135,13 @@ The supported slice is intentionally narrow:
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 
-Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor uses one
-long and one short Metal dispatch per candidate in hedge mode. Their directional surfaces form a
+Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
+Trailing Martingale use one long and one short Metal dispatch per candidate in hedge mode. Their
+directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, dual-side multi-coin trailing martingale, trailing-martingale
-`coin_overrides`, unmodeled non-bot suite scenario overrides, HSL, and auto-unstuck are not
+Dual-side one-way arbitration, trailing-martingale `coin_overrides`, unmodeled non-bot suite
+scenario overrides, HSL, and auto-unstuck are not
 silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
