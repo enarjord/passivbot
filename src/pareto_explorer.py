@@ -4,6 +4,8 @@ import argparse
 import json
 import math
 import os
+import shutil
+import tempfile
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +62,9 @@ METHOD_DESCRIPTIONS = {
     "lexicographic": "Strict priority chooser. Sorts by objective priority order.",
     "outranking": "Simplified PROMETHEE-style chooser based on pairwise net preference flow.",
 }
+
+
+FILTERED_SELECTION_MANIFEST = "selection.json"
 
 
 @dataclass(frozen=True)
@@ -318,7 +323,10 @@ def parse_method_name(raw_method: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool pareto",
-        description="Select a single candidate from a Pareto front directory.",
+        description=(
+            "Select a single candidate from a Pareto front directory and optionally copy the "
+            "winner or filtered set."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Methods:\n"
@@ -331,7 +339,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Limits are applied before selection. Repeat -l/--limit for multiple keep-conditions:\n"
             "  -l 'adg_strategy_eq>0.0'\n"
             "  -l 'drawdown_worst_strategy_eq<=0.35'\n"
-            "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n"
+            "  --limits '[{\"metric\":\"drawdown_worst_strategy_eq\",\"penalize_if\":\">\",\"value\":0.35}]'\n\n"
+            "Outputs:\n"
+            "  -s configs/selected.local.json          Copy the selected member.\n"
+            "  -f optimize_results/filtered_pareto     Copy members retained after limits.\n"
         ),
     )
     parser.add_argument(
@@ -409,6 +420,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         metavar="N",
         help="Show the top N ranked candidates instead of only the winner. Default: 1.",
+    )
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
+        "-s",
+        "--save-selected",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Copy the selected Pareto member to FILE.",
+    )
+    output_group.add_argument(
+        "-f",
+        "--save-filtered",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Copy every member retained after limits to DIR and write selection.json. "
+            "Without limits, copy the full loaded set."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -1515,6 +1546,197 @@ def format_selection_result(
     return "\n".join(lines)
 
 
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_within_by_identity(path: Path, directory: Path) -> bool:
+    current = path
+    while True:
+        try:
+            if current.samefile(directory):
+                return True
+        except FileNotFoundError:
+            pass
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+def _validate_output_path(path: Path, pareto_dir: Path, *, directory: bool) -> None:
+    if (
+        _is_within(path, pareto_dir)
+        or _is_within_by_identity(path, pareto_dir)
+        or (
+            directory
+            and (
+                _is_within(pareto_dir, path)
+                or _is_within_by_identity(pareto_dir, path)
+            )
+        )
+    ):
+        raise ValueError(
+            f"Output must not overlap the source Pareto directory: {path}"
+        )
+
+
+def _prepare_selected_output(
+    raw_path: str | os.PathLike[str] | None,
+    pareto_dir: Path,
+) -> Path | None:
+    if raw_path is None:
+        return None
+    unresolved_output = Path(raw_path).expanduser()
+    if unresolved_output.is_symlink():
+        raise FileExistsError(f"Selected output already exists: {unresolved_output}")
+    output = unresolved_output.resolve()
+    _validate_output_path(output, pareto_dir, directory=False)
+    if output.suffix.lower() != ".json":
+        raise ValueError(f"Selected output must use a .json filename: {output}")
+    if output.exists():
+        if output.is_dir():
+            raise IsADirectoryError(f"Selected output path is a directory: {output}")
+        raise FileExistsError(f"Selected output already exists: {output}")
+    if output.parent.exists() and not output.parent.is_dir():
+        raise NotADirectoryError(f"Selected output parent is not a directory: {output.parent}")
+    return output
+
+
+def _prepare_filtered_output(
+    raw_path: str | os.PathLike[str] | None,
+    pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+) -> Path | None:
+    if raw_path is None:
+        return None
+    unresolved_output = Path(raw_path).expanduser()
+    if unresolved_output.is_symlink():
+        raise FileExistsError(f"Filtered output directory already exists: {unresolved_output}")
+    output = unresolved_output.resolve()
+    _validate_output_path(output, pareto_dir, directory=True)
+    names = [candidate.path.name for candidate in candidates]
+    folded_names = [name.casefold() for name in names]
+    if len(folded_names) != len(set(folded_names)):
+        raise ValueError("Filtered members contain duplicate filenames.")
+    if FILTERED_SELECTION_MANIFEST.casefold() in folded_names:
+        raise ValueError(
+            f"Filtered member filename conflicts with {FILTERED_SELECTION_MANIFEST!r}."
+        )
+    if output.exists():
+        if not output.is_dir():
+            raise NotADirectoryError(f"Filtered output path is not a directory: {output}")
+        raise FileExistsError(f"Filtered output directory already exists: {output}")
+    if output.parent.exists() and not output.parent.is_dir():
+        raise NotADirectoryError(f"Filtered output parent is not a directory: {output.parent}")
+    return output
+
+
+def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-selected-"))
+    try:
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=stage,
+            prefix="candidate-",
+            suffix=".tmp",
+        )
+    except Exception:
+        _remove_export_tree(stage)
+        raise
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as destination:
+            file_descriptor = -1
+            with candidate.path.open("rb") as source:
+                shutil.copyfileobj(source, destination)
+        return temporary
+    except Exception:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        _remove_selected_stage(temporary)
+        raise
+
+
+def _install_selected(temporary: Path, output: Path) -> None:
+    try:
+        if output.exists():
+            raise FileExistsError(f"Selected output already exists: {output}")
+        temporary.rename(output)
+    finally:
+        _remove_selected_stage(temporary)
+
+
+def _stage_filtered(
+    output: Path,
+    pareto_dir: Path,
+    candidates: Sequence[ParetoCandidate],
+    *,
+    loaded_count: int,
+    active_limits: Sequence[Mapping[str, Any]],
+    scenario: str | None,
+    selected: ParetoCandidate,
+) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-filtered-"))
+    try:
+        for candidate in candidates:
+            destination = stage / candidate.path.name
+            if destination.exists():
+                raise ValueError(
+                    f"Filtered member filename collides on the destination filesystem: "
+                    f"{candidate.path.name}"
+                )
+            shutil.copyfile(candidate.path, destination)
+        manifest = {
+            "tool": "passivbot tool pareto",
+            "pareto_dir": str(pareto_dir),
+            "loaded_count": int(loaded_count),
+            "retained_count": len(candidates),
+            "scenario": scenario,
+            "applied_limits": _json_ready(active_limits),
+            "selected_member": selected.path.name,
+            "members": [candidate.path.name for candidate in candidates],
+        }
+        manifest_path = stage / FILTERED_SELECTION_MANIFEST
+        if manifest_path.exists():
+            raise ValueError(
+                f"Filtered member filename conflicts with {FILTERED_SELECTION_MANIFEST!r}."
+            )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return stage
+    except Exception:
+        _remove_export_tree(stage)
+        raise
+
+
+def _remove_export_tree(path: Path) -> None:
+    shutil.rmtree(path)
+
+
+def _remove_selected_stage(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    if path.parent.exists():
+        _remove_export_tree(path.parent)
+
+
+def _install_filtered(stage: Path, output: Path) -> Path:
+    try:
+        if output.exists():
+            raise FileExistsError(f"Filtered output directory already exists: {output}")
+        stage.rename(output)
+        return output / FILTERED_SELECTION_MANIFEST
+    finally:
+        if stage.exists():
+            _remove_export_tree(stage)
+
+
 def run_from_args(args: argparse.Namespace) -> SelectionResult:
     method = parse_method_name(args.method)
     raw_path = getattr(args, "path", None)
@@ -1557,6 +1779,48 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
         target_pairs=getattr(args, "target", None),
         priority_arg=getattr(args, "priority", None),
     )
+    selected_output = _prepare_selected_output(
+        getattr(args, "save_selected", None),
+        pareto_dir,
+    )
+    filtered_output = _prepare_filtered_output(
+        getattr(args, "save_filtered", None),
+        pareto_dir,
+        filtered_candidates,
+    )
+    selected_stage: Path | None = None
+    filtered_stage: Path | None = None
+    filtered_manifest: Path | None = None
+    try:
+        if selected_output is not None:
+            selected_stage = _stage_selected(
+                result.candidate,
+                selected_output,
+            )
+        if filtered_output is not None:
+            filtered_stage = _stage_filtered(
+                filtered_output,
+                pareto_dir,
+                filtered_candidates,
+                loaded_count=len(candidates),
+                active_limits=active_limits,
+                scenario=scenario,
+                selected=result.candidate,
+            )
+        if selected_output is not None and selected_stage is not None:
+            _install_selected(selected_stage, selected_output)
+            selected_stage = None
+        if filtered_output is not None and filtered_stage is not None:
+            filtered_manifest = _install_filtered(
+                filtered_stage,
+                filtered_output,
+            )
+            filtered_stage = None
+    finally:
+        if selected_stage is not None:
+            _remove_selected_stage(selected_stage)
+        if filtered_stage is not None and filtered_stage.exists():
+            _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
     if getattr(args, "json_output", False):
         ranking_order = result.details.get("ranking_order") or [scenario_front.index(result.candidate)]
@@ -1596,21 +1860,38 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
                     "scenario_front_complete": False,
                 }
             )
+        if selected_output is not None:
+            payload["selected"]["saved_path"] = str(selected_output)
+        if filtered_output is not None and filtered_manifest is not None:
+            payload["saved_filtered"] = {
+                "directory": str(filtered_output),
+                "manifest": str(filtered_manifest),
+                "count": len(filtered_candidates),
+            }
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(
-            format_selection_result(
-                pareto_dir,
-                candidates=scenario_front,
-                loaded_count=len(candidates),
-                retained_count=len(filtered_candidates),
-                scenario=scenario,
-                scenario_front_count=len(scenario_front) if scenario is not None else None,
-                active_limits=active_limits,
-                result=result,
-                show_top=show_top,
-            )
+        output = format_selection_result(
+            pareto_dir,
+            candidates=scenario_front,
+            loaded_count=len(candidates),
+            retained_count=len(filtered_candidates),
+            scenario=scenario,
+            scenario_front_count=len(scenario_front) if scenario is not None else None,
+            active_limits=active_limits,
+            result=result,
+            show_top=show_top,
         )
+        saved_lines: List[str] = []
+        if selected_output is not None:
+            saved_lines.append(f"Saved selected member: {_display_path(selected_output)}")
+        if filtered_output is not None and filtered_manifest is not None:
+            saved_lines.append(
+                f"Saved filtered members: {len(filtered_candidates)} to "
+                f"{_display_path(filtered_output)}"
+            )
+        if saved_lines:
+            output += "\n" + "\n".join(saved_lines)
+        print(output)
     return result
 
 
