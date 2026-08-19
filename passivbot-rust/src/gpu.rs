@@ -10,6 +10,8 @@ pub const MPS_EMA_ANCHOR_MULTICOIN_SOURCE: &str =
 pub const MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE: &str = MPS_EMA_ANCHOR_MULTICOIN_SOURCE;
 pub const MPS_TRAILING_MARTINGALE_SOURCE: &str =
     include_str!("gpu/mps_trailing_martingale_directional.metal");
+pub const MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE: &str =
+    include_str!("gpu/mps_trailing_martingale_multicoin.metal");
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE
@@ -25,6 +27,10 @@ pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
 
 pub fn mps_trailing_martingale_source() -> &'static str {
     MPS_TRAILING_MARTINGALE_SOURCE
+}
+
+pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
+    MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE
 }
 
 #[cfg(test)]
@@ -115,5 +121,24 @@ mod tests {
         assert!(!source.contains("price_now > rounded_target"));
         assert!(!source.contains("price_now < rounded_target"));
         assert!(!source.contains("nearest_ticks("));
+    }
+
+    #[test]
+    fn trailing_martingale_multicoin_mps_source_exposes_expected_kernel_contract() {
+        let source = mps_trailing_martingale_multicoin_source();
+        assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
+        assert!(source.contains("constant int MAX_COINS = 64"));
+        assert!(source.contains("constant int PARAM_COLS = 34"));
+        assert!(source.contains("min_since_open"));
+        assert!(source.contains("max_since_min"));
+        assert!(source.contains("max_since_open"));
+        assert!(source.contains("min_since_max"));
+        assert!(source.contains("effective_n_positions"));
+        assert!(source.contains("float total_cap = twel - 1.0e-7f"));
+        assert!(source.contains("entry_retracement_base"));
+        assert!(source.contains("close_retracement_base"));
+        assert!(source.contains("touch_nearest_ticks[k * C + c]"));
+        assert!(!source.contains("unstuck"));
+        assert!(!source.contains("hard_stop"));
     }
 }

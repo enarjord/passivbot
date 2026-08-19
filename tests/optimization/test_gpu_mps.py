@@ -7,6 +7,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.model import (
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     _build_hourly_log_range,
     _directional_touch_ticks,
     _minimum_entry_qty_encoding,
@@ -50,6 +51,7 @@ from optimization.gpu.mps_kernel import (
     MpsEmaAnchorMulticoinRunner,
     MpsEmaAnchorMulticoinLongRunner,
     MpsEmaAnchorRunner,
+    MpsTrailingMartingaleMulticoinRunner,
 )
 
 
@@ -332,6 +334,104 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert torch.equal(
         exact_last_output["day_end_eq"][0], exact_last_output["day_end_eq"][1]
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
+    import passivbot_rust
+
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    assert "kernel void passivbot_trailing_martingale_multicoin" in source
+    assert "constant int PARAM_COLS = 34" in source
+    assert "effective_n_positions" in source
+    assert "min_since_open" in source
+    assert "entry_retracement_base" in source
+    assert "close_retracement_base" in source
+
+    count = 512
+    coin_count = 3
+    phase = np.linspace(0.0, 12.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * (6.0 + coin)
+        hlcvs[:, coin, 0] = close * 1.015
+        hlcvs[:, coin, 1] = close * 0.985
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    assert data["touch_nearest_ticks"].shape == (count, coin_count)
+    assert data["touch_nearest_ticks"].dtype == torch.int32
+    values = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 30.0,
+        "volatility_ema_span_1h": 60.0,
+        "volatility_ema_span_1m": 60.0,
+        "entry_double_down_factor": 1.5,
+        "entry_initial_ema_dist": 0.01,
+        "entry_initial_qty_pct": 0.1,
+        "entry_threshold_base_pct": 0.02,
+        "entry_threshold_we_weight": 0.0,
+        "entry_threshold_volatility_1h_weight": 0.0,
+        "entry_threshold_volatility_1m_weight": 0.0,
+        "entry_retracement_base_pct": 0.0,
+        "entry_retracement_we_weight": 0.0,
+        "entry_retracement_volatility_1h_weight": 0.0,
+        "entry_retracement_volatility_1m_weight": 0.0,
+        "close_qty_pct": 0.2,
+        "close_threshold_base_pct": 0.01,
+        "close_threshold_we_weight": 0.0,
+        "close_threshold_volatility_1h_weight": 0.0,
+        "close_threshold_volatility_1m_weight": 0.0,
+        "close_retracement_base_pct": 0.0,
+        "close_retracement_volatility_1h_weight": 0.0,
+        "close_retracement_volatility_1m_weight": 0.0,
+        "entry_cooldown_minutes": 0.0,
+        "total_wallet_exposure_limit": 1.0,
+        "gate_initial": 1.0,
+        "gate_reentry": 1.0,
+        "forager_volume_ema_span_1m": 60.0,
+        "forager_volatility_ema_span_1m": 60.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights_volume": 1.0,
+        "forager_score_weights_ema_readiness": 0.0,
+        "forager_score_weights_volatility": 0.0,
+        "n_positions": 2.0,
+    }
+    row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
+
+    output = MpsTrailingMartingaleMulticoinRunner(
+        runs[0], data, side=side, forager_score_hysteresis_pct=0.02
+    ).run(np.array([row, row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["balance"].device.type == "mps"
+    assert output["balance"].shape == (2,)
+    assert torch.isfinite(output["balance"]).all()
+    assert output["day_has_fill"].sum().item() > 0
+    assert (output["open_positions"] <= 2.0).all()
 
 
 @pytest.mark.skipif(

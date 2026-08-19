@@ -12,6 +12,7 @@ from optimization.gpu.model import (
     GAP_BINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_PARAM_KEYS,
 )
 
@@ -49,6 +50,17 @@ def _ema_anchor_multicoin_shader_library():
 
     return torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py()
+    )
+
+
+@lru_cache(maxsize=1)
+def _trailing_martingale_multicoin_shader_library():
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     )
 
 
@@ -314,7 +326,7 @@ class MpsEmaAnchorMulticoinRunner:
     ):
         if side not in {"long", "short"}:
             raise ValueError(
-                f"MPS multicoin EMA runner side must be long or short, got {side!r}"
+                f"MPS multicoin runner side must be long or short, got {side!r}"
             )
         self.side = side
         self.run_config = run
@@ -324,6 +336,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.bars = data["bars"]
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
+        self.touch_nearest_ticks = data["touch_nearest_ticks"]
         self.coin_settings = data["coin_settings"]
         if coin_overrides is None:
             coin_overrides = np.full((self.n_coins, 12), np.nan, dtype=np.float32)
@@ -475,6 +488,92 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 
     def __init__(self, run: ProxyRun, data: dict):
         super().__init__(run, data, side="short")
+
+
+class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
+    """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
+
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        side: str,
+        forager_score_hysteresis_pct: float = 0.0,
+    ):
+        super().__init__(
+            run,
+            data,
+            side=side,
+            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+        )
+
+    def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        expected = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
+        if params.ndim != 2 or params.shape[1] != expected:
+            got = params.shape[1] if params.ndim == 2 else params.shape
+            raise ValueError(
+                "expected multicoin Trailing Martingale parameter matrix with "
+                f"{expected} columns, got {got}"
+            )
+        return np.ascontiguousarray(params, dtype=np.float32)
+
+    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+        started = time.perf_counter()
+        matrix = self._pack_params(params)
+        packed = time.perf_counter()
+        params_mps = torch.as_tensor(matrix, device="mps")
+        batch_size = int(matrix.shape[0])
+        daily, scalars, gaps = self._output_buffers(batch_size)
+        sizes_key = (batch_size, int(matrix.shape[1]))
+        if sizes_key not in self._sizes:
+            self._sizes[sizes_key] = torch.tensor(
+                [
+                    batch_size,
+                    self.n,
+                    self.n_coins,
+                    self.n_days,
+                    self.requested_start_idx,
+                    self.run_config.warmup_bars,
+                    self.start_minute_of_day,
+                    self.start_minute_of_hour,
+                ],
+                dtype=torch.int32,
+                device="mps",
+            )
+        prepared = time.perf_counter()
+        library = _trailing_martingale_multicoin_shader_library()
+        compiled = time.perf_counter()
+        if profile:
+            torch.mps.synchronize()
+            dispatched = time.perf_counter()
+        else:
+            dispatched = compiled
+        library.passivbot_trailing_martingale_multicoin(
+            self.bars,
+            self.fill_ticks,
+            self.touch_ticks,
+            self.touch_nearest_ticks,
+            self.coin_settings,
+            params_mps,
+            self.settings,
+            self._sizes[sizes_key],
+            daily,
+            scalars,
+            gaps,
+            threads=(batch_size, 1, 1),
+        )
+        if profile:
+            torch.mps.synchronize()
+        finished = time.perf_counter()
+        self.last_profile = {
+            "cpu_pack_seconds": packed - started,
+            "upload_and_zero_seconds": prepared - packed,
+            "compile_seconds": compiled - prepared,
+            "pre_dispatch_sync_seconds": dispatched - compiled,
+            "kernel_seconds": finished - dispatched,
+        }
+        return _decode_outputs(daily, scalars, gaps)
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):

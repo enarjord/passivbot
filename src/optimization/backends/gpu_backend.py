@@ -129,6 +129,17 @@ TRAILING_MARTINGALE_BOUND_MAP = {
     for bound_suffix, parameter in _TM_SIDE_BOUND_SUFFIXES.items()
 }
 
+TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS = {
+    side: {
+        **TRAILING_MARTINGALE_BOUND_MAP,
+        **{
+            f"{side}_{suffix}": f"{side}_{parameter}"
+            for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
+        },
+    }
+    for side in ("long", "short")
+}
+
 GPU_STRATEGY_BOUND_MAPS = {
     "ema_anchor": EMA_BOUND_MAP,
     "trailing_martingale": TRAILING_MARTINGALE_BOUND_MAP,
@@ -308,6 +319,17 @@ def _ema_multicoin_bound_map(target_side: str, overrides: set[str]) -> dict:
     bound_map = dict(EMA_MULTICOIN_BOUND_MAPS[target_side])
     if "mirror_short_from_long" in overrides and target_side == "short":
         bound_map.update(EMA_MULTICOIN_BOUND_MAPS["long"])
+    return bound_map
+
+
+def _trailing_martingale_multicoin_bound_map(
+    target_side: str, overrides: set[str]
+) -> dict:
+    """Include all bound families feeding one single-side multicoin TM run."""
+
+    bound_map = dict(TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS[target_side])
+    if "mirror_short_from_long" in overrides and target_side == "short":
+        bound_map.update(TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS["long"])
     return bound_map
 
 
@@ -750,13 +772,14 @@ def _validate_scope_config(
                 "GPU multicoin foundation supports at most "
                 f"{MPS_MULTICOIN_MAX_COINS} coins; prepared {coin_count}"
             )
-        if strategy_kind != "ema_anchor":
-            raise ValueError(
-                "GPU multicoin foundation currently supports strategy_kind=ema_anchor only"
-            )
         if len(enabled_sides) not in (1, 2):
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
+            )
+        if strategy_kind == "trailing_martingale" and len(enabled_sides) != 1:
+            raise ValueError(
+                "GPU multi-coin Trailing Martingale currently requires exactly "
+                "one enabled side"
             )
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
@@ -1037,11 +1060,15 @@ def _gpu_suite_search_context(
         .lower()
         for item in suite_inputs
     }
-    if strategy_kinds != {"ema_anchor"}:
+    if len(strategy_kinds) != 1 or not strategy_kinds <= {
+        "ema_anchor",
+        "trailing_martingale",
+    }:
         raise ValueError(
-            "GPU multicoin suites currently require strategy_kind=ema_anchor in "
-            f"every scenario; got {sorted(strategy_kinds)}"
+            "GPU multicoin suites require one supported strategy kind in every "
+            f"scenario; got {sorted(strategy_kinds)}"
         )
+    strategy_kind = next(iter(strategy_kinds))
     sides_by_label = {}
     for item in suite_inputs:
         sides = tuple(
@@ -1054,6 +1081,11 @@ def _gpu_suite_search_context(
             raise ValueError(
                 "GPU multicoin suites require one or two enabled sides in every "
                 f"scenario; {item['ctx'].label!r} has {list(sides)}"
+            )
+        if strategy_kind == "trailing_martingale" and len(sides) != 1:
+            raise ValueError(
+                "GPU multi-coin Trailing Martingale suites currently require "
+                f"exactly one enabled side; {item['ctx'].label!r} has {list(sides)}"
             )
     common_topologies = set(sides_by_label.values())
     if len(common_topologies) != 1:
@@ -2165,7 +2197,7 @@ def run_backend(
     from config.metrics import canonicalize_metric_name
     from config.scoring import extract_objective_specs
     from optimization.gpu.metrics import SUPPORTED_METRICS
-    from optimization.gpu.service import MpsMulticoinEmaProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
     from optimization.warmup import (
         _finalize_optimizer_vector_config,
         validate_optimizer_effective_configs,
@@ -2227,7 +2259,7 @@ def run_backend(
             evaluator.shared_hlcvs_np[exchange].shape[1]
         )
         suite_multicoin_sides = None
-    if strategy_kind == "ema_anchor" and max_coin_count > 1:
+    if max_coin_count > 1:
         multicoin_sides = (
             list(suite_multicoin_sides)
             if suite_multicoin_sides is not None
@@ -2241,13 +2273,19 @@ def run_backend(
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
             )
+        if strategy_kind == "trailing_martingale" and len(multicoin_sides) != 1:
+            raise ValueError(
+                "GPU multi-coin Trailing Martingale currently requires exactly "
+                "one enabled side"
+            )
         bound_map = {}
         for multicoin_side in multicoin_sides:
-            bound_map.update(
-                _ema_multicoin_bound_map(
-                    multicoin_side, gpu_optimizer_overrides
-                )
+            mapper = (
+                _trailing_martingale_multicoin_bound_map
+                if strategy_kind == "trailing_martingale"
+                else _ema_multicoin_bound_map
             )
+            bound_map.update(mapper(multicoin_side, gpu_optimizer_overrides))
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
@@ -2485,7 +2523,7 @@ def run_backend(
         scenario_proxies = []
         for item in suite_inputs:
             scenario_proxy = (
-                MpsMulticoinEmaProxy
+                MpsMulticoinProxy
                 if item["coin_count"] > 1
                 else MpsSingleCoinProxy
             )(
@@ -2513,7 +2551,7 @@ def run_backend(
             )
 
     else:
-        proxy_cls = MpsMulticoinEmaProxy if max_coin_count > 1 else MpsSingleCoinProxy
+        proxy_cls = MpsMulticoinProxy if max_coin_count > 1 else MpsSingleCoinProxy
         proxy = proxy_cls(
             config=proxy_config,
             hlcvs=evaluator.shared_hlcvs_np[exchange],
