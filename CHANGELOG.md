@@ -43,6 +43,10 @@ All notable user-facing changes will be documented in this file.
   Rust precedence; unsupported override leaves still fail closed, and checkpoint identity now
   includes the prepared effective override table.
 
+- Add `-s/--save-selected` and `-f/--save-filtered` to `passivbot tool pareto` for copying the
+  selected member or the post-limit member set, with fail-if-present destinations and a filtered
+  export manifest.
+
 - Add experimental Apple MPS optimization suites for the existing single-coin EMA-anchor and
   trailing-martingale scopes. Metal screens every candidate against each prepared scenario, while
   the canonical suite reducer, scenario-aware objectives, and limits select proxy candidates and

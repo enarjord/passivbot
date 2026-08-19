@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import pareto_explorer
 from pareto_explorer import (
     build_scenario_front,
     build_parser,
@@ -440,6 +441,20 @@ def test_build_parser_accepts_scenario():
     assert args.scenario == "bull"
 
 
+def test_build_parser_accepts_save_outputs():
+    parser = build_parser()
+    selected_args = parser.parse_args(["-s", "selected.json"])
+    filtered_args = parser.parse_args(["-f", "filtered"])
+
+    assert selected_args.save_selected == "selected.json"
+    assert filtered_args.save_filtered == "filtered"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-s", "selected.json", "-f", "filtered"])
+    help_text = parser.format_help()
+    assert "configs/selected.local.json" in help_text
+    assert "optimize_results/filtered_pareto" in help_text
+
+
 def test_project_and_rebuild_scenario_front(scenario_pareto_dir: Path):
     _pareto_dir, candidates, specs = load_candidates(scenario_pareto_dir)
 
@@ -761,6 +776,230 @@ def test_run_from_args_json_output(sample_pareto_dir: Path, capsys):
     assert "ranking_order" not in payload["selected"]["details"]
     assert "score_vector" not in payload["selected"]["details"]
     assert result.candidate.path.stem == "b_extreme"
+
+
+def test_run_from_args_saves_selected_member_exactly(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "promoted" / "candidate.json"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "--method",
+            "utility",
+            "--weight",
+            "metric_b=5",
+            "--save-selected",
+            str(output),
+        ]
+    )
+
+    result = run_from_args(args)
+
+    assert result.candidate.path.name == "b_extreme.json"
+    assert output.read_bytes() == result.candidate.path.read_bytes()
+    assert "Saved selected member:" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+def test_selected_member_stages_in_private_directory(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
+    stage = pareto_explorer._stage_selected(candidates[0], tmp_path / "selected.json")
+    try:
+        assert stage.parent.parent == tmp_path
+        assert stage.parent.stat().st_mode & 0o077 == 0
+        assert stage.read_bytes() == candidates[0].path.read_bytes()
+    finally:
+        pareto_explorer._remove_selected_stage(stage)
+
+
+def test_selected_stage_cleans_directory_when_file_creation_fails(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
+    monkeypatch.setattr(
+        pareto_explorer.tempfile,
+        "mkstemp",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("too many open files")),
+    )
+
+    with pytest.raises(OSError, match="too many open files"):
+        pareto_explorer._stage_selected(candidates[0], tmp_path / "selected.json")
+    assert not list(tmp_path.glob(".pareto-selected-*"))
+
+
+def test_run_from_args_saves_post_limit_members_and_manifest(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    output = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-l", "metric_a>0.6", "-f", str(output)]
+    )
+
+    result = run_from_args(args)
+
+    assert result.candidate.path.name == "balanced.json"
+    assert sorted(path.name for path in output.iterdir()) == [
+        "a_extreme.json",
+        "balanced.json",
+        "selection.json",
+    ]
+    for name in ["a_extreme.json", "balanced.json"]:
+        assert (output / name).read_bytes() == (sample_pareto_dir / name).read_bytes()
+    manifest = json.loads((output / "selection.json").read_text())
+    assert manifest["loaded_count"] == 4
+    assert manifest["retained_count"] == 2
+    assert manifest["selected_member"] == "balanced.json"
+    assert manifest["members"] == ["a_extreme.json", "balanced.json"]
+    assert manifest["applied_limits"][0]["metric"] == "metric_a"
+    assert "Saved filtered members: 2" in capsys.readouterr().out
+
+
+def test_saved_outputs_are_reported_in_json(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    capsys,
+):
+    filtered = tmp_path / "filtered"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>0.6",
+            "-f",
+            str(filtered),
+            "--json",
+        ]
+    )
+
+    run_from_args(args)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["saved_filtered"] == {
+        "count": 2,
+        "directory": str(filtered.resolve()),
+        "manifest": str((filtered / "selection.json").resolve()),
+    }
+
+
+def test_saved_outputs_must_not_already_exist(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected.json"
+    selected.write_text('{"old": true}\n')
+    args = build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(args)
+    assert json.loads(selected.read_text()) == {"old": True}
+
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    stale = filtered / "stale.json"
+    stale.write_text('{"stale": true}\n')
+    args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(filtered)])
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(args)
+    assert stale.exists()
+
+
+def test_saved_outputs_refuse_dangling_symlinks(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected.json"
+    selected.symlink_to(tmp_path / "missing-selected.json")
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(
+            build_parser().parse_args([str(sample_pareto_dir), "-s", str(selected)])
+        )
+
+    filtered = tmp_path / "filtered"
+    filtered.symlink_to(tmp_path / "missing-filtered", target_is_directory=True)
+    with pytest.raises(FileExistsError, match="already exists"):
+        run_from_args(
+            build_parser().parse_args([str(sample_pareto_dir), "-f", str(filtered)])
+        )
+
+    assert not (tmp_path / "missing-selected.json").exists()
+    assert not (tmp_path / "missing-filtered").exists()
+
+
+def test_save_outputs_refuse_source_overlap(
+    sample_pareto_dir: Path,
+):
+    selected_args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-s", str(sample_pareto_dir / "selected.json")]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(selected_args)
+
+    filtered_args = build_parser().parse_args(
+        [str(sample_pareto_dir), "-f", str(sample_pareto_dir.parent)]
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        run_from_args(filtered_args)
+
+
+def test_identity_overlap_detects_existing_directory_alias(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    alias = tmp_path / "pareto_alias"
+    alias.symlink_to(sample_pareto_dir, target_is_directory=True)
+
+    assert pareto_explorer._is_within_by_identity(
+        alias / "selected.json",
+        sample_pareto_dir,
+    )
+
+
+def test_filtered_copy_failure_leaves_no_output(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    output = tmp_path / "filtered"
+
+    def fail_copy(_source, _destination):
+        raise OSError("simulated copy failure")
+
+    monkeypatch.setattr(pareto_explorer.shutil, "copyfile", fail_copy)
+    args = build_parser().parse_args([str(sample_pareto_dir), "-f", str(output)])
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        run_from_args(args)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".pareto-filtered-*"))
+
+
+def test_no_output_is_written_when_limits_reject_every_candidate(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    selected = tmp_path / "selected.json"
+    args = build_parser().parse_args(
+        [
+            str(sample_pareto_dir),
+            "-l",
+            "metric_a>2",
+            "-s",
+            str(selected),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="No Pareto candidates remained"):
+        run_from_args(args)
+    assert not selected.exists()
 
 
 def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_dir: Path):
