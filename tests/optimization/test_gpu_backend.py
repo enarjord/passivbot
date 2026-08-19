@@ -344,6 +344,8 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "close_retracement_volatility_1h_weight",
         "close_retracement_volatility_1m_weight",
         "risk_entry_cooldown_minutes",
+        "risk_twel_enforcer_threshold",
+        "risk_we_excess_allowance_pct",
         "total_wallet_exposure_limit",
     }
 
@@ -1328,18 +1330,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             ),
             "total_exposure_enforcer_enabled",
         ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "we_excess_allowance_pct", 0.1
-            ),
-            "we_excess_allowance_pct",
-        ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "total_exposure_entry_gate_enabled", False
-            ),
-            "total_exposure_entry_gate_enabled",
-        ),
     ],
 )
 def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
@@ -1352,6 +1342,52 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("entry_gate", [False, True])
+@pytest.mark.parametrize("allowance_mode", ["bounded", "legacy_raw"])
+def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
+    strategy_kind, side, entry_gate, allowance_mode
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=side == "long", short_enabled=side == "short")
+    risk = config["bot"][side]["risk"]
+    risk["we_excess_allowance_pct"] = 0.25
+    risk["we_excess_allowance_mode"] = allowance_mode
+    risk["total_exposure_entry_gate_enabled"] = entry_gate
+    risk["total_exposure_enforcer_threshold"] = 0.8
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("we_excess_allowance_pct", 0.1, "we_excess_allowance_pct"),
+        (
+            "total_exposure_entry_gate_enabled",
+            False,
+            "total_exposure_entry_gate_enabled",
+        ),
+    ],
+)
+def test_gpu_multicoin_exposure_headroom_policy_remains_fail_closed(
+    key, value, message
+):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    config["bot"]["long"]["risk"][key] = value
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+
+    with pytest.raises(ValueError, match=message):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
@@ -3107,7 +3143,7 @@ def test_gpu_anchor_context_fails_closed_on_missing_fixed_values():
         _build_anchor_parameter_context(config, {})
 
 
-def test_gpu_anchor_ranges_preserve_pinned_scope_validation():
+def test_gpu_anchor_ranges_support_single_coin_exposure_headroom_only():
     config = {
         ANCHOR_PLAN_KEY: {
             "fixed_keys": ["long_risk_we_excess_allowance_pct"],
@@ -3134,8 +3170,13 @@ def test_gpu_anchor_ranges_preserve_pinned_scope_validation():
 
     _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
 
+    _validate_pinned_scope_bounds(
+        fixed_bounds, {}, {"long"}, coin_count=1
+    )
     with pytest.raises(ValueError, match="we_excess_allowance_pct"):
-        _validate_pinned_scope_bounds(fixed_bounds, {}, {"long"})
+        _validate_pinned_scope_bounds(
+            fixed_bounds, {}, {"long"}, coin_count=2
+        )
 
 
 def test_gpu_anchor_ranges_cannot_change_side_enablement():
@@ -3384,13 +3425,27 @@ def test_gpu_rejects_pinned_unsupported_risk_behavior():
         _validate_pinned_scope_bounds(
             {"long_risk_we_excess_allowance_pct": Bound(0.2, 0.2, None)},
             {"long_risk_we_excess_allowance_pct": 0.2},
+            coin_count=2,
         )
 
     with pytest.raises(ValueError, match="twel_enforcer_threshold"):
         _validate_pinned_scope_bounds(
             {"long_risk_twel_enforcer_threshold": Bound(0.8, 0.8, None)},
             {"long_risk_twel_enforcer_threshold": 0.8},
+            coin_count=2,
         )
+
+
+def test_gpu_accepts_single_coin_exposure_policy_bounds():
+    _validate_pinned_scope_bounds(
+        {
+            "long_risk_we_excess_allowance_pct": Bound(0.0, 0.5, None),
+            "long_risk_twel_enforcer_threshold": Bound(0.5, 1.0, None),
+        },
+        {},
+        {"long"},
+        coin_count=1,
+    )
 
 def test_gpu_anchor_constant_twel_threshold_fails_closed():
     config = {
@@ -3420,7 +3475,9 @@ def test_gpu_anchor_constant_twel_threshold_fails_closed():
     _overrides, fixed_bounds = _build_anchor_parameter_context(config, {})
 
     with pytest.raises(ValueError, match="twel_enforcer_threshold"):
-        _validate_pinned_scope_bounds(fixed_bounds, {}, {"long"})
+        _validate_pinned_scope_bounds(
+            fixed_bounds, {}, {"long"}, coin_count=2
+        )
 
 
 def test_gpu_directional_search_space_keeps_side_enablement_fixed():

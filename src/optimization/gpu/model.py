@@ -25,6 +25,18 @@ EMA_ANCHOR_PARAM_KEYS = (
     "total_wallet_exposure_limit",
 )
 
+SINGLE_COIN_EXPOSURE_PARAM_KEYS = (
+    "we_excess_allowance_pct",
+    "we_excess_allowance_legacy_raw",
+    "twel_entry_gate_enabled",
+    "twel_enforcer_threshold",
+)
+
+EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
+    *EMA_ANCHOR_PARAM_KEYS,
+    *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
+)
+
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
     "forager_volume_ema_span_1m",
@@ -64,6 +76,11 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
     "total_wallet_exposure_limit",
     "gate_initial",
     "gate_reentry",
+)
+
+TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
+    *TRAILING_MARTINGALE_PARAM_KEYS,
+    *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
@@ -128,8 +145,8 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
 )
 
 GPU_STRATEGY_PARAM_KEYS = {
-    "ema_anchor": EMA_ANCHOR_PARAM_KEYS,
-    "trailing_martingale": TRAILING_MARTINGALE_PARAM_KEYS,
+    "ema_anchor": EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+    "trailing_martingale": TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
 }
 
 

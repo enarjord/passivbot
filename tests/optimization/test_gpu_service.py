@@ -19,6 +19,7 @@ from optimization.gpu.service import (
     _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
     _require_complete_valid_tail,
+    _single_coin_exposure_params,
 )
 
 
@@ -27,6 +28,35 @@ def test_gpu_proxy_requires_complete_valid_tail():
 
     with pytest.raises(ValueError, match="force-realizes open positions"):
         _require_complete_valid_tail(98, 100)
+
+
+@pytest.mark.parametrize(
+    ("mode", "legacy_raw"), [("bounded", 0.0), ("legacy_raw", 1.0)]
+)
+def test_single_coin_exposure_policy_packs_rust_inputs(mode, legacy_raw):
+    packed = _single_coin_exposure_params(
+        {
+            "we_excess_allowance_pct": 0.25,
+            "we_excess_allowance_mode": mode,
+            "total_exposure_entry_gate_enabled": False,
+            "total_exposure_enforcer_threshold": 0.8,
+        },
+        side="long",
+    )
+
+    assert packed == {
+        "we_excess_allowance_pct": 0.25,
+        "we_excess_allowance_legacy_raw": legacy_raw,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 0.8,
+    }
+
+
+def test_single_coin_exposure_policy_rejects_unknown_allowance_mode():
+    with pytest.raises(ValueError, match="we_excess_allowance_mode"):
+        _single_coin_exposure_params(
+            {"we_excess_allowance_mode": "raw"}, side="short"
+        )
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

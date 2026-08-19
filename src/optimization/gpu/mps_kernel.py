@@ -7,13 +7,13 @@ import numpy as np
 import torch
 
 from optimization.gpu.model import (
-    EMA_ANCHOR_PARAM_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+    EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     GAP_BINS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
-    TRAILING_MARTINGALE_PARAM_KEYS,
+    TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
 )
 
 
@@ -192,7 +192,7 @@ class MpsEmaAnchorRunner:
         self.last_profile: dict[str, float] = {}
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
-        expected = len(EMA_ANCHOR_PARAM_KEYS) * 2
+        expected = len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2
         if params.ndim != 2 or params.shape[1] != expected:
             got = params.shape[1] if params.ndim == 2 else params.shape
             raise ValueError(
@@ -599,7 +599,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     """Persistent single-coin trailing-martingale runner on Apple MPS."""
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
-        expected = len(TRAILING_MARTINGALE_PARAM_KEYS) * 2
+        expected = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS) * 2
         if params.ndim != 2 or params.shape[1] != expected:
             got = params.shape[1] if params.ndim == 2 else params.shape
             raise ValueError(

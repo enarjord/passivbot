@@ -93,13 +93,15 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 27"));
+        assert!(source.contains("constant int SIDE_PARAMS = 31"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
         assert!(source.contains("min_since_max"));
-        assert!(source.contains("if (we_if <= s.twel * 1.01f) return qty"));
-        assert!(source.contains("s.twel * balance - cost"));
+        assert!(source.contains("if (we_if <= s.entry_cap * 1.01f) return qty"));
+        assert!(source.contains("s.entry_cap * balance - cost"));
+        assert!(source.contains("s.allowed_wel"));
+        assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
