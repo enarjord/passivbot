@@ -3,6 +3,7 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 34;
+constant int OVERRIDE_COLS = 25;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -36,6 +37,13 @@ inline float min_entry_qty(
 
 inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
+}
+
+inline float coin_override_or(
+    constant float* coin_overrides, int coin, int column, float fallback
+) {
+    float value = coin_overrides[coin * OVERRIDE_COLS + column];
+    return isfinite(value) ? value : fallback;
 }
 
 inline float calc_close_qty(
@@ -77,6 +85,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -99,19 +108,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const int po = int(b) * PARAM_COLS;
     const float span_a = params[po + 0];
     const float span_b = params[po + 1];
-    const float span_c = sqrt(fmax(span_a * span_b, 1.0f));
-    const float span_lo = fmin(span_a, fmin(span_b, span_c));
-    const float span_hi = fmax(span_a, fmax(span_b, span_c));
-    const float span_mid = span_a + span_b + span_c - span_lo - span_hi;
-    const float alpha0 = clamp(2.0f / (span_lo + 1.0f), 0.0f, 1.0f);
-    const float alpha1 = clamp(2.0f / (span_mid + 1.0f), 0.0f, 1.0f);
-    const float alpha2 = clamp(2.0f / (span_hi + 1.0f), 0.0f, 1.0f);
     const float span_1h = params[po + 2];
     const float span_1m = params[po + 3];
-    const float alpha_1h = span_1h > 0.0f
-        ? 2.0f / (fmax(span_1h, 1.0f) + 1.0f) : 0.0f;
-    const float alpha_1m = span_1m > 0.0f
-        ? clamp(2.0f / (span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
     const float ddf = params[po + 4];
     const float initial_ema_dist = params[po + 5];
     const float initial_qty_pct = params[po + 6];
@@ -234,11 +232,36 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         survivor[c] = false;
         entry_candidate[c] = false;
         filled_coin[c] = false;
-        alpha0_coin[c] = alpha0;
-        alpha1_coin[c] = alpha1;
-        alpha2_coin[c] = alpha2;
-        alpha_1h_coin[c] = alpha_1h;
-        alpha_1m_coin[c] = alpha_1m;
+        float coin_span_a = c < C
+            ? coin_override_or(coin_overrides, c, 0, span_a) : span_a;
+        float coin_span_b = c < C
+            ? coin_override_or(coin_overrides, c, 1, span_b) : span_b;
+        float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
+        float coin_span_lo = fmin(
+            coin_span_a, fmin(coin_span_b, coin_span_c)
+        );
+        float coin_span_hi = fmax(
+            coin_span_a, fmax(coin_span_b, coin_span_c)
+        );
+        float coin_span_mid = coin_span_a + coin_span_b + coin_span_c
+            - coin_span_lo - coin_span_hi;
+        alpha0_coin[c] = clamp(
+            2.0f / (coin_span_lo + 1.0f), 0.0f, 1.0f
+        );
+        alpha1_coin[c] = clamp(
+            2.0f / (coin_span_mid + 1.0f), 0.0f, 1.0f
+        );
+        alpha2_coin[c] = clamp(
+            2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f
+        );
+        float coin_span_1h = c < C
+            ? coin_override_or(coin_overrides, c, 2, span_1h) : span_1h;
+        float coin_span_1m = c < C
+            ? coin_override_or(coin_overrides, c, 3, span_1m) : span_1m;
+        alpha_1h_coin[c] = coin_span_1h > 0.0f
+            ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
+        alpha_1m_coin[c] = coin_span_1m > 0.0f
+            ? clamp(2.0f / (coin_span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
     }
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -455,9 +478,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
+            float coin_wel = coin_override_or(
+                coin_overrides, c, 24, -1.0f
+            );
             if (k >= int(coin_settings[coin_offset + 8])
                 && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close) && twel > 0.0f) {
+                && finite_positive(close) && coin_wel != 0.0f) {
                 tradable_count += 1;
             }
         }
@@ -486,10 +512,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 for (int c = 0; c < C; ++c) {
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
+                    float coin_wel = coin_override_or(
+                        coin_overrides, c, 24, -1.0f
+                    );
                     bool enabled = !selected[c]
                         && k >= int(coin_settings[coin_offset + 8])
                         && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(bars[bar_offset + 2]) && twel > 0.0f;
+                        && finite_positive(bars[bar_offset + 2])
+                        && coin_wel != 0.0f;
                     survivor[c] = enabled;
                     if (enabled) enabled_count += 1;
                 }
@@ -522,9 +552,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                     float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float coin_initial_ema_dist = coin_override_or(
+                        coin_overrides, c, 5, initial_ema_dist
+                    );
                     float threshold = short_side
-                        ? upper * (1.0f + initial_ema_dist)
-                        : lower * (1.0f - initial_ema_dist);
+                        ? upper * (1.0f + coin_initial_ema_dist)
+                        : lower * (1.0f - coin_initial_ema_dist);
                     float readiness = threshold > 0.0f
                         ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
                         : INFINITY;
@@ -542,9 +575,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float close = bars[bar_offset + 2];
                     float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                     float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    float coin_initial_ema_dist = coin_override_or(
+                        coin_overrides, c, 5, initial_ema_dist
+                    );
                     float threshold = short_side
-                        ? upper * (1.0f + initial_ema_dist)
-                        : lower * (1.0f - initial_ema_dist);
+                        ? upper * (1.0f + coin_initial_ema_dist)
+                        : lower * (1.0f - coin_initial_ema_dist);
                     float readiness = threshold > 0.0f
                         ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
                         : INFINITY;
@@ -629,7 +665,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 int bar_offset = (k * C + c) * 4;
                 int tick_offset = (k * C + c) * 2;
                 float price_now = bars[bar_offset + 2];
-                const float coin_wel = effective_wel;
+                float fixed_coin_wel = coin_override_or(
+                    coin_overrides, c, 24, -1.0f
+                );
+                float coin_wel = fixed_coin_wel >= 0.0f
+                    ? fixed_coin_wel : effective_wel;
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])
                     && finite_positive(price_now) && coin_wel > 0.0f;
@@ -641,13 +681,73 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float c_mult = coin_settings[coin_offset + 4];
                 float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
                 float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                float coin_ddf = coin_override_or(
+                    coin_overrides, c, 4, ddf
+                );
+                float coin_initial_ema_dist = coin_override_or(
+                    coin_overrides, c, 5, initial_ema_dist
+                );
+                float coin_initial_qty_pct = coin_override_or(
+                    coin_overrides, c, 6, initial_qty_pct
+                );
+                float coin_entry_threshold_base = coin_override_or(
+                    coin_overrides, c, 7, entry_threshold_base
+                );
+                float coin_entry_threshold_we = coin_override_or(
+                    coin_overrides, c, 8, entry_threshold_we
+                );
+                float coin_entry_threshold_v1h = coin_override_or(
+                    coin_overrides, c, 9, entry_threshold_v1h
+                );
+                float coin_entry_threshold_v1m = coin_override_or(
+                    coin_overrides, c, 10, entry_threshold_v1m
+                );
+                float coin_entry_retracement_base = coin_override_or(
+                    coin_overrides, c, 11, entry_retracement_base
+                );
+                float coin_entry_retracement_we = coin_override_or(
+                    coin_overrides, c, 12, entry_retracement_we
+                );
+                float coin_entry_retracement_v1h = coin_override_or(
+                    coin_overrides, c, 13, entry_retracement_v1h
+                );
+                float coin_entry_retracement_v1m = coin_override_or(
+                    coin_overrides, c, 14, entry_retracement_v1m
+                );
+                float coin_close_qty_pct = coin_override_or(
+                    coin_overrides, c, 15, close_qty_pct
+                );
+                float coin_close_threshold_base = coin_override_or(
+                    coin_overrides, c, 16, close_threshold_base
+                );
+                float coin_close_threshold_we = coin_override_or(
+                    coin_overrides, c, 17, close_threshold_we
+                );
+                float coin_close_threshold_v1h = coin_override_or(
+                    coin_overrides, c, 18, close_threshold_v1h
+                );
+                float coin_close_threshold_v1m = coin_override_or(
+                    coin_overrides, c, 19, close_threshold_v1m
+                );
+                float coin_close_retracement_base = coin_override_or(
+                    coin_overrides, c, 20, close_retracement_base
+                );
+                float coin_close_retracement_v1h = coin_override_or(
+                    coin_overrides, c, 21, close_retracement_v1h
+                );
+                float coin_close_retracement_v1m = coin_override_or(
+                    coin_overrides, c, 22, close_retracement_v1m
+                );
+                float coin_cooldown_min = ceil(coin_override_or(
+                    coin_overrides, c, 23, cooldown_min
+                ));
                 int touch_down = touch_ticks[tick_offset + 0];
                 int touch_up = touch_ticks[tick_offset + 1];
                 int entry_touch = short_side ? touch_up : touch_down;
                 int band_tick = short_side
-                    ? int(ceil(upper * (1.0f + initial_ema_dist)
+                    ? int(ceil(upper * (1.0f + coin_initial_ema_dist)
                         / price_step - 1.0e-6f))
-                    : int(floor(lower * (1.0f - initial_ema_dist)
+                    : int(floor(lower * (1.0f - coin_initial_ema_dist)
                         / price_step + 1.0e-6f));
                 bool initial_touch_controls = !gate_initial || (short_side
                     ? touch_down >= band_tick : touch_up <= band_tick);
@@ -657,7 +757,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     initial_price, qty_step, min_qty, min_cost, c_mult
                 );
                 float iq = fmax(min_iq, round_step(
-                    balance * coin_wel * initial_qty_pct
+                    balance * coin_wel * coin_initial_qty_pct
                         / fmax(initial_price * c_mult, 1.0e-12f),
                     qty_step
                 ));
@@ -672,22 +772,22 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
                 float wer = we / fmax(coin_wel, 1.0e-12f);
                 float threshold_multiplier = fmax(
-                    1.0f + volatility_1h[c] * entry_threshold_v1h
-                        + volatility_1m[c] * entry_threshold_v1m
-                        + wer * entry_threshold_we,
+                    1.0f + volatility_1h[c] * coin_entry_threshold_v1h
+                        + volatility_1m[c] * coin_entry_threshold_v1m
+                        + wer * coin_entry_threshold_we,
                     1.0f
                 );
                 float retracement_multiplier = fmax(
-                    1.0f + volatility_1h[c] * entry_retracement_v1h
-                        + volatility_1m[c] * entry_retracement_v1m
-                        + wer * entry_retracement_we,
+                    1.0f + volatility_1h[c] * coin_entry_retracement_v1h
+                        + volatility_1m[c] * coin_entry_retracement_v1m
+                        + wer * coin_entry_retracement_we,
                     1.0f
                 );
-                float entry_threshold = fmax(entry_threshold_base, 0.0f)
+                float entry_threshold = fmax(coin_entry_threshold_base, 0.0f)
                     * threshold_multiplier;
-                float entry_retracement = fmax(entry_retracement_base, 0.0f)
+                float entry_retracement = fmax(coin_entry_retracement_base, 0.0f)
                     * retracement_multiplier;
-                bool trailing_entry = entry_retracement_base > 0.0f;
+                bool trailing_entry = coin_entry_retracement_base > 0.0f;
                 bool retraced_entry = short_side
                     ? min_since_max[c] < max_since_open[c]
                         * (1.0f - entry_retracement)
@@ -733,8 +833,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 );
                 float rq = fmax(iq_effective, fmax(min_rq, round_step(
                     fmax(
-                        psize[c] * ddf,
-                        balance * coin_wel * initial_qty_pct
+                        psize[c] * coin_ddf,
+                        balance * coin_wel * coin_initial_qty_pct
                             / fmax(reentry_price * c_mult, 1.0e-12f)
                     ),
                     qty_step
@@ -757,11 +857,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 int candidate_entry_tick = flat || partial
                     ? initial_tick : reentry_tick;
                 float entry_price = float(candidate_entry_tick) * price_step;
-                bool cooldown = cooldown_min > 0.0f
+                bool cooldown = coin_cooldown_min > 0.0f
                     && last_increase_k[c] > -1.0e19f
-                    && float(k) < last_increase_k[c] + cooldown_min;
+                    && float(k) < last_increase_k[c] + coin_cooldown_min;
                 if (!selected[c] || cooldown || balance <= 0.0f
-                    || initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
+                    || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
                     quantity = 0.0f;
                 }
                 float headroom = (
@@ -787,17 +887,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 contribution[c] = quantity > 0.0f
                     ? quantity * entry_price * c_mult / balance : 0.0f;
 
-                float close_threshold = close_threshold_base
-                    + wer * close_threshold_we
-                    + volatility_1h[c] * close_threshold_v1h
-                    + volatility_1m[c] * close_threshold_v1m;
-                float close_retracement = fmax(close_retracement_base, 0.0f)
+                float close_threshold = coin_close_threshold_base
+                    + wer * coin_close_threshold_we
+                    + volatility_1h[c] * coin_close_threshold_v1h
+                    + volatility_1m[c] * coin_close_threshold_v1m;
+                float close_retracement = fmax(
+                    coin_close_retracement_base, 0.0f
+                )
                     * fmax(
-                        1.0f + volatility_1h[c] * close_retracement_v1h
-                            + volatility_1m[c] * close_retracement_v1m,
+                        1.0f + volatility_1h[c] * coin_close_retracement_v1h
+                            + volatility_1m[c] * coin_close_retracement_v1m,
                         1.0f
                     );
-                bool trailing_close = close_retracement_base > 0.0f;
+                bool trailing_close = coin_close_retracement_base > 0.0f;
                 bool retraced_close = short_side
                     ? max_since_min[c] > min_since_open[c]
                         * (1.0f + close_retracement)
@@ -841,8 +943,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     );
                 int minimum_close_relation = close_touch_controls
                     ? touch_min_qty_relation[k * C + c] : 0;
-                float close_pct = trailing_close ? close_qty_pct
-                    : (close_threshold_we == 0.0f ? 1.0f : close_qty_pct);
+                float close_pct = trailing_close ? coin_close_qty_pct
+                    : (coin_close_threshold_we == 0.0f
+                        ? 1.0f : coin_close_qty_pct);
                 float clip = calc_close_qty(
                     psize[c], pprice[c], balance, coin_wel,
                     minimum_close, minimum_close_relation, close_pct,
@@ -1012,6 +1115,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -1024,7 +1128,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
-        params, run_settings,
+        coin_overrides, params, run_settings,
         sizes, daily, scalars, gap_hist, b, short_side
     );
 }
@@ -1037,6 +1141,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     constant int* touch_min_qty_bits,
     constant int* touch_min_qty_relation,
     constant float* coin_settings,
+    constant float* coin_overrides,
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
@@ -1048,7 +1153,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
-        params, run_settings,
+        coin_overrides, params, run_settings,
         sizes, daily, scalars, gap_hist, b, false
     );
 }

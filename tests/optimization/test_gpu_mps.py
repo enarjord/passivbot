@@ -351,6 +351,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
+    assert "constant int OVERRIDE_COLS = 25" in source
+    assert "coin_override_or" in source
 
     count = 512
     coin_count = 3
@@ -435,6 +437,58 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
+
+    disabled = np.full((coin_count, 25), np.nan, dtype=np.float32)
+    disabled[:, 24] = 0.0
+    disabled_output = MpsTrailingMartingaleMulticoinRunner(
+        runs[0], data, side=side, coin_overrides=disabled
+    ).run(np.array([row], dtype=np.float64))
+    torch.mps.synchronize()
+    assert disabled_output["day_has_fill"].sum().item() == 0
+    assert disabled_output["open_positions"].item() == 0.0
+
+    exact_last = np.full((coin_count, 25), np.nan, dtype=np.float32)
+    exact_last[:, :25] = np.asarray(row[:25], dtype=np.float32)
+    changed_candidate = list(row)
+    changed_candidate[:25] = [
+        200.0,
+        400.0,
+        240.0,
+        180.0,
+        0.0,
+        0.05,
+        0.01,
+        0.1,
+        2.0,
+        5.0,
+        5.0,
+        0.02,
+        3.0,
+        5.0,
+        5.0,
+        0.8,
+        0.05,
+        2.0,
+        5.0,
+        5.0,
+        0.02,
+        5.0,
+        5.0,
+        120.0,
+        1.0,
+    ]
+    exact_last_output = MpsTrailingMartingaleMulticoinRunner(
+        runs[0], data, side=side, coin_overrides=exact_last
+    ).run(np.array([row, changed_candidate], dtype=np.float64))
+    torch.mps.synchronize()
+    assert torch.equal(
+        exact_last_output["day_has_fill"][0],
+        exact_last_output["day_has_fill"][1],
+    )
+    assert torch.equal(
+        exact_last_output["day_end_eq"][0],
+        exact_last_output["day_end_eq"][1],
+    )
 
 
 @pytest.mark.skipif(

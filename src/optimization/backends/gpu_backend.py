@@ -865,18 +865,31 @@ def _validate_gpu_coin_overrides(
     overrides = config.get("coin_overrides") or {}
     if not overrides:
         return
-    if coin_count <= 1 or strategy_kind != "ema_anchor" or not enabled_sides:
+    if (
+        coin_count <= 1
+        or strategy_kind not in {"ema_anchor", "trailing_martingale"}
+        or not enabled_sides
+    ):
         raise ValueError(
-            "GPU coin_overrides currently require multi-coin EMA Anchor with at "
-            "least one enabled side"
+            "GPU coin_overrides currently require a supported multi-coin strategy "
+            "with at least one enabled side"
         )
     enabled_sides = set(enabled_sides)
-    from optimization.gpu.model import EMA_ANCHOR_PARAM_KEYS
+    from optimization.gpu.model import (
+        EMA_ANCHOR_PARAM_KEYS,
+        TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
+    )
 
-    strategy_keys = set(EMA_ANCHOR_PARAM_KEYS) - {
-        "entry_cooldown_minutes",
-        "total_wallet_exposure_limit",
-    }
+    if strategy_kind == "ema_anchor":
+        strategy_paths = {
+            (key,)
+            for key in set(EMA_ANCHOR_PARAM_KEYS)
+            - {"entry_cooldown_minutes", "total_wallet_exposure_limit"}
+        }
+    else:
+        strategy_paths = {
+            path for _key, path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
+        }
 
     def leaves(value, prefix=()):
         if isinstance(value, dict):
@@ -894,8 +907,14 @@ def _validate_gpu_coin_overrides(
             }
         )
         allowed.update(
-            ("bot", enabled_side, "strategy", "ema_anchor", key)
-            for key in strategy_keys
+            (
+                "bot",
+                enabled_side,
+                "strategy",
+                strategy_kind,
+                *path,
+            )
+            for path in strategy_paths
         )
     unsupported = []
     for coin, patch in overrides.items():
@@ -910,8 +929,9 @@ def _validate_gpu_coin_overrides(
     if unsupported:
         raise ValueError(
             "GPU coin_overrides do not model these paths yet: "
-            f"{sorted(unsupported)}; supported leaves are enabled-side EMA Anchor "
-            "parameters, risk.entry_cooldown_minutes, and wallet_exposure_limit"
+            f"{sorted(unsupported)}; supported leaves are enabled-side "
+            f"{strategy_kind} parameters, risk.entry_cooldown_minutes, and "
+            "wallet_exposure_limit"
         )
 
 
