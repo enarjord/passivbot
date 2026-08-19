@@ -3,7 +3,7 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 38;
-constant int OVERRIDE_COLS = 27;
+constant int OVERRIDE_COLS = 26;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -692,12 +692,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float coin_allowance_pct = coin_override_or(
                     coin_overrides, c, 25, allowance_pct
                 );
-                bool coin_legacy_raw_allowance = coin_override_or(
-                    coin_overrides, c, 26,
-                    legacy_raw_allowance ? 1.0f : 0.0f
-                ) > 0.5f;
                 float allowed_coin_wel = allowed_wallet_exposure_limit(
-                    coin_wel, twel, coin_allowance_pct, coin_legacy_raw_allowance
+                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
                 );
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])

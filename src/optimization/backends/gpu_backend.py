@@ -946,7 +946,6 @@ def _validate_gpu_coin_overrides(
         allowed.update(
             {
                 ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
-                ("bot", enabled_side, "risk", "we_excess_allowance_mode"),
                 ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
@@ -976,7 +975,7 @@ def _validate_gpu_coin_overrides(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
             f"{strategy_kind} parameters, risk.entry_cooldown_minutes, "
-            "risk.we_excess_allowance_mode, risk.we_excess_allowance_pct, and "
+            "risk.we_excess_allowance_pct, and "
             "wallet_exposure_limit"
         )
 

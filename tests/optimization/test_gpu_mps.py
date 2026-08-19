@@ -359,7 +359,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
     assert "constant int PARAM_COLS = 23" in source
-    assert "constant int OVERRIDE_COLS = 14" in source
+    assert "constant int OVERRIDE_COLS = 13" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
     assert "constant int DAILY_COLS = 6" in source
@@ -451,7 +451,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"
 
-    disabled = np.full((coin_count, 14), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 13), np.nan, dtype=np.float32)
     disabled[:, 11] = 0.0
     disabled_output = MpsEmaAnchorMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -460,7 +460,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 14), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 13), np.nan, dtype=np.float32)
     exact_last[:, :11] = np.asarray(row[:11], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:11] = [
@@ -503,7 +503,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
-    assert "constant int OVERRIDE_COLS = 27" in source
+    assert "constant int OVERRIDE_COLS = 26" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
     assert "coin_override_or" in source
@@ -596,7 +596,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
 
-    disabled = np.full((coin_count, 27), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 26), np.nan, dtype=np.float32)
     disabled[:, 24] = 0.0
     disabled_output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -605,7 +605,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 27), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 26), np.nan, dtype=np.float32)
     exact_last[:, :25] = np.asarray(row[:25], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:25] = [
@@ -681,12 +681,10 @@ def test_mps_multicoin_legacy_raw_allowance_with_gate_disabled_expands_volume(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_multicoin_coin_override_allowance_expands_one_symbol(strategy_kind):
-    override_cols = 14 if strategy_kind == "ema_anchor" else 27
+    override_cols = 13 if strategy_kind == "ema_anchor" else 26
     allowance_column = 12 if strategy_kind == "ema_anchor" else 25
-    mode_column = allowance_column + 1
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     overrides[0, allowance_column] = 1.0
-    overrides[0, mode_column] = 1.0
     baseline_runner, baseline = _multicoin_exposure_fixture(strategy_kind, "long")
     override_runner, overridden = _multicoin_exposure_fixture(
         strategy_kind, "long", overrides
@@ -742,7 +740,7 @@ def test_mps_multicoin_twel_threshold_reduces_entry_volume(strategy_kind):
 def test_mps_multicoin_equal_distance_twel_tie_keeps_higher_coin_index(
     strategy_kind,
 ):
-    override_cols = 14 if strategy_kind == "ema_anchor" else 27
+    override_cols = 13 if strategy_kind == "ema_anchor" else 26
     wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     overrides[0, wallet_exposure_column] = 0.4

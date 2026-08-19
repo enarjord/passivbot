@@ -4,7 +4,7 @@ using namespace metal;
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 23;
 constant int COIN_COLS = 11;
-constant int OVERRIDE_COLS = 14;
+constant int OVERRIDE_COLS = 13;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
@@ -609,12 +609,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 float coin_allowance_pct = coin_override_or(
                     coin_overrides, c, 12, allowance_pct
                 );
-                bool coin_legacy_raw_allowance = coin_override_or(
-                    coin_overrides, c, 13,
-                    legacy_raw_allowance ? 1.0f : 0.0f
-                ) > 0.5f;
                 float allowed_coin_wel = allowed_wallet_exposure_limit(
-                    coin_wel, twel, coin_allowance_pct, coin_legacy_raw_allowance
+                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
                 );
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])

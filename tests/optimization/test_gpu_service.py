@@ -371,7 +371,6 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                     "entry_cooldown_minutes": 15.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
-                    "risk_we_excess_allowance_mode": "legacy_raw",
                 }
             },
         ],
@@ -387,7 +386,6 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "risk": {
                             "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
-                            "we_excess_allowance_mode": "legacy_raw",
                         },
                         "wallet_exposure_limit": 0.4,
                     }
@@ -408,16 +406,15 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 14)
+    assert matrix.shape == (2, 13)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
     assert matrix[1, 10] == pytest.approx(15.0)
     assert matrix[1, 11] == pytest.approx(0.4)
     assert matrix[1, 12] == pytest.approx(0.25)
-    assert matrix[1, 13] == pytest.approx(1.0)
     assert contract["coins"] == ["BTC", "ETH"]
-    assert contract["values"][0] == [None] * 14
+    assert contract["values"][0] == [None] * 13
 
 
 def test_multicoin_coin_overrides_pack_dual_sides_independently():
@@ -546,7 +543,6 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
-                    "risk_we_excess_allowance_mode": "legacy_raw",
                 }
             },
         ],
@@ -565,7 +561,6 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         "risk": {
                             "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
-                            "we_excess_allowance_mode": "legacy_raw",
                         },
                         "wallet_exposure_limit": 0.4,
                     }
@@ -586,15 +581,14 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 27)
+    assert matrix.shape == (2, 26)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 15] == pytest.approx(0.5)
     assert matrix[1, 23] == pytest.approx(15.0)
     assert matrix[1, 24] == pytest.approx(0.4)
     assert matrix[1, 25] == pytest.approx(0.25)
-    assert matrix[1, 26] == pytest.approx(1.0)
-    assert contract["values"][0] == [None] * 27
+    assert contract["values"][0] == [None] * 26
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

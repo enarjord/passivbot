@@ -465,7 +465,7 @@ def _build_multicoin_ema_coin_overrides(
         resolve_override = _get_backtest_coin_override
 
     override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    matrix = np.full((len(coins), 14), np.nan, dtype=np.float32)
+    matrix = np.full((len(coins), 13), np.nan, dtype=np.float32)
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
         side_patch = patch.get("bot", {}).get(side, {})
@@ -486,17 +486,6 @@ def _build_multicoin_ema_coin_overrides(
             matrix[coin_index, 12] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
             )
-        if "we_excess_allowance_mode" in risk_patch:
-            mode = str(
-                effective_bot.get("risk_we_excess_allowance_mode", "bounded")
-            ).strip().lower()
-            if mode not in {"bounded", "legacy_raw"}:
-                raise ValueError(
-                    "MPS multicoin proxy requires coin override "
-                    f"{coin!r} bot.{side}.risk.we_excess_allowance_mode to be "
-                    f"bounded or legacy_raw, got {mode!r}"
-                )
-            matrix[coin_index, 13] = float(mode == "legacy_raw")
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -529,9 +518,8 @@ def _build_multicoin_tm_coin_overrides(
     cooldown_column = len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
     wallet_exposure_column = cooldown_column + 1
     allowance_pct_column = wallet_exposure_column + 1
-    allowance_mode_column = allowance_pct_column + 1
     matrix = np.full(
-        (len(coins), allowance_mode_column + 1),
+        (len(coins), allowance_pct_column + 1),
         np.nan,
         dtype=np.float32,
     )
@@ -571,19 +559,6 @@ def _build_multicoin_tm_coin_overrides(
         if "we_excess_allowance_pct" in risk_patch:
             matrix[coin_index, allowance_pct_column] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
-            )
-        if "we_excess_allowance_mode" in risk_patch:
-            mode = str(
-                effective_bot.get("risk_we_excess_allowance_mode", "bounded")
-            ).strip().lower()
-            if mode not in {"bounded", "legacy_raw"}:
-                raise ValueError(
-                    "MPS multicoin proxy requires coin override "
-                    f"{coin!r} bot.{side}.risk.we_excess_allowance_mode to be "
-                    f"bounded or legacy_raw, got {mode!r}"
-                )
-            matrix[coin_index, allowance_mode_column] = float(
-                mode == "legacy_raw"
             )
     contract = {
         "exchange": exchange,

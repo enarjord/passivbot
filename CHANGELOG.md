@@ -6,8 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Extended Apple MPS exposure-headroom support to multi-coin EMA Anchor and Trailing Martingale
   optimization, including long-only, short-only, dual-side hedge, suites, tunable allowance and
-  TWEL-entry thresholds, and per-coin bounded or legacy-raw allowance overrides. The Metal proxy
-  now separates per-symbol allowed wallet exposure from the optional side-wide TWEL entry gate;
+  TWEL-entry thresholds, and per-coin allowance percentage overrides under the globally configured
+  bounded or legacy-raw mode. The Metal proxy now separates per-symbol allowed wallet exposure
+  from the optional side-wide TWEL entry gate;
   exact Rust validation and the existing classification, rank, and drift gates remain
   authoritative. Position- and total-exposure repair remain fail closed.
 

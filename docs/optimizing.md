@@ -128,15 +128,17 @@ The supported slice is intentionally narrow:
   for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
   runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
-  `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and
-  `risk.we_excess_allowance_mode` are supported; trailing-martingale `entry.ema_gate_mode`,
-  disabled sides, and other override leaves fail closed
+  `wallet_exposure_limit` and `risk.we_excess_allowance_pct` are supported; per-coin
+  `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
+  other override leaves fail closed
 - HSL and auto-unstuck disabled
 - single- and multi-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
   suites. For multi-coin runs, allowance is applied to each symbol's dynamic or overridden WEL;
-  bounded mode limits only the added allowance: when the base WEL is at or below the side TWEL,
+  the configured side-level bounded or legacy-raw mode applies to all symbols. Per-coin mode
+  overrides remain outside the canonical config contract.
+  Bounded mode limits only the added allowance: when the base WEL is at or below the side TWEL,
   the allowance cannot raise it past TWEL; an explicit base WEL already above TWEL is left
   unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
   aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate

@@ -1496,7 +1496,6 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
                     "strategy": {"ema_anchor": {"offset": 0.02, "ema_span_0": 90}},
                     "risk": {
                         "entry_cooldown_minutes": 15,
-                        "we_excess_allowance_mode": "legacy_raw",
                         "we_excess_allowance_pct": 0.25,
                     },
                     "wallet_exposure_limit": 0.4,
@@ -1513,6 +1512,13 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
     [
         {"live": {"leverage": 3}},
         {"bot": {"long": {"risk": {"n_positions": 2}}}},
+        {
+            "bot": {
+                "long": {
+                    "risk": {"we_excess_allowance_mode": "legacy_raw"}
+                }
+            }
+        },
         {"bot": {"long": {"unstuck": {"enabled": True}}}},
         {"bot": {"short": {"strategy": {"ema_anchor": {"offset": 0.02}}}}},
     ],
@@ -1560,7 +1566,6 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
                     },
                     "risk": {
                         "entry_cooldown_minutes": 15,
-                        "we_excess_allowance_mode": "legacy_raw",
                         "we_excess_allowance_pct": 0.25,
                     },
                     "wallet_exposure_limit": 0.4,

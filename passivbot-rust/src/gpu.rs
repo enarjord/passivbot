@@ -68,7 +68,7 @@ mod tests {
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 23"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 14"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 13"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
         assert!(source.contains("constant int DAILY_COLS = 6"));
@@ -143,7 +143,7 @@ mod tests {
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 38"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 27"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 26"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
