@@ -4,13 +4,21 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Trailing Martingale per-position exposure repair to the Apple MPS optimizer for single- and
+  multi-coin long-only, short-only, dual-side, and compatible suite runs. The Metal proxy models
+  the canonical enable toggle and tunable threshold, gives the passive repair close precedence
+  over normal strategy closes, reduces strictly below the allowance-adjusted WEL target, and
+  honors static per-coin enable/threshold overrides. Exact Rust validation and the existing
+  classification, rank, and drift gates remain authoritative. EMA Anchor position repair and
+  side-wide total-exposure repair remain fail closed.
+
 - Extended Apple MPS exposure-headroom support to multi-coin EMA Anchor and Trailing Martingale
   optimization, including long-only, short-only, dual-side hedge, suites, tunable allowance and
   TWEL-entry thresholds, and per-coin allowance percentage overrides under the globally configured
   bounded or legacy-raw mode. The Metal proxy now separates per-symbol allowed wallet exposure
   from the optional side-wide TWEL entry gate;
   exact Rust validation and the existing classification, rank, and drift gates remain
-  authoritative. Position- and total-exposure repair remain fail closed.
+  authoritative. Total-exposure repair remains fail closed.
 
 - Added single-coin exposure-headroom policy support to the Apple MPS optimizer for EMA Anchor and
   Trailing Martingale, including long-only, short-only, dual-side, and compatible suite runs.

@@ -2,8 +2,8 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 38;
-constant int OVERRIDE_COLS = 26;
+constant int PARAM_COLS = 40;
+constant int OVERRIDE_COLS = 28;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -92,6 +92,123 @@ inline float calc_close_qty(
     return quantity;
 }
 
+struct CloseGroup {
+    int ticks;
+    float price;
+    float qty;
+};
+
+// Rebuild Rust's post-reducer recursive grid and return its number of
+// duplicate-merged price groups. Selecting one generated-order group at a
+// time keeps GPU memory bounded; the caller reorders positive-WE grids before
+// applying reachable fills, matching calc_closes_long/short.
+inline int recursive_grid_close_groups_after_reducer(
+    bool short_side,
+    float psize,
+    float pprice,
+    float generation_balance,
+    float allowed_wel,
+    int touch_down,
+    int touch_up,
+    int touch_nearest,
+    float touch_min_qty,
+    int touch_min_qty_relation,
+    float close_qty_pct,
+    float close_threshold_base,
+    float close_threshold_we,
+    float close_threshold_v1h,
+    float close_threshold_v1m,
+    float volatility_1h,
+    float volatility_1m,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult,
+    int wanted_group,
+    thread CloseGroup& selected
+) {
+    selected.ticks = 0;
+    selected.price = 0.0f;
+    selected.qty = 0.0f;
+    float sim_psize = psize;
+    bool have_group = false;
+    int group_count = 0;
+    int group_ticks = 0;
+    float group_price = 0.0f;
+    float group_qty = 0.0f;
+    // Exact calc_closes_long/short spends the first of its 500 iterations on
+    // the reducer before generating this post-repair grid.
+    for (int rung = 0; rung < 499 && sim_psize > 0.0f; ++rung) {
+        float we = sim_psize * pprice * c_mult
+            / fmax(generation_balance, 1.0e-9f);
+        float wer = we / fmax(allowed_wel, 1.0e-12f);
+        float threshold = close_threshold_base
+            + wer * close_threshold_we
+            + volatility_1h * close_threshold_v1h
+            + volatility_1m * close_threshold_v1m;
+        float target = pprice * (
+            short_side ? 1.0f - threshold : 1.0f + threshold
+        );
+        int target_tick = short_side
+            ? int(floor(target / price_step + 1.0e-6f))
+            : int(ceil(target / price_step - 1.0e-6f));
+        int close_touch = short_side ? touch_down : touch_up;
+        bool touch_controls = short_side
+            ? close_touch < target_tick
+            : close_touch > target_tick;
+        int order_tick = touch_controls ? touch_nearest : target_tick;
+        float order_price = float(order_tick) * price_step;
+        float minimum_close = touch_controls
+            ? touch_min_qty
+            : min_entry_qty(
+                order_price, qty_step, min_qty, min_cost, c_mult
+            );
+        int minimum_relation = touch_controls
+            ? touch_min_qty_relation : 0;
+        float close_pct = close_threshold_we == 0.0f
+            ? 1.0f : close_qty_pct;
+        float order_qty = calc_close_qty(
+            sim_psize, pprice, generation_balance, allowed_wel,
+            minimum_close, minimum_relation, close_pct,
+            qty_step, c_mult
+        );
+
+        order_qty = round_step(order_qty, qty_step);
+        if (order_qty <= 0.0f || order_tick <= 0) break;
+        order_qty = fmin(order_qty, sim_psize);
+
+        if (!have_group) {
+            have_group = true;
+            group_ticks = order_tick;
+            group_price = order_price;
+            group_qty = order_qty;
+        } else if (order_tick == group_ticks) {
+            group_qty = round_step(group_qty + order_qty, qty_step);
+        } else {
+            if (group_count == wanted_group) {
+                selected.ticks = group_ticks;
+                selected.price = group_price;
+                selected.qty = group_qty;
+            }
+            ++group_count;
+            group_ticks = order_tick;
+            group_price = order_price;
+            group_qty = order_qty;
+        }
+        sim_psize = fmax(round_step(sim_psize - order_qty, qty_step), 0.0f);
+    }
+    if (have_group) {
+        if (group_count == wanted_group) {
+            selected.ticks = group_ticks;
+            selected.price = group_price;
+            selected.qty = group_qty;
+        }
+        ++group_count;
+    }
+    return group_count;
+}
+
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -159,6 +276,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const bool legacy_raw_allowance = params[po + 35] > 0.5f;
     const bool twel_entry_gate_enabled = params[po + 36] > 0.5f;
     const float twel_threshold = params[po + 37];
+    const bool wel_enforcer_enabled = params[po + 38] > 0.5f;
+    const float wel_enforcer_threshold = params[po + 39];
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -194,6 +313,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float last_increase_k[MAX_COINS];
     float entry_qty[MAX_COINS];
     float close_qty[MAX_COINS];
+    float close_gen_balance[MAX_COINS];
+    float close_gen_allowed_wel[MAX_COINS];
     float position_open_k[MAX_COINS];
     float score[MAX_COINS];
     float contribution[MAX_COINS];
@@ -208,6 +329,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
+    bool close_reconstruct_after_reducer[MAX_COINS];
     bool filled_coin[MAX_COINS];
     float alpha0_coin[MAX_COINS];
     float alpha1_coin[MAX_COINS];
@@ -236,6 +358,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         last_increase_k[c] = -1.0e20f;
         entry_qty[c] = 0.0f;
         close_qty[c] = 0.0f;
+        close_gen_balance[c] = 0.0f;
+        close_gen_allowed_wel[c] = 0.0f;
         position_open_k[c] = -1.0f;
         score[c] = -INFINITY;
         contribution[c] = 0.0f;
@@ -250,6 +374,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         incumbent[c] = false;
         survivor[c] = false;
         entry_candidate[c] = false;
+        close_reconstruct_after_reducer[c] = false;
         filled_coin[c] = false;
         float coin_span_a = c < C
             ? coin_override_or(coin_overrides, c, 0, span_a) : span_a;
@@ -351,34 +476,192 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             if (!valid || !alive) continue;
             const float qty_step = coin_settings[coin_offset + 0];
             const float price_step = coin_settings[coin_offset + 1];
+            const float min_qty = coin_settings[coin_offset + 2];
+            const float min_cost = coin_settings[coin_offset + 3];
             const float c_mult = coin_settings[coin_offset + 4];
             const float maker_fee = coin_settings[coin_offset + 5];
 
-            bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
+            bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
+            bool filled_close = close_ready
                 && (short_side
                     ? close_tick[c] > fill_ticks[tick_offset + 1]
                     : close_tick[c] <= fill_ticks[tick_offset + 0]);
-            if (filled_close) {
+            bool rebuild_grid = close_ready
+                && close_reconstruct_after_reducer[c];
+            if (filled_close || rebuild_grid) {
                 float fill_price = float(close_tick[c]) * price_step;
-                float adjusted = fmin(round_step(close_qty[c], qty_step), psize[c]);
-                float pnl = adjusted * c_mult * (short_side
-                    ? pprice[c] - fill_price
-                    : fill_price - pprice[c]);
-                balance += pnl - adjusted * fill_price * c_mult * maker_fee;
-                float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
-                bool went_flat = new_size <= 0.0f;
-                psize[c] = new_size;
-                if (went_flat) {
-                    pprice[c] = 0.0f;
-                    if (position_open_k[c] >= 0.0f) {
-                        held_max_min = fmax(held_max_min, float(k) - position_open_k[c]);
-                    }
-                    position_open_k[c] = -1.0f;
+                float reducer_qty = fmin(
+                    round_step(close_qty[c], qty_step), psize[c]
+                );
+                float grid_gen_psize = fmax(
+                    round_step(psize[c] - reducer_qty, qty_step), 0.0f
+                );
+                int gen_tick_offset = 0;
+                float coin_close_qty_pct = 0.0f;
+                float coin_close_threshold_base = 0.0f;
+                float coin_close_threshold_we = 0.0f;
+                float coin_close_threshold_v1h = 0.0f;
+                float coin_close_threshold_v1m = 0.0f;
+                CloseGroup group;
+                int group_count = 0;
+                bool reverse = false;
+                bool reducer_executed = false;
+                bool executed_close = false;
+
+                if (rebuild_grid && grid_gen_psize > 0.0f) {
+                    gen_tick_offset = ((k - 1) * C + c) * 2;
+                    coin_close_qty_pct = coin_override_or(
+                        coin_overrides, c, 15, close_qty_pct
+                    );
+                    coin_close_threshold_base = coin_override_or(
+                        coin_overrides, c, 16, close_threshold_base
+                    );
+                    coin_close_threshold_we = coin_override_or(
+                        coin_overrides, c, 17, close_threshold_we
+                    );
+                    coin_close_threshold_v1h = coin_override_or(
+                        coin_overrides, c, 18, close_threshold_v1h
+                    );
+                    coin_close_threshold_v1m = coin_override_or(
+                        coin_overrides, c, 19, close_threshold_v1m
+                    );
+                    group_count = recursive_grid_close_groups_after_reducer(
+                        short_side,
+                        grid_gen_psize,
+                        pprice[c],
+                        close_gen_balance[c],
+                        close_gen_allowed_wel[c],
+                        touch_ticks[gen_tick_offset + 0],
+                        touch_ticks[gen_tick_offset + 1],
+                        touch_nearest_ticks[(k - 1) * C + c],
+                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                        touch_min_qty_relation[(k - 1) * C + c],
+                        coin_close_qty_pct,
+                        coin_close_threshold_base,
+                        coin_close_threshold_we,
+                        coin_close_threshold_v1h,
+                        coin_close_threshold_v1m,
+                        volatility_1h[c],
+                        volatility_1m[c],
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        -1,
+                        group
+                    );
+                    reverse = coin_close_threshold_we > 0.0f;
                 }
-                day_volume += fabs(adjusted) * fill_price * c_mult / balance;
-                close_qty[c] = 0.0f;
-                filled_coin[c] = true;
-                any_fill = true;
+
+                for (int rank = 0; rank < group_count; ++rank) {
+                    int wanted = reverse ? group_count - rank - 1 : rank;
+                    recursive_grid_close_groups_after_reducer(
+                        short_side,
+                        grid_gen_psize,
+                        pprice[c],
+                        close_gen_balance[c],
+                        close_gen_allowed_wel[c],
+                        touch_ticks[gen_tick_offset + 0],
+                        touch_ticks[gen_tick_offset + 1],
+                        touch_nearest_ticks[(k - 1) * C + c],
+                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                        touch_min_qty_relation[(k - 1) * C + c],
+                        coin_close_qty_pct,
+                        coin_close_threshold_base,
+                        coin_close_threshold_we,
+                        coin_close_threshold_v1h,
+                        coin_close_threshold_v1m,
+                        volatility_1h[c],
+                        volatility_1m[c],
+                        qty_step,
+                        price_step,
+                        min_qty,
+                        min_cost,
+                        c_mult,
+                        wanted,
+                        group
+                    );
+                    if (group.qty <= 0.0f) break;
+                    bool merge_reducer = filled_close
+                        && !reducer_executed
+                        && group.ticks == close_tick[c];
+                    bool reducer_before_group = filled_close
+                        && !reducer_executed
+                        && (short_side
+                            ? close_tick[c] > group.ticks
+                            : close_tick[c] < group.ticks);
+                    if (reducer_before_group) {
+                        float qty = fmin(reducer_qty, psize[c]);
+                        float pnl = qty * c_mult * (short_side
+                            ? pprice[c] - fill_price
+                            : fill_price - pprice[c]);
+                        balance += pnl
+                            - qty * fill_price * c_mult * maker_fee;
+                        psize[c] = fmax(
+                            round_step(psize[c] - qty, qty_step), 0.0f
+                        );
+                        day_volume += qty * fill_price * c_mult / balance;
+                        reducer_executed = true;
+                        executed_close = true;
+                    }
+                    bool reachable = short_side
+                        ? group.ticks > fill_ticks[tick_offset + 1]
+                        : group.ticks <= fill_ticks[tick_offset + 0];
+                    if (!reachable) break;
+                    float group_qty = group.qty;
+                    if (merge_reducer) {
+                        group_qty = round_step(
+                            group_qty + reducer_qty, qty_step
+                        );
+                        reducer_executed = true;
+                    }
+                    float grid_qty = fmin(
+                        round_step(group_qty, qty_step), psize[c]
+                    );
+                    float grid_pnl = grid_qty * c_mult * (short_side
+                        ? pprice[c] - group.price
+                        : group.price - pprice[c]);
+                    balance += grid_pnl
+                        - grid_qty * group.price * c_mult * maker_fee;
+                    psize[c] = fmax(
+                        round_step(psize[c] - grid_qty, qty_step), 0.0f
+                    );
+                    day_volume += grid_qty * group.price * c_mult / balance;
+                    executed_close = true;
+                    if (psize[c] <= 0.0f) break;
+                }
+
+                if (filled_close && !reducer_executed && psize[c] > 0.0f) {
+                    float qty = fmin(reducer_qty, psize[c]);
+                    float pnl = qty * c_mult * (short_side
+                        ? pprice[c] - fill_price
+                        : fill_price - pprice[c]);
+                    balance += pnl
+                        - qty * fill_price * c_mult * maker_fee;
+                    psize[c] = fmax(
+                        round_step(psize[c] - qty, qty_step), 0.0f
+                    );
+                    day_volume += qty * fill_price * c_mult / balance;
+                    executed_close = true;
+                }
+
+                if (executed_close) {
+                    bool went_flat = psize[c] <= 0.0f;
+                    if (went_flat) {
+                        pprice[c] = 0.0f;
+                        if (position_open_k[c] >= 0.0f) {
+                            held_max_min = fmax(
+                                held_max_min, float(k) - position_open_k[c]
+                            );
+                        }
+                        position_open_k[c] = -1.0f;
+                    }
+                    close_qty[c] = 0.0f;
+                    close_reconstruct_after_reducer[c] = false;
+                    filled_coin[c] = true;
+                    any_fill = true;
+                }
             }
 
             bool was_flat = psize[c] <= 0.0f;
@@ -678,6 +961,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             for (int c = 0; c < C; ++c) {
                 entry_qty[c] = 0.0f;
                 close_qty[c] = 0.0f;
+                close_reconstruct_after_reducer[c] = false;
                 contribution[c] = 0.0f;
                 entry_candidate[c] = false;
                 int coin_offset = c * COIN_COLS;
@@ -691,6 +975,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     ? fixed_coin_wel : effective_wel;
                 float coin_allowance_pct = coin_override_or(
                     coin_overrides, c, 25, allowance_pct
+                );
+                bool coin_wel_enforcer_enabled = coin_override_or(
+                    coin_overrides, c, 26,
+                    wel_enforcer_enabled ? 1.0f : 0.0f
+                ) > 0.5f;
+                float coin_wel_enforcer_threshold = coin_override_or(
+                    coin_overrides, c, 27, wel_enforcer_threshold
                 );
                 float allowed_coin_wel = allowed_wallet_exposure_limit(
                     coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
@@ -912,6 +1203,58 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 entry_candidate[c] = quantity > 0.0f;
                 contribution[c] = quantity > 0.0f
                     ? quantity * entry_price * c_mult / balance : 0.0f;
+
+                // Per-position exposure repair has exact-Rust precedence over
+                // the normal Trailing Martingale close.
+                float wel_target = allowed_coin_wel
+                    * coin_wel_enforcer_threshold;
+                if (coin_wel_enforcer_enabled
+                    && coin_wel_enforcer_threshold > 0.0f
+                    && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
+                    && wel_target > 0.0f && we > wel_target) {
+                    int reducer_tick = short_side ? touch_down : touch_up;
+                    float reducer_price = float(reducer_tick) * price_step;
+                    if (reducer_tick > 0 && reducer_price > 0.0f) {
+                        float reducer_min = min_entry_qty(
+                            reducer_price, qty_step, min_qty, min_cost, c_mult
+                        );
+                        float target_psize = wel_target * balance
+                            / fmax(pprice[c] * c_mult, 1.0e-12f);
+                        float reduce_qty = fmax(psize[c] - target_psize, 0.0f);
+                        if (reduce_qty <= 2.220446e-16f) {
+                            reduce_qty = qty_step;
+                        }
+                        float reducer_qty = 0.0f;
+                        for (int steps = 0; steps <= 10000; ++steps) {
+                            reducer_qty = fmin(
+                                psize[c],
+                                fmax(
+                                    reducer_min,
+                                    ceil_step(reduce_qty, qty_step)
+                                )
+                            );
+                            float new_psize = fmax(
+                                round_step(
+                                    psize[c] - reducer_qty, qty_step
+                                ),
+                                0.0f
+                            );
+                            if (new_psize < target_psize
+                                || new_psize <= 2.220446e-16f) {
+                                break;
+                            }
+                            reduce_qty += qty_step;
+                        }
+                        if (coin_close_retracement_base <= 0.0f) {
+                            close_reconstruct_after_reducer[c] = true;
+                            close_gen_balance[c] = balance;
+                            close_gen_allowed_wel[c] = allowed_coin_wel;
+                        }
+                        close_qty[c] = reducer_qty;
+                        close_tick[c] = reducer_tick;
+                        continue;
+                    }
+                }
 
                 float close_threshold = coin_close_threshold_base
                     + wer * coin_close_threshold_we

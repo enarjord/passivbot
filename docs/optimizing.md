@@ -128,7 +128,9 @@ The supported slice is intentionally narrow:
   for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
   runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
-  `wallet_exposure_limit` and `risk.we_excess_allowance_pct` are supported; per-coin
+  `wallet_exposure_limit` and `risk.we_excess_allowance_pct` are supported. Trailing Martingale
+  also supports per-coin `risk.position_exposure_enforcer_enabled` and
+  `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed
 - HSL and auto-unstuck disabled
@@ -143,8 +145,14 @@ The supported slice is intentionally narrow:
   unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
   aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate
   permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
-- BTC collateral, realized-loss gating, position-exposure enforcement, and total-exposure repair
-  remain disabled
+- Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
+  `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
+  and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
+  times the positive threshold, Metal gives the passive reducer precedence over the normal
+  strategy close and sizes it strictly below that target. Static per-coin overrides may change
+  both fields. EMA Anchor position-exposure repair remains fail closed because its exact Rust
+  strategy path does not use this reducer
+- BTC collateral, realized-loss gating, and total-exposure repair remain disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
   screening proxy compares against the highest executable minimum observed for that coin in the
@@ -186,8 +194,8 @@ overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
 Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
 overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
-enable HSL, auto-unstuck, an exposure enforcer, an invalid position count, or another unsupported
-behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
+enable HSL, auto-unstuck, an unsupported exposure-repair path, an invalid position count, or
+another unsupported behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
 range within that subset, either through common bounds or an explicit scenario override. Metal
 uses the strategy-specific single-coin or multicoin kernel independently for each scenario, then
 feeds all results to the same suite reducer. Scenario-local `coin_overrides` for supported

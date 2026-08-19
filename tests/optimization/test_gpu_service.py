@@ -18,6 +18,7 @@ from optimization.gpu.service import (
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
+    _position_exposure_enforcer_params,
     _require_complete_valid_tail,
     _single_coin_exposure_params,
 )
@@ -56,6 +57,28 @@ def test_single_coin_exposure_policy_rejects_unknown_allowance_mode():
     with pytest.raises(ValueError, match="we_excess_allowance_mode"):
         _single_coin_exposure_params(
             {"we_excess_allowance_mode": "raw"}, side="short"
+        )
+
+
+def test_tm_position_exposure_repair_packs_exact_rust_inputs():
+    assert _position_exposure_enforcer_params(
+        {
+            "position_exposure_enforcer_enabled": True,
+            "position_exposure_enforcer_threshold": 0.8,
+        },
+        side="short",
+    ) == {
+        "wel_enforcer_enabled": 1.0,
+        "wel_enforcer_threshold": 0.8,
+    }
+
+    with pytest.raises(ValueError, match="finite positive"):
+        _position_exposure_enforcer_params(
+            {
+                "position_exposure_enforcer_enabled": True,
+                "position_exposure_enforcer_threshold": 0.0,
+            },
+            side="long",
         )
 
 
@@ -543,6 +566,8 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
+                    "risk_wel_enforcer_enabled": True,
+                    "risk_wel_enforcer_threshold": 0.8,
                 }
             },
         ],
@@ -561,6 +586,8 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         "risk": {
                             "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
+                            "position_exposure_enforcer_enabled": True,
+                            "position_exposure_enforcer_threshold": 0.8,
                         },
                         "wallet_exposure_limit": 0.4,
                     }
@@ -581,14 +608,16 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 26)
+    assert matrix.shape == (2, 28)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 15] == pytest.approx(0.5)
     assert matrix[1, 23] == pytest.approx(15.0)
     assert matrix[1, 24] == pytest.approx(0.4)
     assert matrix[1, 25] == pytest.approx(0.25)
-    assert contract["values"][0] == [None] * 26
+    assert matrix[1, 26] == pytest.approx(1.0)
+    assert matrix[1, 27] == pytest.approx(0.8)
+    assert contract["values"][0] == [None] * 28
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

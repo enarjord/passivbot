@@ -69,6 +69,34 @@ def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
     }
 
 
+def _position_exposure_enforcer_params(
+    risk: dict, *, side: str
+) -> dict[str, float]:
+    enabled = bool(
+        risk.get(
+            "position_exposure_enforcer_enabled",
+            risk.get("risk_wel_enforcer_enabled", False),
+        )
+    )
+    threshold = float(
+        risk.get(
+            "position_exposure_enforcer_threshold",
+            risk.get("risk_wel_enforcer_threshold", 0.0),
+        )
+        or 0.0
+    )
+    if enabled and (not np.isfinite(threshold) or threshold <= 0.0):
+        raise ValueError(
+            "MPS proxy requires a finite positive "
+            f"bot.{side}.risk.position_exposure_enforcer_threshold when the "
+            "position exposure enforcer is enabled"
+        )
+    return {
+        "wel_enforcer_enabled": float(enabled),
+        "wel_enforcer_threshold": threshold,
+    }
+
+
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
     if int(last_valid_idx) != int(candle_count) - 1:
         raise ValueError(
@@ -322,6 +350,10 @@ class MpsSingleCoinProxy:
                     risk["total_wallet_exposure_limit"]
                 )
             strategy.update(_single_coin_exposure_params(risk, side=side))
+            if self.strategy_kind == "trailing_martingale":
+                strategy.update(
+                    _position_exposure_enforcer_params(risk, side=side)
+                )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(
@@ -518,8 +550,10 @@ def _build_multicoin_tm_coin_overrides(
     cooldown_column = len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
     wallet_exposure_column = cooldown_column + 1
     allowance_pct_column = wallet_exposure_column + 1
+    wel_enforcer_enabled_column = allowance_pct_column + 1
+    wel_enforcer_threshold_column = wel_enforcer_enabled_column + 1
     matrix = np.full(
-        (len(coins), allowance_pct_column + 1),
+        (len(coins), wel_enforcer_threshold_column + 1),
         np.nan,
         dtype=np.float32,
     )
@@ -559,6 +593,14 @@ def _build_multicoin_tm_coin_overrides(
         if "we_excess_allowance_pct" in risk_patch:
             matrix[coin_index, allowance_pct_column] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
+            )
+        if "position_exposure_enforcer_enabled" in risk_patch:
+            matrix[coin_index, wel_enforcer_enabled_column] = float(
+                bool(effective_bot.get("risk_wel_enforcer_enabled", False))
+            )
+        if "position_exposure_enforcer_threshold" in risk_patch:
+            matrix[coin_index, wel_enforcer_threshold_column] = float(
+                effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0
             )
     contract = {
         "exchange": exchange,
@@ -772,6 +814,12 @@ class MpsMulticoinProxy:
                     config["bot"][side].get("risk", {}), side=side
                 )
             )
+            if self.strategy_kind == "trailing_martingale":
+                first_strategy.update(
+                    _position_exposure_enforcer_params(
+                        config["bot"][side].get("risk", {}), side=side
+                    )
+                )
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]

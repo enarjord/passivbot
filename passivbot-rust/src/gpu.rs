@@ -95,7 +95,7 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 31"));
+        assert!(source.contains("constant int SIDE_PARAMS = 33"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
@@ -103,14 +103,16 @@ mod tests {
         assert!(source.contains("if (we_if <= s.entry_cap * 1.01f) return qty"));
         assert!(source.contains("s.entry_cap * balance - cost"));
         assert!(source.contains("s.allowed_wel"));
+        assert!(source.contains("s.wel_enforcer_enabled"));
+        assert!(source.contains("wel_target"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
-        assert_eq!(source.matches("high_fill_max_tick").count(), 6);
-        assert_eq!(source.matches("low_nonfill_max_tick").count(), 6);
+        assert_eq!(source.matches("high_fill_max_tick").count(), 8);
+        assert_eq!(source.matches("low_nonfill_max_tick").count(), 8);
         assert!(!source.contains("nextafter("));
         assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
         assert!(source.contains("remainder == mq && mq_relation > 0"));
@@ -125,6 +127,13 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("int grid_rung_limit = long_side.close_is_wel_reducer ? 499 : 500"));
+        assert!(
+            source.contains("int grid_rung_limit = short_side.close_is_wel_reducer ? 499 : 500")
+        );
+        assert_eq!(source.matches("bool reducer_before_group").count(), 2);
+        assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
+        assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
@@ -142,8 +151,15 @@ mod tests {
         let source = mps_trailing_martingale_multicoin_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 38"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 26"));
+        assert!(source.contains("constant int PARAM_COLS = 40"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 28"));
+        assert!(source.contains("coin_wel_enforcer_enabled"));
+        assert!(source.contains("coin_wel_enforcer_threshold"));
+        assert!(source.contains("recursive_grid_close_groups_after_reducer"));
+        assert!(source.contains("for (int rung = 0; rung < 499"));
+        assert!(source.contains("bool reducer_before_group"));
+        assert!(source.contains("close_reconstruct_after_reducer"));
+        assert!(source.contains("close_gen_allowed_wel"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
