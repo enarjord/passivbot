@@ -132,7 +132,19 @@ The supported slice is intentionally narrow:
   and other override leaves fail closed
 - HSL and auto-unstuck disabled
 - BTC collateral, realized-loss gating, and exposure enforcers disabled
-- `backtest.filter_by_min_effective_cost: false`
+- `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
+  projected initial-entry cost test with the configured wallet-exposure limit. The
+  screening proxy compares against the highest executable minimum observed for that coin in the
+  prepared window, rounds that threshold upward, and discounts the projected float32 product so
+  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. To
+  remain conservative across float32 proxy versus float64 Rust path divergence, Metal uses the
+  configured liquidation floor—not proxy balance—as the guaranteed balance lower bound while
+  the single enabled side is flat. Once that side is open it remains managed. This may produce
+  proxy false negatives, which exact validation may admit. A finite positive
+  `backtest.liquidation_threshold` and exactly one enabled side are required. Dual-side and
+  multi-coin runs still require this option to be disabled because proxy position divergence and
+  approximate multi-coin selection cannot conservatively bound exact Rust's cash balance for
+  another flat side or coin
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 

@@ -121,6 +121,7 @@ class MpsEmaAnchorRunner:
         long_enabled: bool = True,
         short_enabled: bool = False,
         hedge_mode: bool = True,
+        filter_by_min_effective_cost: bool = False,
     ):
         self.market = market
         self.run_config = run
@@ -180,6 +181,8 @@ class MpsEmaAnchorRunner:
                 float(self.long_enabled),
                 float(self.short_enabled),
                 float(self.hedge_mode),
+                float(bool(filter_by_min_effective_cost)),
+                data["max_effective_min_cost"],
             ],
             dtype=torch.float32,
             device="mps",

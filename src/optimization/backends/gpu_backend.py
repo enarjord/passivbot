@@ -727,10 +727,15 @@ def _validate_scope_config(
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("GPU foundation does not support suite mode")
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
-        raise ValueError(
-            "GPU foundation requires backtest.filter_by_min_effective_cost=false "
-            "because the screening proxy promotes entries to exchange minimum size"
+        liquidation_threshold = float(
+            config.get("backtest", {}).get("liquidation_threshold", 0.0)
         )
+        if not math.isfinite(liquidation_threshold) or liquidation_threshold <= 0.0:
+            raise ValueError(
+                "GPU min-effective-cost filtering requires a finite positive "
+                "backtest.liquidation_threshold so the proxy has a proven lower "
+                "balance bound"
+            )
     if bool(config.get("live", {}).get("market_orders_allowed")):
         raise ValueError(
             "GPU foundation requires live.market_orders_allowed=false because the "
@@ -764,9 +769,24 @@ def _validate_scope_config(
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
+    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
+        enabled_sides
+    ) != 1:
+        raise ValueError(
+            "GPU min-effective-cost filtering currently requires exactly one "
+            "enabled side because proxy position divergence prevents a proven "
+            "cash-balance bound for the opposite flat side"
+        )
     if coin_count > 1:
         from optimization.gpu.model import MPS_MULTICOIN_MAX_COINS
 
+        if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
+            raise ValueError(
+                "GPU multicoin optimization currently requires "
+                "backtest.filter_by_min_effective_cost=false because the "
+                "approximate proxy path cannot conservatively bound exact Rust's "
+                "portfolio balance"
+            )
         if coin_count > MPS_MULTICOIN_MAX_COINS:
             raise ValueError(
                 "GPU multicoin foundation supports at most "

@@ -1277,12 +1277,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
     [
         (lambda config: config["backtest"].__setitem__("suite_enabled", True), "suite"),
         (
-            lambda config: config["backtest"].__setitem__(
-                "filter_by_min_effective_cost", True
-            ),
-            "filter_by_min_effective_cost",
-        ),
-        (
             lambda config: config["live"].__setitem__(
                 "market_orders_allowed", True
             ),
@@ -1358,6 +1352,85 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_foundation_accepts_single_coin_min_effective_cost_filter(
+    strategy_kind, suite_enabled, side
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=side == "long", short_enabled=side == "short")
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    assert (
+        _validate_scope(config, _Evaluator(), allow_suite=suite_enabled) == "bybit"
+    )
+
+
+def test_gpu_foundation_rejects_min_effective_cost_without_positive_liquidation_floor():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["liquidation_threshold"] = 0.0
+
+    with pytest.raises(ValueError, match="proven lower balance bound"):
+        _validate_scope(config, _Evaluator())
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_rejects_dual_side_min_effective_cost_filter(
+    strategy_kind, suite_enabled
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=True)
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    with pytest.raises(ValueError, match="exactly one enabled side"):
+        _validate_scope(config, _Evaluator(), allow_suite=suite_enabled)
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+@pytest.mark.parametrize("dual_side", [False, True])
+def test_gpu_foundation_rejects_multicoin_min_effective_cost_filter(
+    strategy_kind, suite_enabled, dual_side
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=dual_side)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"] if dual_side else [],
+    }
+    config["live"]["hedge_mode"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    with pytest.raises(
+        ValueError,
+        match="exactly one enabled side|cannot conservatively bound exact Rust",
+    ):
+        _validate_scope(
+            config,
+            _MulticoinEvaluator(),
+            allow_suite=suite_enabled,
+        )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

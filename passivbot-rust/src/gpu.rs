@@ -45,6 +45,11 @@ mod tests {
         assert!(source.contains("constant int SCALAR_COLS = 18"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
+        assert!(source.contains("projected_cost_lower"));
+        assert!(source.contains("float guaranteed_balance_lower"));
+        assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
@@ -116,6 +121,11 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
+        assert!(source.contains("projected_cost_lower"));
+        assert!(source.contains("float guaranteed_balance_lower"));
+        assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));
         assert!(source.contains("cooldown_min != 0.0f"));
         assert!(!source.contains("price_now > rounded_target"));

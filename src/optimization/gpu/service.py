@@ -352,6 +352,9 @@ class MpsSingleCoinProxy:
             long_enabled=self.enabled["long"],
             short_enabled=self.enabled["short"],
             hedge_mode=bool(backtest_params["hedge_mode"]),
+            filter_by_min_effective_cost=bool(
+                backtest_params["filter_by_min_effective_cost"]
+            ),
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:

@@ -32,6 +32,20 @@ inline float min_entry_qty(
     return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
 }
 
+inline bool passes_min_effective_cost(
+    bool enabled, float guaranteed_balance_lower, float wel,
+    float initial_qty_pct, float max_effective_min_cost
+) {
+    if (!enabled) return true;
+    float rounded_projected_cost = guaranteed_balance_lower * wel * initial_qty_pct;
+    // Discount by 16 float32 unit roundoffs. This covers upward encoding and
+    // multiply rounding of all three operands before the conservative compare.
+    float projected_cost_lower = rounded_projected_cost
+        * (1.0f - 9.5367431640625e-7f);
+    return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
+        && projected_cost_lower >= max_effective_min_cost;
+}
+
 struct TmSide {
     float alpha0, alpha1, alpha2, alpha1m, alpha1h;
     float ddf, initial_ema_dist, initial_qty_pct;
@@ -321,7 +335,8 @@ inline void generate_orders(
     bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
-        || s.twel <= 0.0f || eticks <= 1 || (block_initial && flat)) eqty = 0.0f;
+        || s.twel <= 0.0f || eticks <= 1
+        || (block_initial && flat)) eqty = 0.0f;
     s.entry_ticks = eticks;
     s.entry_price = eprice;
     s.entry_qty = crop_entry(
@@ -509,6 +524,8 @@ inline void passivbot_single_coin_impl(
     const bool long_enabled = settings[9] > 0.5f;
     const bool short_enabled = settings[10] > 0.5f;
     const bool hedge_mode = settings[11] > 0.5f;
+    const bool filter_by_min_effective_cost = settings[12] > 0.5f;
+    const float max_effective_min_cost = settings[13];
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
@@ -622,7 +639,8 @@ inline void passivbot_single_coin_impl(
                 if (group.qty <= 0.0f || group.ticks > high_fill_max_tick) break;
                 float adj = fmin(round_step(group.qty, qty_step), long_side.psize);
                 float pnl = adj * c_mult * (group.price - long_side.pprice);
-                balance += pnl - adj * group.price * c_mult * maker_fee;
+                float fee = adj * group.price * c_mult * maker_fee;
+                balance += pnl - fee;
                 float new_psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
                 );
@@ -646,7 +664,8 @@ inline void passivbot_single_coin_impl(
             float cp = long_side.close_price;
             float adj = fmin(round_step(long_side.close_qty, qty_step), long_side.psize);
             float pnl = adj * c_mult * (cp - long_side.pprice);
-            balance += pnl - adj * cp * c_mult * maker_fee;
+            float fee = adj * cp * c_mult * maker_fee;
+            balance += pnl - fee;
             float new_psize = fmax(round_step(long_side.psize - adj, qty_step), 0.0f);
             bool went_flat = new_psize <= 0.0f;
             long_side.psize = new_psize;
@@ -685,7 +704,8 @@ inline void passivbot_single_coin_impl(
                 if (eq <= 0.0f || entry_ticks <= low_nonfill_max_tick
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
 
-                balance -= eq * ep * c_mult * maker_fee;
+                float fee = eq * ep * c_mult * maker_fee;
+                balance -= fee;
                 bool was_flat = long_side.psize <= 0.0f;
                 float new_psize = round_step(long_side.psize + eq, qty_step);
                 float new_pprice = was_flat ? ep
@@ -756,7 +776,8 @@ inline void passivbot_single_coin_impl(
                 if (group.qty <= 0.0f || group.ticks <= low_nonfill_max_tick) break;
                 float adj = fmin(round_step(group.qty, qty_step), short_side.psize);
                 float pnl = adj * c_mult * (short_side.pprice - group.price);
-                balance += pnl - adj * group.price * c_mult * maker_fee;
+                float fee = adj * group.price * c_mult * maker_fee;
+                balance += pnl - fee;
                 float new_psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
                 );
@@ -780,7 +801,8 @@ inline void passivbot_single_coin_impl(
             float cp = short_side.close_price;
             float adj = fmin(round_step(short_side.close_qty, qty_step), short_side.psize);
             float pnl = adj * c_mult * (short_side.pprice - cp);
-            balance += pnl - adj * cp * c_mult * maker_fee;
+            float fee = adj * cp * c_mult * maker_fee;
+            balance += pnl - fee;
             float new_psize = fmax(round_step(short_side.psize - adj, qty_step), 0.0f);
             bool went_flat = new_psize <= 0.0f;
             short_side.psize = new_psize;
@@ -819,7 +841,8 @@ inline void passivbot_single_coin_impl(
                 if (eq <= 0.0f || entry_ticks > high_fill_max_tick
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
 
-                balance -= eq * ep * c_mult * maker_fee;
+                float fee = eq * ep * c_mult * maker_fee;
+                balance -= fee;
                 bool was_flat = short_side.psize <= 0.0f;
                 float new_psize = round_step(short_side.psize + eq, qty_step);
                 float new_pprice = was_flat ? ep
@@ -891,14 +914,34 @@ inline void passivbot_single_coin_impl(
         bool gen = can_gen && alive;
         eq_started = eq_started || gen;
         if (gen) {
-            bool block_long_initial = false;
-            bool block_short_initial = false;
+            // When both sides are flat, an exact Rust path that remains alive has
+            // balance above liq_floor. If either side is open, equity cannot bound
+            // exact cash balance, so flat-side eligibility uses zero and fails closed.
+            float guaranteed_balance_lower =
+                long_side.psize <= 0.0f && short_side.psize <= 0.0f
+                ? liq_floor : 0.0f;
+            bool long_min_cost_eligible = passes_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                long_side.twel, long_side.initial_qty_pct,
+                max_effective_min_cost
+            );
+            bool short_min_cost_eligible = passes_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                short_side.twel, short_side.initial_qty_pct,
+                max_effective_min_cost
+            );
+            bool block_long_initial = !long_min_cost_eligible;
+            bool block_short_initial = !short_min_cost_eligible;
             if (long_enabled && short_enabled && !hedge_mode) {
                 if (long_side.psize > 0.0f) {
                     block_short_initial = true;
                 } else if (short_side.psize > 0.0f) {
                     block_long_initial = true;
-                } else {
+                } else if (long_min_cost_eligible && !short_min_cost_eligible) {
+                    block_short_initial = true;
+                } else if (!long_min_cost_eligible && short_min_cost_eligible) {
+                    block_long_initial = true;
+                } else if (long_min_cost_eligible && short_min_cost_eligible) {
                     float long_lower = fmin(
                         long_side.ema0, fmin(long_side.ema1, long_side.ema2)
                     );
