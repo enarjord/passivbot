@@ -1356,15 +1356,16 @@ def test_gpu_foundation_accepts_ema_long_single():
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("suite_enabled", [False, True])
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_gpu_foundation_accepts_single_coin_min_effective_cost_filter(
-    strategy_kind, suite_enabled
+    strategy_kind, suite_enabled, side
 ):
     builder = (
         _directional_tm_config
         if strategy_kind == "trailing_martingale"
         else _directional_ema_config
     )
-    config = builder(long_enabled=True, short_enabled=True)
+    config = builder(long_enabled=side == "long", short_enabled=side == "short")
     config["backtest"]["filter_by_min_effective_cost"] = True
     config["backtest"]["suite_enabled"] = suite_enabled
 
@@ -1380,6 +1381,24 @@ def test_gpu_foundation_rejects_min_effective_cost_without_positive_liquidation_
 
     with pytest.raises(ValueError, match="proven lower balance bound"):
         _validate_scope(config, _Evaluator())
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_rejects_dual_side_min_effective_cost_filter(
+    strategy_kind, suite_enabled
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    config = builder(long_enabled=True, short_enabled=True)
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    with pytest.raises(ValueError, match="exactly one enabled side"):
+        _validate_scope(config, _Evaluator(), allow_suite=suite_enabled)
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
@@ -1403,7 +1422,10 @@ def test_gpu_foundation_rejects_multicoin_min_effective_cost_filter(
     config["backtest"]["filter_by_min_effective_cost"] = True
     config["backtest"]["suite_enabled"] = suite_enabled
 
-    with pytest.raises(ValueError, match="cannot conservatively bound exact Rust"):
+    with pytest.raises(
+        ValueError,
+        match="exactly one enabled side|cannot conservatively bound exact Rust",
+    ):
         _validate_scope(
             config,
             _MulticoinEvaluator(),

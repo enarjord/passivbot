@@ -769,6 +769,14 @@ def _validate_scope_config(
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
+    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
+        enabled_sides
+    ) != 1:
+        raise ValueError(
+            "GPU min-effective-cost filtering currently requires exactly one "
+            "enabled side because proxy position divergence prevents a proven "
+            "cash-balance bound for the opposite flat side"
+        )
     if coin_count > 1:
         from optimization.gpu.model import MPS_MULTICOIN_MAX_COINS
 
