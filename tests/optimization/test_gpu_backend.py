@@ -346,6 +346,7 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "risk_entry_cooldown_minutes",
         "risk_twel_enforcer_threshold",
         "risk_we_excess_allowance_pct",
+        "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit",
     }
 
@@ -1366,6 +1367,30 @@ def test_gpu_foundation_accepts_single_coin_exposure_headroom_policy(
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_accepts_tm_position_exposure_repair(side, suite_enabled):
+    config = _directional_tm_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["bot"][side]["risk"]["position_exposure_enforcer_enabled"] = True
+    config["bot"][side]["risk"]["position_exposure_enforcer_threshold"] = 0.8
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    assert (
+        _validate_scope(config, _Evaluator(), allow_suite=suite_enabled) == "bybit"
+    )
+
+
+def test_gpu_foundation_keeps_ema_position_exposure_repair_fail_closed():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["bot"]["long"]["risk"]["position_exposure_enforcer_enabled"] = True
+    config["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"] = 0.8
+
+    with pytest.raises(ValueError, match="position_exposure_enforcer_enabled"):
+        _validate_scope(config, _Evaluator())
+
+
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("entry_gate", [False, True])
@@ -1519,6 +1544,13 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
                 }
             }
         },
+        {
+            "bot": {
+                "long": {
+                    "risk": {"position_exposure_enforcer_enabled": True}
+                }
+            }
+        },
         {"bot": {"long": {"unstuck": {"enabled": True}}}},
         {"bot": {"short": {"strategy": {"ema_anchor": {"offset": 0.02}}}}},
     ],
@@ -1567,6 +1599,8 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
                     "risk": {
                         "entry_cooldown_minutes": 15,
                         "we_excess_allowance_pct": 0.25,
+                        "position_exposure_enforcer_enabled": True,
+                        "position_exposure_enforcer_threshold": 0.8,
                     },
                     "wallet_exposure_limit": 0.4,
                 }
@@ -3456,6 +3490,19 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
             {"long_risk_position_exposure_enforcer_enabled": 1.0},
             coin_count=2,
         )
+
+    _validate_pinned_scope_bounds(
+        {
+            "long_risk_position_exposure_enforcer_enabled": Bound(
+                1.0, 1.0, None
+            ),
+            "long_risk_wel_enforcer_threshold": Bound(0.5, 1.0, None),
+        },
+        {"long_risk_position_exposure_enforcer_enabled": 1.0},
+        {"long"},
+        coin_count=2,
+        strategy_kind="trailing_martingale",
+    )
 
     with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
         _validate_pinned_scope_bounds(

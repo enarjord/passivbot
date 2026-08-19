@@ -95,7 +95,7 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 31"));
+        assert!(source.contains("constant int SIDE_PARAMS = 33"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
@@ -103,6 +103,8 @@ mod tests {
         assert!(source.contains("if (we_if <= s.entry_cap * 1.01f) return qty"));
         assert!(source.contains("s.entry_cap * balance - cost"));
         assert!(source.contains("s.allowed_wel"));
+        assert!(source.contains("s.wel_enforcer_enabled"));
+        assert!(source.contains("wel_target"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
@@ -142,8 +144,10 @@ mod tests {
         let source = mps_trailing_martingale_multicoin_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 38"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 26"));
+        assert!(source.contains("constant int PARAM_COLS = 40"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 28"));
+        assert!(source.contains("coin_wel_enforcer_enabled"));
+        assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));

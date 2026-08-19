@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 31;
+constant int SIDE_PARAMS = 33;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -58,6 +58,8 @@ struct TmSide {
     float close_retracement_base, close_retracement_v1h, close_retracement_v1m;
     float cooldown_min, twel, allowed_wel, entry_cap;
     bool gate_initial, gate_reentry;
+    bool wel_enforcer_enabled;
+    float wel_enforcer_threshold;
     float ema0, ema1, ema2, vol1m, vol1h;
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks;
@@ -125,6 +127,8 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     }
     s.entry_cap = twel_entry_gate_enabled
         ? fmin(s.allowed_wel, gate_cap) : s.allowed_wel;
+    s.wel_enforcer_enabled = p[o + 31] > 0.5f;
+    s.wel_enforcer_threshold = p[o + 32];
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
     s.vol1m = 0.0f; s.vol1h = 0.0f;
     s.psize = 0.0f; s.pprice = 0.0f;
@@ -357,6 +361,43 @@ inline void generate_orders(
         s, balance, eprice, eqty,
         qty_step, min_qty, min_cost, c_mult
     );
+
+    // Exact Trailing Martingale gives per-position exposure repair precedence
+    // over its normal close. Reduce strictly below the configured fraction of
+    // the allowance-adjusted WEL, using the passive ask for longs and bid for
+    // shorts just like calc_wel_auto_reduce_long/short in closes.rs.
+    float wel_target = s.allowed_wel * s.wel_enforcer_threshold;
+    if (s.wel_enforcer_enabled && s.wel_enforcer_threshold > 0.0f
+        && balance > 0.0f && s.psize > 0.0f && s.pprice > 0.0f
+        && wel_target > 0.0f && we > wel_target) {
+        int reducer_ticks = is_long ? touch_up_ticks : touch_down_ticks;
+        float reducer_price = float(reducer_ticks) * price_step;
+        if (reducer_ticks > 0 && reducer_price > 0.0f) {
+            float reducer_min = min_entry_qty(
+                reducer_price, qty_step, min_qty, min_cost, c_mult
+            );
+            float target_psize = wel_target * balance
+                / fmax(s.pprice * c_mult, 1.0e-12f);
+            float reduce_qty = fmax(s.psize - target_psize, 0.0f);
+            if (reduce_qty <= 1.1920928955078125e-7f) reduce_qty = qty_step;
+            float reducer_qty = fmin(
+                s.psize,
+                fmax(reducer_min, ceil_step(reduce_qty, qty_step))
+            );
+            float new_we = fmax(s.psize - reducer_qty, 0.0f)
+                * s.pprice * c_mult / balance;
+            if (new_we >= wel_target - 1.0e-12f && reducer_qty < s.psize) {
+                reducer_qty = fmin(
+                    s.psize,
+                    fmax(reducer_min, ceil_step(reducer_qty + qty_step, qty_step))
+                );
+            }
+            s.close_ticks = reducer_ticks;
+            s.close_price = reducer_price;
+            s.close_qty = reducer_qty;
+            return;
+        }
+    }
 
     float ct = s.close_threshold_base + wer * s.close_threshold_we
         + s.vol1h * s.close_threshold_v1h + s.vol1m * s.close_threshold_v1m;

@@ -32,6 +32,11 @@ EXPOSURE_PARAM_KEYS = (
     "twel_enforcer_threshold",
 )
 
+POSITION_EXPOSURE_ENFORCER_PARAM_KEYS = (
+    "wel_enforcer_enabled",
+    "wel_enforcer_threshold",
+)
+
 # Compatibility name retained for imports from the first exposure-policy slice.
 SINGLE_COIN_EXPOSURE_PARAM_KEYS = EXPOSURE_PARAM_KEYS
 
@@ -85,6 +90,7 @@ TRAILING_MARTINGALE_PARAM_KEYS = (
 TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
     *TRAILING_MARTINGALE_PARAM_KEYS,
     *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
+    *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
@@ -97,6 +103,7 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     "forager_score_weights_volatility",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
+    *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (

@@ -2,8 +2,8 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 38;
-constant int OVERRIDE_COLS = 26;
+constant int PARAM_COLS = 40;
+constant int OVERRIDE_COLS = 28;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -159,6 +159,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const bool legacy_raw_allowance = params[po + 35] > 0.5f;
     const bool twel_entry_gate_enabled = params[po + 36] > 0.5f;
     const float twel_threshold = params[po + 37];
+    const bool wel_enforcer_enabled = params[po + 38] > 0.5f;
+    const float wel_enforcer_threshold = params[po + 39];
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -692,6 +694,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float coin_allowance_pct = coin_override_or(
                     coin_overrides, c, 25, allowance_pct
                 );
+                bool coin_wel_enforcer_enabled = coin_override_or(
+                    coin_overrides, c, 26,
+                    wel_enforcer_enabled ? 1.0f : 0.0f
+                ) > 0.5f;
+                float coin_wel_enforcer_threshold = coin_override_or(
+                    coin_overrides, c, 27, wel_enforcer_threshold
+                );
                 float allowed_coin_wel = allowed_wallet_exposure_limit(
                     coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
                 );
@@ -912,6 +921,48 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 entry_candidate[c] = quantity > 0.0f;
                 contribution[c] = quantity > 0.0f
                     ? quantity * entry_price * c_mult / balance : 0.0f;
+
+                // Per-position exposure repair has exact-Rust precedence over
+                // the normal Trailing Martingale close.
+                float wel_target = allowed_coin_wel
+                    * coin_wel_enforcer_threshold;
+                if (coin_wel_enforcer_enabled
+                    && coin_wel_enforcer_threshold > 0.0f
+                    && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
+                    && wel_target > 0.0f && we > wel_target) {
+                    int reducer_tick = short_side ? touch_down : touch_up;
+                    float reducer_price = float(reducer_tick) * price_step;
+                    if (reducer_tick > 0 && reducer_price > 0.0f) {
+                        float reducer_min = min_entry_qty(
+                            reducer_price, qty_step, min_qty, min_cost, c_mult
+                        );
+                        float target_psize = wel_target * balance
+                            / fmax(pprice[c] * c_mult, 1.0e-12f);
+                        float reduce_qty = fmax(psize[c] - target_psize, 0.0f);
+                        if (reduce_qty <= 1.1920928955078125e-7f) {
+                            reduce_qty = qty_step;
+                        }
+                        float reducer_qty = fmin(
+                            psize[c],
+                            fmax(reducer_min, ceil_step(reduce_qty, qty_step))
+                        );
+                        float new_we = fmax(psize[c] - reducer_qty, 0.0f)
+                            * pprice[c] * c_mult / balance;
+                        if (new_we >= wel_target - 1.0e-12f
+                            && reducer_qty < psize[c]) {
+                            reducer_qty = fmin(
+                                psize[c],
+                                fmax(
+                                    reducer_min,
+                                    ceil_step(reducer_qty + qty_step, qty_step)
+                                )
+                            );
+                        }
+                        close_qty[c] = reducer_qty;
+                        close_tick[c] = reducer_tick;
+                        continue;
+                    }
+                }
 
                 float close_threshold = coin_close_threshold_base
                     + wer * coin_close_threshold_we

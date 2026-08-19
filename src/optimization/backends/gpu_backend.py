@@ -138,6 +138,7 @@ _TM_SIDE_BOUND_SUFFIXES = {
     "close_retracement_volatility_1h_weight": "close_retracement_volatility_1h_weight",
     "close_retracement_volatility_1m_weight": "close_retracement_volatility_1m_weight",
     "risk_entry_cooldown_minutes": "entry_cooldown_minutes",
+    "risk_wel_enforcer_threshold": "wel_enforcer_threshold",
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
@@ -405,7 +406,6 @@ PINNED_SCOPE_BOUND_VALUES = {
     for suffix, expected in {
         "hsl_enabled": 0.0,
         "unstuck_enabled": 0.0,
-        "risk_position_exposure_enforcer_enabled": 0.0,
         "risk_total_exposure_enforcer_enabled": 0.0,
     }.items()
 }
@@ -862,10 +862,12 @@ def _validate_scope_config(
                 f"GPU foundation requires bot.{side}.unstuck.enabled=false"
             )
         risk = side_config.get("risk", {})
-        for key, expected in (
-            ("position_exposure_enforcer_enabled", False),
-            ("total_exposure_enforcer_enabled", False),
-        ):
+        required_disabled = [("total_exposure_enforcer_enabled", False)]
+        if strategy_kind != "trailing_martingale":
+            required_disabled.append(
+                ("position_exposure_enforcer_enabled", False)
+            )
+        for key, expected in required_disabled:
             if bool(risk.get(key, expected)) != expected:
                 raise ValueError(
                     f"GPU foundation requires bot.{side}.risk.{key}={str(expected).lower()}"
@@ -950,6 +952,23 @@ def _validate_gpu_coin_overrides(
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
         )
+        if strategy_kind == "trailing_martingale":
+            allowed.update(
+                {
+                    (
+                        "bot",
+                        enabled_side,
+                        "risk",
+                        "position_exposure_enforcer_enabled",
+                    ),
+                    (
+                        "bot",
+                        enabled_side,
+                        "risk",
+                        "position_exposure_enforcer_threshold",
+                    ),
+                }
+            )
         allowed.update(
             (
                 "bot",
@@ -971,11 +990,18 @@ def _validate_gpu_coin_overrides(
             if path not in allowed
         )
     if unsupported:
+        supported_risk = (
+            "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
+        )
+        if strategy_kind == "trailing_martingale":
+            supported_risk += (
+                ", risk.position_exposure_enforcer_enabled, "
+                "risk.position_exposure_enforcer_threshold"
+            )
         raise ValueError(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
-            f"{strategy_kind} parameters, risk.entry_cooldown_minutes, "
-            "risk.we_excess_allowance_pct, and "
+            f"{strategy_kind} parameters, {supported_risk}, and "
             "wallet_exposure_limit"
         )
 
@@ -1972,10 +1998,23 @@ def _build_anchor_parameter_context(
 
 
 def _validate_pinned_scope_bounds(
-    bound_by_key, base_by_key, enabled_sides=None, *, coin_count: int = 1
+    bound_by_key,
+    base_by_key,
+    enabled_sides=None,
+    *,
+    coin_count: int = 1,
+    strategy_kind: str | None = None,
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
-    for key, expected in PINNED_SCOPE_BOUND_VALUES.items():
+    pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    if strategy_kind != "trailing_martingale":
+        pinned.update(
+            {
+                f"{side}_risk_position_exposure_enforcer_enabled": 0.0
+                for side in ("long", "short")
+            }
+        )
+    for key, expected in pinned.items():
         if key.split("_", 1)[0] not in enabled_sides:
             continue
         bound = bound_by_key.get(key)
@@ -2481,6 +2520,7 @@ def run_backend(
         base_by_key,
         enabled_sides,
         coin_count=max_coin_count,
+        strategy_kind=strategy_kind,
     )
 
     if suite_multicoin_sides is None:
@@ -2517,6 +2557,7 @@ def run_backend(
             scenario_base_by_key,
             scenario_enabled_sides,
             coin_count=item["coin_count"],
+            strategy_kind=strategy_kind,
         )
         _validate_directional_search_space(
             scenario_bound_by_key,
