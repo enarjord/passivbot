@@ -803,6 +803,21 @@ def test_run_from_args_saves_selected_member_exactly(
     assert "Saved selected member:" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+def test_selected_member_stages_in_private_directory(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+):
+    _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
+    stage = pareto_explorer._stage_selected(candidates[0], tmp_path / "selected.json")
+    try:
+        assert stage.parent.parent == tmp_path
+        assert stage.parent.stat().st_mode & 0o077 == 0
+        assert stage.read_bytes() == candidates[0].path.read_bytes()
+    finally:
+        pareto_explorer._remove_selected_stage(stage)
+
+
 def test_run_from_args_saves_post_limit_members_and_manifest(
     sample_pareto_dir: Path,
     tmp_path: Path,

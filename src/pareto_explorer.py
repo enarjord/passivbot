@@ -1637,18 +1637,23 @@ def _prepare_filtered_output(
 
 def _stage_selected(candidate: ParetoCandidate, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(dir=output.parent, prefix=".pareto-selected-"))
     file_descriptor, temporary_name = tempfile.mkstemp(
-        dir=output.parent,
-        prefix=".pareto-selected-",
+        dir=stage,
+        prefix="candidate-",
         suffix=".tmp",
     )
-    os.close(file_descriptor)
     temporary = Path(temporary_name)
     try:
-        shutil.copyfile(candidate.path, temporary)
+        with os.fdopen(file_descriptor, "wb") as destination:
+            file_descriptor = -1
+            with candidate.path.open("rb") as source:
+                shutil.copyfileobj(source, destination)
         return temporary
     except Exception:
-        temporary.unlink(missing_ok=True)
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        _remove_selected_stage(temporary)
         raise
 
 
@@ -1658,7 +1663,7 @@ def _install_selected(temporary: Path, output: Path) -> None:
             raise FileExistsError(f"Selected output already exists: {output}")
         temporary.rename(output)
     finally:
-        _remove_export_file(temporary)
+        _remove_selected_stage(temporary)
 
 
 def _stage_filtered(
@@ -1711,8 +1716,10 @@ def _remove_export_tree(path: Path) -> None:
     shutil.rmtree(path)
 
 
-def _remove_export_file(path: Path) -> None:
+def _remove_selected_stage(path: Path) -> None:
     path.unlink(missing_ok=True)
+    if path.parent.exists():
+        _remove_export_tree(path.parent)
 
 
 def _install_filtered(stage: Path, output: Path) -> Path:
@@ -1807,7 +1814,7 @@ def run_from_args(args: argparse.Namespace) -> SelectionResult:
             filtered_stage = None
     finally:
         if selected_stage is not None:
-            _remove_export_file(selected_stage)
+            _remove_selected_stage(selected_stage)
         if filtered_stage is not None and filtered_stage.exists():
             _remove_export_tree(filtered_stage)
     show_top = max(1, int(getattr(args, "show_top", 1) or 1))
