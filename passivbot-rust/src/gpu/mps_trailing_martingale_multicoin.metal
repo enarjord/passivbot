@@ -2,8 +2,8 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 34;
-constant int OVERRIDE_COLS = 25;
+constant int PARAM_COLS = 38;
+constant int OVERRIDE_COLS = 27;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -44,6 +44,21 @@ inline float coin_override_or(
 ) {
     float value = coin_overrides[coin * OVERRIDE_COLS + column];
     return isfinite(value) ? value : fallback;
+}
+
+inline float allowed_wallet_exposure_limit(
+    float base_limit, float total_limit, float allowance_pct, bool legacy_raw
+) {
+    if (!(isfinite(base_limit) && base_limit > 0.0f)) return 0.0f;
+    float raw = fmax(allowance_pct, 0.0f);
+    float effective = raw;
+    if (!legacy_raw) {
+        float max_effective = (
+            isfinite(total_limit) && total_limit > 0.0f
+        ) ? fmax(total_limit / base_limit - 1.0f, 0.0f) : 0.0f;
+        effective = fmin(raw, max_effective);
+    }
+    return base_limit * (1.0f + effective);
 }
 
 inline float calc_close_qty(
@@ -140,6 +155,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float w_ready = params[po + 31];
     float w_volatility = params[po + 32];
     const int n_positions = max(1, int(rint(params[po + 33])));
+    const float allowance_pct = params[po + 34];
+    const bool legacy_raw_allowance = params[po + 35] > 0.5f;
+    const bool twel_entry_gate_enabled = params[po + 36] > 0.5f;
+    const float twel_threshold = params[po + 37];
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -670,9 +689,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 );
                 float coin_wel = fixed_coin_wel >= 0.0f
                     ? fixed_coin_wel : effective_wel;
+                float coin_allowance_pct = coin_override_or(
+                    coin_overrides, c, 25, allowance_pct
+                );
+                bool coin_legacy_raw_allowance = coin_override_or(
+                    coin_overrides, c, 26,
+                    legacy_raw_allowance ? 1.0f : 0.0f
+                ) > 0.5f;
+                float allowed_coin_wel = allowed_wallet_exposure_limit(
+                    coin_wel, twel, coin_allowance_pct, coin_legacy_raw_allowance
+                );
                 bool tradable = k >= int(coin_settings[coin_offset + 8])
                     && k <= int(coin_settings[coin_offset + 7])
-                    && finite_positive(price_now) && coin_wel > 0.0f;
+                    && finite_positive(price_now) && allowed_coin_wel > 0.0f;
                 if (!tradable) continue;
                 float qty_step = coin_settings[coin_offset + 0];
                 float price_step = coin_settings[coin_offset + 1];
@@ -757,7 +786,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     initial_price, qty_step, min_qty, min_cost, c_mult
                 );
                 float iq = fmax(min_iq, round_step(
-                    balance * coin_wel * coin_initial_qty_pct
+                    balance * allowed_coin_wel * coin_initial_qty_pct
                         / fmax(initial_price * c_mult, 1.0e-12f),
                     qty_step
                 ));
@@ -770,7 +799,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     ? fmax(round_step(psize[c], qty_step), min_iq) : iq;
                 float we = !flat && balance > 0.0f
                     ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
-                float wer = we / fmax(coin_wel, 1.0e-12f);
+                float wer = we / fmax(allowed_coin_wel, 1.0e-12f);
                 float threshold_multiplier = fmax(
                     1.0f + volatility_1h[c] * coin_entry_threshold_v1h
                         + volatility_1m[c] * coin_entry_threshold_v1m
@@ -834,21 +863,22 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float rq = fmax(iq_effective, fmax(min_rq, round_step(
                     fmax(
                         psize[c] * coin_ddf,
-                        balance * coin_wel * coin_initial_qty_pct
+                        balance * allowed_coin_wel * coin_initial_qty_pct
                             / fmax(reentry_price * c_mult, 1.0e-12f)
                     ),
                     qty_step
                 )));
                 float we_if = (psize[c] * pprice[c] + rq * reentry_price)
                     * c_mult / fmax(balance, 1.0e-9f);
-                float crop_fraction = (coin_wel - we)
+                float crop_fraction = (allowed_coin_wel - we)
                     / fmax(we_if - we, 1.0e-12f);
                 float rq_crop = fmax(
                     round_step(rq * crop_fraction, qty_step), min_rq
                 );
-                if (we_if > coin_wel * 1.01f && rq_crop < rq) rq = rq_crop;
+                if (we_if > allowed_coin_wel * 1.01f && rq_crop < rq) rq = rq_crop;
                 bool cap_hit = trailing_entry
-                    ? we > coin_wel * 0.999f : we >= coin_wel * 0.999f;
+                    ? we > allowed_coin_wel * 0.999f
+                    : we >= allowed_coin_wel * 0.999f;
                 bool reentry_ok = !flat && !partial && !cap_hit
                     && reentry_tick > 1
                     && (!trailing_entry || entry_triggered);
@@ -865,10 +895,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     quantity = 0.0f;
                 }
                 float headroom = (
-                    coin_wel * balance - psize[c] * pprice[c] * c_mult
+                    allowed_coin_wel * balance - psize[c] * pprice[c] * c_mult
                 ) / fmax(entry_price * c_mult, 1.0e-12f);
                 if ((psize[c] * pprice[c] + quantity * entry_price) * c_mult
-                    / fmax(balance, 1.0e-9f) > coin_wel * 1.01f) {
+                    / fmax(balance, 1.0e-9f) > allowed_coin_wel * 1.01f) {
                     quantity = fmin(
                         quantity, fmax(floor_step(headroom, qty_step), 0.0f)
                     );
@@ -947,7 +977,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     : (coin_close_threshold_we == 0.0f
                         ? 1.0f : coin_close_qty_pct);
                 float clip = calc_close_qty(
-                    psize[c], pprice[c], balance, coin_wel,
+                    psize[c], pprice[c], balance, allowed_coin_wel,
                     minimum_close, minimum_close_relation, close_pct,
                     qty_step, c_mult
                 );
@@ -957,7 +987,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 close_tick[c] = candidate_close_tick;
             }
 
-            float total_cap = twel - 1.0e-7f;
+            float gated_twel = twel;
+            if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
+                gated_twel = fmin(twel, twel * twel_threshold);
+            }
+            float total_cap = twel_entry_gate_enabled
+                ? gated_twel - 1.0e-7f : INFINITY;
             float proposed_twe = current_twe;
             for (int c = 0; c < C; ++c) {
                 if (entry_candidate[c]) proposed_twe += contribution[c];
