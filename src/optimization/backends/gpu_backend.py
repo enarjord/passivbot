@@ -951,25 +951,14 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                     f"GPU suite scenario {ctx.label!r} override {dotted_path!r} is "
                     "outside the supported modeled scenario scope"
                 )
-        coin_sources = (
-            getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources") or {}
-        )
-        if coin_sources:
-            raise ValueError(
-                f"GPU suite scenario {ctx.label!r} uses coin_sources; this slice "
-                "does not model per-coin source exchanges"
-            )
         exchanges = list(ctx.exchanges)
         if len(exchanges) != 1:
             raise ValueError(
-                f"GPU suite scenario {ctx.label!r} requires exactly one exchange, "
+                f"GPU suite scenario {ctx.label!r} requires exactly one prepared "
+                "dataset, "
                 f"got {exchanges}"
             )
         exchange = exchanges[0]
-        if exchange == "combined":
-            raise ValueError(
-                "GPU suite scenarios do not support combined multi-exchange datasets"
-            )
         hlcvs, btc, coin_indices = get_data(ctx, exchange)
         values = np.asarray(hlcvs)
         if coin_indices is not None:
@@ -1584,6 +1573,22 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                     f"GPU suite scenario {item['ctx'].label!r} timestamp identity "
                     f"mismatch: timestamps={len(timestamps)}, hlcvs={len(item['hlcvs'])}"
                 )
+            source_contract = []
+            scenario_mss = item.get("mss") or {}
+            for coin in item["coins"]:
+                metadata = scenario_mss.get(coin) or {}
+                market_exchange = str(
+                    metadata.get("exchange") or item["exchange"]
+                )
+                source_contract.append(
+                    {
+                        "coin": coin,
+                        "ohlcv_exchange": str(
+                            metadata.get("ohlcv_source") or market_exchange
+                        ),
+                        "market_settings_exchange": market_exchange,
+                    }
+                )
             prepared_scenarios.append(
                 {
                     "label": item["ctx"].label,
@@ -1607,6 +1612,7 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                     "last_timestamp": (
                         int(timestamps[-1]) if len(timestamps) else None
                     ),
+                    "coin_sources": source_contract,
                     "coin_overrides": deepcopy(
                         item.get("coin_override_contract")
                         or item["config"].get("coin_overrides", {})
