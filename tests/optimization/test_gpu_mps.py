@@ -1197,6 +1197,57 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_position_reducer_reachability_survives_grid_pruning(side):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    candidate = _tm_single_row(
+        wel_enforcer_enabled=True, wel_enforcer_threshold=0.5
+    )
+    candidate[6] = 1.0
+    candidate[7] = 10.0
+    candidate[11] = 0.0
+    candidate[16] = 0.10
+    candidate[17] = 0.10
+    candidate[20] = 0.0
+    candidate[23] = 100.0
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([candidate + candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    pprice_key = "pprice" if side == "long" else "short_pprice"
+    size = output[size_key].item()
+    repaired_we = size * output[pprice_key].item() / output["balance"].item()
+    assert 0.0 < repaired_we < 0.5
+    assert output["day_volume"].sum().item() > 1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_global_position_exposure_repair(side):
     runner, baseline = _multicoin_exposure_fixture(
         "trailing_martingale", side, count=10
@@ -1218,6 +1269,50 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_reducer_retains_reachable_post_repair_grid(side):
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=6
+    )
+    enabled = list(row)
+    enabled[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_enabled")
+    ] = 1.0
+    enabled[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("wel_enforcer_threshold")
+    ] = 0.5
+    enabled[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+    reducer_only = list(enabled)
+    reducer_only[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "close_retracement_base_pct"
+        )
+    ] = 0.001
+    repaired_grid = list(enabled)
+    repaired_grid[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("close_threshold_base_pct")
+    ] = 0.0
+    repaired_grid[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("close_threshold_we_weight")
+    ] = 0.0
+    output = runner.run(
+        np.asarray([reducer_only, repaired_grid], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    sizes = output[size_key].cpu().numpy()
+    volumes = output["day_volume"].sum(dim=1).cpu().numpy()
+    assert sizes[0] > 0.0
+    assert sizes[1] == pytest.approx(0.0)
+    assert volumes[1] > volumes[0]
 
 
 @pytest.mark.skipif(

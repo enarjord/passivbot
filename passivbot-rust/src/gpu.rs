@@ -127,6 +127,8 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
+        assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
@@ -148,6 +150,9 @@ mod tests {
         assert!(source.contains("constant int OVERRIDE_COLS = 28"));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
+        assert!(source.contains("recursive_close_aggregate_after_reducer"));
+        assert!(source.contains("close_notional"));
+        assert!(source.contains("close_prefiltered"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
