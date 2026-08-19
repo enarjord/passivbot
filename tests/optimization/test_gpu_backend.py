@@ -1277,12 +1277,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
     [
         (lambda config: config["backtest"].__setitem__("suite_enabled", True), "suite"),
         (
-            lambda config: config["backtest"].__setitem__(
-                "filter_by_min_effective_cost", True
-            ),
-            "filter_by_min_effective_cost",
-        ),
-        (
             lambda config: config["live"].__setitem__(
                 "market_orders_allowed", True
             ),
@@ -1358,6 +1352,40 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["single", "multicoin", "dual_multicoin"])
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_accepts_min_effective_cost_filter_across_supported_matrix(
+    strategy_kind, topology, suite_enabled
+):
+    builder = (
+        _directional_tm_config
+        if strategy_kind == "trailing_martingale"
+        else _directional_ema_config
+    )
+    dual = topology == "dual_multicoin"
+    config = builder(long_enabled=True, short_enabled=dual)
+    evaluator = _Evaluator()
+    if topology != "single":
+        config["live"]["approved_coins"] = {
+            "long": ["BTC", "ETH", "SOL"],
+            "short": ["BTC", "ETH", "SOL"] if dual else [],
+        }
+        config["live"]["forager_score_hysteresis_pct"] = 0.0
+        config["live"]["hedge_mode"] = True
+        config["backtest"]["dynamic_wel_by_tradability"] = True
+        config["bot"]["long"]["risk"]["n_positions"] = 2
+        if dual:
+            config["bot"]["short"]["risk"]["n_positions"] = 2
+        evaluator = _MulticoinEvaluator()
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    assert (
+        _validate_scope(config, evaluator, allow_suite=suite_enabled) == "bybit"
+    )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

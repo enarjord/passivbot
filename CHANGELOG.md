@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `backtest.filter_by_min_effective_cost` support across the Apple MPS optimizer's EMA Anchor
+  and Trailing Martingale matrix: single-coin, multi-coin, directional, dual-side, and compatible
+  suites. The Metal proxy conservatively compares projected initial cost against the highest
+  executable exchange minimum in each prepared coin window, using the effective dynamic or
+  per-coin wallet-exposure limit and excluding only flat sides from new entries. Exact Rust retains
+  its current-close rule and remains authoritative through the normal validation and drift gates.
+
 - Added static per-coin Trailing Martingale overrides to single-side and dual-side multi-coin Apple
   MPS optimization and compatible suites. The Metal proxy consumes exact-last per-coin strategy,
   entry-cooldown, and wallet-exposure values; checkpoint identity records each resolved override

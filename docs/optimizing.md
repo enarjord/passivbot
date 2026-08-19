@@ -132,7 +132,12 @@ The supported slice is intentionally narrow:
   and other override leaves fail closed
 - HSL and auto-unstuck disabled
 - BTC collateral, realized-loss gating, and exposure enforcers disabled
-- `backtest.filter_by_min_effective_cost: false`
+- `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
+  projected initial-entry cost test with dynamic or static per-coin wallet-exposure limits. The
+  screening proxy compares against the highest executable minimum observed for that coin in the
+  prepared window, so it never admits an entry that exact Rust would reject at the current close;
+  exact validation may admit a conservative proxy false negative. A failing flat side is excluded
+  from new-entry selection while an open position remains managed
 - `live.market_orders_allowed: false`
 - no invalid candle tail after the selected coin's final valid candle
 

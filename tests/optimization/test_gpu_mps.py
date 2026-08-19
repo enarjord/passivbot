@@ -10,6 +10,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     _build_hourly_log_range,
     _directional_touch_ticks,
+    _maximum_effective_min_cost,
     _minimum_entry_qty_encoding,
     _strict_fill_tick_boundaries,
     build_mps_data,
@@ -47,11 +48,22 @@ def test_minimum_entry_qty_encoding_preserves_just_above_aligned_minimum():
     assert relation.tolist() == [1]
 
 
+def test_maximum_effective_min_cost_preserves_float64_executable_threshold():
+    market = ProxyMarket(0.001, 0.01, 0.001, 10.0004, 1.0, 0.0)
+
+    threshold = _maximum_effective_min_cost(
+        np.array([100.004, 100.0]), market
+    )
+
+    assert threshold == pytest.approx(0.101 * 100.0)
+
+
 from optimization.gpu.mps_kernel import (
     MpsEmaAnchorMulticoinRunner,
     MpsEmaAnchorMulticoinLongRunner,
     MpsEmaAnchorRunner,
     MpsTrailingMartingaleMulticoinRunner,
+    MpsTrailingMartingaleRunner,
 )
 
 
@@ -144,6 +156,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "(run_peak - eqf) / fmax(fabs(run_peak)" in source
     assert "fabs(raw_steps - nearest_count) <= 1.0e-8f" in source
     assert "if (current_cost_we >= cap" in source
+    assert "const bool filter_by_min_effective_cost" in source
+    assert "passes_min_effective_cost" in source
     assert source.index("float eqf = liq ? liq_floor : equity") < source.index(
         "(run_peak - eqf) / fmax(fabs(run_peak)"
     )
@@ -218,6 +232,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "incumbent[c] = selected[c] && psize[c] <= 0.0f" in source
     assert "if (!selected[c] || incumbent[c] || !survivor[c]) continue" in source
     assert "score[challenger] - score[incumbent_coin]" in source
+    assert "const bool filter_by_min_effective_cost" in source
+    assert "passes_min_effective_cost" in source
     count = 512
     coin_count = 3
     phase = np.linspace(0.0, 12.0 * np.pi, count)
@@ -275,6 +291,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         runs[0], data, side=side, forager_score_hysteresis_pct=0.02
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
+    assert runner.settings.cpu()[5].item() == 0.0
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -353,6 +370,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
     assert "constant int OVERRIDE_COLS = 25" in source
     assert "coin_override_or" in source
+    assert "const bool filter_by_min_effective_cost" in source
+    assert "passes_min_effective_cost" in source
 
     count = 512
     coin_count = 3
@@ -715,6 +734,234 @@ def _tm_row(*, initial_ema_dist=0.01, gate_initial=1.0, gate_reentry=1.0):
         gate_initial,
         gate_reentry,
     ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_min_effective_cost_filter_blocks_only_flat_entries(
+    strategy_kind, side
+):
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 102.0, 102.0, 103.0, 102.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 98.0, 97.0, 98.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 200.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    ema_row = [
+        0.1,
+        2.0,
+        3.0,
+        0.0,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        2.0,
+        0.0,
+        1.0,
+    ]
+    row = _tm_row() if strategy_kind == "trailing_martingale" else ema_row
+    runner_cls = (
+        MpsTrailingMartingaleRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorRunner
+    )
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "hedge_mode": True,
+    }
+
+    promoted = runner_cls(market, run, data, **common).run(
+        np.array([row + row], dtype=np.float64)
+    )
+    filtered_runner = runner_cls(
+        market,
+        run,
+        data,
+        filter_by_min_effective_cost=True,
+        **common,
+    )
+    filtered = filtered_runner.run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert filtered_runner.settings.cpu()[12].item() == 1.0
+    assert promoted["day_has_fill"].sum().item() > 0
+    assert filtered["day_has_fill"].sum().item() == 0
+    assert filtered["psize"].item() == 0.0
+    assert filtered["short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if side == "long":
+        low[3] = 98.0
+        high[4] = 102.0
+    else:
+        high[3] = 102.0
+        low[4] = 98.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 100.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [
+        0.1,
+        2.0,
+        3.0,
+        0.0,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        2.0,
+        0.0,
+        1.0,
+    ]
+
+    output = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hedge_mode=True,
+        filter_by_min_effective_cost=True,
+    ).run(np.array([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["day_has_fill"].sum().item() > 0
+    assert output["gap_hist"].sum().item() >= 1
+    assert output["psize"].item() == 0.0
+    assert output["short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_effective_cost_uses_dynamic_and_override_wel(
+    strategy_kind, side
+):
+    count = 128
+    coin_count = 2
+    phase = np.linspace(0.0, 8.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * 4.0
+        hlcvs[:, coin, 0] = close * 1.02
+        hlcvs[:, coin, 1] = close * 0.98
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 60.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    ema_row = [
+        0.1,
+        10.0,
+        30.0,
+        1.5,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        2.0,
+    ]
+    tm_row = _tm_row() + [60.0, 60.0, 0.0, 1.0, 0.0, 0.0, 2.0]
+    row = tm_row if strategy_kind == "trailing_martingale" else ema_row
+    runner_cls = (
+        MpsTrailingMartingaleMulticoinRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorMulticoinRunner
+    )
+    override_cols = 25 if strategy_kind == "trailing_martingale" else 12
+    wel_col = 24 if strategy_kind == "trailing_martingale" else 11
+
+    dynamic_runner = runner_cls(
+        runs[0],
+        data,
+        side=side,
+        filter_by_min_effective_cost=True,
+    )
+    dynamic = dynamic_runner.run(np.array([row], dtype=np.float64))
+    overrides = np.full((coin_count, override_cols), np.nan, dtype=np.float32)
+    overrides[0, wel_col] = 1.0
+    overridden = runner_cls(
+        runs[0],
+        data,
+        side=side,
+        coin_overrides=overrides,
+        filter_by_min_effective_cost=True,
+    ).run(np.array([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert dynamic_runner.settings.cpu()[5].item() == 1.0
+    assert dynamic["day_has_fill"].sum().item() == 0
+    assert overridden["day_has_fill"].sum().item() > 0
 
 
 @pytest.mark.skipif(

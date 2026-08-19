@@ -45,6 +45,8 @@ mod tests {
         assert!(source.contains("constant int SCALAR_COLS = 18"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
@@ -65,7 +67,7 @@ mod tests {
         assert!(source.contains("constant int PARAM_COLS = 19"));
         assert!(source.contains("constant int OVERRIDE_COLS = 12"));
         assert!(source.contains("coin_override_or"));
-        assert!(source.contains("constant int COIN_COLS = 11"));
+        assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int DAILY_COLS = 6"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
@@ -77,6 +79,8 @@ mod tests {
         assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("float total_cap = twel - 1.0e-7f"));
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));
@@ -116,6 +120,8 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));
         assert!(source.contains("cooldown_min != 0.0f"));
         assert!(!source.contains("price_now > rounded_target"));
@@ -130,6 +136,7 @@ mod tests {
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 34"));
         assert!(source.contains("constant int OVERRIDE_COLS = 25"));
+        assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
@@ -142,6 +149,8 @@ mod tests {
         assert!(source.contains("touch_nearest_ticks[k * C + c]"));
         assert!(source.contains("as_type<float>(touch_min_qty_bits[k * C + c])"));
         assert!(source.contains("minimum_close_relation > 0"));
+        assert!(source.contains("const bool filter_by_min_effective_cost"));
+        assert!(source.contains("passes_min_effective_cost"));
         assert!(!source.contains("unstuck"));
         assert!(!source.contains("hard_stop"));
     }

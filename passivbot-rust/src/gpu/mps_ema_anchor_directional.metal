@@ -32,6 +32,16 @@ inline float min_entry_qty(
     return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
 }
 
+inline bool passes_min_effective_cost(
+    bool enabled, float balance, float wel, float initial_qty_pct,
+    float max_effective_min_cost
+) {
+    if (!enabled) return true;
+    float projected_cost = balance * wel * initial_qty_pct;
+    return isfinite(projected_cost) && projected_cost > 0.0f
+        && projected_cost >= max_effective_min_cost;
+}
+
 struct EmaSide {
     float alpha0;
     float alpha1;
@@ -172,7 +182,8 @@ inline void generate_long_orders(
     float capped = floor_step(headroom, qty_step);
     if (over) e_qty = capped > 0.0f && capped + 1.0e-6f >= min_q ? capped : 0.0f;
     if (current_cost_we >= cap || cooldown || bid_price <= 0.0f || balance <= 0.0f
-        || side.base_qty_pct <= 0.0f || (block_initial && side.psize <= 0.0f)) {
+        || side.base_qty_pct <= 0.0f
+        || (block_initial && side.psize <= 0.0f)) {
         e_qty = 0.0f;
     }
     side.entry_ticks = bid_ticks;
@@ -245,7 +256,8 @@ inline void generate_short_orders(
     float capped = floor_step(headroom, qty_step);
     if (over) e_qty = capped > 0.0f && capped + 1.0e-6f >= min_q ? capped : 0.0f;
     if (current_cost_we >= cap || cooldown || ask_price <= 0.0f || balance <= 0.0f
-        || side.base_qty_pct <= 0.0f || (block_initial && side.psize <= 0.0f)) {
+        || side.base_qty_pct <= 0.0f
+        || (block_initial && side.psize <= 0.0f)) {
         e_qty = 0.0f;
     }
     side.entry_ticks = ask_ticks;
@@ -299,6 +311,8 @@ inline void passivbot_single_coin_impl(
     const bool long_enabled = settings[9] > 0.5f;
     const bool short_enabled = settings[10] > 0.5f;
     const bool hedge_mode = settings[11] > 0.5f;
+    const bool filter_by_min_effective_cost = settings[12] > 0.5f;
+    const float max_effective_min_cost = settings[13];
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
@@ -321,6 +335,9 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
+    bool min_cost_eligibility_initialized = false;
+    bool long_min_cost_eligible = true;
+    bool short_min_cost_eligible = true;
 
     int cur_day = flags[2];
     bool day_touched = false;
@@ -481,8 +498,19 @@ inline void passivbot_single_coin_impl(
         bool gen = can_gen && alive;
         eq_started = eq_started || gen;
         if (gen) {
-            bool block_long_initial = false;
-            bool block_short_initial = false;
+            if (!min_cost_eligibility_initialized || any_fill) {
+                long_min_cost_eligible = passes_min_effective_cost(
+                    filter_by_min_effective_cost, balance, long_side.twel,
+                    long_side.base_qty_pct, max_effective_min_cost
+                );
+                short_min_cost_eligible = passes_min_effective_cost(
+                    filter_by_min_effective_cost, balance, short_side.twel,
+                    short_side.base_qty_pct, max_effective_min_cost
+                );
+                min_cost_eligibility_initialized = true;
+            }
+            bool block_long_initial = !long_min_cost_eligible;
+            bool block_short_initial = !short_min_cost_eligible;
             if (long_enabled && short_enabled && !hedge_mode) {
                 if (long_side.psize > 0.0f) {
                     block_short_initial = true;

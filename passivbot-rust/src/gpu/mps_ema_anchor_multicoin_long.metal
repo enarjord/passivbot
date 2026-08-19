@@ -3,7 +3,7 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 19;
-constant int COIN_COLS = 11;
+constant int COIN_COLS = 12;
 constant int OVERRIDE_COLS = 12;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
@@ -37,6 +37,16 @@ inline float min_entry_qty(
 
 inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
+}
+
+inline bool passes_min_effective_cost(
+    bool enabled, float balance, float wel, float initial_qty_pct,
+    float max_effective_min_cost
+) {
+    if (!enabled) return true;
+    float projected_cost = balance * wel * initial_qty_pct;
+    return isfinite(projected_cost) && projected_cost > 0.0f
+        && projected_cost >= max_effective_min_cost;
 }
 
 inline float coin_override_or(
@@ -121,6 +131,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
+    const bool filter_by_min_effective_cost = run_settings[5] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -409,6 +420,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
         max_tradable_seen = max(max_tradable_seen, tradable_count);
         const int effective_n_positions = min(n_positions, max_tradable_seen);
+        const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;
         equity_started = equity_started || can_generate;
@@ -432,11 +444,23 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 for (int c = 0; c < C; ++c) {
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
-                    float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
+                    float fixed_coin_wel = coin_override_or(
+                        coin_overrides, c, 11, -1.0f
+                    );
+                    float coin_wel = fixed_coin_wel >= 0.0f
+                        ? fixed_coin_wel : effective_wel;
+                    float close = bars[bar_offset + 2];
+                    float coin_base_qty_pct = coin_override_or(
+                        coin_overrides, c, 0, base_qty_pct
+                    );
                     bool enabled = !selected[c]
                         && k >= int(coin_settings[coin_offset + 8])
                         && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(bars[bar_offset + 2]) && coin_wel != 0.0f;
+                        && finite_positive(close) && coin_wel > 0.0f
+                        && passes_min_effective_cost(
+                            filter_by_min_effective_cost, balance, coin_wel,
+                            coin_base_qty_pct, coin_settings[coin_offset + 11]
+                        );
                     survivor[c] = enabled;
                     if (enabled) enabled_count += 1;
                 }
@@ -564,7 +588,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 previous_effective_n_positions = effective_n_positions;
             }
 
-            const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
             float current_twe = 0.0f;
             for (int c = 0; c < C; ++c) {
                 int coin_offset = c * COIN_COLS;

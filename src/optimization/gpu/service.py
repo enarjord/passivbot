@@ -352,6 +352,9 @@ class MpsSingleCoinProxy:
             long_enabled=self.enabled["long"],
             short_enabled=self.enabled["short"],
             hedge_mode=bool(backtest_params["hedge_mode"]),
+            filter_by_min_effective_cost=bool(
+                backtest_params["filter_by_min_effective_cost"]
+            ),
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
@@ -849,6 +852,9 @@ class MpsMulticoinProxy:
             runner_kwargs = {
                 "side": side,
                 "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
+                "filter_by_min_effective_cost": bool(
+                    backtest_params["filter_by_min_effective_cost"]
+                ),
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
             self.runners[side] = runner_cls(

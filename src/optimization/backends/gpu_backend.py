@@ -726,11 +726,6 @@ def _validate_scope_config(
 ) -> str:
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("GPU foundation does not support suite mode")
-    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
-        raise ValueError(
-            "GPU foundation requires backtest.filter_by_min_effective_cost=false "
-            "because the screening proxy promotes entries to exchange minimum size"
-        )
     if bool(config.get("live", {}).get("market_orders_allowed")):
         raise ValueError(
             "GPU foundation requires live.market_orders_allowed=false because the "

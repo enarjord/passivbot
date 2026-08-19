@@ -407,11 +407,7 @@ def _directional_touch_ticks(
     )
 
 
-def _minimum_entry_qty_encoding(
-    prices, market: ProxyMarket
-) -> tuple[np.ndarray, np.ndarray]:
-    """Encode Rust-compatible float64 touch minima for float32 Metal comparisons."""
-
+def _minimum_entry_qty_values(prices, market: ProxyMarket) -> np.ndarray:
     prices = np.asarray(prices, dtype=np.float64)
     finite = np.isfinite(prices) & (prices > 0.0)
     safe = np.where(finite, prices, 1.0)
@@ -445,16 +441,49 @@ def _minimum_entry_qty_encoding(
         ),
     )
     minimum_qty = np.where(finite, minimum_qty, 0.0)
-    rounded = minimum_qty.astype(np.float32)
+    return minimum_qty
+
+
+def _float32_threshold_encoding(values) -> tuple[np.ndarray, np.ndarray]:
+    values = np.asarray(values, dtype=np.float64)
+    rounded = values.astype(np.float32)
     if (
-        np.any(~np.isfinite(minimum_qty))
-        or np.any(minimum_qty < 0.0)
+        np.any(~np.isfinite(values))
+        or np.any(values < 0.0)
         or np.any(~np.isfinite(rounded))
     ):
-        raise ValueError("MPS proxy minimum touch quantities exceed float32 range")
-    relation = np.sign(minimum_qty - rounded.astype(np.float64)).astype(np.int32)
+        raise ValueError("MPS proxy threshold values exceed float32 range")
+    relation = np.sign(values - rounded.astype(np.float64)).astype(np.int32)
     rounded_bits = np.ascontiguousarray(rounded).view(np.int32)
     return rounded_bits, relation
+
+
+def _minimum_entry_qty_encoding(
+    prices, market: ProxyMarket
+) -> tuple[np.ndarray, np.ndarray]:
+    """Encode Rust-compatible float64 touch minima for float32 Metal comparisons."""
+
+    return _float32_threshold_encoding(_minimum_entry_qty_values(prices, market))
+
+
+def _maximum_effective_min_cost(prices, market: ProxyMarket) -> float:
+    """Return the conservative executable minimum cost over a prepared window."""
+
+    prices = np.asarray(prices, dtype=np.float64)
+    minimum_qty = _minimum_entry_qty_values(prices, market)
+    finite = np.isfinite(prices) & (prices > 0.0)
+    effective_cost = np.where(
+        finite,
+        minimum_qty * prices * float(market.c_mult),
+        0.0,
+    )
+    maximum = float(np.max(effective_cost, initial=0.0))
+    encoded = np.float32(maximum)
+    if float(encoded) < maximum:
+        encoded = np.nextafter(encoded, np.float32(np.inf))
+    if not np.isfinite(encoded):
+        raise ValueError("MPS proxy maximum effective minimum cost exceeds float32")
+    return float(encoded)
 
 
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
@@ -521,6 +550,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     touch_min_qty_bits, touch_min_qty_relation = _minimum_entry_qty_encoding(
         close, market
     )
+    max_effective_min_cost = _maximum_effective_min_cost(close, market)
 
     def tensor(values, *, dtype=None):
         return torch.as_tensor(values, dtype=dtype, device="mps")
@@ -542,6 +572,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "touch_nearest_tick": tensor(touch_nearest_tick),
         "touch_min_qty_bits": tensor(touch_min_qty_bits),
         "touch_min_qty_relation": tensor(touch_min_qty_relation),
+        "max_effective_min_cost": max_effective_min_cost,
         "n_days": int(day_idx[-1]) + 1,
         "ts0": int(timestamps[0]),
         "times_relative": True,
@@ -607,7 +638,7 @@ def build_mps_multicoin_data(
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
-    coin_settings = np.empty((coin_count, 11), dtype=np.float32)
+    coin_settings = np.empty((coin_count, 12), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
             raise ValueError("MPS multicoin runs must use one shared candle interval")
@@ -628,6 +659,7 @@ def build_mps_multicoin_data(
         min_qty_bits, min_qty_relation = _minimum_entry_qty_encoding(close, market)
         touch_min_qty_bits[:, coin] = min_qty_bits
         touch_min_qty_relation[:, coin] = min_qty_relation
+        max_effective_min_cost = _maximum_effective_min_cost(close, market)
         seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
         seed_close = float(close[seed_index])
         high_seed = float(values[seed_index, coin, 0])
@@ -650,6 +682,7 @@ def build_mps_multicoin_data(
             run.trade_start_idx,
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
+            max_effective_min_cost,
         )
 
     invariant_bytes = (
