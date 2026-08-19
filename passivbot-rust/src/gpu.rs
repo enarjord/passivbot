@@ -150,9 +150,9 @@ mod tests {
         assert!(source.contains("constant int OVERRIDE_COLS = 28"));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
-        assert!(source.contains("recursive_close_aggregate_after_reducer"));
-        assert!(source.contains("close_notional"));
-        assert!(source.contains("close_prefiltered"));
+        assert!(source.contains("recursive_grid_close_groups_after_reducer"));
+        assert!(source.contains("close_reconstruct_after_reducer"));
+        assert!(source.contains("close_gen_allowed_wel"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
