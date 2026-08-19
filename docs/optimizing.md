@@ -118,8 +118,9 @@ The supported slice is intentionally narrow:
   support, while EMA-anchor suites may also use different multi-coin subsets of up to 64 coins when
   every effective scenario shares the same one-side or dual-side hedge-mode topology;
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
-  config overrides are supported, while non-bot override paths and per-coin source assignments
-  remain unsupported
+  config overrides are supported; scenario-local `coin_overrides`, starting balance, maker fee,
+  liquidation threshold, Forager hysteresis, and hedge mode are also supported, while other
+  non-bot override paths and per-coin source assignments remain unsupported
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor runs: EMA-anchor strategy
   parameters, `risk.entry_cooldown_minutes`, and explicit `wallet_exposure_limit` are supported;
   disabled sides and other override leaves fail closed
@@ -134,8 +135,8 @@ long and one short Metal dispatch per candidate in hedge mode. Their directional
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
 Dual-side one-way arbitration, multi-coin trailing-martingale, combined multi-exchange datasets,
-non-bot suite scenario overrides, per-coin source assignments, HSL, and auto-unstuck are not
-silently approximated by this release. Dual-side
+unmodeled non-bot suite scenario overrides, per-coin source assignments, HSL, and auto-unstuck are
+not silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
@@ -157,8 +158,12 @@ enable HSL, auto-unstuck, an exposure enforcer, an invalid position count, or an
 behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
 range within that subset, either through common bounds or an explicit scenario override. Metal
 uses the single-coin or multicoin kernel independently for each scenario, then feeds all results to
-the same suite reducer. Non-bot override paths and scenario `coin_sources` remain rejected until
-their proxy semantics are modeled. The effective external suite definition and any `--scenarios` filter are
+the same suite reducer. Scenario-local `coin_overrides`, `backtest.starting_balance`,
+`backtest.maker_fee_override`, `backtest.liquidation_threshold`,
+`live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
+proxy consumes them through the canonical backtest payload and then passes the same fail-closed
+scope checks. Other non-bot paths and scenario `coin_sources` remain rejected until their proxy
+semantics are modeled. The effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
 prepared concrete dates. The checkpoint signature also records each scenario's ordered effective
 coins, side topology, and prepared candle window, so resume fails closed if preparation changes.
