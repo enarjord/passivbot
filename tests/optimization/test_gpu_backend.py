@@ -1414,12 +1414,19 @@ def test_gpu_foundation_accepts_ema_long_single():
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.1, 0.999, 1.0, 2.0])
-def test_gpu_foundation_accepts_single_coin_ema_realized_loss_gate(
-    side, max_loss_pct
+def test_gpu_foundation_accepts_single_coin_realized_loss_gate(
+    side, strategy_kind, max_loss_pct
 ):
-    config = _directional_ema_config(
-        long_enabled=side == "long", short_enabled=side == "short"
+    builder = (
+        _directional_ema_config
+        if strategy_kind == "ema_anchor"
+        else _directional_tm_config
+    )
+    config = builder(
+        long_enabled=side == "long",
+        short_enabled=side == "short",
     )
     config["live"]["max_realized_loss_pct"] = max_loss_pct
 
@@ -1435,23 +1442,18 @@ def test_gpu_foundation_rejects_invalid_realized_loss_gate(max_loss_pct):
         _validate_scope(config, _Evaluator())
 
 
-@pytest.mark.parametrize(
-    ("config", "evaluator"),
-    [
-        (
-            _directional_tm_config(long_enabled=True, short_enabled=False),
-            _Evaluator(),
-        ),
-        (_long_only_ema_config(), _MulticoinEvaluator()),
-    ],
-)
-def test_gpu_realized_loss_gate_remains_fail_closed_outside_single_ema(
-    config, evaluator
-):
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_gpu_realized_loss_gate_remains_fail_closed_for_multicoin(strategy_kind):
+    builder = (
+        _directional_ema_config
+        if strategy_kind == "ema_anchor"
+        else _directional_tm_config
+    )
+    config = builder(long_enabled=True, short_enabled=False)
     config["live"]["max_realized_loss_pct"] = 0.1
 
-    with pytest.raises(ValueError, match="single-coin EMA Anchor"):
-        _validate_scope(config, evaluator)
+    with pytest.raises(ValueError, match="single-coin EMA Anchor and Trailing Martingale"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])

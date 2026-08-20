@@ -824,12 +824,10 @@ def _validate_scope_config(
             "trailing_martingale only; "
             f"got {strategy_kind!r}"
         )
-    if max_realized_loss_pct < 1.0 and not (
-        coin_count == 1 and strategy_kind == "ema_anchor"
-    ):
+    if max_realized_loss_pct < 1.0 and coin_count != 1:
         raise ValueError(
-            "GPU realized-loss gating currently supports single-coin EMA Anchor; "
-            "Trailing Martingale and multicoin runs require "
+            "GPU realized-loss gating currently supports single-coin EMA Anchor "
+            "and Trailing Martingale; multicoin runs require "
             "live.max_realized_loss_pct>=1.0"
         )
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
