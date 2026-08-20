@@ -155,12 +155,12 @@ The supported slice is intentionally narrow:
 - single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
   shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
   conservative all-history loss envelope, so it may block a close that exact Rust admits after old
-  PnL ages out of `live.pnls_max_lookback_days`. Multi-coin EMA Anchor and single-coin Trailing
+  PnL ages out of `live.pnls_max_lookback_days`. Multi-coin EMA Anchor and Trailing
   Martingale use a stricter zero-loss envelope whenever the gate is active: only clearly profitable
   closes after maker fees are admitted by Metal. This avoids unsafe cross-coin or cross-side loss-
   budget reservation between independent multi-coin dispatches and per-candle enumeration of TM's
   recursive 500-rung close ladder. Exact validation applies the configured rolling allowance and
-  remains authoritative. Multi-coin Trailing Martingale realized-loss gating remains fail closed
+  remains authoritative
 - BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The

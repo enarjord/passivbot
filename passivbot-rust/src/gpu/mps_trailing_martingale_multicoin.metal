@@ -39,6 +39,26 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+inline bool realized_loss_proxy_allows_close(
+    float qty, float close_price, float pprice, bool short_side,
+    float c_mult, float maker_fee, bool gate_enabled
+) {
+    if (!gate_enabled) return true;
+    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
+    float gross_pnl = qty * c_mult * (short_side
+        ? pprice - close_price : close_price - pprice);
+    float fee = qty * close_price * c_mult * maker_fee;
+    float net_pnl = gross_pnl - fee;
+    // Enumerating and reserving every recursive TM close group across all
+    // independently dispatched coins and sides would make screening scale
+    // with the 500-rung exact bound. Use a conservative zero-loss envelope
+    // whenever Rust's configured loss gate is active.
+    float arithmetic_scale = fabs(gross_pnl) + fabs(fee)
+        + qty * fabs(c_mult) * (fabs(close_price) + fabs(pprice));
+    float margin = 1.220703125e-4f * arithmetic_scale;
+    return isfinite(net_pnl) && net_pnl > margin;
+}
+
 inline float coin_override_or(
     constant float* coin_overrides, int coin, int column, float fallback
 ) {
@@ -360,6 +380,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
+    const bool loss_gate_enabled = run_settings[5] < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -566,7 +587,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 && (short_side
                     ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
                     : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
-            bool rebuild_grid = close_ready
+            bool rebuild_grid = psize[c] > 0.0f
                 && close_reconstruct_after_reducer[c];
             if (filled_close || filled_secondary_close || rebuild_grid) {
                 float fill_price = float(close_tick[c]) * price_step;
@@ -776,14 +797,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         float pnl = qty * c_mult * (short_side
                             ? pprice[c] - fill_price
                             : fill_price - pprice[c]);
-                        balance += pnl
-                            - qty * fill_price * c_mult * maker_fee;
-                        psize[c] = fmax(
-                            round_step(psize[c] - qty, qty_step), 0.0f
-                        );
-                        day_volume += qty * fill_price * c_mult / balance;
-                        reducer_executed = true;
-                        executed_close = true;
+                        if (realized_loss_proxy_allows_close(
+                                qty, fill_price, pprice[c], short_side,
+                                c_mult, maker_fee, loss_gate_enabled
+                            )) {
+                            balance += pnl
+                                - qty * fill_price * c_mult * maker_fee;
+                            psize[c] = fmax(
+                                round_step(psize[c] - qty, qty_step), 0.0f
+                            );
+                            day_volume += qty * fill_price * c_mult / balance;
+                            reducer_executed = true;
+                            executed_close = true;
+                        }
                     }
                     bool reachable = short_side
                         ? group.ticks > fill_ticks[tick_offset + 1]
@@ -797,6 +823,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float grid_pnl = grid_qty * c_mult * (short_side
                         ? pprice[c] - group.price
                         : group.price - pprice[c]);
+                    if (!realized_loss_proxy_allows_close(
+                            grid_qty, group.price, pprice[c], short_side,
+                            c_mult, maker_fee, loss_gate_enabled
+                        )) {
+                        continue;
+                    }
                     balance += grid_pnl
                         - grid_qty * group.price * c_mult * maker_fee;
                     psize[c] = fmax(
@@ -830,6 +862,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     );
                     float pnl = qty * c_mult * (short_side
                         ? pprice[c] - price : price - pprice[c]);
+                    if (!realized_loss_proxy_allows_close(
+                            qty, price, pprice[c], short_side,
+                            c_mult, maker_fee, loss_gate_enabled
+                        )) {
+                        continue;
+                    }
                     balance += pnl - qty * price * c_mult * maker_fee;
                     psize[c] = fmax(
                         round_step(psize[c] - qty, qty_step), 0.0f
@@ -1251,8 +1289,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         psize[best], ceil_step(reducer_qty, qty_step)
                     );
                     if (reducer_qty <= 1.0e-9f) continue;
-                    twel_close_qty[best] = reducer_qty;
-                    twel_close_tick[best] = reducer_tick;
+                    bool reducer_allowed = realized_loss_proxy_allows_close(
+                            reducer_qty, reducer_price, pprice[best], short_side,
+                            c_mult, coin_settings[coin_offset + 5],
+                            loss_gate_enabled
+                        );
+                    if (reducer_allowed) {
+                        twel_close_qty[best] = reducer_qty;
+                        twel_close_tick[best] = reducer_tick;
+                    }
+                    // Match exact Rust's two-stage contract: TWEL chooses and
+                    // accounts for its action set before the realized-loss
+                    // gate filters those actions.  A filtered reducer must
+                    // not be reallocated to another symbol.
                     running_twe -= fmax(
                         exposure - fmax(
                             round_step(psize[best] - reducer_qty, qty_step),
@@ -1524,18 +1573,26 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float reducer_qty = raw_twel_reducer_qty;
                 bool use_twel = raw_twel_reducer_qty > 0.0f;
                 float wel_reducer_qty = 0.0f;
+                int wel_reducer_tick = 0;
                 float wel_target = allowed_coin_wel
                     * coin_wel_enforcer_threshold;
                 if (coin_wel_enforcer_enabled
                     && coin_wel_enforcer_threshold > 0.0f
                     && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
                     && wel_target > 0.0f && we > wel_target) {
-                    int wel_reducer_tick = short_side ? touch_down : touch_up;
+                    wel_reducer_tick = short_side ? touch_down : touch_up;
                     float wel_reducer_price = float(wel_reducer_tick) * price_step;
                     wel_reducer_qty = exposure_reducer_qty(
                         psize[c], pprice[c], balance, wel_target,
                         wel_reducer_price, qty_step, min_qty, min_cost, c_mult
                     );
+                    if (!realized_loss_proxy_allows_close(
+                            wel_reducer_qty, wel_reducer_price, pprice[c],
+                            short_side, c_mult, coin_settings[coin_offset + 5],
+                            loss_gate_enabled
+                        )) {
+                        wel_reducer_qty = 0.0f;
+                    }
                     float finalized_wel_reducer_qty = finalized_reducer_qty(
                         psize[c], wel_reducer_qty, wel_reducer_price,
                         qty_step, min_qty, min_cost, c_mult
@@ -1616,6 +1673,24 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         && (!trailing_close || close_triggered)
                     ? clip : 0.0f;
                 close_tick[c] = candidate_close_tick;
+                if (!realized_loss_proxy_allows_close(
+                        close_qty[c], close_price, pprice[c], short_side,
+                        c_mult, coin_settings[coin_offset + 5],
+                        loss_gate_enabled
+                    )) {
+                    if (!trailing_close && close_qty[c] > 0.0f) {
+                        // Exact Rust builds the complete immutable recursive
+                        // grid before filtering each close independently.  A
+                        // loss-making first rung must therefore not hide later
+                        // profitable rungs generated from lower exposure.
+                        close_reconstruct_after_reducer[c] = true;
+                        close_gen_balance[c] = balance;
+                        close_gen_allowed_wel[c] = allowed_coin_wel;
+                        close_grid_gen_psize[c] = psize[c];
+                        close_grid_max_rungs[c] = 500;
+                    }
+                    close_qty[c] = 0.0f;
+                }
                 if (reducer_qty > 0.0f && reducer_tick > 0) {
                     float reducer_price = float(reducer_tick) * price_step;
                     float reducer_min = min_entry_qty(

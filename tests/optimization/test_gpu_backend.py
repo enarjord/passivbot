@@ -1449,12 +1449,11 @@ def test_gpu_ema_realized_loss_gate_accepts_multicoin():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_tm_realized_loss_gate_remains_fail_closed_for_multicoin():
+def test_gpu_tm_realized_loss_gate_accepts_multicoin():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["live"]["max_realized_loss_pct"] = 0.1
 
-    with pytest.raises(ValueError, match="multicoin Trailing Martingale"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
