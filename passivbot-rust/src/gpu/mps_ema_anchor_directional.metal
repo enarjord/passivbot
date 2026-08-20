@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 17;
+constant int SIDE_PARAMS = 23;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -88,6 +88,12 @@ struct EmaSide {
     float entry_cap;
     float twel_enforcer_threshold;
     bool twel_enforcer_enabled;
+    bool unstuck_enabled;
+    bool unstuck_ema_gating_enabled;
+    float unstuck_close_pct;
+    float unstuck_ema_dist;
+    float unstuck_loss_allowance_pct;
+    float unstuck_threshold;
     float ema0;
     float ema1;
     float ema2;
@@ -105,7 +111,16 @@ struct EmaSide {
     float secondary_close_qty;
     int close_without_reducer_ticks;
     float close_without_reducer_qty;
-    bool close_is_twel_reducer;
+    bool close_is_protective_reducer;
+};
+
+struct ReducerVariant {
+    bool valid;
+    bool is_unstuck;
+    int ticks;
+    float qty;
+    int secondary_ticks;
+    float secondary_qty;
 };
 
 inline EmaSide load_side(constant float* params, int po, float seed_close) {
@@ -146,6 +161,12 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.entry_cap = twel_entry_gate_enabled ? gate_cap : INFINITY;
     side.twel_enforcer_threshold = twel_threshold;
     side.twel_enforcer_enabled = params[po + 16] > 0.5f;
+    side.unstuck_enabled = params[po + 17] > 0.5f;
+    side.unstuck_ema_gating_enabled = params[po + 18] > 0.5f;
+    side.unstuck_close_pct = params[po + 19];
+    side.unstuck_ema_dist = params[po + 20];
+    side.unstuck_loss_allowance_pct = params[po + 21];
+    side.unstuck_threshold = params[po + 22];
     side.ema0 = seed_close;
     side.ema1 = seed_close;
     side.ema2 = seed_close;
@@ -163,8 +184,110 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.secondary_close_qty = 0.0f;
     side.close_without_reducer_ticks = 0;
     side.close_without_reducer_qty = 0.0f;
-    side.close_is_twel_reducer = false;
+    side.close_is_protective_reducer = false;
     return side;
+}
+
+inline ReducerVariant empty_reducer_variant() {
+    ReducerVariant result;
+    result.valid = false;
+    result.is_unstuck = false;
+    result.ticks = 0;
+    result.qty = 0.0f;
+    result.secondary_ticks = 0;
+    result.secondary_qty = 0.0f;
+    return result;
+}
+
+inline ReducerVariant finalize_reducer_variant(
+    float psize,
+    int ordinary_ticks,
+    float ordinary_qty,
+    int reducer_ticks,
+    float reducer_qty,
+    bool is_unstuck,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    ReducerVariant result = empty_reducer_variant();
+    if (!(psize > 0.0f && reducer_ticks > 0 && reducer_qty > 0.0f)) {
+        return result;
+    }
+    float reducer_price = float(reducer_ticks) * price_step;
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    reducer_qty = fmin(psize, reducer_qty);
+    if (ordinary_qty > 0.0f && ordinary_ticks > 0) {
+        float ordinary_price = float(ordinary_ticks) * price_step;
+        float ordinary_min = min_entry_qty(
+            ordinary_price, qty_step, min_qty, min_cost, c_mult
+        );
+        if (ordinary_qty + reducer_qty > psize) {
+            ordinary_qty = fmax(round_step(psize - reducer_qty, qty_step), 0.0f);
+        }
+        if (ordinary_qty >= ordinary_min) {
+            float remainder = fmax(
+                round_step(psize - reducer_qty - ordinary_qty, qty_step), 0.0f
+            );
+            float minimum_any = fmin(ordinary_min, reducer_min);
+            if (remainder > 0.0f && remainder < minimum_any) {
+                ordinary_qty = fmin(
+                    psize - reducer_qty,
+                    round_step(ordinary_qty + remainder, qty_step)
+                );
+            }
+            result.secondary_ticks = ordinary_ticks;
+            result.secondary_qty = ordinary_qty;
+        }
+    }
+    if (result.secondary_qty <= 0.0f) {
+        float remainder = fmax(round_step(psize - reducer_qty, qty_step), 0.0f);
+        if (remainder > 0.0f && remainder < reducer_min) {
+            reducer_qty = psize;
+        }
+    }
+    result.valid = reducer_qty > 0.0f;
+    result.is_unstuck = is_unstuck;
+    result.ticks = reducer_ticks;
+    result.qty = reducer_qty;
+    return result;
+}
+
+inline void apply_reducer_variant(
+    thread EmaSide& side,
+    ReducerVariant variant
+) {
+    side.close_ticks = variant.ticks;
+    side.close_qty = variant.qty;
+    side.secondary_close_ticks = variant.secondary_ticks;
+    side.secondary_close_qty = variant.secondary_qty;
+    side.close_is_protective_reducer = variant.valid;
+}
+
+inline void restore_ordinary_close(thread EmaSide& side) {
+    side.close_ticks = side.close_without_reducer_ticks;
+    side.close_qty = side.close_without_reducer_qty;
+    side.secondary_close_ticks = 0;
+    side.secondary_close_qty = 0.0f;
+    side.close_is_protective_reducer = false;
+}
+
+inline ReducerVariant generated_reducer_variant(thread EmaSide& side) {
+    if (!side.close_is_protective_reducer || !(side.close_qty > 0.0f)) {
+        return empty_reducer_variant();
+    }
+    ReducerVariant result;
+    result.valid = true;
+    result.is_unstuck = false;
+    result.ticks = side.close_ticks;
+    result.qty = side.close_qty;
+    result.secondary_ticks = side.secondary_close_ticks;
+    result.secondary_qty = side.secondary_close_qty;
+    return result;
 }
 
 inline float total_exposure_reducer_qty(
@@ -205,7 +328,7 @@ inline void apply_twel_reducer(
 ) {
     side.secondary_close_ticks = 0;
     side.secondary_close_qty = 0.0f;
-    side.close_is_twel_reducer = false;
+    side.close_is_protective_reducer = false;
     float target = side.twel * side.twel_enforcer_threshold;
     int reducer_ticks = is_long
         ? int(floor(price_now * 0.9995f / price_step + 1.0e-6f))
@@ -221,49 +344,179 @@ inline void apply_twel_reducer(
         : 0.0f;
     if (!(reducer_qty > 0.0f)) return;
 
+    apply_reducer_variant(
+        side,
+        finalize_reducer_variant(
+            side.psize, side.close_ticks, side.close_qty,
+            reducer_ticks, reducer_qty, false, qty_step, price_step,
+            min_qty, min_cost, c_mult
+        )
+    );
+}
+
+inline ReducerVariant unstuck_reducer_variant(
+    thread EmaSide& side,
+    bool is_long,
+    float balance,
+    float balance_peak,
+    float price_now,
+    int touch_down_ticks,
+    int touch_up_ticks,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    ReducerVariant none = empty_reducer_variant();
+    if (!(side.unstuck_enabled
+        && side.unstuck_loss_allowance_pct > 0.0f
+        && side.unstuck_close_pct > 0.0f
+        && side.unstuck_threshold > 0.0f
+        && balance > 0.0f
+        && balance_peak > 0.0f
+        && side.psize > 0.0f
+        && side.pprice > 0.0f
+        && side.allowed_wel > 0.0f
+        && price_now > 0.0f)) {
+        return none;
+    }
+    float allowance_pct = side.unstuck_loss_allowance_pct * side.twel;
+    float allowance = float32_floor_nonnegative(
+        fmax(balance - balance_peak * (1.0f - allowance_pct), 0.0f)
+    );
+    if (!(allowance > 0.0f)) return none;
+    float wallet_exposure = side.psize * side.pprice * c_mult / balance;
+    if (!(wallet_exposure / side.allowed_wel > side.unstuck_threshold)) {
+        return none;
+    }
+    if (side.unstuck_ema_gating_enabled) {
+        float lower = fmin(side.ema0, fmin(side.ema1, side.ema2));
+        float upper = fmax(side.ema0, fmax(side.ema1, side.ema2));
+        int trigger_ticks = is_long
+            ? int(ceil(
+                upper * (1.0f + side.unstuck_ema_dist) / price_step
+                    - 1.0e-6f
+            ))
+            : int(floor(
+                lower * (1.0f - side.unstuck_ema_dist) / price_step
+                    + 1.0e-6f
+            ));
+        bool triggered = is_long
+            ? touch_down_ticks >= trigger_ticks
+            : touch_up_ticks <= trigger_ticks;
+        if (!triggered) return none;
+    }
+
+    int reducer_ticks = max(
+        is_long ? touch_up_ticks : touch_down_ticks, 1
+    );
+    float reducer_price = float(reducer_ticks) * price_step;
     float reducer_min = min_entry_qty(
         reducer_price, qty_step, min_qty, min_cost, c_mult
     );
-    float ordinary_qty = side.close_qty;
-    if (ordinary_qty > 0.0f) {
-        float ordinary_price = float(side.close_ticks) * price_step;
-        float ordinary_min = min_entry_qty(
-            ordinary_price, qty_step, min_qty, min_cost, c_mult
+    float target_qty = floor_step(
+        balance * side.allowed_wel * side.unstuck_close_pct
+            / fmax(reducer_price * c_mult, 1.0e-12f),
+        qty_step
+    );
+    float reducer_qty = fmin(
+        side.psize, fmax(reducer_min, target_qty)
+    );
+    float gross_pnl = reducer_qty * c_mult * (
+        is_long ? reducer_price - side.pprice : side.pprice - reducer_price
+    );
+    if (gross_pnl < 0.0f && -gross_pnl > allowance) {
+        float scaled_qty = fmin(
+            side.psize, reducer_qty * allowance / -gross_pnl
         );
-        if (ordinary_qty + reducer_qty > side.psize) {
-            ordinary_qty = fmax(
-                round_step(side.psize - reducer_qty, qty_step), 0.0f
-            );
-        }
-        if (ordinary_qty >= ordinary_min) {
-            float remainder = fmax(
-                round_step(
-                    side.psize - reducer_qty - ordinary_qty, qty_step
-                ),
-                0.0f
-            );
-            float minimum_any = fmin(ordinary_min, reducer_min);
-            if (remainder > 0.0f && remainder < minimum_any) {
-                ordinary_qty = fmin(
-                    side.psize - reducer_qty,
-                    round_step(ordinary_qty + remainder, qty_step)
-                );
-            }
-            side.secondary_close_ticks = side.close_ticks;
-            side.secondary_close_qty = ordinary_qty;
-        }
-    }
-    if (side.secondary_close_qty <= 0.0f) {
-        float remainder = fmax(
-            round_step(side.psize - reducer_qty, qty_step), 0.0f
+        reducer_qty = fmin(
+            side.psize,
+            fmax(reducer_min, floor_step(scaled_qty, qty_step))
         );
-        if (remainder > 0.0f && remainder < reducer_min) {
-            reducer_qty = side.psize;
-        }
     }
-    side.close_ticks = reducer_ticks;
-    side.close_qty = reducer_qty;
-    side.close_is_twel_reducer = true;
+    return finalize_reducer_variant(
+        side.psize,
+        side.close_without_reducer_ticks,
+        side.close_without_reducer_qty,
+        reducer_ticks,
+        reducer_qty,
+        true,
+        qty_step,
+        price_step,
+        min_qty,
+        min_cost,
+        c_mult
+    );
+}
+
+inline bool reducer_variant_preferred(
+    ReducerVariant left,
+    ReducerVariant right,
+    bool is_long
+) {
+    if (!left.valid) return false;
+    if (!right.valid) return true;
+    if (left.qty != right.qty) return left.qty > right.qty;
+    if (left.ticks != right.ticks) {
+        return is_long ? left.ticks < right.ticks : left.ticks > right.ticks;
+    }
+    if (left.is_unstuck != right.is_unstuck) return left.is_unstuck;
+    return false;
+}
+
+inline void order_reducer_variants(
+    ReducerVariant first,
+    ReducerVariant second,
+    bool is_long,
+    thread ReducerVariant& preferred,
+    thread ReducerVariant& fallback
+) {
+    if (reducer_variant_preferred(second, first, is_long)) {
+        preferred = second;
+        fallback = first;
+    } else {
+        preferred = first;
+        fallback = second;
+    }
+}
+
+inline ReducerVariant reducer_variant_at(
+    ReducerVariant preferred,
+    ReducerVariant fallback,
+    int index
+) {
+    return index == 0 ? preferred : fallback;
+}
+
+inline bool gate_reducer_variant(
+    ReducerVariant variant,
+    float pprice,
+    bool is_long,
+    float price_step,
+    float c_mult,
+    float maker_fee,
+    bool gate_enabled,
+    thread float& remaining_loss_budget
+) {
+    if (!variant.valid || !(variant.qty > 0.0f && pprice > 0.0f)) {
+        return false;
+    }
+    float price = float(variant.ticks) * price_step;
+    float gross_pnl = variant.qty * c_mult * (
+        is_long ? price - pprice : pprice - price
+    );
+    float net_pnl = gross_pnl - variant.qty * price * c_mult * maker_fee;
+    if (!realized_loss_gate_allows(
+            net_pnl, remaining_loss_budget, gate_enabled)) {
+        return false;
+    }
+    if (gate_enabled && net_pnl < 0.0f) {
+        remaining_loss_budget = float32_floor_nonnegative(
+            fmax(remaining_loss_budget + net_pnl, 0.0f)
+        );
+    }
+    return true;
 }
 
 inline void update_indicators(
@@ -824,50 +1077,106 @@ inline void passivbot_single_coin_impl(
                 fmax(allowed_loss_budget - current_realized_loss, 0.0f)
             );
 
-            // Exact Rust reserves the shared batch allowance for protective
-            // reducers largest-first, even when an emitted order never fills.
-            bool long_reducer = long_enabled
-                && long_side.close_is_twel_reducer
-                && long_side.close_qty > 0.0f;
-            bool short_reducer = short_enabled
-                && short_side.close_is_twel_reducer
-                && short_side.close_qty > 0.0f;
-            bool short_reducer_first = short_reducer
-                && (!long_reducer
-                    || short_side.close_qty > long_side.close_qty);
-            for (int rank = 0; rank < 2; ++rank) {
-                bool use_short = short_reducer_first ? rank == 0 : rank == 1;
-                if (use_short && short_reducer) {
-                    gate_generated_close(
-                        short_side.close_qty, short_side.close_ticks,
-                        short_side.pprice, false, price_step, c_mult, maker_fee,
-                        loss_gate_enabled, remaining_loss_budget
-                    );
-                } else if (!use_short && long_reducer) {
-                    gate_generated_close(
-                        long_side.close_qty, long_side.close_ticks,
-                        long_side.pprice, true, price_step, c_mult, maker_fee,
-                        loss_gate_enabled, remaining_loss_budget
-                    );
+            ReducerVariant long_twel = generated_reducer_variant(long_side);
+            ReducerVariant short_twel = generated_reducer_variant(short_side);
+            ReducerVariant long_unstuck = long_enabled
+                ? unstuck_reducer_variant(
+                    long_side, true, balance, balance_peak, close,
+                    touch_down_tick, touch_up_tick, qty_step, price_step,
+                    min_qty, min_cost, c_mult
+                )
+                : empty_reducer_variant();
+            ReducerVariant short_unstuck = short_enabled
+                ? unstuck_reducer_variant(
+                    short_side, false, balance, balance_peak, close,
+                    touch_down_tick, touch_up_tick, qty_step, price_step,
+                    min_qty, min_cost, c_mult
+                )
+                : empty_reducer_variant();
+
+            // Exact Rust emits at most one global unstuck intent: the eligible
+            // long/short position with the lowest pside-aware price distance.
+            if (long_unstuck.valid && short_unstuck.valid) {
+                float long_diff = 1.0f - close / long_side.pprice;
+                float short_diff = close / short_side.pprice - 1.0f;
+                if (long_diff <= short_diff) {
+                    short_unstuck = empty_reducer_variant();
+                } else {
+                    long_unstuck = empty_reducer_variant();
                 }
             }
-            if (long_reducer && long_side.close_qty <= 0.0f) {
-                long_side.secondary_close_ticks =
-                    long_side.close_without_reducer_ticks;
-                long_side.secondary_close_qty =
-                    long_side.close_without_reducer_qty;
+
+            ReducerVariant long_preferred, long_fallback;
+            ReducerVariant short_preferred, short_fallback;
+            order_reducer_variants(
+                long_twel, long_unstuck, true,
+                long_preferred, long_fallback
+            );
+            order_reducer_variants(
+                short_twel, short_unstuck, false,
+                short_preferred, short_fallback
+            );
+            restore_ordinary_close(long_side);
+            restore_ordinary_close(short_side);
+
+            ReducerVariant selected_long = empty_reducer_variant();
+            ReducerVariant selected_short = empty_reducer_variant();
+            int long_candidate_index = 0;
+            int short_candidate_index = 0;
+            bool long_resolved = !long_preferred.valid;
+            bool short_resolved = !short_preferred.valid;
+            // Final reducer sizes compete globally largest-first. A blocked
+            // candidate advances only its own position to the next reducer.
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                ReducerVariant long_candidate = reducer_variant_at(
+                    long_preferred, long_fallback, long_candidate_index
+                );
+                ReducerVariant short_candidate = reducer_variant_at(
+                    short_preferred, short_fallback, short_candidate_index
+                );
+                bool long_available = !long_resolved && long_candidate.valid;
+                bool short_available = !short_resolved && short_candidate.valid;
+                if (!long_available && !short_available) break;
+                bool use_long = long_available && (
+                    !short_available || long_candidate.qty >= short_candidate.qty
+                );
+                if (use_long) {
+                    if (gate_reducer_variant(
+                            long_candidate, long_side.pprice, true,
+                            price_step, c_mult, maker_fee, loss_gate_enabled,
+                            remaining_loss_budget)) {
+                        selected_long = long_candidate;
+                        long_resolved = true;
+                    } else {
+                        long_candidate_index += 1;
+                        long_resolved = long_candidate_index > 1
+                            || !long_fallback.valid;
+                    }
+                } else {
+                    if (gate_reducer_variant(
+                            short_candidate, short_side.pprice, false,
+                            price_step, c_mult, maker_fee, loss_gate_enabled,
+                            remaining_loss_budget)) {
+                        selected_short = short_candidate;
+                        short_resolved = true;
+                    } else {
+                        short_candidate_index += 1;
+                        short_resolved = short_candidate_index > 1
+                            || !short_fallback.valid;
+                    }
+                }
             }
-            if (short_reducer && short_side.close_qty <= 0.0f) {
-                short_side.secondary_close_ticks =
-                    short_side.close_without_reducer_ticks;
-                short_side.secondary_close_qty =
-                    short_side.close_without_reducer_qty;
+            if (selected_long.valid) {
+                apply_reducer_variant(long_side, selected_long);
+            }
+            if (selected_short.valid) {
+                apply_reducer_variant(short_side, selected_short);
             }
 
             // Ordinary closes consume any remaining allowance in canonical
             // long-then-short order after protective reducers are finalized.
             if (long_enabled) {
-                if (long_side.close_is_twel_reducer) {
+                if (long_side.close_is_protective_reducer) {
                     gate_generated_close(
                         long_side.secondary_close_qty,
                         long_side.secondary_close_ticks, long_side.pprice, true,
@@ -883,7 +1192,7 @@ inline void passivbot_single_coin_impl(
                 }
             }
             if (short_enabled) {
-                if (short_side.close_is_twel_reducer) {
+                if (short_side.close_is_protective_reducer) {
                     gate_generated_close(
                         short_side.secondary_close_qty,
                         short_side.secondary_close_ticks, short_side.pprice,

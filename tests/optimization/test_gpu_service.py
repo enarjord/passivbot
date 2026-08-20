@@ -22,6 +22,7 @@ from optimization.gpu.service import (
     _require_complete_valid_tail,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
+    _unstuck_params,
 )
 
 
@@ -106,6 +107,26 @@ def test_tm_total_exposure_repair_packs_exact_rust_inputs(
             {"total_exposure_enforcer_policy": "largest_loss"},
             side="short",
         )
+
+
+def test_single_coin_unstuck_packs_exact_rust_inputs():
+    assert _unstuck_params(
+        {
+            "unstuck_enabled": True,
+            "unstuck_ema_gating_enabled": False,
+            "unstuck_close_pct": 0.125,
+            "unstuck_ema_dist": -0.01,
+            "unstuck_loss_allowance_pct": 0.02,
+            "unstuck_threshold": 0.85,
+        }
+    ) == {
+        "unstuck_enabled": 1.0,
+        "unstuck_ema_gating_enabled": 0.0,
+        "unstuck_close_pct": 0.125,
+        "unstuck_ema_dist": -0.01,
+        "unstuck_loss_allowance_pct": 0.02,
+        "unstuck_threshold": 0.85,
+    }
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

@@ -133,7 +133,15 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed
-- HSL and auto-unstuck disabled
+- HSL disabled. Single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
+  short-only, hedge-mode dual-side, one-way, and compatible suite runs. Metal models the enable and
+  EMA-gating toggles, tunable close percentage, EMA distance, loss allowance, and exposure
+  threshold. It derives the allowance from a conservative all-history realized net-PnL peak,
+  admits at most one least-stuck long/short candidate, scales a losing close to its own allowance
+  subject to exchange minimums, and lets that close compete with the position's WEL/TWEL reducer
+  before ordinary closes consume the remaining realized-loss budget. Exact Rust remains
+  authoritative for the configured rolling PnL lookback. Multi-coin auto-unstuck remains fail
+  closed until its account-wide least-stuck selector is modeled across all coins and both sides
 - single- and multi-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
@@ -155,12 +163,14 @@ The supported slice is intentionally narrow:
 - single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
   shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
   conservative all-history loss envelope, so it may block a close that exact Rust admits after old
-  PnL ages out of `live.pnls_max_lookback_days`. Multi-coin EMA Anchor and Trailing
-  Martingale use a stricter zero-loss envelope whenever the gate is active: only clearly profitable
-  closes after maker fees are admitted by Metal. This avoids unsafe cross-coin or cross-side loss-
-  budget reservation between independent multi-coin dispatches and per-candle enumeration of TM's
-  recursive 500-rung close ladder. Exact validation applies the configured rolling allowance and
-  remains authoritative
+  PnL ages out of `live.pnls_max_lookback_days`. Single-coin Trailing Martingale permits its one
+  selected auto-unstuck reducer to consume that same conservative budget, while its recursive
+  ordinary and exposure-repair closes retain the stricter zero-loss envelope. Multi-coin EMA
+  Anchor and Trailing Martingale use a stricter zero-loss envelope whenever the gate is active:
+  only clearly profitable closes after maker fees are admitted by Metal. This avoids unsafe cross-
+  coin or cross-side loss-budget reservation between independent multi-coin dispatches and per-
+  candle enumeration of TM's recursive 500-rung close ladder. Exact validation applies the
+  configured rolling allowance and remains authoritative
 - BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
@@ -183,9 +193,9 @@ Trailing Martingale use one long and one short Metal dispatch per candidate in h
 directional surfaces form a
 conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
 Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, unmodeled non-bot suite scenario overrides, HSL, and auto-unstuck
-are not silently approximated by this release. Dual-side
-multi-coin screening also rejects `fills_gap_longest_days`,
+Dual-side one-way arbitration, unmodeled non-bot suite scenario overrides, HSL, and multi-coin
+auto-unstuck are not silently approximated by this release. Dual-side multi-coin screening also
+rejects `fills_gap_longest_days`,
 `fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
 `fills_gap_p99_hours`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
@@ -205,11 +215,12 @@ overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
 Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
 overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
-enable HSL, auto-unstuck, an unsupported exposure-repair path, an invalid position count, or
-another unsupported behavior. In a multicoin suite, a scenario with fewer coins must keep the effective `n_positions`
-range within that subset, either through common bounds or an explicit scenario override. Metal
-uses the strategy-specific single-coin or multicoin kernel independently for each scenario, then
-feeds all results to the same suite reducer. Scenario-local `coin_overrides` for supported
+enable HSL, multi-coin auto-unstuck, an unsupported exposure-repair path, an invalid position
+count, or another unsupported behavior. In a multicoin suite, a scenario with fewer coins must
+keep the effective `n_positions` range within that subset, either through common bounds or an
+explicit scenario override. Metal uses the strategy-specific single-coin or multicoin kernel
+independently for each scenario, then feeds all results to the same suite reducer. Scenario-local
+`coin_overrides` for supported
 multi-coin EMA Anchor and Trailing Martingale runs, `backtest.starting_balance`,
 `backtest.maker_fee_override`, `backtest.liquidation_threshold`,
 `live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario

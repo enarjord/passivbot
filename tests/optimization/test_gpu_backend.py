@@ -374,6 +374,10 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",
         "total_wallet_exposure_limit",
+        "unstuck_close_pct",
+        "unstuck_ema_dist",
+        "unstuck_loss_allowance_pct",
+        "unstuck_threshold",
     }
 
     assert set(TRAILING_MARTINGALE_BOUND_MAP) == {
@@ -1376,12 +1380,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             "hsl",
         ),
         (
-            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
-                "enabled", True
-            ),
-            "unstuck",
-        ),
-        (
             lambda config: config["backtest"].__setitem__(
                 "btc_collateral_cap", 0.5
             ),
@@ -2222,12 +2220,21 @@ def test_gpu_foundation_accepts_recursive_trailing_martingale_bounds():
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_foundation_checks_unsupported_behavior_on_short_side():
+def test_gpu_foundation_accepts_single_coin_unstuck_on_short_side():
     config = _directional_ema_config(long_enabled=False, short_enabled=True)
     config["bot"]["short"]["unstuck"]["enabled"] = True
 
-    with pytest.raises(ValueError, match=r"bot\.short\.unstuck"):
-        _validate_scope(config, _Evaluator())
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_keeps_multicoin_unstuck_fail_closed():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    config["bot"]["long"]["unstuck"]["enabled"] = True
+
+    with pytest.raises(ValueError, match=r"multicoin.*bot\.long\.unstuck"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 def test_gpu_foundation_rejects_both_sides_disabled():
@@ -3293,7 +3300,7 @@ def test_gpu_fixed_disabled_retracement_canonicalizes_dead_weight_genes():
     assert close["retracement_volatility_1m_weight"] == 0.01
 
 
-def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
+def test_gpu_materialized_fixed_runtime_scope_accepts_single_coin_unstuck():
     config = _long_only_ema_config()
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.unstuck.enabled": True
@@ -3303,8 +3310,7 @@ def test_gpu_materialized_fixed_runtime_scope_still_fails_closed():
         [],
     )
 
-    with pytest.raises(ValueError, match=r"bot\.long\.unstuck"):
-        _validate_scope(proxy_config, _Evaluator())
+    assert _validate_scope(proxy_config, _Evaluator()) == "bybit"
 
 
 def test_gpu_optimizer_override_scope_fails_closed():
@@ -3889,6 +3895,23 @@ def test_gpu_accepts_single_coin_exposure_policy_bounds():
         {"long"},
         coin_count=1,
     )
+
+
+def test_gpu_accepts_single_coin_unstuck_bounds_but_pins_multicoin_disabled():
+    from optimization.bounds import Bound
+
+    bounds = {
+        "long_unstuck_enabled": Bound(1.0, 1.0, None),
+        "long_unstuck_close_pct": Bound(0.01, 0.2, None),
+        "long_unstuck_ema_dist": Bound(-0.05, 0.05, None),
+        "long_unstuck_loss_allowance_pct": Bound(0.01, 0.1, None),
+        "long_unstuck_threshold": Bound(0.5, 0.95, None),
+    }
+    base = {"long_unstuck_enabled": 1.0}
+
+    _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=1)
+    with pytest.raises(ValueError, match="unstuck_enabled"):
+        _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=2)
 
 
 def test_gpu_anchor_constant_twel_threshold_is_supported_for_multicoin():

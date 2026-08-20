@@ -96,6 +96,13 @@ _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
     "risk_twel_enforcer_threshold": "twel_enforcer_threshold",
 }
 
+_SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES = {
+    "unstuck_close_pct": "unstuck_close_pct",
+    "unstuck_ema_dist": "unstuck_ema_dist",
+    "unstuck_loss_allowance_pct": "unstuck_loss_allowance_pct",
+    "unstuck_threshold": "unstuck_threshold",
+}
+
 EMA_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
@@ -108,6 +115,11 @@ EMA_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
     },
 }
 
@@ -181,6 +193,11 @@ TRAILING_MARTINGALE_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
     },
 }
 
@@ -433,7 +450,6 @@ PINNED_SCOPE_BOUND_VALUES = {
     for side in ("long", "short")
     for suffix, expected in {
         "hsl_enabled": 0.0,
-        "unstuck_enabled": 0.0,
     }.items()
 }
 
@@ -927,9 +943,10 @@ def _validate_scope_config(
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
             raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
-        if bool(side_config.get("unstuck", {}).get("enabled")):
+        if coin_count > 1 and bool(side_config.get("unstuck", {}).get("enabled")):
             raise ValueError(
-                f"GPU foundation requires bot.{side}.unstuck.enabled=false"
+                "GPU multicoin foundation requires "
+                f"bot.{side}.unstuck.enabled=false"
             )
         risk = side_config.get("risk", {})
         required_disabled = []
@@ -2100,6 +2117,10 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    if coin_count > 1:
+        pinned.update(
+            {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
+        )
     if strategy_kind != "trailing_martingale":
         pinned.update(
             {
@@ -2689,14 +2710,14 @@ def run_backend(
         ):
             # Forager ranking cannot affect a one-coin backtest.
             continue
-        if any(
-            bound_key.startswith(f"{side}_hsl_")
-            or bound_key.startswith(f"{side}_unstuck_")
-            for side in enabled_sides
+        if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
+            # HSL remains disabled, so its dormant bounds affect neither path.
+            continue
+        if max_coin_count > 1 and any(
+            bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
         ):
-            # The enabling flags are not optimizer bounds. Scope validation
-            # requires both features off, so these dormant values cannot affect
-            # either the exact Rust backtest or the proxy.
+            # Multicoin unstuck remains disabled until the proxy owns the same
+            # global least-stuck selector as exact Rust.
             continue
         if (
             max_coin_count == 1

@@ -117,6 +117,19 @@ def _total_exposure_enforcer_params(
     }
 
 
+def _unstuck_params(bot: dict) -> dict[str, float]:
+    return {
+        "unstuck_enabled": float(bool(bot["unstuck_enabled"])),
+        "unstuck_ema_gating_enabled": float(
+            bool(bot["unstuck_ema_gating_enabled"])
+        ),
+        "unstuck_close_pct": float(bot["unstuck_close_pct"]),
+        "unstuck_ema_dist": float(bot["unstuck_ema_dist"]),
+        "unstuck_loss_allowance_pct": float(bot["unstuck_loss_allowance_pct"]),
+        "unstuck_threshold": float(bot["unstuck_threshold"]),
+    }
+
+
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
     if int(last_valid_idx) != int(candle_count) - 1:
         raise ValueError(
@@ -352,10 +365,6 @@ class MpsSingleCoinProxy:
             raise ValueError("GPU foundation requires at least one enabled side")
         self.base_params = {}
         for side, bot in (("long", long_bot), ("short", short_bot)):
-            if self.enabled[side] and bool(bot.get("unstuck_enabled")):
-                raise ValueError(
-                    f"GPU foundation requires bot.{side}.unstuck.enabled=false"
-                )
             if self.enabled[side] and bool(bot.get("hsl_enabled")):
                 raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
             strategy = dict(payload.strategy_params_list[0][side])
@@ -378,6 +387,7 @@ class MpsSingleCoinProxy:
                 strategy.update(
                     _total_exposure_enforcer_params(risk, side=side)
                 )
+                strategy.update(_unstuck_params(bot))
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(

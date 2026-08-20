@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added single-coin auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for
+  long-only, short-only, dual-side hedge/one-way, and compatible suite runs. The Metal proxy models
+  EMA gating, least-stuck long/short selection, allowance-based loss sizing, exchange minimums,
+  competition with WEL/TWEL and ordinary closes, and the global realized-loss gate. Its all-history
+  realized-PnL envelope is conservative relative to exact Rust's configured rolling lookback;
+  exact validations and the existing classification, rank, and drift gates remain authoritative.
+  Multi-coin auto-unstuck remains fail closed pending a portfolio-wide selector.
+
 - Expanded Apple MPS optimizer scoring and limits with fill-gap mean, median, p95, and p99 hours.
   The proxy conservatively decodes its existing logarithmic inter-fill histogram at a float32-safe
   upper edge, adds exact leading and trailing gaps, and coalesces same-candle fills; exact
