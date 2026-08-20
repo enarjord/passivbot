@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -14,6 +15,7 @@ from optimizer_overrides import optimizer_overrides
 from optimization.bounds import Bound
 from optimization.backends.gpu_backend import (
     _apply_gpu_optimizer_overrides,
+    _ask_gpu_population,
     _canonical_candidate_values,
     _canonicalize_mirrored_hash_vector,
     _canonicalize_optimizer_override_hash_vector,
@@ -42,6 +44,7 @@ from optimization.backends.gpu_backend import (
     _update_novelty_stall,
     _validation_probe_count,
     _spearman,
+    _submit_gpu_exact_validation,
     _resolve_options,
     _restore_gpu_result_run_contract,
     _single_scenario_metric_surface,
@@ -77,6 +80,28 @@ class _Evaluator:
 class _MulticoinEvaluator:
     exchanges = ["bybit"]
     shared_hlcvs_np = {"bybit": np.zeros((100, 3, 4), dtype=np.float64)}
+
+
+def test_gpu_generation_checks_interrupt_before_ask():
+    algorithm = MagicMock()
+    interrupt_check = MagicMock(side_effect=KeyboardInterrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        _ask_gpu_population(algorithm, interrupt_check)
+
+    interrupt_check.assert_called_once_with()
+    algorithm.ask.assert_not_called()
+
+
+def test_gpu_exact_submission_checks_interrupt_before_apply_async():
+    pool = MagicMock()
+    interrupt_check = MagicMock(side_effect=KeyboardInterrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        _submit_gpu_exact_validation(pool, [1.0], interrupt_check)
+
+    interrupt_check.assert_called_once_with()
+    pool.apply_async.assert_not_called()
 
 
 def _long_only_ema_config():
