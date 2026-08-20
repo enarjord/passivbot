@@ -20,6 +20,7 @@ from optimization.gpu.model import (
     build_mps_multicoin_data,
 )
 from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
+from optimization.gpu.metrics import _fill_gap_metrics
 
 
 @pytest.mark.parametrize(
@@ -4246,6 +4247,26 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
     assert output["gap_hist"].sum().item() >= 1
     assert output["psize"].item() == 0.0
     assert output["short_psize"].item() == 0.0
+    gap_metrics = _fill_gap_metrics(
+        {
+            key: output[key].cpu()
+            for key in (
+                "gap_hist",
+                "first_fill_ts",
+                "last_fill_ts",
+                "first_eq_ts",
+                "last_eq_ts",
+            )
+        },
+        run,
+    )
+    assert all(
+        torch.isfinite(value).all().item()
+        for value in gap_metrics.values()
+    )
+    assert gap_metrics["fills_gap_p99_hours"].item() >= gap_metrics[
+        "fills_gap_p95_hours"
+    ].item()
 
 
 @pytest.mark.skipif(
