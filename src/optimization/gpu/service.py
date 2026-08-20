@@ -980,6 +980,9 @@ class MpsMulticoinProxy:
             runner_kwargs = {
                 "side": side,
                 "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
+                "max_realized_loss_pct": float(
+                    backtest_params.get("max_realized_loss_pct", 1.0)
+                ),
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
             self.runners[side] = runner_cls(
