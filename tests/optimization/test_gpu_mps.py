@@ -19,6 +19,22 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
 )
+from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
+
+
+@pytest.mark.parametrize(
+    "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
+)
+def test_mps_realized_loss_limit_float32_encoding_never_loosens(value):
+    encoded = _encode_max_realized_loss_pct(value)
+
+    assert encoded <= value
+    assert encoded < 1.0
+
+
+@pytest.mark.parametrize("value", [1.0, 2.0, 1.0e100])
+def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
+    assert _encode_max_realized_loss_pct(value) == 1.0
 
 
 def _single_coin_exposure_fields(

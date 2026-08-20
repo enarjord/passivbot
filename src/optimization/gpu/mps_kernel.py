@@ -22,6 +22,17 @@ MPS_MULTICOIN_DAILY_COLS = 6
 MPS_SCALAR_COLS = 18
 
 
+def _encode_max_realized_loss_pct(value: float) -> float:
+    """Encode a float64 loss fraction without loosening its Metal budget."""
+
+    if value >= 1.0:
+        return 1.0
+    encoded = np.float32(value)
+    if float(encoded) > value:
+        encoded = np.nextafter(encoded, np.float32(-np.inf))
+    return float(encoded)
+
+
 @lru_cache(maxsize=1)
 def _shader_library():
     if not torch.backends.mps.is_available():
@@ -136,6 +147,9 @@ class MpsEmaAnchorRunner:
             raise ValueError(
                 "max_realized_loss_pct must be finite and non-negative"
             )
+        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
+            max_realized_loss_pct
+        )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
         self.bars = (
@@ -189,7 +203,7 @@ class MpsEmaAnchorRunner:
                 float(self.hedge_mode),
                 float(bool(filter_by_min_effective_cost)),
                 data["max_effective_min_cost"],
-                max_realized_loss_pct,
+                encoded_max_realized_loss_pct,
             ],
             dtype=torch.float32,
             device="mps",
