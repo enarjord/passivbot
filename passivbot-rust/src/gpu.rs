@@ -95,6 +95,8 @@ mod tests {
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("clamped_market_price"));
         assert!(source.contains("secondary_close_qty"));
+        assert!(source.contains("realized_loss_proxy_allows_close"));
+        assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
         assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));

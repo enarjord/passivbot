@@ -350,6 +350,7 @@ class MpsEmaAnchorMulticoinRunner:
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
+        max_realized_loss_pct: float = 1.0,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -388,6 +389,14 @@ class MpsEmaAnchorMulticoinRunner:
             raise ValueError(
                 "forager_score_hysteresis_pct must be finite and non-negative"
             )
+        max_realized_loss_pct = float(max_realized_loss_pct)
+        if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
+            raise ValueError(
+                "max_realized_loss_pct must be finite and non-negative"
+            )
+        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
+            max_realized_loss_pct
+        )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
@@ -398,6 +407,7 @@ class MpsEmaAnchorMulticoinRunner:
                 run.interval_ms,
                 float(side == "short"),
                 forager_score_hysteresis_pct,
+                encoded_max_realized_loss_pct,
             ],
             dtype=torch.float32,
             device="mps",
@@ -536,6 +546,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
+        max_realized_loss_pct: float = 1.0,
     ):
         super().__init__(
             run,
@@ -543,6 +554,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             side=side,
             coin_overrides=coin_overrides,
             forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            max_realized_loss_pct=max_realized_loss_pct,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:

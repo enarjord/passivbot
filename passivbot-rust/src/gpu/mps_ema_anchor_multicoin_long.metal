@@ -39,6 +39,25 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+inline bool realized_loss_proxy_allows_close(
+    float qty, float close_price, float pprice, bool short_side,
+    float c_mult, float maker_fee, bool gate_enabled
+) {
+    if (!gate_enabled) return true;
+    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
+    float gross_pnl = qty * c_mult * (short_side
+        ? pprice - close_price : close_price - pprice);
+    float fee = qty * close_price * c_mult * maker_fee;
+    float net_pnl = gross_pnl - fee;
+    // A zero-loss envelope avoids shared loss-budget reservations across
+    // independently dispatched coins and sides. The float32 margin covers
+    // 1024 unit roundoffs in accumulated position price and this projection.
+    float arithmetic_scale = fabs(gross_pnl) + fabs(fee)
+        + qty * fabs(c_mult) * (fabs(close_price) + fabs(pprice));
+    float margin = 1.220703125e-4f * arithmetic_scale;
+    return isfinite(net_pnl) && net_pnl > margin;
+}
+
 inline float coin_override_or(
     constant float* coin_overrides, int coin, int column, float fallback
 ) {
@@ -153,6 +172,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float liquidation_floor = run_settings[1];
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
+    const bool loss_gate_enabled = run_settings[5] < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -887,6 +907,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 // ordinary EMA close first, matching finalized_closes_with_reducer.
                 float reducer_qty = twel_close_qty[c];
                 int reducer_tick = twel_close_tick[c];
+                if (reducer_qty > 0.0f && reducer_tick > 0
+                    && !realized_loss_proxy_allows_close(
+                        reducer_qty, float(reducer_tick) * price_step,
+                        pprice[c], short_side, c_mult,
+                        coin_settings[coin_offset + 5], loss_gate_enabled
+                    )) {
+                    reducer_qty = 0.0f;
+                    twel_close_qty[c] = 0.0f;
+                    twel_close_tick[c] = 0;
+                }
                 if (reducer_qty > 0.0f && reducer_tick > 0) {
                     float reducer_price = float(reducer_tick) * price_step;
                     float reducer_min = min_entry_qty(
@@ -940,6 +970,22 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     }
                     close_qty[c] = reducer_qty;
                     close_tick[c] = reducer_tick;
+                }
+                if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_close(
+                        close_qty[c], float(close_tick[c]) * price_step,
+                        pprice[c], short_side, c_mult,
+                        coin_settings[coin_offset + 5], loss_gate_enabled
+                    )) {
+                    close_qty[c] = 0.0f;
+                }
+                if (secondary_close_qty[c] > 0.0f
+                    && !realized_loss_proxy_allows_close(
+                        secondary_close_qty[c],
+                        float(secondary_close_tick[c]) * price_step,
+                        pprice[c], short_side, c_mult,
+                        coin_settings[coin_offset + 5], loss_gate_enabled
+                    )) {
+                    secondary_close_qty[c] = 0.0f;
                 }
             }
 

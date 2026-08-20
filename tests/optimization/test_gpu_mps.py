@@ -66,6 +66,7 @@ def _multicoin_exposure_fixture(
     closes=(100.0, 120.0),
     highs=None,
     lows=None,
+    max_realized_loss_pct=1.0,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -136,7 +137,11 @@ def _multicoin_exposure_fixture(
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
-            runs[0], data, side=side, coin_overrides=coin_overrides
+            runs[0],
+            data,
+            side=side,
+            coin_overrides=coin_overrides,
+            max_realized_loss_pct=max_realized_loss_pct,
         )
     else:
         values = {
@@ -185,7 +190,11 @@ def _multicoin_exposure_fixture(
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
-            runs[0], data, side=side, coin_overrides=coin_overrides
+            runs[0],
+            data,
+            side=side,
+            coin_overrides=coin_overrides,
+            max_realized_loss_pct=max_realized_loss_pct,
         )
     return runner, row
 
@@ -415,6 +424,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "twel_enforcer_reduce_portfolio" in source
     assert "clamped_market_price" in source
     assert "secondary_close_qty" in source
+    assert "realized_loss_proxy_allows_close" in source
+    assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
     assert "constant int DAILY_COLS = 6" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
@@ -477,9 +488,14 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     row += _single_coin_exposure_fields() + [0.0, 0.0]
 
     runner = MpsEmaAnchorMulticoinRunner(
-        runs[0], data, side=side, forager_score_hysteresis_pct=0.02
+        runs[0],
+        data,
+        side=side,
+        forager_score_hysteresis_pct=0.02,
+        max_realized_loss_pct=0.1,
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
+    assert runner.settings.cpu()[5].item() <= 0.1
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -499,6 +515,10 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
             data,
             side=side,
             forager_score_hysteresis_pct=-0.01,
+        )
+    with pytest.raises(ValueError, match="max_realized_loss_pct"):
+        MpsEmaAnchorMulticoinRunner(
+            runs[0], data, side=side, max_realized_loss_pct=float("nan")
         )
 
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
@@ -2917,6 +2937,102 @@ def test_mps_ema_multicoin_total_exposure_repair_policy(side):
     pprice_key = "pprice" if side == "long" else "short_pprice"
     total_twe = (output[pprice_key] / output["balance"]).cpu()
     assert (total_twe < 0.5).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
+    overrides = np.full((2, 13), np.nan, dtype=np.float32)
+    overrides[0, 11] = 0.1
+    count = 70
+    closes = np.full((count, 2), 100.0)
+    highs = np.full((count, 2), 100.5)
+    lows = np.full((count, 2), 99.5)
+    if side == "long":
+        lows[62, :] = 98.0
+        closes[63:, :] = 98.0
+        highs[63:, :] = 98.0
+        lows[63:, :] = 97.9
+    else:
+        highs[62, :] = 102.0
+        closes[63:, :] = 102.0
+        highs[63:, :] = 102.1
+        lows[63:, :] = 102.0
+
+    runner_kwargs = {
+        "strategy_kind": "ema_anchor",
+        "side": side,
+        "coin_overrides": overrides,
+        "count": count,
+        "closes": closes,
+        "highs": highs,
+        "lows": lows,
+    }
+    ungated_runner, candidate = _multicoin_exposure_fixture(
+        max_realized_loss_pct=1.0, **runner_kwargs
+    )
+    gated_runner, _ = _multicoin_exposure_fixture(
+        max_realized_loss_pct=0.1, **runner_kwargs
+    )
+    values = dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "offset": 0.01,
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    candidate = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
+
+    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
+    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key].item() < gated[size_key].item()
+    assert gated["open_positions"].item() == pytest.approx(2.0)
+    assert gated["balance"].item() >= ungated["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+        for _ in range(2)
+    ]
+    runner_kwargs = {
+        "strategy_kind": "ema_anchor",
+        "side": side,
+        "count": 70,
+        "closes": (100.0, 100.0),
+        "markets": markets,
+    }
+    ungated_runner, candidate = _multicoin_exposure_fixture(
+        max_realized_loss_pct=1.0, **runner_kwargs
+    )
+    gated_runner, _ = _multicoin_exposure_fixture(
+        max_realized_loss_pct=0.1, **runner_kwargs
+    )
+    candidate[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+
+    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
+    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key].item() == pytest.approx(0.0)
+    assert gated[size_key].item() > 0.0
+    assert gated["balance"].item() >= ungated["balance"].item()
 
 
 @pytest.mark.skipif(

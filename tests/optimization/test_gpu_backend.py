@@ -1442,17 +1442,18 @@ def test_gpu_foundation_rejects_invalid_realized_loss_gate(max_loss_pct):
         _validate_scope(config, _Evaluator())
 
 
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_gpu_realized_loss_gate_remains_fail_closed_for_multicoin(strategy_kind):
-    builder = (
-        _directional_ema_config
-        if strategy_kind == "ema_anchor"
-        else _directional_tm_config
-    )
-    config = builder(long_enabled=True, short_enabled=False)
+def test_gpu_ema_realized_loss_gate_accepts_multicoin():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["max_realized_loss_pct"] = 0.1
 
-    with pytest.raises(ValueError, match="single-coin EMA Anchor and Trailing Martingale"):
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_tm_realized_loss_gate_remains_fail_closed_for_multicoin():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["max_realized_loss_pct"] = 0.1
+
+    with pytest.raises(ValueError, match="multicoin Trailing Martingale"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
