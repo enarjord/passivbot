@@ -1504,7 +1504,14 @@ def test_gpu_multicoin_accepts_tm_total_exposure_repair(side, policy):
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_dual_multicoin_accepts_tm_total_exposure_repair():
+@pytest.mark.parametrize(
+    "repair_key",
+    [
+        "position_exposure_enforcer_enabled",
+        "total_exposure_enforcer_enabled",
+    ],
+)
+def test_gpu_dual_multicoin_rejects_tm_exposure_repair(repair_key):
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1512,17 +1519,35 @@ def test_gpu_dual_multicoin_accepts_tm_total_exposure_repair():
     }
     config["live"]["hedge_mode"] = True
     config["backtest"]["dynamic_wel_by_tradability"] = True
-    for side, policy in (
-        ("long", "reduce_overweight"),
-        ("short", "reduce_portfolio"),
-    ):
+    for side in ("long", "short"):
         risk = config["bot"][side]["risk"]
         risk["n_positions"] = 2
-        risk["total_exposure_enforcer_enabled"] = True
-        risk["total_exposure_enforcer_policy"] = policy
-        risk["total_exposure_enforcer_threshold"] = 0.8
+        risk[repair_key] = True
 
-    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_dual_multicoin_rejects_tm_coin_override_exposure_repair():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {
+                    "risk": {"position_exposure_enforcer_enabled": True}
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 def test_gpu_foundation_keeps_ema_total_exposure_repair_fail_closed():
@@ -3660,6 +3685,19 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
         coin_count=2,
         strategy_kind="trailing_martingale",
     )
+
+    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
+        _validate_pinned_scope_bounds(
+            {
+                "long_risk_total_exposure_enforcer_enabled": Bound(
+                    0.0, 1.0, None
+                )
+            },
+            {"long_risk_total_exposure_enforcer_enabled": 0.0},
+            {"long", "short"},
+            coin_count=2,
+            strategy_kind="trailing_martingale",
+        )
 
 
 def test_gpu_accepts_single_coin_exposure_policy_bounds():

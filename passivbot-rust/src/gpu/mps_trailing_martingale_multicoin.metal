@@ -143,6 +143,17 @@ inline float finalized_reducer_qty(
         ? psize : reducer_qty;
 }
 
+inline float clamped_market_price(
+    constant float* bars, constant float* coin_settings,
+    int k, int coin, int coin_count
+) {
+    int coin_offset = coin * COIN_COLS;
+    int first_valid = int(coin_settings[coin_offset + 6]);
+    int last_valid = int(coin_settings[coin_offset + 7]);
+    int market_k = clamp(k, first_valid, last_valid);
+    return bars[(market_k * coin_count + coin) * 4 + 2];
+}
+
 struct CloseGroup {
     int ticks;
     float price;
@@ -1183,7 +1194,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             && !(exposure > overweight_target + 1.0e-9f)) {
                             continue;
                         }
-                        float market_price = bars[(k * C + c) * 4 + 2];
+                        float market_price = clamped_market_price(
+                            bars, coin_settings, k, c, C
+                        );
                         float projected_loss = psize[c] * c_mult * fmax(
                             short_side
                                 ? market_price - pprice[c]
@@ -1211,7 +1224,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         fmax(running_twe - twel_repair_target, 0.0f),
                         exposure
                     );
-                    float market_price = bars[(k * C + best) * 4 + 2];
+                    float market_price = clamped_market_price(
+                        bars, coin_settings, k, best, C
+                    );
                     int reducer_tick = short_side
                         ? int(ceil(
                             market_price * 1.0005f / price_step - 1.0e-6f

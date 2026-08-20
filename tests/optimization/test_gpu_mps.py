@@ -2296,6 +2296,82 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
+    count = 7
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
+    hlcvs[:, :, 0] = 101.0
+    hlcvs[:, :, 1] = 99.0
+    hlcvs[:, :, 2] = 100.0
+    hlcvs[:, :, 3] = 100.0
+    # Coin zero delists after this close. Exact orchestration continues to use
+    # that clamped market price for open-position repair ranking.
+    hlcvs[3, 0, :3] = [111.0, 109.0, 110.0]
+    hlcvs[4:, 0, :] = 0.0
+    # The still-tradable coin is adverse for long and favorable for short.
+    hlcvs[4:, 1, :3] = [91.0, 89.0, 90.0]
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    runs = [
+        ProxyRun(
+            1_000.0,
+            1,
+            1,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            last_valid,
+        )
+        for last_valid in (3, count - 1)
+    ]
+    data = build_mps_multicoin_data(
+        hlcvs, timestamps, runs, [market, market]
+    )
+    _, row = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=count
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.75,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    repaired = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+    baseline = list(repaired)
+    baseline[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_enabled"
+        )
+    ] = 0.0
+    output = MpsTrailingMartingaleMulticoinRunner(
+        runs[1], data, side=side
+    ).run(np.asarray([baseline, repaired], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    sizes = output[size_key].cpu().numpy()
+    if side == "long":
+        # The favorable delisted long ranks first; its reducer cannot fill on
+        # invalid bars, so the live coin remains untouched.
+        assert sizes[1] == pytest.approx(sizes[0])
+    else:
+        # The adverse delisted short ranks behind the favorable live short,
+        # whose reducer remains reachable and therefore reduces total size.
+        assert sizes[1] < sizes[0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_twel_repair_preserves_trailing_closes(side):
     highs = np.full((7, 2), 100.0)
     lows = np.full((7, 2), 100.0)
