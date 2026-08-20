@@ -126,6 +126,23 @@ inline float exposure_reducer_qty(
     return reducer_qty;
 }
 
+inline float finalized_reducer_qty(
+    float psize, float reducer_qty, float reducer_price,
+    float qty_step, float min_qty, float min_cost, float c_mult
+) {
+    if (reducer_qty <= 0.0f || reducer_price <= 0.0f) return 0.0f;
+    float remainder = fmax(
+        round_step(psize - reducer_qty, qty_step), 0.0f
+    );
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    // Match finalized_reducer_candidates for the reducer-only strategy close
+    // set: absorb an uncloseable residual before protective reducers compete.
+    return remainder > 0.0f && remainder < reducer_min
+        ? psize : reducer_qty;
+}
+
 struct CloseGroup {
     int ticks;
     float price;
@@ -1482,9 +1499,15 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
                 // Exact Rust keeps only the largest protective reducer for a
                 // position before allocating its ordinary close ladder.
-                float reducer_qty = twel_close_qty[c];
+                float raw_twel_reducer_qty = twel_close_qty[c];
                 int reducer_tick = twel_close_tick[c];
-                bool use_twel = reducer_qty > 0.0f;
+                float twel_reducer_price = float(reducer_tick) * price_step;
+                float finalized_twel_reducer_qty = finalized_reducer_qty(
+                    psize[c], raw_twel_reducer_qty, twel_reducer_price,
+                    qty_step, min_qty, min_cost, c_mult
+                );
+                float reducer_qty = raw_twel_reducer_qty;
+                bool use_twel = raw_twel_reducer_qty > 0.0f;
                 float wel_reducer_qty = 0.0f;
                 float wel_target = allowed_coin_wel
                     * coin_wel_enforcer_threshold;
@@ -1498,7 +1521,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         psize[c], pprice[c], balance, wel_target,
                         wel_reducer_price, qty_step, min_qty, min_cost, c_mult
                     );
-                    if (wel_reducer_qty >= reducer_qty) {
+                    float finalized_wel_reducer_qty = finalized_reducer_qty(
+                        psize[c], wel_reducer_qty, wel_reducer_price,
+                        qty_step, min_qty, min_cost, c_mult
+                    );
+                    if (finalized_wel_reducer_qty
+                            >= finalized_twel_reducer_qty) {
                         reducer_qty = wel_reducer_qty;
                         reducer_tick = wel_reducer_tick;
                         use_twel = false;

@@ -289,6 +289,24 @@ inline float total_exposure_reducer_qty(
     return fmin(psize, ceil_step(reducer_qty, qty_step));
 }
 
+inline float finalized_reducer_qty(
+    float psize, float reducer_qty, float reducer_price,
+    float qty_step, float min_qty, float min_cost, float c_mult
+) {
+    if (reducer_qty <= 0.0f || reducer_price <= 0.0f) return 0.0f;
+    float remainder = fmax(
+        round_step(psize - reducer_qty, qty_step), 0.0f
+    );
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    // Reducer selection finalizes each competing protective close separately.
+    // In a WEL/TWEL competition the strategy WEL has already suppressed the
+    // ordinary ladder, so a sub-minimum remainder is absorbed by the candidate.
+    return remainder > 0.0f && remainder < reducer_min
+        ? psize : reducer_qty;
+}
+
 inline void generate_orders(
     thread TmSide& s, bool is_long, float balance, float price_now,
     int touch_down_ticks, int touch_up_ticks, int touch_nearest_ticks,
@@ -461,7 +479,18 @@ inline void generate_orders(
             qty_step, min_qty, min_cost, c_mult
         ) : 0.0f;
 
-    bool use_twel = twel_qty > wel_qty;
+    float finalized_wel_qty = finalized_reducer_qty(
+        s.psize, wel_qty, wel_price,
+        qty_step, min_qty, min_cost, c_mult
+    );
+    float finalized_twel_qty = finalized_reducer_qty(
+        s.psize, twel_qty, twel_price,
+        qty_step, min_qty, min_cost, c_mult
+    );
+    bool use_twel = finalized_twel_qty > finalized_wel_qty;
+    // Final sizing is only the selection key. Preserve the requested quantity
+    // for the winning reducer so the ordinary close allocator below can absorb
+    // dust exactly as Rust does when TWEL is the sole strategy-external close.
     float reducer_qty = use_twel ? twel_qty : wel_qty;
     int reducer_ticks = use_twel ? twel_ticks : wel_ticks;
     float reducer_price = use_twel ? twel_price : wel_price;

@@ -108,7 +108,10 @@ mod tests {
         assert!(source.contains("s.twel_enforcer_enabled"));
         assert!(source.contains("twel_target"));
         assert!(source.contains("price_now * 0.9995f / price_step"));
-        assert!(source.contains("bool use_twel = twel_qty > wel_qty"));
+        assert!(source.contains("finalized_wel_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_twel_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_twel_qty > finalized_wel_qty"));
+        assert!(source.contains("reducer_qty = use_twel ? twel_qty : wel_qty"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
@@ -168,7 +171,12 @@ mod tests {
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("twel_close_qty"));
         assert!(source.contains("market_price * 0.9995f / price_step"));
-        assert!(source.contains("wel_reducer_qty >= reducer_qty"));
+        assert!(source.contains("finalized_twel_reducer_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_wel_reducer_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_wel_reducer_qty"));
+        assert!(source.contains(">= finalized_twel_reducer_qty"));
+        assert!(source.contains("reducer_qty = raw_twel_reducer_qty"));
+        assert!(source.contains("reducer_qty = wel_reducer_qty"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
         assert!(source.contains("for (int rung = 0; rung < max_rungs"));
