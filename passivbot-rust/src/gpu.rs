@@ -132,10 +132,14 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
-        assert!(source
-            .contains("int grid_rung_limit = long_side.close_is_exposure_reducer ? 499 : 500"));
-        assert!(source
-            .contains("int grid_rung_limit = short_side.close_is_exposure_reducer ? 499 : 500"));
+        assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
+        assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));
+        assert!(source.contains("short_side.close_gen_psize - strategy_wel_qty"));
+        assert!(source.contains("use_twel && wel_qty <= 0.0f"));
+        assert!(source.contains("long_side.secondary_close_price"));
+        assert!(source.contains("short_side.secondary_close_price"));
+        assert!(source.contains("dust_remainder"));
+        assert!(!source.contains("float primary_diff = fabs"));
         assert_eq!(source.matches("bool reducer_before_group").count(), 2);
         assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
         assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
@@ -167,10 +171,16 @@ mod tests {
         assert!(source.contains("wel_reducer_qty >= reducer_qty"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
-        assert!(source.contains("for (int rung = 0; rung < 499"));
+        assert!(source.contains("for (int rung = 0; rung < max_rungs"));
         assert!(source.contains("bool reducer_before_group"));
         assert!(source.contains("close_reconstruct_after_reducer"));
         assert!(source.contains("close_gen_allowed_wel"));
+        assert!(source.contains("current_effective_n_positions"));
+        assert!(source.contains("close_grid_gen_psize"));
+        assert!(source.contains("psize[c] - wel_reducer_qty"));
+        assert!(source.contains("use_twel && wel_reducer_qty <= 0.0f"));
+        assert!(source.contains("dust_remainder"));
+        assert!(!source.contains("float primary_diff = fabs"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
