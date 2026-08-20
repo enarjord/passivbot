@@ -72,6 +72,25 @@ _EMA_SIDE_BOUND_SUFFIXES = {
     "total_wallet_exposure_limit": "total_wallet_exposure_limit",
 }
 
+
+def _ask_gpu_population(algorithm, interrupt_check: InterruptCheck):
+    """Start an ask/tell transaction only when shutdown has not been requested."""
+
+    interrupt_check()
+    return algorithm.ask()
+
+
+def _submit_gpu_exact_validation(
+    pool,
+    vector,
+    interrupt_check: InterruptCheck,
+):
+    """Refuse new exact CPU work once the GPU interrupt latch is set."""
+
+    interrupt_check()
+    return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
+
+
 _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
     "risk_we_excess_allowance_pct": "we_excess_allowance_pct",
     "risk_twel_enforcer_threshold": "twel_enforcer_threshold",
@@ -2676,10 +2695,6 @@ def run_backend(
         def evaluate_proxy(candidates):
             return proxy.evaluate(candidates)
 
-    def evaluate_proxy_interruptibly(candidates):
-        interrupt_check()
-        return evaluate_proxy(candidates)
-
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
     )
@@ -3075,9 +3090,11 @@ def run_backend(
                 consume_ready(wait_for_one=True)
                 continue
 
-            population = algorithm.ask()
+            # Do not poll the latch again until the matching tell() completes;
+            # checkpointing an interrupted ask/tell transaction is not safe.
+            population = _ask_gpu_population(algorithm, interrupt_check)
             rows = np.asarray(population.get("X"), dtype=np.float64)
-            metric_rows = evaluate_proxy_interruptibly(parameter_dicts(rows))
+            metric_rows = evaluate_proxy(parameter_dicts(rows))
             proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
             proxy_evaluations += len(rows)
             if objective_scale.median is None:
@@ -3128,8 +3145,10 @@ def run_backend(
             )
             submitted_this_generation = 0
             for index, is_probe, is_proxy_front, vector, digest in novel_selections:
-                result = pool.apply_async(
-                    _evaluate_pymoo_worker_from_globals, (vector,)
+                result = _submit_gpu_exact_validation(
+                    pool,
+                    vector,
+                    interrupt_check,
                 )
                 pending[result] = (
                     vector,
