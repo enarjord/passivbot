@@ -46,6 +46,29 @@ inline bool passes_min_effective_cost(
         && projected_cost_lower >= max_effective_min_cost;
 }
 
+inline bool realized_loss_proxy_allows_close(
+    float qty, float close_price, float pprice, bool is_long,
+    float c_mult, float maker_fee, bool gate_enabled
+) {
+    if (!gate_enabled) return true;
+    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
+    float gross_pnl = qty * c_mult
+        * (is_long ? close_price - pprice : pprice - close_price);
+    float fee = qty * close_price * c_mult * maker_fee;
+    float net_pnl = gross_pnl - fee;
+    // Enumerating and reserving the recursive TM close ladder at every candle
+    // would make screening proportional to its 500-rung exact upper bound.
+    // Instead, the proxy uses a zero-loss envelope whenever Rust's gate is
+    // active. Require 1024 float32 unit roundoffs: twice the recursive rung
+    // bound, covering accumulated position-price drift plus this projection,
+    // so a rounded break-even result is not admitted as non-loss-making.
+    // Exact Rust remains authoritative.
+    float arithmetic_scale = fabs(gross_pnl) + fabs(fee)
+        + qty * fabs(c_mult) * (fabs(close_price) + fabs(pprice));
+    float margin = 1.220703125e-4f * arithmetic_scale;
+    return isfinite(net_pnl) && net_pnl > margin;
+}
+
 struct TmSide {
     float alpha0, alpha1, alpha2, alpha1m, alpha1h;
     float ddf, initial_ema_dist, initial_qty_pct;
@@ -63,6 +86,7 @@ struct TmSide {
     bool twel_enforcer_enabled;
     float twel_enforcer_threshold;
     bool close_is_exposure_reducer, close_is_twel_reducer;
+    bool close_loss_gate_disabled_reducers;
     float ema0, ema1, ema2, vol1m, vol1h;
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks, secondary_close_ticks;
@@ -137,6 +161,7 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.twel_enforcer_threshold = twel_threshold;
     s.close_is_exposure_reducer = false;
     s.close_is_twel_reducer = false;
+    s.close_loss_gate_disabled_reducers = false;
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
     s.vol1m = 0.0f; s.vol1h = 0.0f;
     s.psize = 0.0f; s.pprice = 0.0f;
@@ -337,6 +362,7 @@ inline void generate_orders(
     s.close_gen_touch_min_qty_relation = touch_min_qty_relation;
     s.close_is_exposure_reducer = false;
     s.close_is_twel_reducer = false;
+    s.close_loss_gate_disabled_reducers = false;
     s.secondary_close_ticks = 0;
     s.secondary_close_price = 0.0f;
     s.secondary_close_qty = 0.0f;
@@ -729,6 +755,7 @@ inline void passivbot_single_coin_impl(
     const bool hedge_mode = settings[11] > 0.5f;
     const bool filter_by_min_effective_cost = settings[12] > 0.5f;
     const float max_effective_min_cost = settings[13];
+    const bool loss_gate_enabled = settings[14] < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
@@ -841,6 +868,10 @@ inline void passivbot_single_coin_impl(
         }
         if (long_scan_close_grid && long_recursive_close) {
             TmSide grid_source = long_side;
+            if (long_side.close_loss_gate_disabled_reducers) {
+                grid_source.wel_enforcer_enabled = false;
+                grid_source.twel_enforcer_enabled = false;
+            }
             float reducer_qty = 0.0f;
             int reducer_ticks = 0;
             float reducer_price = 0.0f;
@@ -984,16 +1015,22 @@ inline void passivbot_single_coin_impl(
                     float pnl = reducer_qty * c_mult
                         * (reducer_price - long_side.pprice);
                     float fee = reducer_qty * reducer_price * c_mult * maker_fee;
-                    balance += pnl - fee;
-                    long_side.psize = fmax(
-                        round_step(
-                            long_side.psize - reducer_qty, qty_step
-                        ),
-                        0.0f
-                    );
-                    day_volume += reducer_qty * reducer_price / balance;
-                    long_close_fill = true;
-                    reducer_executed = true;
+                    if (!realized_loss_proxy_allows_close(
+                            reducer_qty, reducer_price, long_side.pprice, true,
+                            c_mult, maker_fee, loss_gate_enabled)) {
+                        reducer_reachable = false;
+                    } else {
+                        balance += pnl - fee;
+                        long_side.psize = fmax(
+                            round_step(
+                                long_side.psize - reducer_qty, qty_step
+                            ),
+                            0.0f
+                        );
+                        day_volume += reducer_qty * reducer_price / balance;
+                        long_close_fill = true;
+                        reducer_executed = true;
+                    }
                 }
                 if (group.ticks > high_fill_max_tick) break;
                 float group_qty = trimmed_group_qty;
@@ -1001,6 +1038,9 @@ inline void passivbot_single_coin_impl(
                 float adj = fmin(round_step(group_qty, qty_step), long_side.psize);
                 float pnl = adj * c_mult * (group.price - long_side.pprice);
                 float fee = adj * group.price * c_mult * maker_fee;
+                if (!realized_loss_proxy_allows_close(
+                        adj, group.price, long_side.pprice, true,
+                        c_mult, maker_fee, loss_gate_enabled)) continue;
                 balance += pnl - fee;
                 float new_psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1026,12 +1066,16 @@ inline void passivbot_single_coin_impl(
                 float pnl = adj * c_mult
                     * (reducer_price - long_side.pprice);
                 float fee = adj * reducer_price * c_mult * maker_fee;
-                balance += pnl - fee;
-                long_side.psize = fmax(
-                    round_step(long_side.psize - adj, qty_step), 0.0f
-                );
-                day_volume += adj * reducer_price / balance;
-                long_close_fill = true;
+                if (realized_loss_proxy_allows_close(
+                        adj, reducer_price, long_side.pprice, true,
+                        c_mult, maker_fee, loss_gate_enabled)) {
+                    balance += pnl - fee;
+                    long_side.psize = fmax(
+                        round_step(long_side.psize - adj, qty_step), 0.0f
+                    );
+                    day_volume += adj * reducer_price / balance;
+                    long_close_fill = true;
+                }
             }
             if (long_close_fill && long_side.psize <= 0.0f
                 && long_side.pprice > 0.0f) {
@@ -1063,6 +1107,9 @@ inline void passivbot_single_coin_impl(
                 );
                 float pnl = adj * c_mult * (cp - long_side.pprice);
                 float fee = adj * cp * c_mult * maker_fee;
+                if (!realized_loss_proxy_allows_close(
+                        adj, cp, long_side.pprice, true,
+                        c_mult, maker_fee, loss_gate_enabled)) continue;
                 balance += pnl - fee;
                 long_side.psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1175,6 +1222,10 @@ inline void passivbot_single_coin_impl(
         }
         if (short_scan_close_grid && short_recursive_close) {
             TmSide grid_source = short_side;
+            if (short_side.close_loss_gate_disabled_reducers) {
+                grid_source.wel_enforcer_enabled = false;
+                grid_source.twel_enforcer_enabled = false;
+            }
             float reducer_qty = 0.0f;
             int reducer_ticks = 0;
             float reducer_price = 0.0f;
@@ -1318,16 +1369,22 @@ inline void passivbot_single_coin_impl(
                     float pnl = reducer_qty * c_mult
                         * (short_side.pprice - reducer_price);
                     float fee = reducer_qty * reducer_price * c_mult * maker_fee;
-                    balance += pnl - fee;
-                    short_side.psize = fmax(
-                        round_step(
-                            short_side.psize - reducer_qty, qty_step
-                        ),
-                        0.0f
-                    );
-                    day_volume += reducer_qty * reducer_price / balance;
-                    short_close_fill = true;
-                    reducer_executed = true;
+                    if (!realized_loss_proxy_allows_close(
+                            reducer_qty, reducer_price, short_side.pprice, false,
+                            c_mult, maker_fee, loss_gate_enabled)) {
+                        reducer_reachable = false;
+                    } else {
+                        balance += pnl - fee;
+                        short_side.psize = fmax(
+                            round_step(
+                                short_side.psize - reducer_qty, qty_step
+                            ),
+                            0.0f
+                        );
+                        day_volume += reducer_qty * reducer_price / balance;
+                        short_close_fill = true;
+                        reducer_executed = true;
+                    }
                 }
                 if (group.ticks <= low_nonfill_max_tick) break;
                 float group_qty = trimmed_group_qty;
@@ -1335,6 +1392,9 @@ inline void passivbot_single_coin_impl(
                 float adj = fmin(round_step(group_qty, qty_step), short_side.psize);
                 float pnl = adj * c_mult * (short_side.pprice - group.price);
                 float fee = adj * group.price * c_mult * maker_fee;
+                if (!realized_loss_proxy_allows_close(
+                        adj, group.price, short_side.pprice, false,
+                        c_mult, maker_fee, loss_gate_enabled)) continue;
                 balance += pnl - fee;
                 float new_psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
@@ -1360,12 +1420,16 @@ inline void passivbot_single_coin_impl(
                 float pnl = adj * c_mult
                     * (short_side.pprice - reducer_price);
                 float fee = adj * reducer_price * c_mult * maker_fee;
-                balance += pnl - fee;
-                short_side.psize = fmax(
-                    round_step(short_side.psize - adj, qty_step), 0.0f
-                );
-                day_volume += adj * reducer_price / balance;
-                short_close_fill = true;
+                if (realized_loss_proxy_allows_close(
+                        adj, reducer_price, short_side.pprice, false,
+                        c_mult, maker_fee, loss_gate_enabled)) {
+                    balance += pnl - fee;
+                    short_side.psize = fmax(
+                        round_step(short_side.psize - adj, qty_step), 0.0f
+                    );
+                    day_volume += adj * reducer_price / balance;
+                    short_close_fill = true;
+                }
             }
             if (short_close_fill && short_side.psize <= 0.0f
                 && short_side.pprice > 0.0f) {
@@ -1397,6 +1461,9 @@ inline void passivbot_single_coin_impl(
                 );
                 float pnl = adj * c_mult * (short_side.pprice - cp);
                 float fee = adj * cp * c_mult * maker_fee;
+                if (!realized_loss_proxy_allows_close(
+                        adj, cp, short_side.pprice, false,
+                        c_mult, maker_fee, loss_gate_enabled)) continue;
                 balance += pnl - fee;
                 short_side.psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
@@ -1572,6 +1639,88 @@ inline void passivbot_single_coin_impl(
                     touch_min_qty_relation, price_step, min_qty,
                     min_cost, c_mult, kf, block_short_initial
                 );
+            }
+            // Exact Rust tries the next-largest protective reducer when the
+            // winner is loss-gated, then falls back to the ordinary strategy
+            // ladder. Re-generate only this uncommon gated path; ordinary
+            // recursive groups are screened individually when reachable.
+            if (long_enabled && loss_gate_enabled
+                && long_side.close_is_exposure_reducer
+                && !realized_loss_proxy_allows_close(
+                    long_side.close_qty, long_side.close_price,
+                    long_side.pprice, true, c_mult, maker_fee, true
+                )) {
+                bool wel_enabled = long_side.wel_enforcer_enabled;
+                bool twel_enabled = long_side.twel_enforcer_enabled;
+                if (long_side.close_is_twel_reducer) {
+                    long_side.twel_enforcer_enabled = false;
+                } else {
+                    long_side.wel_enforcer_enabled = false;
+                }
+                generate_long_orders(
+                    long_side, balance, close, qty_step, touch_down_tick,
+                    touch_up_tick, touch_nearest_tick, touch_min_qty,
+                    touch_min_qty_relation, price_step, min_qty,
+                    min_cost, c_mult, kf, block_long_initial
+                );
+                if (!long_side.close_is_exposure_reducer) {
+                    long_side.close_loss_gate_disabled_reducers = true;
+                } else if (long_side.close_is_exposure_reducer
+                    && !realized_loss_proxy_allows_close(
+                        long_side.close_qty, long_side.close_price,
+                        long_side.pprice, true, c_mult, maker_fee, true
+                    )) {
+                    long_side.wel_enforcer_enabled = false;
+                    long_side.twel_enforcer_enabled = false;
+                    generate_long_orders(
+                        long_side, balance, close, qty_step, touch_down_tick,
+                        touch_up_tick, touch_nearest_tick, touch_min_qty,
+                        touch_min_qty_relation, price_step, min_qty,
+                        min_cost, c_mult, kf, block_long_initial
+                    );
+                    long_side.close_loss_gate_disabled_reducers = true;
+                }
+                long_side.wel_enforcer_enabled = wel_enabled;
+                long_side.twel_enforcer_enabled = twel_enabled;
+            }
+            if (short_enabled && loss_gate_enabled
+                && short_side.close_is_exposure_reducer
+                && !realized_loss_proxy_allows_close(
+                    short_side.close_qty, short_side.close_price,
+                    short_side.pprice, false, c_mult, maker_fee, true
+                )) {
+                bool wel_enabled = short_side.wel_enforcer_enabled;
+                bool twel_enabled = short_side.twel_enforcer_enabled;
+                if (short_side.close_is_twel_reducer) {
+                    short_side.twel_enforcer_enabled = false;
+                } else {
+                    short_side.wel_enforcer_enabled = false;
+                }
+                generate_short_orders(
+                    short_side, balance, close, qty_step, touch_down_tick,
+                    touch_up_tick, touch_nearest_tick, touch_min_qty,
+                    touch_min_qty_relation, price_step, min_qty,
+                    min_cost, c_mult, kf, block_short_initial
+                );
+                if (!short_side.close_is_exposure_reducer) {
+                    short_side.close_loss_gate_disabled_reducers = true;
+                } else if (short_side.close_is_exposure_reducer
+                    && !realized_loss_proxy_allows_close(
+                        short_side.close_qty, short_side.close_price,
+                        short_side.pprice, false, c_mult, maker_fee, true
+                    )) {
+                    short_side.wel_enforcer_enabled = false;
+                    short_side.twel_enforcer_enabled = false;
+                    generate_short_orders(
+                        short_side, balance, close, qty_step, touch_down_tick,
+                        touch_up_tick, touch_nearest_tick, touch_min_qty,
+                        touch_min_qty_relation, price_step, min_qty,
+                        min_cost, c_mult, kf, block_short_initial
+                    );
+                    short_side.close_loss_gate_disabled_reducers = true;
+                }
+                short_side.wel_enforcer_enabled = wel_enabled;
+                short_side.twel_enforcer_enabled = twel_enabled;
             }
         }
 

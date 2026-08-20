@@ -1683,6 +1683,195 @@ def test_mps_ema_zero_loss_budget_blocks_loss_below_balance_ulp():
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    high[3], low[3] = 105.0, 95.0
+    if side == "long":
+        close[4:] = 98.0
+        high[4:] = 98.0
+        low[4:] = 97.9
+    else:
+        close[4:] = 102.0
+        high[4:] = 102.1
+        low[4:] = 102.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        entry_gate=False,
+        threshold=0.5,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = 10.0
+    row[20] = 0.0
+    kwargs = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+    }
+
+    ungated = MpsTrailingMartingaleRunner(
+        market, run, data, max_realized_loss_pct=1.0, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    gated = MpsTrailingMartingaleRunner(
+        market, run, data, max_realized_loss_pct=0.1, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key][0].item() < gated[size_key][0].item()
+    assert gated[size_key][0].item() > 9.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_loss_gate_rebuilds_profitable_ordinary_close_after_reducer(side):
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    high[3], low[3] = 105.0, 95.0
+    if side == "long":
+        close[4] = high[4] = 98.0
+        low[4] = 97.9
+        high[5] = 100.1
+        low[5] = 98.0
+    else:
+        close[4] = low[4] = 102.0
+        high[4] = 102.1
+        high[5] = 102.0
+        low[5] = 99.9
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        entry_gate=False,
+        threshold=0.5,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = 0.01
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.1,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key][0].item() == pytest.approx(0.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_realized_loss_gate_blocks_fee_only_ordinary_close(side):
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if side == "long":
+        low[2] = 99.99
+        close[3:] = 99.0
+        high[3] = 99.0
+        low[3] = 98.9
+        high[4] = 99.6
+        low[4] = 99.0
+    else:
+        high[2] = 100.01
+        close[3:] = 101.0
+        high[3] = 101.1
+        low[3] = 101.0
+        high[4] = 101.0
+        low[4] = 100.4
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.0,
+        gate_initial=False,
+        gate_reentry=False,
+        entry_gate=False,
+    )
+    row[6] = 0.1
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = -0.005
+    row[17] = 0.0
+    row[20] = 0.0
+    kwargs = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+    }
+
+    ungated = MpsTrailingMartingaleRunner(
+        market, run, data, max_realized_loss_pct=1.0, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    gated = MpsTrailingMartingaleRunner(
+        market, run, data, max_realized_loss_pct=0.1, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key][0].item() == pytest.approx(0.0)
+    assert gated[size_key][0].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_equal_wel_twel_reducers_keep_nearer_wel(side):
     count = 6
     close = np.full(count, 100.0)
@@ -3784,6 +3973,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "for (int rung = 0; rung < 500; ++rung)" in source
     assert "ladder_side, ladder_balance" in source
     assert "recursive_close_groups" in source
+    assert "realized_loss_proxy_allows_close" in source
+    assert "const bool loss_gate_enabled = settings[14] < 1.0f" in source
+    assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
     assert "projected_cost_lower" in source

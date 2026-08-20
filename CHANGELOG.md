@@ -4,11 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Added cumulative realized-loss gating to single-coin Apple MPS EMA Anchor screening for long,
-  short, hedge-mode, and one-way runs. Metal tracks a conservative all-history peak-relative
-  realized net-PnL budget, including maker fees, and blocks lossy ordinary or exposure-repair
-  closes that exceed it. Exact Rust remains authoritative for the configured rolling PnL lookback;
-  unsupported Trailing Martingale and multicoin combinations remain fail closed.
+- Added realized-loss gating to single-coin Apple MPS EMA Anchor and Trailing Martingale screening
+  for long, short, hedge-mode, and one-way runs. EMA Anchor tracks a conservative all-history
+  peak-relative realized net-PnL budget, including maker fees, and blocks lossy ordinary or
+  exposure-repair closes that exceed it. To avoid enumerating a recursive 500-rung ladder every
+  candle, Trailing Martingale uses a stricter zero-loss proxy envelope whenever the gate is active.
+  Exact Rust remains authoritative for the configured rolling PnL lookback and allowance;
+  multicoin realized-loss gating remains fail closed.
 
 - Expanded Apple MPS optimizer scoring and limits with weighted strategy-equity MDG, Sharpe,
   Sortino, Omega, Calmar, and Sterling metrics. The proxy maps the exact optimizer's ten-subset

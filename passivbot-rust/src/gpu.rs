@@ -147,6 +147,9 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("realized_loss_proxy_allows_close"));
+        assert!(source.contains("const bool loss_gate_enabled = settings[14] < 1.0f"));
+        assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));
         assert!(source.contains("short_side.close_gen_psize - strategy_wel_qty"));
