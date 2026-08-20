@@ -349,9 +349,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float last_increase_k[MAX_COINS];
     float entry_qty[MAX_COINS];
     float close_qty[MAX_COINS];
+    float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
+    float close_gen_market_price[MAX_COINS];
     float position_open_k[MAX_COINS];
     float score[MAX_COINS];
     float contribution[MAX_COINS];
@@ -362,6 +364,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float min_since_max[MAX_COINS];
     int entry_tick[MAX_COINS];
     int close_tick[MAX_COINS];
+    int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
     bool selected[MAX_COINS];
     bool incumbent[MAX_COINS];
@@ -396,9 +399,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         last_increase_k[c] = -1.0e20f;
         entry_qty[c] = 0.0f;
         close_qty[c] = 0.0f;
+        secondary_close_qty[c] = 0.0f;
         twel_close_qty[c] = 0.0f;
         close_gen_balance[c] = 0.0f;
         close_gen_allowed_wel[c] = 0.0f;
+        close_gen_market_price[c] = 0.0f;
         position_open_k[c] = -1.0f;
         score[c] = -INFINITY;
         contribution[c] = 0.0f;
@@ -409,6 +414,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         min_since_max[c] = INFINITY;
         entry_tick[c] = 0;
         close_tick[c] = 0;
+        secondary_close_tick[c] = 0;
         twel_close_tick[c] = 0;
         selected[c] = false;
         incumbent[c] = false;
@@ -526,9 +532,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 && (short_side
                     ? close_tick[c] > fill_ticks[tick_offset + 1]
                     : close_tick[c] <= fill_ticks[tick_offset + 0]);
+            bool filled_secondary_close = secondary_close_qty[c] > 0.0f
+                && psize[c] > 0.0f
+                && (short_side
+                    ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
+                    : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
             bool rebuild_grid = close_ready
                 && close_reconstruct_after_reducer[c];
-            if (filled_close || rebuild_grid) {
+            if (filled_close || filled_secondary_close || rebuild_grid) {
                 float fill_price = float(close_tick[c]) * price_step;
                 float reducer_qty = fmin(
                     round_step(close_qty[c], qty_step), psize[c]
@@ -672,17 +683,39 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     if (psize[c] <= 0.0f) break;
                 }
 
-                if (filled_close && !reducer_executed && psize[c] > 0.0f) {
-                    float qty = fmin(reducer_qty, psize[c]);
+                float secondary_price = float(secondary_close_tick[c])
+                    * price_step;
+                float primary_diff = fabs(
+                    fill_price - close_gen_market_price[c]
+                );
+                float secondary_diff = fabs(
+                    secondary_price - close_gen_market_price[c]
+                );
+                bool secondary_first = filled_secondary_close
+                    && (!(filled_close && !reducer_executed)
+                        || secondary_diff <= primary_diff);
+                for (int close_rank = 0; close_rank < 2; ++close_rank) {
+                    bool use_secondary = secondary_first
+                        ? close_rank == 0 : close_rank == 1;
+                    bool reachable = use_secondary
+                        ? filled_secondary_close
+                        : filled_close && !reducer_executed;
+                    if (!reachable || psize[c] <= 0.0f) continue;
+                    float price = use_secondary
+                        ? secondary_price : fill_price;
+                    float requested_qty = use_secondary
+                        ? secondary_close_qty[c] : reducer_qty;
+                    float qty = fmin(
+                        round_step(requested_qty, qty_step), psize[c]
+                    );
                     float pnl = qty * c_mult * (short_side
-                        ? pprice[c] - fill_price
-                        : fill_price - pprice[c]);
-                    balance += pnl
-                        - qty * fill_price * c_mult * maker_fee;
+                        ? pprice[c] - price : price - pprice[c]);
+                    balance += pnl - qty * price * c_mult * maker_fee;
                     psize[c] = fmax(
                         round_step(psize[c] - qty, qty_step), 0.0f
                     );
-                    day_volume += qty * fill_price * c_mult / balance;
+                    day_volume += qty * price * c_mult / balance;
+                    if (!use_secondary) reducer_executed = true;
                     executed_close = true;
                 }
 
@@ -698,6 +731,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         position_open_k[c] = -1.0f;
                     }
                     close_qty[c] = 0.0f;
+                    secondary_close_qty[c] = 0.0f;
                     close_reconstruct_after_reducer[c] = false;
                     filled_coin[c] = true;
                     any_fill = true;
@@ -1027,7 +1061,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         if (processed[c] || psize[c] <= 0.0f
                             || pprice[c] <= 0.0f) continue;
                         int coin_offset = c * COIN_COLS;
-                        int tick_offset = (k * C + c) * 2;
                         float c_mult = coin_settings[coin_offset + 4];
                         float exposure = psize[c] * pprice[c] * c_mult
                             / balance;
@@ -1036,11 +1069,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             && !(exposure > overweight_target + 1.0e-9f)) {
                             continue;
                         }
-                        int market_tick = short_side
-                            ? touch_ticks[tick_offset + 1]
-                            : touch_ticks[tick_offset + 0];
-                        float market_price = float(market_tick)
-                            * coin_settings[coin_offset + 1];
+                        float market_price = bars[(k * C + c) * 4 + 2];
                         float projected_loss = psize[c] * c_mult * fmax(
                             short_side
                                 ? market_price - pprice[c]
@@ -1057,7 +1086,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     if (best < 0) break;
                     processed[best] = true;
                     int coin_offset = best * COIN_COLS;
-                    int tick_offset = (k * C + best) * 2;
                     float qty_step = coin_settings[coin_offset + 0];
                     float price_step = coin_settings[coin_offset + 1];
                     float min_qty = coin_settings[coin_offset + 2];
@@ -1069,12 +1097,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         fmax(running_twe - twel_repair_target, 0.0f),
                         exposure
                     );
-                    int market_tick = short_side
-                        ? touch_ticks[tick_offset + 1]
-                        : touch_ticks[tick_offset + 0];
+                    float market_price = bars[(k * C + best) * 4 + 2];
                     int reducer_tick = short_side
-                        ? int(ceil(float(market_tick) * 1.0005f - 1.0e-6f))
-                        : int(floor(float(market_tick) * 0.9995f + 1.0e-6f));
+                        ? int(ceil(
+                            market_price * 1.0005f / price_step - 1.0e-6f
+                        ))
+                        : int(floor(
+                            market_price * 0.9995f / price_step + 1.0e-6f
+                        ));
                     reducer_tick = max(reducer_tick, 1);
                     float reducer_price = float(reducer_tick) * price_step;
                     float requested_qty = ceil_step(
@@ -1106,6 +1136,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             for (int c = 0; c < C; ++c) {
                 entry_qty[c] = 0.0f;
                 close_qty[c] = 0.0f;
+                secondary_close_qty[c] = 0.0f;
+                secondary_close_tick[c] = 0;
                 close_reconstruct_after_reducer[c] = false;
                 contribution[c] = 0.0f;
                 entry_candidate[c] = false;
@@ -1113,6 +1145,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 int bar_offset = (k * C + c) * 4;
                 int tick_offset = (k * C + c) * 2;
                 float price_now = bars[bar_offset + 2];
+                close_gen_market_price[c] = price_now;
                 float fixed_coin_wel = coin_override_or(
                     coin_overrides, c, 24, -1.0f
                 );
@@ -1365,20 +1398,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         psize[c], pprice[c], balance, wel_target,
                         wel_reducer_price, qty_step, min_qty, min_cost, c_mult
                     );
-                    if (wel_reducer_qty > reducer_qty) {
+                    if (wel_reducer_qty >= reducer_qty) {
                         reducer_qty = wel_reducer_qty;
                         reducer_tick = wel_reducer_tick;
                     }
-                }
-                if (reducer_qty > 0.0f && reducer_tick > 0) {
-                    if (coin_close_retracement_base <= 0.0f) {
-                        close_reconstruct_after_reducer[c] = true;
-                        close_gen_balance[c] = balance;
-                        close_gen_allowed_wel[c] = allowed_coin_wel;
-                    }
-                    close_qty[c] = reducer_qty;
-                    close_tick[c] = reducer_tick;
-                    continue;
                 }
 
                 float close_threshold = coin_close_threshold_base
@@ -1449,6 +1472,31 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         && (!trailing_close || close_triggered)
                     ? clip : 0.0f;
                 close_tick[c] = candidate_close_tick;
+                if (reducer_qty > 0.0f && reducer_tick > 0) {
+                    if (trailing_close && close_qty[c] > 0.0f) {
+                        float ordinary_qty = close_qty[c];
+                        if (ordinary_qty + reducer_qty > psize[c]) {
+                            ordinary_qty = fmax(
+                                round_step(psize[c] - reducer_qty, qty_step),
+                                0.0f
+                            );
+                        }
+                        bool ordinary_below_minimum = ordinary_qty
+                                < minimum_close
+                            || (ordinary_qty == minimum_close
+                                && minimum_close_relation > 0);
+                        if (!ordinary_below_minimum) {
+                            secondary_close_qty[c] = ordinary_qty;
+                            secondary_close_tick[c] = close_tick[c];
+                        }
+                    } else if (!trailing_close) {
+                        close_reconstruct_after_reducer[c] = true;
+                        close_gen_balance[c] = balance;
+                        close_gen_allowed_wel[c] = allowed_coin_wel;
+                    }
+                    close_qty[c] = reducer_qty;
+                    close_tick[c] = reducer_tick;
+                }
             }
 
             float gated_twel = twel;

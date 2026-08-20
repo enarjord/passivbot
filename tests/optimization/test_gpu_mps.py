@@ -48,13 +48,25 @@ def _multicoin_exposure_fixture(
     count=64,
     markets=None,
     closes=(100.0, 120.0),
+    highs=None,
+    lows=None,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
-    for coin, close in enumerate(closes):
-        hlcvs[:, coin, 0] = close * 1.01
-        hlcvs[:, coin, 1] = close * 0.99
+    close_matrix = np.asarray(closes, dtype=np.float64)
+    for coin in range(coin_count):
+        close = (
+            np.full(count, close_matrix[coin])
+            if close_matrix.ndim == 1
+            else close_matrix[:, coin]
+        )
+        hlcvs[:, coin, 0] = (
+            close * 1.01 if highs is None else np.asarray(highs)[:, coin]
+        )
+        hlcvs[:, coin, 1] = (
+            close * 0.99 if lows is None else np.asarray(lows)[:, coin]
+        )
         hlcvs[:, coin, 2] = close
         hlcvs[:, coin, 3] = 100.0 * (coin + 1)
     if markets is None:
@@ -1284,6 +1296,178 @@ def test_mps_tm_single_coin_total_exposure_repair(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_equal_wel_twel_reducers_keep_nearer_wel(side):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 105.0, 100.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 95.0, 100.0, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        entry_gate=False,
+        threshold=0.5,
+        wel_enforcer_enabled=True,
+        wel_enforcer_threshold=0.5,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = 10.0
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # The WEL reducer rests at 100.00 and is not strictly touched by the next
+    # candle.  Choosing the farther TWEL reducer would close half the position.
+    assert output[size_key][0].item() == pytest.approx(10.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_twel_offsets_raw_close_before_tick_quantization(side):
+    count = 6
+    close = np.full(count, 100.019)
+    high = np.full(count, 100.019)
+    low = np.full(count, 100.019)
+    high[3] = 105.0
+    low[3] = 95.0
+    if side == "long":
+        close[4] = 99.95
+        high[4] = 99.955
+        low[4] = 99.90
+    else:
+        close[4] = 100.08
+        high[4] = 100.10
+        low[4] = 100.075
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        entry_gate=False,
+        threshold=0.5,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = 10.0
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # Exact raw-first quantization emits 99.96 long / 100.07 short, neither of
+    # which is strictly touched.  Rounding the close first moves the order one
+    # tick farther and incorrectly fills it.
+    assert output[size_key][0].item() == pytest.approx(10.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_twel_repair_preserves_triggered_trailing_close(side):
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 105.0, 99.9, 105.0, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 95.0, 98.0, 95.0, 100.0])
+    if side == "long":
+        close[4] = 99.0
+    else:
+        close[4] = 101.0
+        high[4] = 102.0
+        low[4] = 100.1
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        entry_gate=False,
+        threshold=0.5,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[15] = 0.2
+    row[16] = 0.0
+    row[20] = 0.001
+    row[23] = 100.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # TWEL repair alone leaves five contracts.  The independently triggered
+    # trailing close must therefore reduce the position further in the same
+    # candle without exceeding the original position.
+    assert 0.0 < output[size_key][0].item() < 5.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_position_reducer_reachability_survives_grid_pruning(side):
     count = 6
     close = np.full(count, 100.0)
@@ -1818,6 +2002,85 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     pprice_key = "pprice" if side == "long" else "short_pprice"
     total_twe = (output[pprice_key] / output["balance"]).cpu()
     assert (total_twe < 0.5).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_twel_repair_preserves_trailing_closes(side):
+    highs = np.full((7, 2), 100.0)
+    lows = np.full((7, 2), 100.0)
+    highs[3, :] = 105.0
+    lows[3, :] = 95.0
+    highs[5, :] = 105.0
+    lows[5, :] = 95.0
+    if side == "long":
+        highs[4, :] = 99.9
+        lows[4, :] = 98.0
+        closes = np.full((7, 2), 100.0)
+        closes[4, :] = 99.0
+    else:
+        highs[4, :] = 102.0
+        lows[4, :] = 100.1
+        closes = np.full((7, 2), 100.0)
+        closes[4, :] = 101.0
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=7,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+    )
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("close_qty_pct")
+    ] = 0.2
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "close_threshold_base_pct"
+        )
+    ] = 0.0
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "close_retracement_base_pct"
+        )
+    ] = 0.001
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_cooldown_minutes"
+        )
+    ] = 100.0
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_entry_gate_enabled"
+        )
+    ] = 0.0
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_threshold"
+        )
+    ] = 0.8
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_enabled"
+        )
+    ] = 1.0
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_reduce_portfolio"
+        )
+    ] = 1.0
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    pprice_key = "pprice" if side == "long" else "short_pprice"
+    total_twe = output[pprice_key][0].item() / output["balance"][0].item()
+    # Two ordinary trailing closes remove 0.2 TWE in total and TWEL repair
+    # independently removes another 0.2.  Suppressing one trailing close
+    # leaves approximately 0.7 instead of 0.6.
+    assert total_twe < 0.65
 
 
 @pytest.mark.skipif(
