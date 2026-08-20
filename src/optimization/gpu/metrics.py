@@ -16,15 +16,21 @@ SUPPORTED_METRICS = (
     "adg_strategy_eq",
     "adg_strategy_eq_w",
     "backtest_completion_ratio",
+    "calmar_ratio_strategy_eq",
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_strategy_eq",
+    "expected_shortfall_1pct_strategy_eq",
     "fills_gap_longest_days",
+    "gain_strategy_eq",
     "mdg_strategy_eq",
+    "omega_ratio_strategy_eq",
     "position_held_days_max",
     "sharpe_ratio_strategy_eq",
     "sortino_ratio_strategy_eq",
+    "sterling_ratio_strategy_eq",
     "strategy_eq_recovery_days_max",
     "strategy_eq_underwater_pct_mean",
+    "strategy_eq_underwater_pct_median",
     "volume_pct_per_day_avg",
 )
 
@@ -62,10 +68,11 @@ def _masked_median(values, mask):
     return torch.where(counts > 0, medians, torch.zeros_like(medians))
 
 
-def _smoothed_adg(day_eq, active):
+def _smoothed_gain_adg(day_eq, active):
     batch_size, day_count = day_eq.shape
     if day_count == 0:
-        return torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
+        zeros = torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
+        return zeros, zeros
     counts = active.sum(dim=1)
     indices = (
         torch.arange(day_count, device=day_eq.device)
@@ -87,14 +94,23 @@ def _smoothed_adg(day_eq, active):
         gather_index = sorted_indices[:, offset].clamp(min=0)
         tail_values += take * day_eq.gather(1, gather_index.unsqueeze(1)).squeeze(1)
     end = tail_values / tail_count.to(day_eq.dtype)
-    gain = end / start.abs().clamp(min=1e-12) * torch.sign(start)
+    gain = torch.where(
+        start > 0.0,
+        torch.where(end > 0.0, end / start, torch.full_like(end, -1.0)),
+        torch.full_like(end, float("inf")),
+    )
     duration_days = counts.clamp(min=1).to(day_eq.dtype)
     adg = torch.where(
-        (gain > 0) & (counts > 0),
+        (gain > 0) & (counts >= 2),
         gain.clamp(min=1e-12) ** (1.0 / duration_days) - 1.0,
-        torch.full_like(gain, -1.0),
+        torch.where(counts >= 2, torch.full_like(gain, -1.0), torch.zeros_like(gain)),
     )
-    return torch.where(counts > 0, adg, torch.zeros_like(adg))
+    gain = torch.where(counts >= 2, gain, torch.zeros_like(gain))
+    return gain, adg
+
+
+def _smoothed_adg(day_eq, active):
+    return _smoothed_gain_adg(day_eq, active)[1]
 
 
 def _sharpe_sortino(changes, mask, adg):
@@ -130,6 +146,36 @@ def _sharpe_sortino(changes, mask, adg):
         torch.zeros_like(adg),
     )
     return sharpe, sortino
+
+
+def _omega_ratio(changes, mask):
+    gains = torch.where(
+        mask & (changes >= 0.0), changes, torch.zeros_like(changes)
+    ).sum(dim=1)
+    losses = torch.where(
+        mask & (changes < 0.0), -changes, torch.zeros_like(changes)
+    ).sum(dim=1)
+    cap = torch.full_like(gains, 1_000.0)
+    ratio = gains / losses.clamp(min=1e-12)
+    return torch.where(
+        losses <= 1e-12,
+        torch.where(gains > 1e-12, cap, torch.zeros_like(gains)),
+        ratio.clamp(max=1_000.0),
+    )
+
+
+def _mean_worst_one_pct_abs(values, mask):
+    if values.shape[1] == 0:
+        return torch.zeros(values.shape[0], dtype=values.dtype, device=values.device)
+    counts = mask.sum(dim=1)
+    ordered = torch.sort(
+        torch.where(mask, values, torch.full_like(values, float("inf"))), dim=1
+    ).values
+    worst_count = (counts.to(values.dtype) * 0.01).floor().clamp(min=1).to(torch.long)
+    cumulative = torch.cumsum(ordered.abs(), dim=1)
+    result = cumulative.gather(1, (worst_count - 1).unsqueeze(1)).squeeze(1)
+    result = result / worst_count.to(values.dtype)
+    return torch.where(counts > 0, result, torch.zeros_like(result))
 
 
 def _weighted_adg(
@@ -192,11 +238,13 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
 
-    adg = _smoothed_adg(day_end_eq, active)
+    gain, adg = _smoothed_gain_adg(day_end_eq, active)
     daily_changes, change_mask = _pct_change(day_end_eq, active)
     mdg = _masked_median(daily_changes, change_mask)
+    omega = _omega_ratio(daily_changes, change_mask)
     daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
+    expected_shortfall = _mean_worst_one_pct_abs(daily_min_changes, min_change_mask)
     adg_w = _weighted_adg(
         day_end_eq,
         active,
@@ -209,6 +257,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
         dim=1
     ) / active.sum(dim=1).clamp(min=1)
+    underwater_median = _masked_median(day_max_dd, active)
     sorted_drawdowns, _ = torch.sort(
         torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)),
         dim=1,
@@ -221,6 +270,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     worst_one_pct = cumulative_drawdowns.gather(
         1, (worst_count - 1).unsqueeze(1)
     ).squeeze(1) / worst_count.to(torch.float64)
+    calmar = adg / out["max_dd"].to(torch.float64).clamp(min=1e-12)
+    sterling = adg / worst_one_pct.clamp(min=1e-12)
 
     volume_days = day_has_fill.sum(dim=1).clamp(min=1).to(torch.float64)
     volume_pct = day_volume.sum(dim=1) / volume_days
@@ -279,15 +330,21 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "adg_strategy_eq": adg,
         "adg_strategy_eq_w": adg_w,
         "backtest_completion_ratio": completion,
+        "calmar_ratio_strategy_eq": calmar,
         "drawdown_worst_mean_1pct_strategy_eq": worst_one_pct,
         "drawdown_worst_strategy_eq": out["max_dd"],
+        "expected_shortfall_1pct_strategy_eq": expected_shortfall,
         "fills_gap_longest_days": gap_longest_days,
+        "gain_strategy_eq": gain,
         "mdg_strategy_eq": mdg,
+        "omega_ratio_strategy_eq": omega,
         "position_held_days_max": held_days,
         "sharpe_ratio_strategy_eq": sharpe,
         "sortino_ratio_strategy_eq": sortino,
+        "sterling_ratio_strategy_eq": sterling,
         "strategy_eq_recovery_days_max": recovery_max_days,
         "strategy_eq_underwater_pct_mean": underwater,
+        "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
     if needed is None:

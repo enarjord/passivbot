@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Expanded Apple MPS optimizer scoring and limits with strategy-equity gain, Omega ratio,
+  expected shortfall, Calmar ratio, Sterling ratio, and median underwater percentage. These
+  metrics are reduced from the existing compact Metal equity summaries, while exact Rust
+  backtests remain authoritative for persisted results and Pareto membership.
+
 - Added EMA Anchor side-wide total-exposure repair to multi-coin Apple MPS optimization for
   long-only, short-only, and compatible suite runs. The Metal proxy models both
   `reduce_overweight` and `reduce_portfolio`, ranks every open position by projected adverse loss,
