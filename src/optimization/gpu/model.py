@@ -65,6 +65,7 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     "forager_score_weights_volatility",
     "n_positions",
     *EXPOSURE_PARAM_KEYS,
+    *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
