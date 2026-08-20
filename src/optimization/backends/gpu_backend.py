@@ -868,7 +868,10 @@ def _validate_scope_config(
                         "GPU dual-side multicoin optimization currently requires "
                         f"matching long/short {label}_coins"
                     )
-        if len(enabled_sides) == 2 and strategy_kind == "trailing_martingale":
+        if len(enabled_sides) == 2 and strategy_kind in {
+            "ema_anchor",
+            "trailing_martingale",
+        }:
             repair_paths = []
             for side in enabled_sides:
                 risk = config["bot"][side].get("risk", {})
@@ -929,10 +932,6 @@ def _validate_scope_config(
         if strategy_kind != "trailing_martingale":
             required_disabled.append(
                 ("position_exposure_enforcer_enabled", False)
-            )
-        if strategy_kind == "ema_anchor" and coin_count > 1:
-            required_disabled.append(
-                ("total_exposure_enforcer_enabled", False)
             )
         for key, expected in required_disabled:
             if bool(risk.get(key, expected)) != expected:
@@ -2081,14 +2080,7 @@ def _validate_pinned_scope_bounds(
                 for side in ("long", "short")
             }
         )
-    if strategy_kind == "ema_anchor" and coin_count > 1:
-        pinned.update(
-            {
-                f"{side}_risk_total_exposure_enforcer_enabled": 0.0
-                for side in ("long", "short")
-            }
-        )
-    elif coin_count > 1 and len(enabled_sides) == 2:
+    if coin_count > 1 and len(enabled_sides) == 2:
         # Directional multicoin runners do not share realized PnL or balance.
         # Until a portfolio kernel owns both sides, any exposure reducer whose
         # sizing depends on account balance must remain disabled.

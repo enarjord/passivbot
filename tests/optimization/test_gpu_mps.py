@@ -115,6 +115,8 @@ def _multicoin_exposure_fixture(
             "we_excess_allowance_legacy_raw": 0.0,
             "twel_entry_gate_enabled": 1.0,
             "twel_enforcer_threshold": 1.0,
+            "twel_enforcer_enabled": 0.0,
+            "twel_enforcer_reduce_portfolio": 0.0,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
@@ -385,10 +387,14 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 23" in source
+    assert "constant int PARAM_COLS = 25" in source
     assert "constant int OVERRIDE_COLS = 13" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
+    assert "twel_enforcer_enabled" in source
+    assert "twel_enforcer_reduce_portfolio" in source
+    assert "clamped_market_price" in source
+    assert "secondary_close_qty" in source
     assert "constant int DAILY_COLS = 6" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
@@ -448,7 +454,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         0.0,
         2.0,
     ]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + [0.0, 0.0]
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0], data, side=side, forager_score_hysteresis_pct=0.02
@@ -2387,6 +2393,59 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_total_exposure_repair_policy(side):
+    overrides = np.full((2, 13), np.nan, dtype=np.float32)
+    overrides[0, 11] = 0.1
+    count = 70
+    highs = np.full((count, 2), 100.5)
+    lows = np.full((count, 2), 99.5)
+    if side == "long":
+        lows[62, :] = 98.0
+    else:
+        highs[62, :] = 102.0
+    runner, baseline = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        overrides,
+        count=count,
+        closes=(100.0, 100.0),
+        highs=highs,
+        lows=lows,
+    )
+    overweight = list(baseline)
+    overweight[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.01
+    overweight[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+    overweight[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_entry_gate_enabled")
+    ] = 0.0
+    overweight[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_threshold")
+    ] = 0.5
+    overweight[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")
+    ] = 1.0
+    portfolio = list(overweight)
+    portfolio[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_reduce_portfolio"
+        )
+    ] = 1.0
+
+    output = runner.run(np.asarray([overweight, portfolio], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["open_positions"].cpu().tolist() == pytest.approx([2.0, 1.0])
+    pprice_key = "pprice" if side == "long" else "short_pprice"
+    total_twe = (output[pprice_key] / output["balance"]).cpu()
+    assert (total_twe < 0.5).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
     count = 7
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -2456,6 +2515,76 @@ def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
     else:
         # The adverse delisted short ranks behind the favorable live short,
         # whose reducer remains reachable and therefore reduces total size.
+        assert sizes[1] < sizes[0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_twel_ranking_clamps_delisted_market_price(side):
+    count = 70
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
+    hlcvs[:, :, 0] = 101.0
+    hlcvs[:, :, 1] = 99.0
+    hlcvs[:, :, 2] = 100.0
+    hlcvs[:, :, 3] = 100.0
+    # Fill the wide-offset entries, then make coin zero favorable for long
+    # and adverse for short before it delists. Coin one has the inverse rank.
+    hlcvs[62, 0, :3] = [140.0, 70.0, 130.0]
+    hlcvs[62, 1, :3] = [130.0, 70.0, 90.0]
+    hlcvs[63:, 0, :] = 0.0
+    hlcvs[63:, 1, :3] = [101.0, 89.0, 90.0]
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    runs = [
+        ProxyRun(
+            1_000.0,
+            1,
+            1,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            last_valid,
+        )
+        for last_valid in (62, count - 1)
+    ]
+    data = build_mps_multicoin_data(
+        hlcvs, timestamps, runs, [market, market]
+    )
+    _, row = _multicoin_exposure_fixture("ema_anchor", side, count=count)
+    values = dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "offset": 0.2,
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.75,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    repaired = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
+    baseline = list(repaired)
+    baseline[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")
+    ] = 0.0
+    output = MpsEmaAnchorMulticoinRunner(
+        runs[1], data, side=side
+    ).run(np.asarray([baseline, repaired], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    sizes = output[size_key].cpu().numpy()
+    if side == "long":
+        # The favorable delisted long ranks first; its reducer cannot fill on
+        # invalid bars, so the live coin remains untouched.
+        assert sizes[1] == pytest.approx(sizes[0])
+    else:
+        # The favorable live short ranks before the adverse delisted short.
         assert sizes[1] < sizes[0]
 
 

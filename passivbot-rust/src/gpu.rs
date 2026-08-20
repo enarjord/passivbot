@@ -70,7 +70,7 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 23"));
+        assert!(source.contains("constant int PARAM_COLS = 25"));
         assert!(source.contains("constant int OVERRIDE_COLS = 13"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
@@ -87,6 +87,11 @@ mod tests {
         assert!(source.contains("score[challenger] - score[incumbent_coin]"));
         assert!(source.contains("allowed_wallet_exposure_limit"));
         assert!(source.contains("twel_entry_gate_enabled"));
+        assert!(source.contains("twel_enforcer_enabled"));
+        assert!(source.contains("twel_enforcer_reduce_portfolio"));
+        assert!(source.contains("clamped_market_price"));
+        assert!(source.contains("secondary_close_qty"));
+        assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
         assert!(!source.contains("unstuck"));

@@ -846,6 +846,7 @@ class MpsMulticoinProxy:
                         config["bot"][side].get("risk", {}), side=side
                     )
                 )
+            if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:
                 first_strategy.update(
                     _total_exposure_enforcer_params(
                         config["bot"][side].get("risk", {}), side=side

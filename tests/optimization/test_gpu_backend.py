@@ -1584,11 +1584,55 @@ def test_gpu_foundation_accepts_ema_dual_single_coin_total_exposure_repair(
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_multicoin_keeps_ema_total_exposure_repair_fail_closed():
-    config = _directional_ema_config(long_enabled=True, short_enabled=False)
-    config["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] = True
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "policy", ["reduce_overweight", "reduce_portfolio"]
+)
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_multicoin_accepts_ema_total_exposure_repair(
+    side, policy, suite_enabled
+):
+    config = _directional_ema_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    coins = ["BTC", "ETH", "SOL"]
+    config["live"]["approved_coins"][side] = coins
+    if suite_enabled:
+        # Suite materialization requires symmetric coin universes even when
+        # one side is disabled by a zero total-exposure budget.
+        other = "short" if side == "long" else "long"
+        config["live"]["approved_coins"][other] = coins
+        config["bot"][other]["risk"]["total_wallet_exposure_limit"] = 0.0
+    risk = config["bot"][side]["risk"]
+    risk["n_positions"] = 2
+    risk["total_exposure_enforcer_enabled"] = True
+    risk["total_exposure_enforcer_policy"] = policy
+    risk["total_exposure_enforcer_threshold"] = 0.8
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["backtest"]["suite_enabled"] = suite_enabled
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
+    assert (
+        _validate_scope(
+            config, _MulticoinEvaluator(), allow_suite=suite_enabled
+        )
+        == "bybit"
+    )
+
+
+def test_gpu_dual_multicoin_rejects_ema_total_exposure_repair():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["approved_coins"] = {
+        "long": ["BTC", "ETH", "SOL"],
+        "short": ["BTC", "ETH", "SOL"],
+    }
+    config["live"]["hedge_mode"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    for side in ("long", "short"):
+        risk = config["bot"][side]["risk"]
+        risk["n_positions"] = 2
+        risk["total_exposure_enforcer_enabled"] = True
+
+    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -3705,12 +3749,13 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
         strategy_kind="trailing_martingale",
     )
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
-        _validate_pinned_scope_bounds(
-            {"long_risk_total_exposure_enforcer_enabled": Bound(1.0, 1.0, None)},
-            {"long_risk_total_exposure_enforcer_enabled": 1.0},
-            coin_count=2,
-        )
+    _validate_pinned_scope_bounds(
+        {"long_risk_total_exposure_enforcer_enabled": Bound(1.0, 1.0, None)},
+        {"long_risk_total_exposure_enforcer_enabled": 1.0},
+        {"long"},
+        coin_count=2,
+        strategy_kind="ema_anchor",
+    )
 
     _validate_pinned_scope_bounds(
         {"long_risk_total_exposure_enforcer_enabled": Bound(1.0, 1.0, None)},
@@ -3739,6 +3784,19 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
             {"long", "short"},
             coin_count=2,
             strategy_kind="trailing_martingale",
+        )
+
+    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
+        _validate_pinned_scope_bounds(
+            {
+                "long_risk_total_exposure_enforcer_enabled": Bound(
+                    0.0, 1.0, None
+                )
+            },
+            {"long_risk_total_exposure_enforcer_enabled": 0.0},
+            {"long", "short"},
+            coin_count=2,
+            strategy_kind="ema_anchor",
         )
 
 
