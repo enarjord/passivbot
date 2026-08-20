@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Trailing Martingale side-wide total-exposure repair to the Apple MPS optimizer for
+  single- and multi-coin long-only, short-only, and compatible suite runs. The Metal
+  proxy models both `reduce_overweight` and `reduce_portfolio`, ranks repair candidates by projected
+  adverse loss, applies exchange minimums and quantity steps, and lets the largest WEL/TWEL reducer
+  compete before rebuilding the ordinary close ladder. Exact Rust validation and the existing
+  classification, rank, and drift gates remain authoritative. EMA Anchor total-exposure repair
+  remains fail closed. Dual-side multi-coin exposure repair also remains fail closed until a
+  shared-balance portfolio kernel can preserve exact cross-side sizing.
+
 - GPU optimization now latches Ctrl+C received during a native Metal dispatch,
   stops before another generation or exact-validation submission, saves a
   resumable checkpoint, and then cleans up optimizer workers and shared memory.

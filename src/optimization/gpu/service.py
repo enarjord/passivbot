@@ -97,6 +97,26 @@ def _position_exposure_enforcer_params(
     }
 
 
+def _total_exposure_enforcer_params(
+    risk: dict, *, side: str
+) -> dict[str, float]:
+    policy = str(
+        risk.get("total_exposure_enforcer_policy", "reduce_overweight")
+    ).strip().lower()
+    if policy not in {"reduce_overweight", "reduce_portfolio"}:
+        raise ValueError(
+            "MPS proxy requires "
+            f"bot.{side}.risk.total_exposure_enforcer_policy to be "
+            f"reduce_overweight or reduce_portfolio, got {policy!r}"
+        )
+    return {
+        "twel_enforcer_enabled": float(
+            bool(risk.get("total_exposure_enforcer_enabled", False))
+        ),
+        "twel_enforcer_reduce_portfolio": float(policy == "reduce_portfolio"),
+    }
+
+
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
     if int(last_valid_idx) != int(candle_count) - 1:
         raise ValueError(
@@ -353,6 +373,9 @@ class MpsSingleCoinProxy:
             if self.strategy_kind == "trailing_martingale":
                 strategy.update(
                     _position_exposure_enforcer_params(risk, side=side)
+                )
+                strategy.update(
+                    _total_exposure_enforcer_params(risk, side=side)
                 )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
@@ -761,6 +784,8 @@ class MpsMulticoinProxy:
             "forager_score_weights",
             "n_positions",
             "risk_twel_entry_gate_enabled",
+            "risk_twel_enforcer_enabled",
+            "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
             "unstuck_enabled",
             "hsl_enabled",
@@ -817,6 +842,11 @@ class MpsMulticoinProxy:
             if self.strategy_kind == "trailing_martingale":
                 first_strategy.update(
                     _position_exposure_enforcer_params(
+                        config["bot"][side].get("risk", {}), side=side
+                    )
+                )
+                first_strategy.update(
+                    _total_exposure_enforcer_params(
                         config["bot"][side].get("risk", {}), side=side
                     )
                 )
