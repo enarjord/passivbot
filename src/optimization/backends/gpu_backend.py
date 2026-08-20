@@ -927,11 +927,12 @@ def _validate_scope_config(
         risk = side_config.get("risk", {})
         required_disabled = []
         if strategy_kind != "trailing_martingale":
-            required_disabled.extend(
-                [
-                    ("position_exposure_enforcer_enabled", False),
-                    ("total_exposure_enforcer_enabled", False),
-                ]
+            required_disabled.append(
+                ("position_exposure_enforcer_enabled", False)
+            )
+        if strategy_kind == "ema_anchor" and coin_count > 1:
+            required_disabled.append(
+                ("total_exposure_enforcer_enabled", False)
             )
         for key, expected in required_disabled:
             if bool(risk.get(key, expected)) != expected:
@@ -2080,6 +2081,7 @@ def _validate_pinned_scope_bounds(
                 for side in ("long", "short")
             }
         )
+    if strategy_kind == "ema_anchor" and coin_count > 1:
         pinned.update(
             {
                 f"{side}_risk_total_exposure_enforcer_enabled": 0.0

@@ -292,6 +292,9 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
+    assert "constant int SIDE_PARAMS = 17" in source
+    assert "total_exposure_reducer_qty" in source
+    assert "secondary_close_qty" in source
     assert "constant int SCALAR_COLS = 18" in source
     assert "side.psize * price_now * c_mult / balance" in source
     assert "short_side.psize * c_mult * (short_side.pprice - close)" in source
@@ -360,7 +363,7 @@ def test_mps_ema_anchor_shader_smoke():
         0.0,
         1.0,
     ]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
     parameters = np.array([row + row, row + row], dtype=np.float64)
 
     output = MpsEmaAnchorRunner(market, run, data).run(parameters)
@@ -831,7 +834,7 @@ def test_mps_ema_anchor_preserves_tick_aligned_computed_target():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -867,7 +870,7 @@ def test_mps_ema_anchor_directionally_rounds_non_aligned_candle_touch():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, -0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=True, short_enabled=False
@@ -910,7 +913,7 @@ def test_mps_volume_uses_raw_non_positive_post_fill_balance():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
     parameters = np.array(
         [row + row],
         dtype=np.float64,
@@ -955,7 +958,7 @@ def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
 
     output = MpsEmaAnchorRunner(
         market,
@@ -995,7 +998,7 @@ def test_mps_short_only_opens_short_position():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [0.1, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
 
     output = MpsEmaAnchorRunner(
         market, run, data, long_enabled=False, short_enabled=True
@@ -1130,7 +1133,7 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(
             0.0,
             1.0,
         ]
-        return values + exposure
+        return values + exposure + _tm_twel_enforcer_fields()
 
     runner_cls = (
         MpsTrailingMartingaleRunner
@@ -1288,6 +1291,94 @@ def test_mps_tm_single_coin_total_exposure_repair(side):
     sizes = output[size_key].cpu().numpy()
     assert sizes[0] > 9.0
     assert sizes[1] == pytest.approx(5.0)
+    assert (
+        output["day_volume"][1].sum().item()
+        > output["day_volume"][0].sum().item()
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_single_coin_total_exposure_repair(side):
+    count = 10
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    if side == "long":
+        close[2:] = 99.9
+        high[2:] = 99.9
+        low[3] = 98.0
+        low[4:] = 99.9
+    else:
+        close[2:] = 100.1
+        high[3] = 102.0
+        high[4:] = 100.1
+        low[2:] = 100.1
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    values = {
+        "base_qty_pct": 1.0,
+        "ema_span_0": 2.0,
+        "ema_span_1": 3.0,
+        "entry_double_down_factor": 0.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "offset_volatility_1h_weight": 0.0,
+        "offset_volatility_1m_weight": 0.0,
+        "offset_volatility_ema_span_1h": 2.0,
+        "offset_volatility_ema_span_1m": 2.0,
+        "entry_cooldown_minutes": 100.0,
+        "total_wallet_exposure_limit": 1.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 0.5,
+        "twel_enforcer_enabled": 0.0,
+    }
+    baseline = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    repaired_values = dict(values, twel_enforcer_enabled=1.0)
+    repaired = [
+        repaired_values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+    ]
+    output = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(
+        np.asarray(
+            [baseline + baseline, repaired + repaired], dtype=np.float64
+        )
+    )
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    sizes = output[size_key].cpu().numpy()
+    assert sizes[0] > 8.0
+    pprice_key = "pprice" if side == "long" else "short_pprice"
+    repaired_we = (
+        sizes[1]
+        * output[pprice_key][1].item()
+        / output["balance"][1].item()
+    )
+    assert 0.0 < sizes[1] < sizes[0]
+    assert 0.35 < repaired_we <= 0.51
     assert (
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
@@ -2944,7 +3035,7 @@ def test_mps_single_coin_min_effective_cost_filter_blocks_only_flat_entries(
         0.0,
         1.0,
     ]
-    ema_row += _single_coin_exposure_fields()
+    ema_row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
     row = _tm_single_row() if strategy_kind == "trailing_martingale" else ema_row
     runner_cls = (
         MpsTrailingMartingaleRunner
@@ -3015,7 +3106,7 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
         0.0,
         1.0,
     ]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
     guaranteed_balance_lower = run.starting_balance * run.liquidation_threshold
     rounded_projection = np.float32(guaranteed_balance_lower) * np.float32(
         base_qty_pct
@@ -3082,7 +3173,7 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
             0.0,
             1.0,
         ]
-        long_row += _single_coin_exposure_fields()
+        long_row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
         short_row = list(long_row)
         short_row[0] = 0.01
         short_row[4] = 0.01
@@ -3150,7 +3241,7 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
         0.0,
         1.0,
     ]
-    row += _single_coin_exposure_fields()
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
 
     output = MpsEmaAnchorRunner(
         market,

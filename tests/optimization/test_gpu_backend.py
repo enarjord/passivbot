@@ -992,11 +992,11 @@ def test_gpu_suite_inputs_accept_and_preserve_bot_override_scope():
     )
 
 
-def test_gpu_suite_inputs_revalidate_effective_bot_override_scope():
+def test_gpu_suite_inputs_accept_ema_single_coin_total_exposure_repair_override():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
     ctx = SimpleNamespace(
-        label="unsupported_risk",
+        label="ema_total_repair",
         overrides={"bot.long.risk.total_exposure_enforcer_enabled": True},
         exchanges=["bybit"],
         msss={"bybit": {"BTC": {}, "__meta__": {}}},
@@ -1018,8 +1018,11 @@ def test_gpu_suite_inputs_revalidate_effective_bot_override_scope():
             ] = True
             return scenario
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled=false"):
-        _gpu_suite_scenario_inputs(config, Suite())
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["config"]["bot"]["long"]["risk"][
+        "total_exposure_enforcer_enabled"
+    ]
 
 
 def test_gpu_suite_inputs_accept_tm_total_exposure_repair_override():
@@ -1396,12 +1399,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             ),
             "position_exposure_enforcer_enabled",
         ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "total_exposure_enforcer_enabled", True
-            ),
-            "total_exposure_enforcer_enabled",
-        ),
     ],
 )
 def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
@@ -1550,12 +1547,49 @@ def test_gpu_dual_multicoin_rejects_tm_coin_override_exposure_repair():
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_foundation_keeps_ema_total_exposure_repair_fail_closed():
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "policy", ["reduce_overweight", "reduce_portfolio"]
+)
+@pytest.mark.parametrize("suite_enabled", [False, True])
+def test_gpu_foundation_accepts_ema_single_coin_total_exposure_repair(
+    side, policy, suite_enabled
+):
+    config = _directional_ema_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    risk = config["bot"][side]["risk"]
+    risk["total_exposure_enforcer_enabled"] = True
+    risk["total_exposure_enforcer_policy"] = policy
+    risk["total_exposure_enforcer_threshold"] = 0.8
+    config["backtest"]["suite_enabled"] = suite_enabled
+
+    assert (
+        _validate_scope(config, _Evaluator(), allow_suite=suite_enabled)
+        == "bybit"
+    )
+
+
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_gpu_foundation_accepts_ema_dual_single_coin_total_exposure_repair(
+    hedge_mode,
+):
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = hedge_mode
+    for side in ("long", "short"):
+        risk = config["bot"][side]["risk"]
+        risk["total_exposure_enforcer_enabled"] = True
+        risk["total_exposure_enforcer_threshold"] = 0.8
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_multicoin_keeps_ema_total_exposure_repair_fail_closed():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] = True
 
     with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
-        _validate_scope(config, _Evaluator())
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
@@ -3677,6 +3711,14 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
             {"long_risk_total_exposure_enforcer_enabled": 1.0},
             coin_count=2,
         )
+
+    _validate_pinned_scope_bounds(
+        {"long_risk_total_exposure_enforcer_enabled": Bound(1.0, 1.0, None)},
+        {"long_risk_total_exposure_enforcer_enabled": 1.0},
+        {"long"},
+        coin_count=1,
+        strategy_kind="ema_anchor",
+    )
 
     _validate_pinned_scope_bounds(
         {"long_risk_total_exposure_enforcer_enabled": Bound(1.0, 1.0, None)},
