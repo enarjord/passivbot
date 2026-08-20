@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 40;
+constant int PARAM_COLS = 42;
 constant int OVERRIDE_COLS = 28;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
@@ -90,6 +90,40 @@ inline float calc_close_qty(
         quantity = 0.0f;
     }
     return quantity;
+}
+
+inline float exposure_reducer_qty(
+    float psize, float pprice, float balance, float target_exposure,
+    float reducer_price, float qty_step, float min_qty, float min_cost,
+    float c_mult
+) {
+    if (!(balance > 0.0f && psize > 0.0f && pprice > 0.0f
+        && target_exposure > 0.0f && reducer_price > 0.0f)) {
+        return 0.0f;
+    }
+    float current_exposure = psize * pprice * c_mult / balance;
+    if (!(current_exposure > target_exposure)) return 0.0f;
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float target_psize = target_exposure * balance
+        / fmax(pprice * c_mult, 1.0e-12f);
+    float reduce_qty = fmax(psize - target_psize, 0.0f);
+    if (reduce_qty <= 2.220446e-16f) reduce_qty = qty_step;
+    float reducer_qty = 0.0f;
+    for (int steps = 0; steps <= 10000; ++steps) {
+        reducer_qty = fmin(
+            psize, fmax(reducer_min, ceil_step(reduce_qty, qty_step))
+        );
+        float new_psize = fmax(
+            round_step(psize - reducer_qty, qty_step), 0.0f
+        );
+        if (new_psize < target_psize || new_psize <= 2.220446e-16f) {
+            break;
+        }
+        reduce_qty += qty_step;
+    }
+    return reducer_qty;
 }
 
 struct CloseGroup {
@@ -278,6 +312,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel_threshold = params[po + 37];
     const bool wel_enforcer_enabled = params[po + 38] > 0.5f;
     const float wel_enforcer_threshold = params[po + 39];
+    const bool twel_enforcer_enabled = params[po + 40] > 0.5f;
+    const bool twel_enforcer_reduce_portfolio = params[po + 41] > 0.5f;
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -313,6 +349,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float last_increase_k[MAX_COINS];
     float entry_qty[MAX_COINS];
     float close_qty[MAX_COINS];
+    float twel_close_qty[MAX_COINS];
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
     float position_open_k[MAX_COINS];
@@ -325,6 +362,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float min_since_max[MAX_COINS];
     int entry_tick[MAX_COINS];
     int close_tick[MAX_COINS];
+    int twel_close_tick[MAX_COINS];
     bool selected[MAX_COINS];
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
@@ -358,6 +396,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         last_increase_k[c] = -1.0e20f;
         entry_qty[c] = 0.0f;
         close_qty[c] = 0.0f;
+        twel_close_qty[c] = 0.0f;
         close_gen_balance[c] = 0.0f;
         close_gen_allowed_wel[c] = 0.0f;
         position_open_k[c] = -1.0f;
@@ -370,6 +409,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         min_since_max[c] = INFINITY;
         entry_tick[c] = 0;
         close_tick[c] = 0;
+        twel_close_tick[c] = 0;
         selected[c] = false;
         incumbent[c] = false;
         survivor[c] = false;
@@ -951,11 +991,116 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
             const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
             float current_twe = 0.0f;
+            int open_position_count = 0;
             for (int c = 0; c < C; ++c) {
                 int coin_offset = c * COIN_COLS;
                 if (psize[c] > 0.0f && balance > 0.0f) {
                     current_twe += psize[c] * pprice[c]
                         * coin_settings[coin_offset + 4] / balance;
+                    open_position_count += 1;
+                }
+                twel_close_qty[c] = 0.0f;
+                twel_close_tick[c] = 0;
+            }
+
+            // Match calc_twel_enforcer_actions: account for every open
+            // position, rank reducible positions by least adverse projected
+            // loss per exposure (then symbol index), and allocate only the
+            // exposure needed to cross the side-wide target.
+            float twel_repair_target = twel * twel_threshold;
+            if (twel_enforcer_enabled && twel_threshold > 0.0f
+                && twel_repair_target > 0.0f && balance > 0.0f
+                && current_twe > twel_repair_target + 1.0e-9f
+                && open_position_count > 0) {
+                int repair_n_positions = effective_n_positions > 0
+                    ? effective_n_positions : open_position_count;
+                float overweight_target = twel_repair_target
+                    / fmax(float(repair_n_positions), 1.0f);
+                bool processed[MAX_COINS];
+                for (int c = 0; c < MAX_COINS; ++c) processed[c] = false;
+                float running_twe = current_twe;
+                for (int rank = 0; rank < C; ++rank) {
+                    if (running_twe <= twel_repair_target + 1.0e-9f) break;
+                    int best = -1;
+                    float best_adverse = INFINITY;
+                    for (int c = 0; c < C; ++c) {
+                        if (processed[c] || psize[c] <= 0.0f
+                            || pprice[c] <= 0.0f) continue;
+                        int coin_offset = c * COIN_COLS;
+                        int tick_offset = (k * C + c) * 2;
+                        float c_mult = coin_settings[coin_offset + 4];
+                        float exposure = psize[c] * pprice[c] * c_mult
+                            / balance;
+                        if (!(exposure > 1.0e-9f)) continue;
+                        if (!twel_enforcer_reduce_portfolio
+                            && !(exposure > overweight_target + 1.0e-9f)) {
+                            continue;
+                        }
+                        int market_tick = short_side
+                            ? touch_ticks[tick_offset + 1]
+                            : touch_ticks[tick_offset + 0];
+                        float market_price = float(market_tick)
+                            * coin_settings[coin_offset + 1];
+                        float projected_loss = psize[c] * c_mult * fmax(
+                            short_side
+                                ? market_price - pprice[c]
+                                : pprice[c] - market_price,
+                            0.0f
+                        );
+                        float adverse = projected_loss / exposure;
+                        if (best < 0 || adverse < best_adverse
+                            || (adverse == best_adverse && c < best)) {
+                            best = c;
+                            best_adverse = adverse;
+                        }
+                    }
+                    if (best < 0) break;
+                    processed[best] = true;
+                    int coin_offset = best * COIN_COLS;
+                    int tick_offset = (k * C + best) * 2;
+                    float qty_step = coin_settings[coin_offset + 0];
+                    float price_step = coin_settings[coin_offset + 1];
+                    float min_qty = coin_settings[coin_offset + 2];
+                    float min_cost = coin_settings[coin_offset + 3];
+                    float c_mult = coin_settings[coin_offset + 4];
+                    float exposure = psize[best] * pprice[best] * c_mult
+                        / balance;
+                    float exposure_to_cut = fmin(
+                        fmax(running_twe - twel_repair_target, 0.0f),
+                        exposure
+                    );
+                    int market_tick = short_side
+                        ? touch_ticks[tick_offset + 1]
+                        : touch_ticks[tick_offset + 0];
+                    int reducer_tick = short_side
+                        ? int(ceil(float(market_tick) * 1.0005f - 1.0e-6f))
+                        : int(floor(float(market_tick) * 0.9995f + 1.0e-6f));
+                    reducer_tick = max(reducer_tick, 1);
+                    float reducer_price = float(reducer_tick) * price_step;
+                    float requested_qty = ceil_step(
+                        exposure_to_cut * balance
+                            / fmax(pprice[best] * c_mult, 1.0e-12f),
+                        qty_step
+                    );
+                    float reducer_min = min_entry_qty(
+                        reducer_price, qty_step, min_qty, min_cost, c_mult
+                    );
+                    float reducer_qty = fmin(
+                        psize[best], fmax(reducer_min, requested_qty)
+                    );
+                    reducer_qty = fmin(
+                        psize[best], ceil_step(reducer_qty, qty_step)
+                    );
+                    if (reducer_qty <= 1.0e-9f) continue;
+                    twel_close_qty[best] = reducer_qty;
+                    twel_close_tick[best] = reducer_tick;
+                    running_twe -= fmax(
+                        exposure - fmax(
+                            round_step(psize[best] - reducer_qty, qty_step),
+                            0.0f
+                        ) * pprice[best] * c_mult / balance,
+                        0.0f
+                    );
                 }
             }
             for (int c = 0; c < C; ++c) {
@@ -1204,56 +1349,36 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 contribution[c] = quantity > 0.0f
                     ? quantity * entry_price * c_mult / balance : 0.0f;
 
-                // Per-position exposure repair has exact-Rust precedence over
-                // the normal Trailing Martingale close.
+                // Exact Rust keeps only the largest protective reducer for a
+                // position before allocating its ordinary close ladder.
+                float reducer_qty = twel_close_qty[c];
+                int reducer_tick = twel_close_tick[c];
                 float wel_target = allowed_coin_wel
                     * coin_wel_enforcer_threshold;
                 if (coin_wel_enforcer_enabled
                     && coin_wel_enforcer_threshold > 0.0f
                     && balance > 0.0f && psize[c] > 0.0f && pprice[c] > 0.0f
                     && wel_target > 0.0f && we > wel_target) {
-                    int reducer_tick = short_side ? touch_down : touch_up;
-                    float reducer_price = float(reducer_tick) * price_step;
-                    if (reducer_tick > 0 && reducer_price > 0.0f) {
-                        float reducer_min = min_entry_qty(
-                            reducer_price, qty_step, min_qty, min_cost, c_mult
-                        );
-                        float target_psize = wel_target * balance
-                            / fmax(pprice[c] * c_mult, 1.0e-12f);
-                        float reduce_qty = fmax(psize[c] - target_psize, 0.0f);
-                        if (reduce_qty <= 2.220446e-16f) {
-                            reduce_qty = qty_step;
-                        }
-                        float reducer_qty = 0.0f;
-                        for (int steps = 0; steps <= 10000; ++steps) {
-                            reducer_qty = fmin(
-                                psize[c],
-                                fmax(
-                                    reducer_min,
-                                    ceil_step(reduce_qty, qty_step)
-                                )
-                            );
-                            float new_psize = fmax(
-                                round_step(
-                                    psize[c] - reducer_qty, qty_step
-                                ),
-                                0.0f
-                            );
-                            if (new_psize < target_psize
-                                || new_psize <= 2.220446e-16f) {
-                                break;
-                            }
-                            reduce_qty += qty_step;
-                        }
-                        if (coin_close_retracement_base <= 0.0f) {
-                            close_reconstruct_after_reducer[c] = true;
-                            close_gen_balance[c] = balance;
-                            close_gen_allowed_wel[c] = allowed_coin_wel;
-                        }
-                        close_qty[c] = reducer_qty;
-                        close_tick[c] = reducer_tick;
-                        continue;
+                    int wel_reducer_tick = short_side ? touch_down : touch_up;
+                    float wel_reducer_price = float(wel_reducer_tick) * price_step;
+                    float wel_reducer_qty = exposure_reducer_qty(
+                        psize[c], pprice[c], balance, wel_target,
+                        wel_reducer_price, qty_step, min_qty, min_cost, c_mult
+                    );
+                    if (wel_reducer_qty > reducer_qty) {
+                        reducer_qty = wel_reducer_qty;
+                        reducer_tick = wel_reducer_tick;
                     }
+                }
+                if (reducer_qty > 0.0f && reducer_tick > 0) {
+                    if (coin_close_retracement_base <= 0.0f) {
+                        close_reconstruct_after_reducer[c] = true;
+                        close_gen_balance[c] = balance;
+                        close_gen_allowed_wel[c] = allowed_coin_wel;
+                    }
+                    close_qty[c] = reducer_qty;
+                    close_tick[c] = reducer_tick;
+                    continue;
                 }
 
                 float close_threshold = coin_close_threshold_base

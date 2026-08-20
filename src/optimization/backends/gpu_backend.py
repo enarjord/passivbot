@@ -433,7 +433,6 @@ PINNED_SCOPE_BOUND_VALUES = {
     for suffix, expected in {
         "hsl_enabled": 0.0,
         "unstuck_enabled": 0.0,
-        "risk_total_exposure_enforcer_enabled": 0.0,
     }.items()
 }
 
@@ -889,10 +888,13 @@ def _validate_scope_config(
                 f"GPU foundation requires bot.{side}.unstuck.enabled=false"
             )
         risk = side_config.get("risk", {})
-        required_disabled = [("total_exposure_enforcer_enabled", False)]
+        required_disabled = []
         if strategy_kind != "trailing_martingale":
-            required_disabled.append(
-                ("position_exposure_enforcer_enabled", False)
+            required_disabled.extend(
+                [
+                    ("position_exposure_enforcer_enabled", False),
+                    ("total_exposure_enforcer_enabled", False),
+                ]
             )
         for key, expected in required_disabled:
             if bool(risk.get(key, expected)) != expected:
@@ -2038,6 +2040,12 @@ def _validate_pinned_scope_bounds(
         pinned.update(
             {
                 f"{side}_risk_position_exposure_enforcer_enabled": 0.0
+                for side in ("long", "short")
+            }
+        )
+        pinned.update(
+            {
+                f"{side}_risk_total_exposure_enforcer_enabled": 0.0
                 for side in ("long", "short")
             }
         )

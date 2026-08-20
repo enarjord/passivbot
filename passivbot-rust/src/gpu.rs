@@ -95,7 +95,7 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 33"));
+        assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
@@ -105,6 +105,8 @@ mod tests {
         assert!(source.contains("s.allowed_wel"));
         assert!(source.contains("s.wel_enforcer_enabled"));
         assert!(source.contains("wel_target"));
+        assert!(source.contains("s.twel_enforcer_enabled"));
+        assert!(source.contains("twel_target"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
         assert!(!source.contains("alpha0 * close +"));
@@ -127,10 +129,10 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
-        assert!(source.contains("int grid_rung_limit = long_side.close_is_wel_reducer ? 499 : 500"));
-        assert!(
-            source.contains("int grid_rung_limit = short_side.close_is_wel_reducer ? 499 : 500")
-        );
+        assert!(source
+            .contains("int grid_rung_limit = long_side.close_is_exposure_reducer ? 499 : 500"));
+        assert!(source
+            .contains("int grid_rung_limit = short_side.close_is_exposure_reducer ? 499 : 500"));
         assert_eq!(source.matches("bool reducer_before_group").count(), 2);
         assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
         assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
@@ -151,10 +153,13 @@ mod tests {
         let source = mps_trailing_martingale_multicoin_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 40"));
+        assert!(source.contains("constant int PARAM_COLS = 42"));
         assert!(source.contains("constant int OVERRIDE_COLS = 28"));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
+        assert!(source.contains("twel_enforcer_enabled"));
+        assert!(source.contains("twel_enforcer_reduce_portfolio"));
+        assert!(source.contains("twel_close_qty"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
         assert!(source.contains("for (int rung = 0; rung < 499"));
         assert!(source.contains("bool reducer_before_group"));

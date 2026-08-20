@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 33;
+constant int SIDE_PARAMS = 34;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -60,7 +60,9 @@ struct TmSide {
     bool gate_initial, gate_reentry;
     bool wel_enforcer_enabled;
     float wel_enforcer_threshold;
-    bool close_is_wel_reducer;
+    bool twel_enforcer_enabled;
+    float twel_enforcer_threshold;
+    bool close_is_exposure_reducer;
     float ema0, ema1, ema2, vol1m, vol1h;
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks;
@@ -130,7 +132,9 @@ inline TmSide load_side(constant float* p, int o, float seed) {
         ? fmin(s.allowed_wel, gate_cap) : s.allowed_wel;
     s.wel_enforcer_enabled = p[o + 31] > 0.5f;
     s.wel_enforcer_threshold = p[o + 32];
-    s.close_is_wel_reducer = false;
+    s.twel_enforcer_enabled = p[o + 33] > 0.5f;
+    s.twel_enforcer_threshold = twel_threshold;
+    s.close_is_exposure_reducer = false;
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
     s.vol1m = 0.0f; s.vol1h = 0.0f;
     s.psize = 0.0f; s.pprice = 0.0f;
@@ -222,6 +226,65 @@ inline float calc_close_qty(
     return qty;
 }
 
+inline float exposure_reducer_qty(
+    float psize, float pprice, float balance, float target_exposure,
+    float reducer_price, float qty_step, float min_qty, float min_cost,
+    float c_mult
+) {
+    if (!(balance > 0.0f && psize > 0.0f && pprice > 0.0f
+        && target_exposure > 0.0f && reducer_price > 0.0f)) {
+        return 0.0f;
+    }
+    float current_exposure = psize * pprice * c_mult / balance;
+    if (!(current_exposure > target_exposure)) return 0.0f;
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float target_psize = target_exposure * balance
+        / fmax(pprice * c_mult, 1.0e-12f);
+    float reduce_qty = fmax(psize - target_psize, 0.0f);
+    if (reduce_qty <= 2.220446e-16f) reduce_qty = qty_step;
+    float reducer_qty = 0.0f;
+    for (int steps = 0; steps <= 10000; ++steps) {
+        reducer_qty = fmin(
+            psize, fmax(reducer_min, ceil_step(reduce_qty, qty_step))
+        );
+        float new_psize = fmax(
+            round_step(psize - reducer_qty, qty_step), 0.0f
+        );
+        if (new_psize < target_psize || new_psize <= 2.220446e-16f) {
+            break;
+        }
+        reduce_qty += qty_step;
+    }
+    return reducer_qty;
+}
+
+inline float total_exposure_reducer_qty(
+    float psize, float pprice, float balance, float target_exposure,
+    float reducer_price, float qty_step, float min_qty, float min_cost,
+    float c_mult
+) {
+    if (!(balance > 0.0f && psize > 0.0f && pprice > 0.0f
+        && target_exposure > 0.0f && reducer_price > 0.0f)) {
+        return 0.0f;
+    }
+    float current_exposure = psize * pprice * c_mult / balance;
+    if (!(current_exposure > target_exposure + 1.0e-9f)) return 0.0f;
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float exposure_to_cut = current_exposure - target_exposure;
+    float requested_qty = ceil_step(
+        exposure_to_cut * balance / fmax(pprice * c_mult, 1.0e-12f),
+        qty_step
+    );
+    float reducer_qty = fmin(
+        psize, fmax(reducer_min, requested_qty)
+    );
+    return fmin(psize, ceil_step(reducer_qty, qty_step));
+}
+
 inline void generate_orders(
     thread TmSide& s, bool is_long, float balance, float price_now,
     int touch_down_ticks, int touch_up_ticks, int touch_nearest_ticks,
@@ -250,7 +313,7 @@ inline void generate_orders(
     s.close_gen_touch_nearest_ticks = touch_nearest_ticks;
     s.close_gen_touch_min_qty = touch_min_qty;
     s.close_gen_touch_min_qty_relation = touch_min_qty_relation;
-    s.close_is_wel_reducer = false;
+    s.close_is_exposure_reducer = false;
     int band_ticks = directional_ticks(
         band * (is_long ? 1.0f - s.initial_ema_dist
                         : 1.0f + s.initial_ema_dist),
@@ -365,45 +428,38 @@ inline void generate_orders(
         qty_step, min_qty, min_cost, c_mult
     );
 
-    // Exact Trailing Martingale gives per-position exposure repair precedence
-    // over its normal close. Reduce strictly below the configured fraction of
-    // the allowance-adjusted WEL, using the passive ask for longs and bid for
-    // shorts just like calc_wel_auto_reduce_long/short in closes.rs.
+    // Exact Rust selects the largest protective reducer before allocating the
+    // ordinary close ladder.  Model both the per-position WEL repair and the
+    // side-wide TWEL repair, retaining the winning reducer's own price.
     float wel_target = s.allowed_wel * s.wel_enforcer_threshold;
-    if (s.wel_enforcer_enabled && s.wel_enforcer_threshold > 0.0f
-        && balance > 0.0f && s.psize > 0.0f && s.pprice > 0.0f
-        && wel_target > 0.0f && we > wel_target) {
-        int reducer_ticks = is_long ? touch_up_ticks : touch_down_ticks;
-        float reducer_price = float(reducer_ticks) * price_step;
-        if (reducer_ticks > 0 && reducer_price > 0.0f) {
-            float reducer_min = min_entry_qty(
-                reducer_price, qty_step, min_qty, min_cost, c_mult
-            );
-            float target_psize = wel_target * balance
-                / fmax(s.pprice * c_mult, 1.0e-12f);
-            float reduce_qty = fmax(s.psize - target_psize, 0.0f);
-            if (reduce_qty <= 2.220446e-16f) reduce_qty = qty_step;
-            float reducer_qty = 0.0f;
-            for (int steps = 0; steps <= 10000; ++steps) {
-                reducer_qty = fmin(
-                    s.psize,
-                    fmax(reducer_min, ceil_step(reduce_qty, qty_step))
-                );
-                float new_psize = fmax(
-                    round_step(s.psize - reducer_qty, qty_step), 0.0f
-                );
-                if (new_psize < target_psize
-                    || new_psize <= 2.220446e-16f) {
-                    break;
-                }
-                reduce_qty += qty_step;
-            }
-            s.close_ticks = reducer_ticks;
-            s.close_price = reducer_price;
-            s.close_qty = reducer_qty;
-            s.close_is_wel_reducer = true;
-            return;
-        }
+    int wel_ticks = is_long ? touch_up_ticks : touch_down_ticks;
+    float wel_price = float(wel_ticks) * price_step;
+    float wel_qty = s.wel_enforcer_enabled && s.wel_enforcer_threshold > 0.0f
+        ? exposure_reducer_qty(
+            s.psize, s.pprice, balance, wel_target, wel_price,
+            qty_step, min_qty, min_cost, c_mult
+        ) : 0.0f;
+
+    float twel_target = s.twel * s.twel_enforcer_threshold;
+    int twel_ticks = is_long
+        ? int(floor(float(touch_down_ticks) * 0.9995f + 1.0e-6f))
+        : int(ceil(float(touch_up_ticks) * 1.0005f - 1.0e-6f));
+    twel_ticks = max(twel_ticks, 1);
+    float twel_price = float(twel_ticks) * price_step;
+    float twel_qty = s.twel_enforcer_enabled
+        && s.twel_enforcer_threshold > 0.0f
+        ? total_exposure_reducer_qty(
+            s.psize, s.pprice, balance, twel_target, twel_price,
+            qty_step, min_qty, min_cost, c_mult
+        ) : 0.0f;
+
+    if (wel_qty > 0.0f || twel_qty > 0.0f) {
+        bool use_twel = twel_qty >= wel_qty;
+        s.close_ticks = use_twel ? twel_ticks : wel_ticks;
+        s.close_price = use_twel ? twel_price : wel_price;
+        s.close_qty = use_twel ? twel_qty : wel_qty;
+        s.close_is_exposure_reducer = true;
+        return;
     }
 
     float ct = s.close_threshold_base + wer * s.close_threshold_we
@@ -670,7 +726,7 @@ inline void passivbot_single_coin_impl(
         bool long_scan_close_grid = long_close_ready
             && long_side.close_ticks <= high_fill_max_tick;
         if (long_close_ready && long_recursive_close
-            && long_side.close_is_wel_reducer) {
+            && long_side.close_is_exposure_reducer) {
             // A touch-clamped grid order uses nearest-tick quantization while
             // the passive reducer rounds up.  The grid may therefore be one
             // tick nearer and independently reachable.
@@ -700,7 +756,7 @@ inline void passivbot_single_coin_impl(
             float reducer_qty = 0.0f;
             int reducer_ticks = 0;
             float reducer_price = 0.0f;
-            if (long_side.close_is_wel_reducer) {
+            if (long_side.close_is_exposure_reducer) {
                 reducer_qty = fmin(
                     round_step(long_side.close_qty, qty_step), long_side.psize
                 );
@@ -715,7 +771,7 @@ inline void passivbot_single_coin_impl(
                 grid_source.wel_enforcer_enabled = false;
             }
             CloseGroup group;
-            int grid_rung_limit = long_side.close_is_wel_reducer ? 499 : 500;
+            int grid_rung_limit = long_side.close_is_exposure_reducer ? 499 : 500;
             int group_count = recursive_close_groups(
                 grid_source, true, -1, qty_step, price_step,
                 min_qty, min_cost, c_mult, grid_rung_limit, group
@@ -887,7 +943,7 @@ inline void passivbot_single_coin_impl(
         bool short_scan_close_grid = short_close_ready
             && short_side.close_ticks > low_nonfill_max_tick;
         if (short_close_ready && short_recursive_close
-            && short_side.close_is_wel_reducer) {
+            && short_side.close_is_exposure_reducer) {
             // Mirror the long-side nearest-tick scan: a touch-clamped grid
             // order can sit one tick above the down-rounded reducer.
             short_scan_close_grid = short_scan_close_grid
@@ -915,7 +971,7 @@ inline void passivbot_single_coin_impl(
             float reducer_qty = 0.0f;
             int reducer_ticks = 0;
             float reducer_price = 0.0f;
-            if (short_side.close_is_wel_reducer) {
+            if (short_side.close_is_exposure_reducer) {
                 reducer_qty = fmin(
                     round_step(short_side.close_qty, qty_step), short_side.psize
                 );
@@ -930,7 +986,7 @@ inline void passivbot_single_coin_impl(
                 grid_source.wel_enforcer_enabled = false;
             }
             CloseGroup group;
-            int grid_rung_limit = short_side.close_is_wel_reducer ? 499 : 500;
+            int grid_rung_limit = short_side.close_is_exposure_reducer ? 499 : 500;
             int group_count = recursive_close_groups(
                 grid_source, false, -1, qty_step, price_step,
                 min_qty, min_cost, c_mult, grid_rung_limit, group

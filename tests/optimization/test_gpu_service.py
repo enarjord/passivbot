@@ -21,6 +21,7 @@ from optimization.gpu.service import (
     _position_exposure_enforcer_params,
     _require_complete_valid_tail,
     _single_coin_exposure_params,
+    _total_exposure_enforcer_params,
 )
 
 
@@ -79,6 +80,31 @@ def test_tm_position_exposure_repair_packs_exact_rust_inputs():
                 "position_exposure_enforcer_threshold": 0.0,
             },
             side="long",
+        )
+
+
+@pytest.mark.parametrize(
+    ("policy", "reduce_portfolio"),
+    [("reduce_overweight", 0.0), ("reduce_portfolio", 1.0)],
+)
+def test_tm_total_exposure_repair_packs_exact_rust_inputs(
+    policy, reduce_portfolio
+):
+    assert _total_exposure_enforcer_params(
+        {
+            "total_exposure_enforcer_enabled": True,
+            "total_exposure_enforcer_policy": policy,
+        },
+        side="long",
+    ) == {
+        "twel_enforcer_enabled": 1.0,
+        "twel_enforcer_reduce_portfolio": reduce_portfolio,
+    }
+
+    with pytest.raises(ValueError, match="total_exposure_enforcer_policy"):
+        _total_exposure_enforcer_params(
+            {"total_exposure_enforcer_policy": "largest_loss"},
+            side="short",
         )
 
 

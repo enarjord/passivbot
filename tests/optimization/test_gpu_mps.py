@@ -36,6 +36,10 @@ def _tm_wel_enforcer_fields(*, enabled=False, threshold=1.0):
     return [float(enabled), threshold]
 
 
+def _tm_twel_enforcer_fields(*, enabled=False):
+    return [float(enabled)]
+
+
 def _multicoin_exposure_fixture(
     strategy_kind,
     side,
@@ -146,6 +150,8 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_threshold": 1.0,
             "wel_enforcer_enabled": 0.0,
             "wel_enforcer_threshold": 1.0,
+            "twel_enforcer_enabled": 0.0,
+            "twel_enforcer_reduce_portfolio": 0.0,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
@@ -503,7 +509,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 40" in source
+    assert "constant int PARAM_COLS = 42" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
@@ -590,6 +596,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_threshold": 1.0,
         "wel_enforcer_enabled": 0.0,
         "wel_enforcer_threshold": 1.0,
+        "twel_enforcer_enabled": 0.0,
+        "twel_enforcer_reduce_portfolio": 0.0,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -1027,6 +1035,7 @@ def _tm_single_row(
     threshold=1.0,
     wel_enforcer_enabled=False,
     wel_enforcer_threshold=1.0,
+    twel_enforcer_enabled=False,
 ):
     return _tm_row(
         initial_ema_dist=initial_ema_dist,
@@ -1040,6 +1049,8 @@ def _tm_single_row(
     ) + _tm_wel_enforcer_fields(
         enabled=wel_enforcer_enabled,
         threshold=wel_enforcer_threshold,
+    ) + _tm_twel_enforcer_fields(
+        enabled=twel_enforcer_enabled,
     )
 
 
@@ -1085,7 +1096,12 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(
                 gate_reentry=1.0,
             )
             values[6] = 1.0
-            return values + exposure + _tm_wel_enforcer_fields()
+            return (
+                values
+                + exposure
+                + _tm_wel_enforcer_fields()
+                + _tm_twel_enforcer_fields()
+            )
         values = [
             1.0,
             2.0,
@@ -1163,7 +1179,16 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
     baseline[16] = 10.0
     baseline[20] = 0.0
     repaired = list(baseline)
-    repaired[-2:] = _tm_wel_enforcer_fields(enabled=True, threshold=0.5)
+    repaired[
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+            "wel_enforcer_enabled"
+        )
+    ] = 1.0
+    repaired[
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+            "wel_enforcer_threshold"
+        )
+    ] = 0.5
     output = MpsTrailingMartingaleRunner(
         market,
         run,
@@ -1187,6 +1212,68 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
     )
     assert 0.0 < sizes[1] < sizes[0]
     assert 0.45 < repaired_we < 0.5
+    assert (
+        output["day_volume"][1].sum().item()
+        > output["day_volume"][0].sum().item()
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_single_coin_total_exposure_repair(side):
+    count = 10
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    # A coarse quantity step makes the semantic distinction observable:
+    # TWEL repair rounds up to the target, while WEL repair intentionally
+    # takes one additional step to finish strictly below its target.
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    baseline = _tm_single_row(entry_gate=False, threshold=0.5)
+    baseline[6] = 1.0
+    baseline[7] = 10.0
+    baseline[11] = 0.0
+    baseline[16] = 10.0
+    baseline[20] = 0.0
+    repaired = list(baseline)
+    repaired[
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+            "twel_enforcer_enabled"
+        )
+    ] = 1.0
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(
+        np.asarray(
+            [baseline + baseline, repaired + repaired], dtype=np.float64
+        )
+    )
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    sizes = output[size_key].cpu().numpy()
+    assert sizes[0] > 9.0
+    assert sizes[1] == pytest.approx(5.0)
     assert (
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
@@ -1685,6 +1772,52 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_total_exposure_repair_policy(side):
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[0, 24] = 0.1
+    runner, baseline = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        overrides,
+        count=10,
+        closes=(100.0, 100.0),
+    )
+    overweight = list(baseline)
+    overweight[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_entry_gate_enabled"
+        )
+    ] = 0.0
+    overweight[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_threshold"
+        )
+    ] = 0.5
+    overweight[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_enabled"
+        )
+    ] = 1.0
+    portfolio = list(overweight)
+    portfolio[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "twel_enforcer_reduce_portfolio"
+        )
+    ] = 1.0
+
+    output = runner.run(np.asarray([overweight, portfolio], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["open_positions"].cpu().tolist() == pytest.approx([2.0, 1.0])
+    pprice_key = "pprice" if side == "long" else "short_pprice"
+    total_twe = (output[pprice_key] / output["balance"]).cpu()
+    assert (total_twe < 0.5).all()
 
 
 @pytest.mark.skipif(
@@ -2379,6 +2512,8 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     )
     row.extend(_single_coin_exposure_fields())
     row.extend(_tm_wel_enforcer_fields())
+    row.extend(_tm_twel_enforcer_fields())
+    row.append(0.0)  # TWEL reduce_overweight policy
 
     output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side
@@ -2407,7 +2542,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 33" in source
+    assert "constant int SIDE_PARAMS = 34" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
