@@ -19,6 +19,22 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
 )
+from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
+
+
+@pytest.mark.parametrize(
+    "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
+)
+def test_mps_realized_loss_limit_float32_encoding_never_loosens(value):
+    encoded = _encode_max_realized_loss_pct(value)
+
+    assert encoded <= value
+    assert encoded < 1.0
+
+
+@pytest.mark.parametrize("value", [1.0, 2.0, 1.0e100])
+def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
+    assert _encode_max_realized_loss_pct(value) == 1.0
 
 
 def _single_coin_exposure_fields(
@@ -297,6 +313,10 @@ def test_mps_ema_anchor_shader_smoke():
     assert "constant int SIDE_PARAMS = 17" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
+    assert "realized_loss_gate_allows" in source
+    assert "float32_floor_nonnegative" in source
+    assert "record_realized_net" in source
+    assert "const float max_realized_loss_pct = settings[14]" in source
     assert "constant int SCALAR_COLS = 18" in source
     assert "side.psize * price_now * c_mult / balance" in source
     assert "short_side.psize * c_mult * (short_side.pprice - close)" in source
@@ -1389,6 +1409,274 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
+    count = 10
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    if side == "long":
+        close[2:] = 99.9
+        high[2:] = 99.9
+        low[3] = 98.0
+        low[4:] = 99.9
+    else:
+        close[2:] = 100.1
+        high[3] = 102.0
+        high[4:] = 100.1
+        low[2:] = 100.1
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    values = {
+        "base_qty_pct": 1.0,
+        "ema_span_0": 2.0,
+        "ema_span_1": 3.0,
+        "entry_double_down_factor": 0.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "offset_volatility_1h_weight": 0.0,
+        "offset_volatility_1m_weight": 0.0,
+        "offset_volatility_ema_span_1h": 2.0,
+        "offset_volatility_ema_span_1m": 2.0,
+        "entry_cooldown_minutes": 100.0,
+        "total_wallet_exposure_limit": 1.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 0.5,
+        "twel_enforcer_enabled": 1.0,
+    }
+    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    kwargs = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+    }
+
+    ungated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=1.0, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    gated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=0.0, **kwargs
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key][0].item() < gated[size_key][0].item()
+    assert gated[size_key][0].item() > 8.0
+    assert gated["balance"][0].item() >= ungated["balance"][0].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_realized_loss_gate_shares_budget_between_sides():
+    count = 8
+    close = np.full(count, 100.0)
+    high = np.full(count, 102.0)
+    low = np.full(count, 98.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    values = {
+        "base_qty_pct": 1.0,
+        "ema_span_0": 2.0,
+        "ema_span_1": 3.0,
+        "entry_double_down_factor": 0.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "offset_volatility_1h_weight": 0.0,
+        "offset_volatility_1m_weight": 0.0,
+        "offset_volatility_ema_span_1h": 2.0,
+        "offset_volatility_ema_span_1m": 2.0,
+        "entry_cooldown_minutes": 100.0,
+        "total_wallet_exposure_limit": 1.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 0.5,
+        "twel_enforcer_enabled": 1.0,
+    }
+    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+
+    output = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=True,
+        max_realized_loss_pct=0.0031,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    sizes = sorted([output["psize"][0].item(), output["short_psize"][0].item()])
+    assert sizes[0] < 8.0
+    assert sizes[1] > 8.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_realized_loss_gate_reserves_unfilled_batch_loss():
+    count = 6
+    close = np.array([100.0, 100.0, 100.0, 100.0, 99.9, 99.9])
+    high = np.array([100.0, 100.0, 100.0, 100.01, 99.9, 99.9])
+    low = np.array([100.0, 100.0, 100.0, 99.99, 99.9, 99.9])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    values = {
+        "base_qty_pct": 1.0,
+        "ema_span_0": 2.0,
+        "ema_span_1": 3.0,
+        "entry_double_down_factor": 0.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "offset_volatility_1h_weight": 0.0,
+        "offset_volatility_1m_weight": 0.0,
+        "offset_volatility_ema_span_1h": 2.0,
+        "offset_volatility_ema_span_1m": 2.0,
+        "entry_cooldown_minutes": 100.0,
+        "total_wallet_exposure_limit": 1.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 0.5,
+        "twel_enforcer_enabled": 1.0,
+    }
+    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    common = {
+        "long_enabled": True,
+        "short_enabled": True,
+        "hedge_mode": True,
+    }
+
+    ungated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=1.0, **common
+    ).run(np.asarray([row + row], dtype=np.float64))
+    gated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=0.0031, **common
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    sizes = {
+        "ungated_long": ungated["psize"][0].item(),
+        "ungated_short": ungated["short_psize"][0].item(),
+        "gated_long": gated["psize"][0].item(),
+        "gated_short": gated["short_psize"][0].item(),
+    }
+    assert sizes["ungated_long"] > 8.0, sizes
+    assert sizes["ungated_short"] < 8.0, sizes
+    assert sizes["gated_long"] > 8.0, sizes
+    assert sizes["gated_short"] > 8.0, sizes
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_zero_loss_budget_blocks_loss_below_balance_ulp():
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.array([100.0, 100.0, 100.0, 100.01, 100.01, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 99.99, 99.99, 100.0])
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.000001, 0.01, 0.000001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        100_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    values = {
+        "base_qty_pct": 0.000001,
+        "ema_span_0": 2.0,
+        "ema_span_1": 3.0,
+        "entry_double_down_factor": 0.0,
+        "offset": 0.0,
+        "offset_psize_weight": 0.0,
+        "offset_volatility_1h_weight": 0.0,
+        "offset_volatility_1m_weight": 0.0,
+        "offset_volatility_ema_span_1h": 2.0,
+        "offset_volatility_ema_span_1m": 2.0,
+        "entry_cooldown_minutes": 100.0,
+        "total_wallet_exposure_limit": 1.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 0.0,
+        "twel_enforcer_threshold": 1.0,
+        "twel_enforcer_enabled": 0.0,
+    }
+    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+
+    ungated = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        max_realized_loss_pct=1.0,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    gated = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        max_realized_loss_pct=0.0,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert ungated["psize"][0].item() == pytest.approx(0.0)
+    assert gated["psize"][0].item() > 0.0009
 
 
 @pytest.mark.skipif(

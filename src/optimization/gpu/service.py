@@ -438,6 +438,9 @@ class MpsSingleCoinProxy:
             filter_by_min_effective_cost=bool(
                 backtest_params["filter_by_min_effective_cost"]
             ),
+            max_realized_loss_pct=float(
+                backtest_params.get("max_realized_loss_pct", 1.0)
+            ),
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:

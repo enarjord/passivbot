@@ -152,7 +152,12 @@ The supported slice is intentionally narrow:
   strategy close and sizes it strictly below that target. Static per-coin overrides may change
   both fields. EMA Anchor position-exposure repair remains fail closed because its exact Rust
   strategy path does not use this reducer
-- BTC collateral, realized-loss gating, and total-exposure repair remain disabled
+- single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
+  shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
+  conservative all-history loss envelope, so it may block a close that exact Rust admits after old
+  PnL ages out of `live.pnls_max_lookback_days`; exact validation remains authoritative. Trailing
+  Martingale and multicoin realized-loss gating remain fail closed
+- BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
   screening proxy compares against the highest executable minimum observed for that coin in the
