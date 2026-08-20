@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Expanded Apple MPS optimizer scoring and limits with weighted strategy-equity MDG, Sharpe,
+  Sortino, Omega, Calmar, and Sterling metrics. The proxy maps the exact optimizer's ten-subset
+  averaging schedule onto its existing compact daily Metal summaries and skips these additional
+  reductions when none of the weighted metrics is requested; exact Rust validation remains
+  authoritative.
+
 - Expanded Apple MPS optimizer scoring and limits with strategy-equity gain, Omega ratio,
   expected shortfall, Calmar ratio, Sterling ratio, and median underwater percentage. These
   metrics are reduced from the existing compact Metal equity summaries, while exact Rust

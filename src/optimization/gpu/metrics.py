@@ -17,17 +17,23 @@ SUPPORTED_METRICS = (
     "adg_strategy_eq_w",
     "backtest_completion_ratio",
     "calmar_ratio_strategy_eq",
+    "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_strategy_eq",
     "expected_shortfall_1pct_strategy_eq",
     "fills_gap_longest_days",
     "gain_strategy_eq",
     "mdg_strategy_eq",
+    "mdg_strategy_eq_w",
     "omega_ratio_strategy_eq",
+    "omega_ratio_strategy_eq_w",
     "position_held_days_max",
     "sharpe_ratio_strategy_eq",
+    "sharpe_ratio_strategy_eq_w",
     "sortino_ratio_strategy_eq",
+    "sortino_ratio_strategy_eq_w",
     "sterling_ratio_strategy_eq",
+    "sterling_ratio_strategy_eq_w",
     "strategy_eq_recovery_days_max",
     "strategy_eq_underwater_pct_mean",
     "strategy_eq_underwater_pct_median",
@@ -178,16 +184,29 @@ def _mean_worst_one_pct_abs(values, mask):
     return torch.where(counts > 0, result, torch.zeros_like(result))
 
 
-def _weighted_adg(
-    day_eq,
+def _mean_worst_one_pct_largest(values, mask):
+    if values.shape[1] == 0:
+        return torch.zeros(values.shape[0], dtype=values.dtype, device=values.device)
+    counts = mask.sum(dim=1)
+    ordered = torch.sort(
+        torch.where(mask, values.abs(), torch.zeros_like(values)),
+        dim=1,
+        descending=True,
+    ).values
+    worst_count = (counts.to(values.dtype) * 0.01).floor().clamp(min=1).to(torch.long)
+    cumulative = torch.cumsum(ordered, dim=1)
+    result = cumulative.gather(1, (worst_count - 1).unsqueeze(1)).squeeze(1)
+    result = result / worst_count.to(values.dtype)
+    return torch.where(counts > 0, result, torch.zeros_like(result))
+
+
+def _weighted_subsets(
     active,
     first_eq_ts,
     last_eq_ts,
     first_timestamp,
     interval_ms,
 ):
-    """Match Rust's minute-sliced weighted ADG using compact daily outputs."""
-
     finite_timestamps = torch.isfinite(first_eq_ts) & torch.isfinite(last_eq_ts)
     sample_span = torch.where(
         finite_timestamps,
@@ -200,32 +219,144 @@ def _weighted_adg(
         .add(1)
         .clamp(min=1)
     )
-    eligible = (
-        finite_timestamps & (sample_count >= 2)
-    )
-    total = torch.where(
-        eligible,
-        _smoothed_adg(day_eq, active),
-        torch.zeros(day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device),
-    )
+    eligible = finite_timestamps & (sample_count >= 2)
+    subsets = [active]
     first_day = int(first_timestamp) // 86_400_000
-    day_ids = torch.arange(day_eq.shape[1], device=day_eq.device) + first_day
+    day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
         fraction = 1.0 / (1.0 + index)
         start_position = torch.floor(
-            sample_count.to(day_eq.dtype) * (1.0 - fraction) + 0.5
+            sample_count.to(first_eq_ts.dtype) * (1.0 - fraction) + 0.5
         ).to(torch.long)
-        subset_start_ts = first_eq_ts + start_position.to(day_eq.dtype) * float(
+        subset_start_ts = first_eq_ts + start_position.to(first_eq_ts.dtype) * float(
             interval_ms
         )
         subset_start_day = torch.floor(subset_start_ts / 86_400_000.0).to(
             torch.long
         )
-        subset = active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
+        subsets.append(
+            active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
+        )
+    return eligible, subsets
+
+
+def _weighted_adg(
+    day_eq,
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+):
+    """Match Rust's minute-sliced weighted ADG using compact daily outputs."""
+
+    eligible, subsets = _weighted_subsets(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    total = torch.zeros(
+        day_eq.shape[0], dtype=day_eq.dtype, device=day_eq.device
+    )
+    for subset in subsets:
         total += torch.where(
             eligible, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
         )
     return total / 10.0
+
+
+WEIGHTED_STRATEGY_EQ_METRICS = {
+    "adg_strategy_eq_w",
+    "mdg_strategy_eq_w",
+    "sharpe_ratio_strategy_eq_w",
+    "sortino_ratio_strategy_eq_w",
+    "omega_ratio_strategy_eq_w",
+    "calmar_ratio_strategy_eq_w",
+    "sterling_ratio_strategy_eq_w",
+}
+
+
+def _weighted_strategy_eq_metrics(
+    day_end_eq,
+    day_min_eq,
+    day_max_dd,
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+    requested,
+):
+    requested = set(requested) & WEIGHTED_STRATEGY_EQ_METRICS
+    if not requested:
+        return {}
+    eligible, subsets = _weighted_subsets(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    totals = {
+        name: torch.zeros(
+            day_end_eq.shape[0],
+            dtype=day_end_eq.dtype,
+            device=day_end_eq.device,
+        )
+        for name in requested
+    }
+    need_return_changes = bool(
+        requested & {"mdg_strategy_eq_w", "omega_ratio_strategy_eq_w"}
+    )
+    need_min_changes = bool(
+        requested
+        & {"sharpe_ratio_strategy_eq_w", "sortino_ratio_strategy_eq_w"}
+    )
+    need_drawdowns = bool(
+        requested & {"calmar_ratio_strategy_eq_w", "sterling_ratio_strategy_eq_w"}
+    )
+    for subset in subsets:
+        adg = _smoothed_adg(day_end_eq, subset)
+        values = {}
+        if "adg_strategy_eq_w" in requested:
+            values["adg_strategy_eq_w"] = adg
+        if need_return_changes:
+            returns, return_mask = _pct_change(day_end_eq, subset)
+            if "mdg_strategy_eq_w" in requested:
+                values["mdg_strategy_eq_w"] = _masked_median(returns, return_mask)
+            if "omega_ratio_strategy_eq_w" in requested:
+                values["omega_ratio_strategy_eq_w"] = _omega_ratio(
+                    returns, return_mask
+                )
+        if need_min_changes:
+            min_returns, min_return_mask = _pct_change(day_min_eq, subset)
+            sharpe, sortino = _sharpe_sortino(min_returns, min_return_mask, adg)
+            if "sharpe_ratio_strategy_eq_w" in requested:
+                values["sharpe_ratio_strategy_eq_w"] = sharpe
+            if "sortino_ratio_strategy_eq_w" in requested:
+                values["sortino_ratio_strategy_eq_w"] = sortino
+        if need_drawdowns:
+            drawdown_worst = torch.where(
+                subset, day_max_dd, torch.zeros_like(day_max_dd)
+            ).max(dim=1).values
+            if "calmar_ratio_strategy_eq_w" in requested:
+                values["calmar_ratio_strategy_eq_w"] = adg / drawdown_worst.clamp(
+                    min=1e-12
+                )
+            if "sterling_ratio_strategy_eq_w" in requested:
+                worst_one_pct = _mean_worst_one_pct_largest(
+                    day_max_dd, subset
+                )
+                values["sterling_ratio_strategy_eq_w"] = adg / worst_one_pct.clamp(
+                    min=1e-12
+                )
+        for name, value in values.items():
+            totals[name] += torch.where(
+                eligible, value, torch.zeros_like(value)
+            )
+    return {name: value / 10.0 for name, value in totals.items()}
 
 
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
@@ -237,6 +368,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_volume = out["day_volume"].to(torch.float64)
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
+    requested = set(SUPPORTED_METRICS if needed is None else needed)
 
     gain, adg = _smoothed_gain_adg(day_end_eq, active)
     daily_changes, change_mask = _pct_change(day_end_eq, active)
@@ -245,31 +377,23 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     daily_min_changes, min_change_mask = _pct_change(day_min_eq, active)
     sharpe, sortino = _sharpe_sortino(daily_min_changes, min_change_mask, adg)
     expected_shortfall = _mean_worst_one_pct_abs(daily_min_changes, min_change_mask)
-    adg_w = _weighted_adg(
+    weighted_metrics = _weighted_strategy_eq_metrics(
         day_end_eq,
+        day_min_eq,
+        day_max_dd,
         active,
         out["first_eq_ts"],
         out["last_eq_ts"],
         data["ts0"],
         run.interval_ms,
+        requested,
     )
 
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
         dim=1
     ) / active.sum(dim=1).clamp(min=1)
     underwater_median = _masked_median(day_max_dd, active)
-    sorted_drawdowns, _ = torch.sort(
-        torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)),
-        dim=1,
-        descending=True,
-    )
-    worst_count = (
-        (0.01 * active.sum(dim=1).to(torch.float64)).floor().clamp(min=1).to(torch.long)
-    )
-    cumulative_drawdowns = torch.cumsum(sorted_drawdowns, dim=1)
-    worst_one_pct = cumulative_drawdowns.gather(
-        1, (worst_count - 1).unsqueeze(1)
-    ).squeeze(1) / worst_count.to(torch.float64)
+    worst_one_pct = _mean_worst_one_pct_largest(day_max_dd, active)
     calmar = adg / out["max_dd"].to(torch.float64).clamp(min=1e-12)
     sterling = adg / worst_one_pct.clamp(min=1e-12)
 
@@ -328,7 +452,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
 
     objectives = {
         "adg_strategy_eq": adg,
-        "adg_strategy_eq_w": adg_w,
         "backtest_completion_ratio": completion,
         "calmar_ratio_strategy_eq": calmar,
         "drawdown_worst_mean_1pct_strategy_eq": worst_one_pct,
@@ -347,7 +470,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    objectives.update(weighted_metrics)
     if needed is None:
         return objectives
-    requested = set(needed)
     return {key: value for key, value in objectives.items() if key in requested}

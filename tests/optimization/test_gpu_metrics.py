@@ -10,10 +10,12 @@ from optimization.gpu.metrics import (
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
+    _pct_change,
     _sharpe_sortino,
     _smoothed_adg,
     _smoothed_gain_adg,
     _weighted_adg,
+    _weighted_strategy_eq_metrics,
     compute_objectives,
 )
 
@@ -91,6 +93,17 @@ def test_strategy_equity_summary_metric_surface_is_supported():
     } <= set(SUPPORTED_METRICS)
 
 
+def test_weighted_strategy_equity_metric_surface_is_supported():
+    assert {
+        "mdg_strategy_eq_w",
+        "sharpe_ratio_strategy_eq_w",
+        "sortino_ratio_strategy_eq_w",
+        "omega_ratio_strategy_eq_w",
+        "calmar_ratio_strategy_eq_w",
+        "sterling_ratio_strategy_eq_w",
+    } <= set(SUPPORTED_METRICS)
+
+
 def test_smoothed_gain_and_adg_match_rust_terminal_contract():
     gain, adg = _smoothed_gain_adg(
         torch.tensor([[100.0, 110.0, 120.0, 130.0]], dtype=torch.float64),
@@ -121,6 +134,55 @@ def test_expected_shortfall_uses_worst_one_percent_daily_min_return():
     mask = torch.tensor([[True, True, True, True]])
 
     assert _mean_worst_one_pct_abs(values, mask).item() == pytest.approx(0.4)
+
+
+def test_weighted_strategy_metrics_use_rust_minute_sliced_subset_average():
+    day_end = torch.tensor([[100.0, 90.0, 100.0, 90.0]], dtype=torch.float64)
+    day_min = day_end.clone()
+    day_dd = torch.tensor([[0.0, 0.1, 0.05, 0.1]], dtype=torch.float64)
+    active = torch.ones_like(day_end, dtype=torch.bool)
+    last_ts = float((4 * 1440 - 1) * 60_000)
+    requested = {
+        "mdg_strategy_eq_w",
+        "sharpe_ratio_strategy_eq_w",
+        "sortino_ratio_strategy_eq_w",
+        "omega_ratio_strategy_eq_w",
+        "calmar_ratio_strategy_eq_w",
+        "sterling_ratio_strategy_eq_w",
+    }
+
+    metrics = _weighted_strategy_eq_metrics(
+        day_end,
+        day_min,
+        day_dd,
+        active,
+        torch.tensor([0.0], dtype=torch.float64),
+        torch.tensor([last_ts], dtype=torch.float64),
+        0,
+        60_000,
+        requested,
+    )
+
+    full_returns, full_mask = _pct_change(day_end, active)
+    last_two = torch.tensor([[False, False, True, True]])
+    tail_returns, tail_mask = _pct_change(day_end, last_two)
+    expected_mdg = (
+        _masked_median(full_returns, full_mask)
+        + 2.0 * _masked_median(tail_returns, tail_mask)
+    ) / 10.0
+    expected_omega = (
+        _omega_ratio(full_returns, full_mask)
+        + 2.0 * _omega_ratio(tail_returns, tail_mask)
+    ) / 10.0
+
+    assert set(metrics) == requested
+    assert metrics["mdg_strategy_eq_w"].item() == pytest.approx(
+        expected_mdg.item()
+    )
+    assert metrics["omega_ratio_strategy_eq_w"].item() == pytest.approx(
+        expected_omega.item()
+    )
+    assert all(torch.isfinite(value).all().item() for value in metrics.values())
 
 
 def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
