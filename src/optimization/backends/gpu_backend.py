@@ -220,6 +220,7 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("coin_overrides",),
     ("live", "forager_score_hysteresis_pct"),
     ("live", "hedge_mode"),
+    ("live", "max_realized_loss_pct"),
 }
 
 
@@ -797,10 +798,13 @@ def _validate_scope_config(
         )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
-    if float(config.get("live", {}).get("max_realized_loss_pct", 1.0)) != 1.0:
+    max_realized_loss_pct = float(
+        config.get("live", {}).get("max_realized_loss_pct", 1.0)
+    )
+    if not math.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
         raise ValueError(
-            "GPU foundation requires live.max_realized_loss_pct=1.0 because the "
-            "screening proxy does not model the realized-loss gate"
+            "GPU foundation requires a finite non-negative "
+            "live.max_realized_loss_pct"
         )
     exchanges = list(exchanges)
     if len(exchanges) != 1:
@@ -819,6 +823,14 @@ def _validate_scope_config(
             "GPU foundation supports strategy_kind=ema_anchor or "
             "trailing_martingale only; "
             f"got {strategy_kind!r}"
+        )
+    if max_realized_loss_pct < 1.0 and not (
+        coin_count == 1 and strategy_kind == "ema_anchor"
+    ):
+        raise ValueError(
+            "GPU realized-loss gating currently supports single-coin EMA Anchor; "
+            "Trailing Martingale and multicoin runs require "
+            "live.max_realized_loss_pct>=1.0"
         )
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:

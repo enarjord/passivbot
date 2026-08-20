@@ -618,6 +618,11 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             ("live", "forager_score_hysteresis_pct"),
         ),
         ("live.hedge_mode", True, ("live", "hedge_mode")),
+        (
+            "live.max_realized_loss_pct",
+            0.05,
+            ("live", "max_realized_loss_pct"),
+        ),
     ],
 )
 def test_gpu_suite_inputs_accept_modeled_non_bot_overrides(
@@ -1388,12 +1393,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             "coin_overrides",
         ),
         (
-            lambda config: config["live"].__setitem__(
-                "max_realized_loss_pct", 0.1
-            ),
-            "max_realized_loss_pct",
-        ),
-        (
             lambda config: config["bot"]["long"]["risk"].__setitem__(
                 "position_exposure_enforcer_enabled", True
             ),
@@ -1411,6 +1410,47 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("max_loss_pct", [0.0, 0.1, 0.999, 1.0, 2.0])
+def test_gpu_foundation_accepts_single_coin_ema_realized_loss_gate(
+    side, max_loss_pct
+):
+    config = _directional_ema_config(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["live"]["max_realized_loss_pct"] = max_loss_pct
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("max_loss_pct", [-0.1, float("nan"), float("inf")])
+def test_gpu_foundation_rejects_invalid_realized_loss_gate(max_loss_pct):
+    config = _long_only_ema_config()
+    config["live"]["max_realized_loss_pct"] = max_loss_pct
+
+    with pytest.raises(ValueError, match="finite non-negative"):
+        _validate_scope(config, _Evaluator())
+
+
+@pytest.mark.parametrize(
+    ("config", "evaluator"),
+    [
+        (
+            _directional_tm_config(long_enabled=True, short_enabled=False),
+            _Evaluator(),
+        ),
+        (_long_only_ema_config(), _MulticoinEvaluator()),
+    ],
+)
+def test_gpu_realized_loss_gate_remains_fail_closed_outside_single_ema(
+    config, evaluator
+):
+    config["live"]["max_realized_loss_pct"] = 0.1
+
+    with pytest.raises(ValueError, match="single-coin EMA Anchor"):
+        _validate_scope(config, evaluator)
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])

@@ -122,6 +122,7 @@ class MpsEmaAnchorRunner:
         short_enabled: bool = False,
         hedge_mode: bool = True,
         filter_by_min_effective_cost: bool = False,
+        max_realized_loss_pct: float = 1.0,
     ):
         self.market = market
         self.run_config = run
@@ -130,6 +131,11 @@ class MpsEmaAnchorRunner:
         self.hedge_mode = bool(hedge_mode)
         if not self.long_enabled and not self.short_enabled:
             raise ValueError("MPS EMA proxy requires at least one enabled side")
+        max_realized_loss_pct = float(max_realized_loss_pct)
+        if not np.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
+            raise ValueError(
+                "max_realized_loss_pct must be finite and non-negative"
+            )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
         self.bars = (
@@ -183,6 +189,7 @@ class MpsEmaAnchorRunner:
                 float(self.hedge_mode),
                 float(bool(filter_by_min_effective_cost)),
                 data["max_effective_min_cost"],
+                max_realized_loss_pct,
             ],
             dtype=torch.float32,
             device="mps",
