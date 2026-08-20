@@ -738,9 +738,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             );
                         }
                     }
-                    bool merge_reducer = filled_close
-                        && !reducer_executed
-                        && group.ticks == close_tick[c];
                     bool reducer_before_group = filled_close
                         && !reducer_executed
                         && (short_side
@@ -765,12 +762,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         : group.ticks <= fill_ticks[tick_offset + 0];
                     if (!reachable) break;
                     float group_qty = trimmed_group_qty;
-                    if (merge_reducer) {
-                        group_qty = round_step(
-                            group_qty + reducer_qty, qty_step
-                        );
-                        reducer_executed = true;
-                    }
                     if (group_qty <= 0.0f) continue;
                     float grid_qty = fmin(
                         round_step(group_qty, qty_step), psize[c]

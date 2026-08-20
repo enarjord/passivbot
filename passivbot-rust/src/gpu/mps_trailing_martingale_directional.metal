@@ -949,8 +949,6 @@ inline void passivbot_single_coin_impl(
                         }
                     }
                 }
-                bool merge_reducer = reducer_reachable
-                    && !reducer_executed && group.ticks == reducer_ticks;
                 bool reducer_before_group = reducer_reachable
                     && !reducer_executed && reducer_ticks < group.ticks;
                 if (reducer_before_group) {
@@ -970,10 +968,6 @@ inline void passivbot_single_coin_impl(
                 }
                 if (group.ticks > high_fill_max_tick) break;
                 float group_qty = trimmed_group_qty;
-                if (merge_reducer) {
-                    group_qty = round_step(group_qty + reducer_qty, qty_step);
-                    reducer_executed = true;
-                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), long_side.psize);
                 float pnl = adj * c_mult * (group.price - long_side.pprice);
@@ -1289,8 +1283,6 @@ inline void passivbot_single_coin_impl(
                         }
                     }
                 }
-                bool merge_reducer = reducer_reachable
-                    && !reducer_executed && group.ticks == reducer_ticks;
                 bool reducer_before_group = reducer_reachable
                     && !reducer_executed && reducer_ticks > group.ticks;
                 if (reducer_before_group) {
@@ -1310,10 +1302,6 @@ inline void passivbot_single_coin_impl(
                 }
                 if (group.ticks <= low_nonfill_max_tick) break;
                 float group_qty = trimmed_group_qty;
-                if (merge_reducer) {
-                    group_qty = round_step(group_qty + reducer_qty, qty_step);
-                    reducer_executed = true;
-                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), short_side.psize);
                 float pnl = adj * c_mult * (short_side.pprice - group.price);

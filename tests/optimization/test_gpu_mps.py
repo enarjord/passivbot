@@ -531,6 +531,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
     assert "coin_override_or" in source
+    assert "merge_reducer" not in source
 
     count = 512
     coin_count = 3
@@ -1954,13 +1955,14 @@ def test_mps_tm_small_excess_reducer_crosses_strict_target(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_same_tick_reducer_and_grid_merge_before_volume(side):
+def test_mps_tm_same_tick_twel_and_grid_use_separate_volume_denominators(side):
     count = 6
-    close = np.full(count, 100.0)
-    high = np.full(count, 102.0)
-    low = np.full(count, 98.0)
+    generation_touch = 100.4 if side == "long" else 100.6
+    close = np.array([100.0, 100.0, 100.0, generation_touch, 100.0, 100.0])
+    high = np.array([100.0, 100.0, 100.0, 102.0, 101.5, 100.0])
+    low = np.array([100.0, 100.0, 100.0, 98.0, 99.5, 100.0])
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+    market = ProxyMarket(0.001, 1.0, 0.001, 0.0, 1.0, 0.001)
     run = ProxyRun(
         1_000.0,
         1,
@@ -1975,7 +1977,7 @@ def test_mps_tm_same_tick_reducer_and_grid_merge_before_volume(side):
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     candidate = _tm_single_row(
-        wel_enforcer_enabled=True, wel_enforcer_threshold=0.5
+        entry_gate=False, threshold=0.5, twel_enforcer_enabled=True
     )
     candidate[6] = 1.0
     candidate[7] = 10.0
@@ -1993,19 +1995,36 @@ def test_mps_tm_same_tick_reducer_and_grid_merge_before_volume(side):
     ).run(np.asarray([candidate + candidate], dtype=np.float64))
     torch.mps.synchronize()
 
-    # The initial EMA band places the long at 99 and the short at 101.  Qty is
-    # cropped to one wallet exposure at those prices.  The reducer and the
-    # reconstructed close grid both land at 100, so exact Rust executes their
-    # combined quantity as one fill with one post-fill volume denominator.
+    # The coarse price step sends both the raw-touch grid and the offset TWEL
+    # reducer to the same tick. Exact Rust nevertheless keeps them as separate
+    # orders, executing the grid first by order-type ID.
     entry_price = 99.0 if side == "long" else 101.0
     entry_qty = 10.101 if side == "long" else 9.901
+    grid_qty = 5.045
+    reducer_qty = entry_qty - grid_qty
+    close_price = 100.0 if side == "long" else 101.0
     balance_after_entry = 1_000.0 - entry_qty * entry_price * 0.001
-    pnl = entry_qty * (
-        100.0 - entry_price if side == "long" else entry_price - 100.0
+    grid_pnl = grid_qty * (
+        close_price - entry_price
+        if side == "long"
+        else entry_price - close_price
     )
-    balance_after_close = balance_after_entry + pnl - entry_qty * 100.0 * 0.001
+    balance_after_grid = (
+        balance_after_entry + grid_pnl - grid_qty * close_price * 0.001
+    )
+    reducer_pnl = reducer_qty * (
+        close_price - entry_price
+        if side == "long"
+        else entry_price - close_price
+    )
+    balance_after_close = (
+        balance_after_grid
+        + reducer_pnl
+        - reducer_qty * close_price * 0.001
+    )
     expected_volume = entry_qty * entry_price / balance_after_entry
-    expected_volume += entry_qty * 100.0 / balance_after_close
+    expected_volume += grid_qty * close_price / balance_after_grid
+    expected_volume += reducer_qty * close_price / balance_after_close
     assert output["balance"].item() == pytest.approx(
         balance_after_close, abs=2.0e-4
     )
@@ -2574,26 +2593,17 @@ def test_mps_tm_multicoin_post_repair_grid_volume_uses_per_fill_balance(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_same_tick_reducer_and_grid_merge_before_volume(side):
-    markets = [
-        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001),
-        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001),
-    ]
-    runner, row = _multicoin_exposure_fixture(
-        "trailing_martingale",
-        side,
-        count=6,
-        markets=markets,
-        closes=(100.0, 100.0),
+def test_mps_tm_multicoin_same_tick_twel_and_grid_use_separate_denominators(side):
+    runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
+        side, maker_fee=0.001
     )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
         {
-            "entry_cooldown_minutes": 100.0,
-            "close_threshold_base_pct": 0.0,
-            "close_threshold_we_weight": 0.0,
-            "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold": 0.5,
+            "wel_enforcer_enabled": 0.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_enabled": 1.0,
         }
     )
     candidate = [
@@ -2602,16 +2612,39 @@ def test_mps_tm_multicoin_same_tick_reducer_and_grid_merge_before_volume(side):
     output = runner.run(np.asarray([candidate], dtype=np.float64))
     torch.mps.synchronize()
 
-    balance_after_first_entry = 999.5
-    balance_after_second_entry = 999.0001
-    balance_after_first_close = 998.5001
-    balance_after_second_close = 998.0002
-    expected_volume = 500.0 / balance_after_first_entry
-    expected_volume += 499.9 / balance_after_second_entry
-    expected_volume += 500.0 / balance_after_first_close
-    expected_volume += 499.9 / balance_after_second_close
+    entry_price = 99.0 if side == "long" else 101.0
+    entry_qty = 10.101 if side == "long" else 9.901
+    grid_qty = 5.045 if side == "long" else 4.945
+    reducer_qty = entry_qty - grid_qty
+    close_price = 100.0 if side == "long" else 101.0
+    balance_after_entry = (
+        1_000.0 - entry_qty * entry_price * market.maker_fee
+    )
+    expected_volume = entry_qty * entry_price / balance_after_entry
+    grid_pnl = grid_qty * (
+        close_price - entry_price
+        if side == "long"
+        else entry_price - close_price
+    )
+    balance_after_grid = (
+        balance_after_entry
+        + grid_pnl
+        - grid_qty * close_price * market.maker_fee
+    )
+    expected_volume += grid_qty * close_price / balance_after_grid
+    reducer_pnl = reducer_qty * (
+        close_price - entry_price
+        if side == "long"
+        else entry_price - close_price
+    )
+    balance_after_close = (
+        balance_after_grid
+        + reducer_pnl
+        - reducer_qty * close_price * market.maker_fee
+    )
+    expected_volume += reducer_qty * close_price / balance_after_close
     assert output["balance"].item() == pytest.approx(
-        balance_after_second_close, abs=3.0e-4
+        balance_after_close, abs=3.0e-4
     )
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
@@ -3020,6 +3053,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "s.close_retracement_base > 0.0f" in source
     assert "entry_gen_balance" in source
     assert "close_gen_balance" in source
+    assert "merge_reducer" not in source
     assert "for (int rung = 0; rung < 500; ++rung)" in source
     assert "ladder_side, ladder_balance" in source
     assert "recursive_close_groups" in source
