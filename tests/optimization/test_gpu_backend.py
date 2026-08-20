@@ -3734,15 +3734,36 @@ def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
             != original
         )
 
+    changed_lookback = copy.deepcopy(config)
+    changed_lookback["live"]["pnls_max_lookback_days"] = 7.0
+    changed_lookback_contract = _gpu_runtime_checkpoint_contract(
+        changed_lookback, proxy
+    )
+    assert changed_lookback_contract["pnls_max_lookback_days"] == 7.0
+    assert (
+        _checkpoint_signature(
+            active, scoring, runtime_contract=changed_lookback_contract
+        )
+        != original
+    )
+
+    all_history = copy.deepcopy(config)
+    all_history["live"]["pnls_max_lookback_days"] = "all"
+    assert _gpu_runtime_checkpoint_contract(all_history, proxy)[
+        "pnls_max_lookback_days"
+    ] == -1.0
+
     fixed = _long_only_ema_config()
     fixed["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.unstuck.enabled": True,
         "bot.long.unstuck.threshold": 0.765,
+        "live.pnls_max_lookback_days": 12.0,
     }
     effective = _materialize_gpu_override_template(fixed, [])
     effective_contract = _gpu_runtime_checkpoint_contract(effective, proxy)
     assert effective_contract["unstuck"]["long"]["enabled"] is True
     assert effective_contract["unstuck"]["long"]["threshold"] == 0.765
+    assert effective_contract["pnls_max_lookback_days"] == 12.0
 
 
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
@@ -3827,6 +3848,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "strategy_kind": "ema_anchor",
             "enabled_sides": ["long"],
             "max_realized_loss_pct": 1.0,
+            "pnls_max_lookback_days": 30.0,
             "unstuck": original["unstuck"],
             "candle_count": 3,
             "first_timestamp": 1000,
@@ -3853,6 +3875,18 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
 
     assert changed != original
     assert changed["prepared_scenarios"][0]["max_realized_loss_pct"] == 0.05
+
+    changed_lookback = copy.deepcopy(item)
+    changed_lookback["config"]["live"]["pnls_max_lookback_days"] = 7.0
+    changed = _gpu_suite_checkpoint_contract(config, [changed_lookback])
+    assert changed != original
+    assert changed["prepared_scenarios"][0]["pnls_max_lookback_days"] == 7.0
+
+    changed_base_lookback = copy.deepcopy(config)
+    changed_base_lookback["live"]["pnls_max_lookback_days"] = "all"
+    changed = _gpu_suite_checkpoint_contract(changed_base_lookback, [item])
+    assert changed != original
+    assert changed["pnls_max_lookback_days"] == -1.0
 
     changed_unstuck = copy.deepcopy(item)
     changed_unstuck["config"]["bot"]["long"]["unstuck"]["enabled"] = True

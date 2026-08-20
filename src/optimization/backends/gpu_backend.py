@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from config.metrics import resolve_metric_value
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import (
@@ -1792,6 +1793,9 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     contract["max_realized_loss_pct"] = float(
         config.get("live", {}).get("max_realized_loss_pct", 1.0)
     )
+    contract["pnls_max_lookback_days"] = (
+        _gpu_pnls_max_lookback_days_checkpoint_value(config)
+    )
     contract["unstuck"] = _gpu_unstuck_checkpoint_contract(config)
     if suite_inputs is not None:
         prepared_scenarios = []
@@ -1839,6 +1843,11 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                         .get("live", {})
                         .get("max_realized_loss_pct", 1.0)
                     ),
+                    "pnls_max_lookback_days": (
+                        _gpu_pnls_max_lookback_days_checkpoint_value(
+                            item["config"]
+                        )
+                    ),
                     "unstuck": _gpu_unstuck_checkpoint_contract(item["config"]),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
@@ -1863,11 +1872,21 @@ def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
         "max_realized_loss_pct": float(
             config.get("live", {}).get("max_realized_loss_pct", 1.0)
         ),
+        "pnls_max_lookback_days": (
+            _gpu_pnls_max_lookback_days_checkpoint_value(config)
+        ),
         "coin_override_contract": deepcopy(
             getattr(proxy, "coin_override_contract", None)
         ),
         "unstuck": _gpu_unstuck_checkpoint_contract(config),
     }
+
+
+def _gpu_pnls_max_lookback_days_checkpoint_value(config: dict) -> float:
+    return parse_pnls_max_lookback_days(
+        config.get("live", {}).get("pnls_max_lookback_days", 30.0),
+        field_name="live.pnls_max_lookback_days",
+    ).to_backtest_days_value()
 
 
 def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
