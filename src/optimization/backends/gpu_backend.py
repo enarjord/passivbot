@@ -1776,6 +1776,9 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
             "volume_normalization",
         )
     }
+    contract["max_realized_loss_pct"] = float(
+        config.get("live", {}).get("max_realized_loss_pct", 1.0)
+    )
     if suite_inputs is not None:
         prepared_scenarios = []
         for item in suite_inputs:
@@ -1817,6 +1820,11 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                         for side in ("long", "short")
                         if gpu_side_enabled(item["config"], side)
                     ],
+                    "max_realized_loss_pct": float(
+                        item["config"]
+                        .get("live", {})
+                        .get("max_realized_loss_pct", 1.0)
+                    ),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -1833,6 +1841,17 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
             )
         contract["prepared_scenarios"] = prepared_scenarios
     return contract
+
+
+def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
+    return {
+        "max_realized_loss_pct": float(
+            config.get("live", {}).get("max_realized_loss_pct", 1.0)
+        ),
+        "coin_override_contract": deepcopy(
+            getattr(proxy, "coin_override_contract", None)
+        ),
+    }
 
 
 def _checkpoint_signature(
@@ -2869,7 +2888,7 @@ def run_backend(
         runtime_contract=(
             None
             if suite_enabled
-            else getattr(proxy, "coin_override_contract", None)
+            else _gpu_runtime_checkpoint_contract(config, proxy)
         ),
     )
     budget = int(config["optimize"]["iters"])
@@ -2883,7 +2902,8 @@ def run_backend(
             checkpoint = pickle.load(file)
         if checkpoint.get("signature") != signature:
             raise ValueError(
-                "GPU checkpoint does not match current bounds, scoring, or suite contract"
+                "GPU checkpoint does not match current bounds, scoring, suite, "
+                "or runtime contract"
             )
         algorithm = checkpoint["algorithm"]
         seed = int(checkpoint.get("seed", seed))

@@ -33,6 +33,7 @@ from optimization.backends.gpu_backend import (
     _gpu_candidate_source_sides,
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
+    _gpu_runtime_checkpoint_contract,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
     _gpu_suite_search_context,
@@ -3634,6 +3635,26 @@ def test_gpu_checkpoint_signature_tracks_effective_suite_contract():
     )
 
 
+def test_gpu_checkpoint_signature_tracks_realized_loss_gate_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _long_only_ema_config()
+    proxy = SimpleNamespace(coin_override_contract={"values": []})
+    original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=original_contract
+    )
+
+    config["live"]["max_realized_loss_pct"] = 0.05
+    changed_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+
+    assert changed_contract["max_realized_loss_pct"] == 0.05
+    assert (
+        _checkpoint_signature(active, scoring, runtime_contract=changed_contract)
+        != original
+    )
+
+
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -3715,6 +3736,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "coin_count": 2,
             "strategy_kind": "ema_anchor",
             "enabled_sides": ["long"],
+            "max_realized_loss_pct": 1.0,
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -3733,6 +3755,13 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "coin_overrides": {},
         }
     ]
+
+    changed_loss_gate = copy.deepcopy(item)
+    changed_loss_gate["config"]["live"]["max_realized_loss_pct"] = 0.05
+    changed = _gpu_suite_checkpoint_contract(config, [changed_loss_gate])
+
+    assert changed != original
+    assert changed["prepared_scenarios"][0]["max_realized_loss_pct"] == 0.05
 
     changed_coins = copy.deepcopy(item)
     changed_coins["coins"] = ["BTC", "SOL"]

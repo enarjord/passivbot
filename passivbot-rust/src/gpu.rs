@@ -53,6 +53,7 @@ mod tests {
         assert!(source.contains("projected_cost_lower"));
         assert!(source.contains("float guaranteed_balance_lower"));
         assert!(source.contains("realized_loss_gate_allows"));
+        assert!(source.contains("float32_floor_nonnegative"));
         assert!(source.contains("record_realized_net"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));

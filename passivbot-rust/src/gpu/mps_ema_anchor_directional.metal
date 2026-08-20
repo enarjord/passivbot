@@ -47,11 +47,16 @@ inline bool passes_min_effective_cost(
 }
 
 inline bool realized_loss_gate_allows(
-    float net_pnl, float simulated_balance, float balance_floor,
+    float net_pnl, float remaining_loss_budget,
     bool gate_enabled
 ) {
     return !gate_enabled || net_pnl >= 0.0f
-        || simulated_balance + net_pnl >= balance_floor;
+        || -net_pnl <= remaining_loss_budget;
+}
+
+inline float float32_floor_nonnegative(float value) {
+    if (!(value > 0.0f) || !isfinite(value)) return fmax(value, 0.0f);
+    return as_type<float>(as_type<uint>(value) - 1u);
 }
 
 inline void record_realized_net(
@@ -451,9 +456,8 @@ inline void gate_generated_close(
     float price_step,
     float c_mult,
     float maker_fee,
-    float balance_floor,
     bool gate_enabled,
-    thread float& simulated_balance
+    thread float& remaining_loss_budget
 ) {
     if (!(qty > 0.0f && ticks > 0 && pprice > 0.0f)) return;
     float price = float(ticks) * price_step;
@@ -461,11 +465,15 @@ inline void gate_generated_close(
         * (is_long ? price - pprice : pprice - price);
     float net_pnl = gross_pnl - qty * price * c_mult * maker_fee;
     if (!realized_loss_gate_allows(
-            net_pnl, simulated_balance, balance_floor, gate_enabled)) {
+            net_pnl, remaining_loss_budget, gate_enabled)) {
         qty = 0.0f;
         return;
     }
-    if (net_pnl < 0.0f) simulated_balance += net_pnl;
+    if (gate_enabled && net_pnl < 0.0f) {
+        remaining_loss_budget = float32_floor_nonnegative(
+            fmax(remaining_loss_budget + net_pnl, 0.0f)
+        );
+    }
 }
 
 inline void passivbot_single_coin_impl(
@@ -806,9 +814,15 @@ inline void passivbot_single_coin_impl(
             bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
             float balance_peak = balance
                 + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
-            float balance_floor = balance_peak
-                * (1.0f - fmax(max_realized_loss_pct, 0.0f));
-            float simulated_balance = balance;
+            float allowed_loss_budget = float32_floor_nonnegative(
+                balance_peak * fmax(max_realized_loss_pct, 0.0f)
+            );
+            float current_realized_loss = fmax(
+                realized_pnl_cumsum_max - realized_pnl_cumsum_last, 0.0f
+            );
+            float remaining_loss_budget = float32_floor_nonnegative(
+                fmax(allowed_loss_budget - current_realized_loss, 0.0f)
+            );
 
             // Exact Rust reserves the shared batch allowance for protective
             // reducers largest-first, even when an emitted order never fills.
@@ -827,13 +841,13 @@ inline void passivbot_single_coin_impl(
                     gate_generated_close(
                         short_side.close_qty, short_side.close_ticks,
                         short_side.pprice, false, price_step, c_mult, maker_fee,
-                        balance_floor, loss_gate_enabled, simulated_balance
+                        loss_gate_enabled, remaining_loss_budget
                     );
                 } else if (!use_short && long_reducer) {
                     gate_generated_close(
                         long_side.close_qty, long_side.close_ticks,
                         long_side.pprice, true, price_step, c_mult, maker_fee,
-                        balance_floor, loss_gate_enabled, simulated_balance
+                        loss_gate_enabled, remaining_loss_budget
                     );
                 }
             }
@@ -857,14 +871,14 @@ inline void passivbot_single_coin_impl(
                     gate_generated_close(
                         long_side.secondary_close_qty,
                         long_side.secondary_close_ticks, long_side.pprice, true,
-                        price_step, c_mult, maker_fee, balance_floor,
-                        loss_gate_enabled, simulated_balance
+                        price_step, c_mult, maker_fee, loss_gate_enabled,
+                        remaining_loss_budget
                     );
                 } else {
                     gate_generated_close(
                         long_side.close_qty, long_side.close_ticks,
                         long_side.pprice, true, price_step, c_mult, maker_fee,
-                        balance_floor, loss_gate_enabled, simulated_balance
+                        loss_gate_enabled, remaining_loss_budget
                     );
                 }
             }
@@ -873,14 +887,14 @@ inline void passivbot_single_coin_impl(
                     gate_generated_close(
                         short_side.secondary_close_qty,
                         short_side.secondary_close_ticks, short_side.pprice,
-                        false, price_step, c_mult, maker_fee, balance_floor,
-                        loss_gate_enabled, simulated_balance
+                        false, price_step, c_mult, maker_fee, loss_gate_enabled,
+                        remaining_loss_budget
                     );
                 } else {
                     gate_generated_close(
                         short_side.close_qty, short_side.close_ticks,
                         short_side.pprice, false, price_step, c_mult, maker_fee,
-                        balance_floor, loss_gate_enabled, simulated_balance
+                        loss_gate_enabled, remaining_loss_budget
                     );
                 }
             }
