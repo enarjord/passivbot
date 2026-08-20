@@ -1,5 +1,7 @@
+import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 
@@ -7,6 +9,8 @@ torch = pytest.importorskip("torch")
 
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
+    _GAP_HIST_UPPER_STEPS,
+    _fill_gap_metrics,
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
@@ -78,8 +82,101 @@ def test_weighted_adg_slices_minutes_before_daily_reduction():
     assert actual.item() == pytest.approx(((full + 2.0 * last_two) / 10.0).item())
 
 
-def test_interpolated_fill_gap_percentile_fails_closed_for_gpu_proxy():
-    assert "fills_gap_p95_hours" not in SUPPORTED_METRICS
+def test_fill_gap_summary_metric_surface_is_supported():
+    assert {
+        "fills_gap_mean_hours",
+        "fills_gap_median_hours",
+        "fills_gap_p95_hours",
+        "fills_gap_p99_hours",
+    } <= set(SUPPORTED_METRICS)
+
+
+def test_fill_gap_summary_without_fills_uses_whole_active_span():
+    out = {
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "first_fill_ts": torch.tensor([float("nan")]),
+        "last_fill_ts": torch.tensor([float("nan")]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([7_200_000.0]),
+    }
+
+    metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
+
+    assert all(value.item() == pytest.approx(2.0) for value in metrics.values())
+
+
+def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
+    gap_hist = torch.zeros((1, 128), dtype=torch.int32)
+    gap_minutes = 120
+    bin_index = int(math.log(gap_minutes + 1.0) * 127.0 / math.log(4_000_001.0))
+    gap_hist[0, bin_index] = 1
+    out = {
+        "gap_hist": gap_hist,
+        "first_fill_ts": torch.tensor([3_600_000.0]),
+        "last_fill_ts": torch.tensor([10_800_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([14_400_000.0]),
+    }
+
+    metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
+
+    # Exact distinct-candle gaps are [1h, 2h, 1h]. Log-bin upper edges may
+    # overstate the inter-fill gap but must never make a minimizing proxy
+    # metric more optimistic than exact Rust.
+    assert metrics["fills_gap_mean_hours"].item() >= 4.0 / 3.0
+    assert metrics["fills_gap_median_hours"].item() >= 1.0
+    assert metrics["fills_gap_p95_hours"].item() >= 1.9
+    assert metrics["fills_gap_p99_hours"].item() >= 1.98
+
+
+def test_fill_gap_float32_bin_decode_never_understates_boundary_samples():
+    samples = {0, 1, 4_000_000}
+    log_max = math.log(4_000_001.0)
+    for index in range(127):
+        edge = math.exp((index + 1) * log_max / 127.0) - 1.0
+        center = math.floor(edge)
+        samples.update(max(0, center + delta) for delta in range(-2, 3))
+
+    for gap in samples:
+        encoded = int(
+            np.float32(
+                np.log(np.float32(gap) + np.float32(1.0))
+                * np.float32(127.0)
+                / np.log(np.float32(4_000_001.0))
+            )
+        )
+        encoded = min(max(encoded, 0), 127)
+        assert _GAP_HIST_UPPER_STEPS[encoded] >= gap
+
+
+def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
+    interval_ms = 60_000
+    first_eq_step = 3_900_000
+    first_fill_step = first_eq_step + 1
+    last_fill_step = first_eq_step + 3
+    last_eq_step = first_eq_step + 4
+    out = {
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "first_fill_ts": torch.tensor(
+            [first_fill_step * interval_ms], dtype=torch.float32
+        ),
+        "last_fill_ts": torch.tensor(
+            [last_fill_step * interval_ms], dtype=torch.float32
+        ),
+        "first_eq_ts": torch.tensor(
+            [first_eq_step * interval_ms], dtype=torch.float32
+        ),
+        "last_eq_ts": torch.tensor(
+            [last_eq_step * interval_ms], dtype=torch.float32
+        ),
+    }
+
+    metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
+
+    assert metrics["fills_gap_mean_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_median_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.0 / 60.0)
+    assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.0 / 60.0)
 
 
 def test_strategy_equity_summary_metric_surface_is_supported():
@@ -344,6 +441,10 @@ def test_completion_is_zero_when_no_equity_sample_exists():
             "adg_strategy_eq_w",
             "backtest_completion_ratio",
             "fills_gap_longest_days",
+            "fills_gap_mean_hours",
+            "fills_gap_median_hours",
+            "fills_gap_p95_hours",
+            "fills_gap_p99_hours",
         },
     )
 
@@ -351,6 +452,13 @@ def test_completion_is_zero_when_no_equity_sample_exists():
     assert metrics["adg_strategy_eq"].item() == 0.0
     assert metrics["adg_strategy_eq_w"].item() == 0.0
     assert metrics["fills_gap_longest_days"].item() == 0.0
+    for name in (
+        "fills_gap_mean_hours",
+        "fills_gap_median_hours",
+        "fills_gap_p95_hours",
+        "fills_gap_p99_hours",
+    ):
+        assert metrics[name].item() == 0.0
 
 
 def test_completion_uses_raw_requested_start_before_available_history():

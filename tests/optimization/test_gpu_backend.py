@@ -2074,6 +2074,10 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
     "metric",
     [
         "fills_gap_longest_days",
+        "fills_gap_mean_hours",
+        "fills_gap_median_hours",
+        "fills_gap_p95_hours",
+        "fills_gap_p99_hours",
         "strategy_eq_recovery_days_max",
         "volume_pct_per_day_avg",
     ],
@@ -2091,6 +2095,10 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
     _validate_dual_multicoin_metrics(
         {
             "fills_gap_longest_days",
+            "fills_gap_mean_hours",
+            "fills_gap_median_hours",
+            "fills_gap_p95_hours",
+            "fills_gap_p99_hours",
             "strategy_eq_recovery_days_max",
             "volume_pct_per_day_avg",
         },

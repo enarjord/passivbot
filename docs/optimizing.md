@@ -186,6 +186,8 @@ Rust portfolio backtest, and classification, rank, and drift gates halt material
 Dual-side one-way arbitration, unmodeled non-bot suite scenario overrides, HSL, and auto-unstuck
 are not silently approximated by this release. Dual-side
 multi-coin screening also rejects `fills_gap_longest_days`,
+`fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
+`fills_gap_p99_hours`,
 `strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
 or fill volume normalized by the shared balance safely.
@@ -248,13 +250,17 @@ rejects aliases that resolve to the same setting, and rejects mapping-level repl
 fixed value disables dependent trailing-martingale parameters, the Metal search removes and
 hash-canonicalizes those dead genes using the same rule as exact candidate materialization.
 
-Proxy scoring and limits are likewise fail-closed. This slice supports `adg_strategy_eq`,
-`adg_strategy_eq_w`, `mdg_strategy_eq`, `sharpe_ratio_strategy_eq`,
-`sortino_ratio_strategy_eq`, `volume_pct_per_day_avg`, `strategy_eq_recovery_days_max`,
-`position_held_days_max`, `strategy_eq_underwater_pct_mean`, `drawdown_worst_strategy_eq`,
-`drawdown_worst_mean_1pct_strategy_eq`, `fills_gap_longest_days`, and
-`backtest_completion_ratio`. Metrics such as `fills_gap_p95_hours` that require exact per-fill
-interpolation are rejected before a run starts.
+Proxy scoring and limits are likewise fail-closed. The supported strategy-equity surface includes
+gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
+drawdown, mean and median underwater percentage, maximum recovery and position-held duration,
+volume per active day, backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino,
+Omega, Calmar, and Sterling. Fill-gap longest, mean, median, p95, and p99 metrics are also
+supported. Metal coalesces multiple fills in the same candle and records positive inter-candle gaps
+in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
+edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
+fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.
+Exact Rust metrics remain authoritative. Other metrics that require unmodeled per-fill, trade, or
+position aggregates are rejected before a run starts.
 
 The backend is hybrid rather than a replacement backtester:
 

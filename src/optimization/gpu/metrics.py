@@ -7,6 +7,8 @@ metrics validated for this foundation and integrated with the current schema.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
@@ -22,6 +24,10 @@ SUPPORTED_METRICS = (
     "drawdown_worst_strategy_eq",
     "expected_shortfall_1pct_strategy_eq",
     "fills_gap_longest_days",
+    "fills_gap_mean_hours",
+    "fills_gap_median_hours",
+    "fills_gap_p95_hours",
+    "fills_gap_p99_hours",
     "gain_strategy_eq",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
@@ -43,6 +49,34 @@ SUPPORTED_METRICS = (
 # Reserved for a later PR that validates metrics requiring per-fill/trade
 # aggregates. Keeping this empty avoids allocating the larger Metal buffers.
 EXTRA_KERNEL_METRICS = ()
+
+
+_GAP_HIST_BINS = 128
+_GAP_HIST_LOG_MAX = math.log(4_000_001.0)
+_FILL_GAP_HISTOGRAM_METRICS = {
+    "fills_gap_mean_hours",
+    "fills_gap_median_hours",
+    "fills_gap_p95_hours",
+    "fills_gap_p99_hours",
+}
+# Metal classifies gaps with float32 logarithms. Expand the decoded boundary
+# by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
+# this minimizing proxy optimistic.
+_GAP_HIST_EDGE_MARGIN = 1.220703125e-4
+_GAP_HIST_UPPER_STEPS = tuple(
+    max(
+        0,
+        math.ceil(
+            (
+                math.exp((index + 1) * _GAP_HIST_LOG_MAX / 127.0)
+                - 1.0
+            )
+            * (1.0 + _GAP_HIST_EDGE_MARGIN)
+        )
+        - 1,
+    )
+    for index in range(_GAP_HIST_BINS - 1)
+) + (float("inf"),)
 
 
 def _daily_series_masks(day_min_eq):
@@ -198,6 +232,108 @@ def _mean_worst_one_pct_largest(values, mask):
     result = cumulative.gather(1, (worst_count - 1).unsqueeze(1)).squeeze(1)
     result = result / worst_count.to(values.dtype)
     return torch.where(counts > 0, result, torch.zeros_like(result))
+
+
+def _weighted_percentile(values, counts, percentile):
+    """Interpolate a percentile over sorted values with integer multiplicities."""
+
+    ordered_values, order = torch.sort(values, dim=1)
+    ordered_counts = counts.gather(1, order)
+    cumulative = ordered_counts.cumsum(dim=1)
+    total = ordered_counts.sum(dim=1)
+    rank = float(percentile) * (total - 1).clamp(min=0).to(values.dtype)
+    lower_rank = torch.floor(rank).to(torch.long)
+    upper_rank = torch.ceil(rank).to(torch.long)
+
+    def gather_rank(target):
+        index = (cumulative > target.unsqueeze(1)).to(torch.int64).argmax(dim=1)
+        return ordered_values.gather(1, index.unsqueeze(1)).squeeze(1)
+
+    lower = gather_rank(lower_rank)
+    upper = gather_rank(upper_rank)
+    weight = rank - lower_rank.to(values.dtype)
+    result = lower * (1.0 - weight) + upper * weight
+    return torch.where(total > 0, result, torch.zeros_like(result))
+
+
+def _fill_gap_metrics(out, run):
+    """Conservatively reduce coalesced fill timestamps and log-gap bins."""
+
+    interval_ms = max(float(run.interval_ms), 1.0)
+    first_eq_ts = out["first_eq_ts"].to(torch.float64)
+    last_eq_ts = out["last_eq_ts"].to(torch.float64)
+    first_fill_ts = out["first_fill_ts"].to(torch.float64)
+    last_fill_ts = out["last_fill_ts"].to(torch.float64)
+    has_equity = (
+        torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts >= first_eq_ts)
+    )
+    has_fill = (
+        has_equity
+        & torch.isfinite(first_fill_ts)
+        & torch.isfinite(last_fill_ts)
+    )
+    # Metal exports integer candle indices multiplied by interval_ms through a
+    # float32 scalar buffer. Recover the indices before subtracting so rounding
+    # of large millisecond offsets cannot make a boundary gap optimistic.
+    first_eq_step = torch.round(first_eq_ts / interval_ms)
+    last_eq_step = torch.round(last_eq_ts / interval_ms)
+    first_fill_step = torch.round(first_fill_ts / interval_ms)
+    last_fill_step = torch.round(last_fill_ts / interval_ms)
+    span_ms = torch.where(
+        has_equity,
+        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms,
+        torch.zeros_like(first_eq_ts),
+    )
+    span_steps = span_ms / interval_ms
+    upper_steps = torch.tensor(
+        _GAP_HIST_UPPER_STEPS,
+        dtype=torch.float64,
+        device=first_eq_ts.device,
+    ).unsqueeze(0)
+    upper_steps = torch.minimum(upper_steps, span_steps.unsqueeze(1))
+    gap_values = upper_steps * interval_ms / 3_600_000.0
+    gap_counts = out["gap_hist"].to(torch.long)
+    gap_counts = torch.where(
+        has_fill.unsqueeze(1), gap_counts, torch.zeros_like(gap_counts)
+    )
+
+    lead_hours = torch.where(
+        has_fill,
+        (first_fill_step - first_eq_step).clamp(min=0.0)
+        * interval_ms
+        / 3_600_000.0,
+        span_ms / 3_600_000.0,
+    )
+    trail_hours = torch.where(
+        has_fill,
+        (last_eq_step - last_fill_step).clamp(min=0.0)
+        * interval_ms
+        / 3_600_000.0,
+        torch.zeros_like(span_ms),
+    )
+    boundary_values = torch.stack((lead_hours, trail_hours), dim=1)
+    boundary_counts = torch.stack(
+        (
+            has_equity.to(torch.long),
+            has_fill.to(torch.long),
+        ),
+        dim=1,
+    )
+    values = torch.cat((gap_values, boundary_values), dim=1)
+    counts = torch.cat((gap_counts, boundary_counts), dim=1)
+    total = counts.sum(dim=1).clamp(min=1).to(torch.float64)
+    weighted_values = torch.where(
+        counts > 0, values, torch.zeros_like(values)
+    )
+    mean = (weighted_values * counts.to(values.dtype)).sum(dim=1) / total
+    return {
+        "fills_gap_mean_hours": mean,
+        "fills_gap_median_hours": _weighted_percentile(values, counts, 0.50),
+        "fills_gap_p95_hours": _weighted_percentile(values, counts, 0.95),
+        "fills_gap_p99_hours": _weighted_percentile(values, counts, 0.99),
+    }
 
 
 def _weighted_subsets(
@@ -434,6 +570,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     gap_longest_days = torch.where(
         has_equity, gap_longest_days, torch.zeros_like(gap_longest_days)
     )
+    fill_gap_metrics = (
+        _fill_gap_metrics(out, run)
+        if requested & _FILL_GAP_HISTOGRAM_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -470,6 +611,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    objectives.update(fill_gap_metrics)
     objectives.update(weighted_metrics)
     if needed is None:
         return objectives

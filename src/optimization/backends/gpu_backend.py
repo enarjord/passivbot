@@ -956,6 +956,10 @@ def _validate_dual_multicoin_metrics(
         set(needed_metrics)
         & {
             "fills_gap_longest_days",
+            "fills_gap_mean_hours",
+            "fills_gap_median_hours",
+            "fills_gap_p95_hours",
+            "fills_gap_p99_hours",
             "strategy_eq_recovery_days_max",
             "volume_pct_per_day_avg",
         }
