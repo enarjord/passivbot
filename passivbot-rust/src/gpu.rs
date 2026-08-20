@@ -43,6 +43,9 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
+        assert!(source.contains("constant int SIDE_PARAMS = 17"));
+        assert!(source.contains("total_exposure_reducer_qty"));
+        assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
         assert!(source.contains("const bool filter_by_min_effective_cost"));
@@ -55,8 +58,8 @@ mod tests {
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
-        assert_eq!(source.matches("high_fill_max_tick").count(), 3);
-        assert_eq!(source.matches("low_nonfill_max_tick").count(), 3);
+        assert_eq!(source.matches("high_fill_max_tick").count(), 4);
+        assert_eq!(source.matches("low_nonfill_max_tick").count(), 4);
         assert!(!source.contains("nextafter("));
     }
 

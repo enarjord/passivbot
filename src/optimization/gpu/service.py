@@ -374,6 +374,7 @@ class MpsSingleCoinProxy:
                 strategy.update(
                     _position_exposure_enforcer_params(risk, side=side)
                 )
+            if self.strategy_kind in {"ema_anchor", "trailing_martingale"}:
                 strategy.update(
                     _total_exposure_enforcer_params(risk, side=side)
                 )

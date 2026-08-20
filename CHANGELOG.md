@@ -4,14 +4,22 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added EMA Anchor side-wide total-exposure repair to single-coin Apple MPS optimization for
+  long-only, short-only, shared-balance dual-side, and compatible suite runs. The Metal proxy
+  models the canonical TWEL reducer price and size, reserves the protective reducer before
+  trimming the ordinary EMA close, and executes independently reachable closes in canonical
+  order. Exact Rust validation and the existing classification, rank, and drift gates remain
+  authoritative. EMA Anchor multi-coin repair remains fail closed pending a portfolio-ranking
+  kernel.
+
 - Added Trailing Martingale side-wide total-exposure repair to the Apple MPS optimizer for
   single- and multi-coin long-only, short-only, and compatible suite runs. The Metal
   proxy models both `reduce_overweight` and `reduce_portfolio`, ranks repair candidates by projected
   adverse loss, applies exchange minimums and quantity steps, and lets the largest WEL/TWEL reducer
   compete before rebuilding the ordinary close ladder. Exact Rust validation and the existing
-  classification, rank, and drift gates remain authoritative. EMA Anchor total-exposure repair
-  remains fail closed. Dual-side multi-coin exposure repair also remains fail closed until a
-  shared-balance portfolio kernel can preserve exact cross-side sizing.
+  classification, rank, and drift gates remain authoritative. EMA Anchor multi-coin
+  total-exposure repair remains fail closed. Dual-side multi-coin exposure repair also remains
+  fail closed until a shared-balance portfolio kernel can preserve exact cross-side sizing.
 
 - GPU optimization now latches Ctrl+C received during a native Metal dispatch,
   stops before another generation or exact-validation submission, saves a
@@ -23,7 +31,7 @@ All notable user-facing changes will be documented in this file.
   over normal strategy closes, reduces strictly below the allowance-adjusted WEL target, and
   honors static per-coin enable/threshold overrides. Exact Rust validation and the existing
   classification, rank, and drift gates remain authoritative. EMA Anchor position repair and
-  side-wide total-exposure repair remain fail closed.
+  multi-coin side-wide total-exposure repair remain fail closed.
 
 - Extended Apple MPS exposure-headroom support to multi-coin EMA Anchor and Trailing Martingale
   optimization, including long-only, short-only, dual-side hedge, suites, tunable allowance and
@@ -31,7 +39,7 @@ All notable user-facing changes will be documented in this file.
   bounded or legacy-raw mode. The Metal proxy now separates per-symbol allowed wallet exposure
   from the optional side-wide TWEL entry gate;
   exact Rust validation and the existing classification, rank, and drift gates remain
-  authoritative. Total-exposure repair remains fail closed.
+  authoritative. EMA Anchor multi-coin total-exposure repair remains fail closed.
 
 - Added single-coin exposure-headroom policy support to the Apple MPS optimizer for EMA Anchor and
   Trailing Martingale, including long-only, short-only, dual-side, and compatible suite runs.
