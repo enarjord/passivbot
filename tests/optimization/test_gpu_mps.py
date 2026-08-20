@@ -582,6 +582,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert "coin_override_or" in source
     assert "merge_reducer" not in source
     assert "finalized_reducer_qty" in source
+    assert "realized_loss_proxy_allows_close" in source
+    assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
 
     count = 512
     coin_count = 3
@@ -664,9 +666,15 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
-    output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, side=side, forager_score_hysteresis_pct=0.02
-    ).run(np.array([row, row], dtype=np.float64))
+    runner = MpsTrailingMartingaleMulticoinRunner(
+        runs[0],
+        data,
+        side=side,
+        forager_score_hysteresis_pct=0.02,
+        max_realized_loss_pct=0.1,
+    )
+    assert runner.settings.cpu()[5].item() <= 0.1
+    output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
     assert output["balance"].device.type == "mps"
@@ -2884,6 +2892,264 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     pprice_key = "pprice" if side == "long" else "short_pprice"
     total_twe = (output[pprice_key] / output["balance"]).cpu()
     assert (total_twe < 0.5).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[0, 24] = 0.1
+    runner_kwargs = {
+        "strategy_kind": "trailing_martingale",
+        "side": side,
+        "coin_overrides": overrides,
+        "count": 10,
+        "closes": (100.0, 100.0),
+    }
+    ungated_runner, candidate = _multicoin_exposure_fixture(
+        max_realized_loss_pct=1.0, **runner_kwargs
+    )
+    gated_runner, _ = _multicoin_exposure_fixture(
+        max_realized_loss_pct=0.1, **runner_kwargs
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
+    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key].item() < gated[size_key].item()
+    assert gated["open_positions"].item() == pytest.approx(2.0)
+    assert gated["balance"].item() >= ungated["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+        for _ in range(2)
+    ]
+    runner_kwargs = {
+        "strategy_kind": "trailing_martingale",
+        "side": side,
+        "count": 10,
+        "closes": (100.0, 100.0),
+        "markets": markets,
+    }
+    ungated_runner, candidate = _multicoin_exposure_fixture(
+        max_realized_loss_pct=1.0, **runner_kwargs
+    )
+    gated_runner, _ = _multicoin_exposure_fixture(
+        max_realized_loss_pct=0.1, **runner_kwargs
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "close_qty_pct": 1.0,
+            "close_threshold_base_pct": 0.0,
+            "close_threshold_we_weight": 0.0,
+            "entry_cooldown_minutes": 100.0,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
+    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated[size_key].item() == pytest.approx(0.0)
+    assert gated[size_key].item() > 0.0
+    assert gated["balance"].item() >= ungated["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side):
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[0, 24] = 0.1
+    count = 10
+    blocked_highs = np.full((count, 2), 100.5)
+    blocked_lows = np.full((count, 2), 99.5)
+    recovery_highs = blocked_highs.copy()
+    recovery_lows = blocked_lows.copy()
+    if side == "long":
+        recovery_highs[7:, :] = 102.0
+    else:
+        recovery_lows[7:, :] = 98.0
+    common = {
+        "strategy_kind": "trailing_martingale",
+        "side": side,
+        "coin_overrides": overrides,
+        "count": count,
+        "closes": (100.0, 100.0),
+        "max_realized_loss_pct": 0.1,
+    }
+    blocked_runner, candidate = _multicoin_exposure_fixture(
+        highs=blocked_highs, lows=blocked_lows, **common
+    )
+    recovery_runner, _ = _multicoin_exposure_fixture(
+        highs=recovery_highs, lows=recovery_lows, **common
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "close_qty_pct": 1.0,
+            "close_threshold_base_pct": 0.01,
+            "close_threshold_we_weight": 0.0,
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    blocked = blocked_runner.run(np.asarray([candidate], dtype=np.float64))
+    recovered = recovery_runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert blocked[size_key].item() > 0.0
+    assert recovered[size_key].item() == pytest.approx(0.0)
+    assert recovered["balance"].item() > blocked["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_loss_gate_scans_past_blocked_recursive_rung(side):
+    count = 10
+    highs = np.full((count, 2), 100.5)
+    lows = np.full((count, 2), 99.5)
+    if side == "long":
+        highs[5:, 0] = 102.0
+    else:
+        lows[5:, 0] = 98.0
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[1, 24] = 0.0
+    runner, candidate = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        coin_overrides=overrides,
+        count=count,
+        closes=(100.0, 100.0),
+        highs=highs,
+        lows=lows,
+        max_realized_loss_pct=0.1,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "close_qty_pct": 0.25,
+            "close_threshold_base_pct": 0.015,
+            "close_threshold_we_weight": -0.025,
+            "entry_cooldown_minutes": 100.0,
+            "gate_initial": 1.0,
+            "n_positions": 1.0,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # The first immutable recursive rungs are below break-even, but later
+    # rungs become profitable as their simulated exposure falls. Exact Rust
+    # filters the early rungs independently and retains those later closes.
+    assert output[size_key].item() < 5.0
+    assert output["balance"].item() > 1_000.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
+    count = 10
+    closes = np.full((count, 2), 100.0)
+    if side == "long":
+        closes[5:, 1] = 102.0
+    else:
+        closes[5:, 1] = 98.0
+    highs = closes * 1.01
+    lows = closes * 0.99
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+        for _ in range(2)
+    ]
+    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides[0, 24] = 0.6
+    overrides[1, 24] = 0.4
+    runner, candidate = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        markets=markets,
+        max_realized_loss_pct=0.1,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_reduce_portfolio": 1.0,
+        }
+    )
+    baseline = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+    repaired_values = dict(values, twel_enforcer_enabled=1.0)
+    repaired = [
+        repaired_values[key]
+        for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(np.asarray([baseline, repaired], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # Coin zero wins TWEL's equal-adverse tie and alone reaches the target, but
+    # its fee-only reducer is loss-gated. Exact Rust does not then reallocate
+    # that action to profitable coin one.
+    assert output["open_positions"].cpu().tolist() == pytest.approx([2.0, 2.0])
+    assert output[size_key][1].item() == pytest.approx(
+        output[size_key][0].item(), abs=2.0e-4
+    )
 
 
 @pytest.mark.skipif(

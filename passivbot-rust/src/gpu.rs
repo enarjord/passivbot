@@ -187,6 +187,8 @@ mod tests {
         assert!(source.contains("twel_enforcer_enabled"));
         assert!(source.contains("twel_enforcer_reduce_portfolio"));
         assert!(source.contains("twel_close_qty"));
+        assert!(source.contains("realized_loss_proxy_allows_close"));
+        assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
         assert!(source.contains("market_price * 0.9995f / price_step"));
         assert_eq!(source.matches("clamped_market_price(").count(), 3);
         assert!(source.contains("finalized_twel_reducer_qty = finalized_reducer_qty"));
