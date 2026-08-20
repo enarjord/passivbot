@@ -409,6 +409,53 @@ inline float finalized_reducer_qty(
         ? psize : reducer_qty;
 }
 
+inline float finalized_reducer_qty_with_ordinary(
+    float psize,
+    float reducer_qty,
+    float reducer_price,
+    float ordinary_qty,
+    float ordinary_min,
+    int ordinary_min_relation,
+    float qty_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    if (reducer_qty <= 0.0f || reducer_price <= 0.0f) return 0.0f;
+    reducer_qty = fmin(psize, reducer_qty);
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    if (ordinary_qty > 0.0f) {
+        if (ordinary_qty + reducer_qty > psize) {
+            ordinary_qty = fmax(
+                round_step(psize - reducer_qty, qty_step), 0.0f
+            );
+        }
+        bool ordinary_below_minimum = ordinary_qty < ordinary_min
+            || (ordinary_qty == ordinary_min && ordinary_min_relation > 0);
+        if (!ordinary_below_minimum) {
+            float remainder = fmax(
+                round_step(psize - reducer_qty - ordinary_qty, qty_step),
+                0.0f
+            );
+            float minimum_any = fmin(ordinary_min, reducer_min);
+            if (remainder > 0.0f && remainder < minimum_any) {
+                ordinary_qty = fmin(
+                    psize - reducer_qty,
+                    round_step(ordinary_qty + remainder, qty_step)
+                );
+            }
+            if (ordinary_qty > 0.0f) return reducer_qty;
+        }
+    }
+    float remainder = fmax(
+        round_step(psize - reducer_qty, qty_step), 0.0f
+    );
+    return remainder > 0.0f && remainder < reducer_min
+        ? psize : reducer_qty;
+}
+
 inline bool reducer_candidate_preferred(
     float left_qty,
     int left_ticks,
@@ -703,43 +750,6 @@ inline void generate_orders(
         )
         : 0.0f;
 
-    float finalized_wel_qty = finalized_reducer_qty(
-        s.psize, wel_qty, wel_price,
-        qty_step, min_qty, min_cost, c_mult
-    );
-    float finalized_twel_qty = finalized_reducer_qty(
-        s.psize, twel_qty, twel_price,
-        qty_step, min_qty, min_cost, c_mult
-    );
-    float finalized_unstuck_qty = finalized_reducer_qty(
-        s.psize, unstuck_qty, unstuck_price,
-        qty_step, min_qty, min_cost, c_mult
-    );
-    int unstuck_order_type_id = is_long ? 9 : 20;
-    bool use_twel = finalized_twel_qty > finalized_wel_qty;
-    float finalized_exposure_qty = use_twel
-        ? finalized_twel_qty : finalized_wel_qty;
-    int exposure_ticks = use_twel ? twel_ticks : wel_ticks;
-    int exposure_order_type_id = use_twel
-        ? (is_long ? 10 : 21) : (is_long ? 24 : 25);
-    // Rust chooses by finalized size, then strict distance to the executable
-    // touch, and finally stable order fields. Unstuck and WEL share the touch,
-    // so the lower unstuck order-type id wins only that exact-price tie.
-    bool use_unstuck = reducer_candidate_preferred(
-        finalized_unstuck_qty, unstuck_ticks, unstuck_order_type_id,
-        finalized_exposure_qty, exposure_ticks, exposure_order_type_id,
-        is_long
-    );
-    // Final sizing is only the selection key. Preserve the requested quantity
-    // for the winning reducer so the ordinary close allocator below can absorb
-    // dust exactly as Rust does when TWEL is the sole strategy-external close.
-    float reducer_qty = use_unstuck
-        ? unstuck_qty : (use_twel ? twel_qty : wel_qty);
-    int reducer_ticks = use_unstuck
-        ? unstuck_ticks : (use_twel ? twel_ticks : wel_ticks);
-    float reducer_price = use_unstuck
-        ? unstuck_price : (use_twel ? twel_price : wel_price);
-
     float ct = s.close_threshold_base + wer * s.close_threshold_we
         + s.vol1h * s.close_threshold_v1h + s.vol1m * s.close_threshold_v1m;
     float cr = fmax(s.close_retracement_base, 0.0f) * fmax(
@@ -793,6 +803,54 @@ inline void generate_orders(
         ? calc_close_qty(
             s, balance, close_mq, close_mq_relation, pct, qty_step, c_mult
         ) : 0.0f;
+    bool ordinary_can_accompany_reducer = wel_qty <= 0.0f
+        && trailing_close && s.close_qty > 0.0f;
+    float finalized_wel_qty = finalized_reducer_qty(
+        s.psize, wel_qty, wel_price,
+        qty_step, min_qty, min_cost, c_mult
+    );
+    float finalized_twel_qty = ordinary_can_accompany_reducer
+        ? finalized_reducer_qty_with_ordinary(
+            s.psize, twel_qty, twel_price, s.close_qty, close_mq,
+            close_mq_relation, qty_step, min_qty, min_cost, c_mult
+        )
+        : finalized_reducer_qty(
+            s.psize, twel_qty, twel_price,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    float finalized_unstuck_qty = ordinary_can_accompany_reducer
+        ? finalized_reducer_qty_with_ordinary(
+            s.psize, unstuck_qty, unstuck_price, s.close_qty, close_mq,
+            close_mq_relation, qty_step, min_qty, min_cost, c_mult
+        )
+        : finalized_reducer_qty(
+            s.psize, unstuck_qty, unstuck_price,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    int unstuck_order_type_id = is_long ? 9 : 20;
+    bool use_twel = finalized_twel_qty > finalized_wel_qty;
+    float finalized_exposure_qty = use_twel
+        ? finalized_twel_qty : finalized_wel_qty;
+    int exposure_ticks = use_twel ? twel_ticks : wel_ticks;
+    int exposure_order_type_id = use_twel
+        ? (is_long ? 10 : 21) : (is_long ? 24 : 25);
+    // Rust chooses by finalized size, then strict distance to the executable
+    // touch, and finally stable order fields. Unstuck and WEL share the touch,
+    // so the lower unstuck order-type id wins only that exact-price tie.
+    bool use_unstuck = reducer_candidate_preferred(
+        finalized_unstuck_qty, unstuck_ticks, unstuck_order_type_id,
+        finalized_exposure_qty, exposure_ticks, exposure_order_type_id,
+        is_long
+    );
+    // Final sizing is only the selection key. Preserve the requested quantity
+    // for the winning reducer so the ordinary close allocator below can absorb
+    // dust exactly as Rust does when TWEL is the sole strategy-external close.
+    float reducer_qty = use_unstuck
+        ? unstuck_qty : (use_twel ? twel_qty : wel_qty);
+    int reducer_ticks = use_unstuck
+        ? unstuck_ticks : (use_twel ? twel_ticks : wel_ticks);
+    float reducer_price = use_unstuck
+        ? unstuck_price : (use_twel ? twel_price : wel_price);
     if (reducer_qty > 0.0f && reducer_ticks > 0) {
         float reducer_min = min_entry_qty(
             reducer_price, qty_step, min_qty, min_cost, c_mult

@@ -131,7 +131,8 @@ mod tests {
         assert!(source.contains("twel_target"));
         assert!(source.contains("price_now * 0.9995f / price_step"));
         assert!(source.contains("finalized_wel_qty = finalized_reducer_qty"));
-        assert!(source.contains("finalized_twel_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_reducer_qty_with_ordinary"));
+        assert!(source.contains("float finalized_twel_qty = ordinary_can_accompany_reducer"));
         assert!(source.contains("finalized_twel_qty > finalized_wel_qty"));
         assert!(source.contains("float reducer_qty = use_unstuck"));
         assert!(source.contains("? unstuck_qty : (use_twel ? twel_qty : wel_qty)"));

@@ -1571,6 +1571,71 @@ def test_mps_tm_equal_unstuck_twel_reducers_keep_nearer_twel(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_unstuck_finalization_keeps_valid_ordinary_close_remainder():
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3] = 98.0
+    high[4] = 201.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.5, 0.01, 0.5, 500.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.01,
+        gate_initial=1.0,
+        gate_reentry=0.0,
+        entry_gate=True,
+        threshold=1.0,
+        wel_enforcer_enabled=True,
+        wel_enforcer_threshold=0.2,
+        unstuck_enabled=True,
+        unstuck_ema_gating_enabled=False,
+        unstuck_close_pct=0.7,
+        unstuck_loss_allowance_pct=0.2,
+        unstuck_threshold=0.5,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[15] = 0.3
+    row[16] = 1.0
+    row[20] = 0.01
+    row[23] = 100.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        max_realized_loss_pct=0.05,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # At the 100 touch, the requested unstuck close is 7 and its minimum is 5.
+    # The ordinary close near 198 has a 3-unit quantity above its ~2.5 minimum,
+    # so exact finalization keeps the unstuck selection key at 7 instead of
+    # promoting it to the full 10. The genuinely larger WEL reducer therefore
+    # wins and leaves less than the unstuck request would have left.
+    assert output["psize"].item() < 3.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_single_coin_exposure_headroom_and_entry_gate(
@@ -4815,6 +4880,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "close_gen_balance" in source
     assert "merge_reducer" not in source
     assert "finalized_reducer_qty" in source
+    assert "finalized_reducer_qty_with_ordinary" in source
     assert "reducer_candidate_preferred" in source
     assert "strict distance to the executable" in source
     assert "for (int rung = 0; rung < 500; ++rung)" in source

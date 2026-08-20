@@ -34,6 +34,7 @@ from optimization.backends.gpu_backend import (
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
+    _gpu_unstuck_parameter_active,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
     _gpu_suite_search_context,
@@ -48,6 +49,7 @@ from optimization.backends.gpu_backend import (
     _submit_gpu_exact_validation,
     _resolve_options,
     _restore_gpu_result_run_contract,
+    _single_coin_unstuck_search_sides,
     _single_scenario_metric_surface,
     _suite_limit_metric_value,
     _trailing_martingale_multicoin_bound_map,
@@ -2227,6 +2229,36 @@ def test_gpu_foundation_accepts_single_coin_unstuck_on_short_side():
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
+def test_gpu_single_coin_unstuck_search_excludes_disabled_side_genes():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+
+    assert _single_coin_unstuck_search_sides(config, []) == set()
+    assert not _gpu_unstuck_parameter_active(
+        "long_unstuck_close_pct", set()
+    )
+    assert _gpu_unstuck_parameter_active("long_offset", set())
+
+    config["bot"]["short"]["unstuck"]["enabled"] = True
+    search_sides = _single_coin_unstuck_search_sides(config, [])
+    assert search_sides == {"short"}
+    assert not _gpu_unstuck_parameter_active(
+        "long_unstuck_threshold", search_sides
+    )
+    assert _gpu_unstuck_parameter_active(
+        "short_unstuck_threshold", search_sides
+    )
+
+
+def test_gpu_single_coin_suite_keeps_unstuck_genes_used_by_any_scenario():
+    base = _directional_ema_config(long_enabled=True, short_enabled=False)
+    scenario = copy.deepcopy(base)
+    scenario["bot"]["long"]["unstuck"]["enabled"] = True
+
+    assert _single_coin_unstuck_search_sides(
+        base, [{"config": scenario}]
+    ) == {"long"}
+
+
 def test_gpu_foundation_keeps_multicoin_unstuck_fail_closed():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
@@ -3671,6 +3703,48 @@ def test_gpu_checkpoint_signature_tracks_realized_loss_gate_contract():
     )
 
 
+def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _long_only_ema_config()
+    config["bot"]["long"]["unstuck"]["enabled"] = True
+    proxy = SimpleNamespace(coin_override_contract=None)
+    original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=original_contract
+    )
+
+    edits = {
+        "enabled": False,
+        "ema_gating_enabled": False,
+        "close_pct": 0.234,
+        "ema_dist": -0.012,
+        "loss_allowance_pct": 0.034,
+        "threshold": 0.876,
+    }
+    for key, value in edits.items():
+        changed = copy.deepcopy(config)
+        changed["bot"]["long"]["unstuck"][key] = value
+        changed_contract = _gpu_runtime_checkpoint_contract(changed, proxy)
+        assert changed_contract != original_contract
+        assert (
+            _checkpoint_signature(
+                active, scoring, runtime_contract=changed_contract
+            )
+            != original
+        )
+
+    fixed = _long_only_ema_config()
+    fixed["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.unstuck.enabled": True,
+        "bot.long.unstuck.threshold": 0.765,
+    }
+    effective = _materialize_gpu_override_template(fixed, [])
+    effective_contract = _gpu_runtime_checkpoint_contract(effective, proxy)
+    assert effective_contract["unstuck"]["long"]["enabled"] is True
+    assert effective_contract["unstuck"]["long"]["threshold"] == 0.765
+
+
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -3753,6 +3827,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "strategy_kind": "ema_anchor",
             "enabled_sides": ["long"],
             "max_realized_loss_pct": 1.0,
+            "unstuck": original["unstuck"],
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -3778,6 +3853,10 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
 
     assert changed != original
     assert changed["prepared_scenarios"][0]["max_realized_loss_pct"] == 0.05
+
+    changed_unstuck = copy.deepcopy(item)
+    changed_unstuck["config"]["bot"]["long"]["unstuck"]["enabled"] = True
+    assert _gpu_suite_checkpoint_contract(config, [changed_unstuck]) != original
 
     changed_coins = copy.deepcopy(item)
     changed_coins["coins"] = ["BTC", "SOL"]
