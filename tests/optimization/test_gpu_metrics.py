@@ -37,6 +37,51 @@ def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
     assert "loss_profit_ratio" in SUPPORTED_METRICS
 
 
+def test_duration_alias_metrics_match_rust_unit_contracts():
+    day_end = torch.tensor([[100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "max_dd": torch.zeros(1, dtype=torch.float64),
+        "held_max_ms": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1, dtype=torch.float64),
+        "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
+        "recovery_max_ms": torch.tensor([30 * 3_600_000.0], dtype=torch.float64),
+        "last_high_ts": torch.tensor([30 * 3_600_000.0], dtype=torch.float64),
+        "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
+        "last_eq_ts": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
+        "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+    }
+    run = SimpleNamespace(
+        requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+    )
+    requested = {
+        "position_held_days_max",
+        "position_held_hours_max",
+        "strategy_eq_recovery_days_max",
+        "peak_recovery_hours_strategy_eq",
+    }
+
+    metrics = compute_objectives(
+        out,
+        run,
+        {"ts0": 0.0, "n": 36 * 60 + 1},
+        needed=requested,
+    )
+
+    assert set(metrics) == requested
+    assert metrics["position_held_days_max"].item() == pytest.approx(1.5)
+    assert metrics["position_held_hours_max"].item() == pytest.approx(36.0)
+    assert metrics["strategy_eq_recovery_days_max"].item() == pytest.approx(1.25)
+    assert metrics["peak_recovery_hours_strategy_eq"].item() == pytest.approx(30.0)
+    assert requested <= set(SUPPORTED_METRICS)
+
+
 def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
     changes = torch.tensor([[0.1, 0.1]], dtype=torch.float64)
     mask = torch.tensor([[True, True]])
