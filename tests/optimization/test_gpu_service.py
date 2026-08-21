@@ -423,7 +423,7 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         "hsl_tier_ratio_yellow": 0.5,
         "hsl_tier_ratio_orange": 0.75,
         "hsl_orange_graceful_stop": 1.0,
-        "hsl_signal_coin": 1.0,
+        "hsl_signal_mode": 2.0,
         "hsl_slot_count": 1.0,
     }
 
@@ -435,6 +435,16 @@ def test_single_coin_hsl_packs_state_machine_inputs():
             },
             signal_mode="coin",
         )
+
+
+@pytest.mark.parametrize(
+    ("signal_mode", "expected_id"),
+    [("unified", 0.0), ("pside", 1.0), ("coin", 2.0)],
+)
+def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id):
+    packed = _hsl_params({"hsl_enabled": False}, signal_mode=signal_mode)
+
+    assert packed["hsl_signal_mode"] == expected_id
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

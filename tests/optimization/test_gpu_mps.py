@@ -144,7 +144,7 @@ _HSL_DISABLED_VALUES = {
     "hsl_tier_ratio_yellow": 0.5,
     "hsl_tier_ratio_orange": 0.75,
     "hsl_orange_graceful_stop": 0.0,
-    "hsl_signal_coin": 0.0,
+    "hsl_signal_mode": 0.0,
     "hsl_slot_count": 1.0,
 }
 
@@ -582,6 +582,225 @@ def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
     assert not hour_valid[1]
     assert hour_valid[61]
     assert hour_log_range[61] == pytest.approx(np.log(106.0 / 94.0))
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_shared_hsl_trace_matches_exact_rust():
+    import passivbot_rust
+
+    trace_kernel = r"""
+kernel void passivbot_hsl_trace(
+    device const float* samples [[buffer(0)]],
+    constant float* params [[buffer(1)]],
+    constant float* settings [[buffer(2)]],
+    constant int* sizes [[buffer(3)]],
+    device float* output [[buffer(4)]],
+    uint b [[thread_position_in_grid]]
+) {
+    const int B = sizes[0];
+    const int N = sizes[1];
+    const int PARAM_COLS = 11;
+    const int SAMPLE_COLS = 5;
+    const int OUTPUT_COLS = 10;
+    if (b >= uint(B)) return;
+    HslState h = load_hsl(params, int(b) * PARAM_COLS, 0);
+    for (int k = 0; k < N; k++) {
+        const int si = k * SAMPLE_COLS;
+        HslSignal signal;
+        bool valid = derive_hsl_signal(
+            h,
+            samples[si + 0],
+            settings[0],
+            samples[si + 1],
+            samples[si + 2],
+            signal
+        );
+        if (valid) {
+            update_hsl_from_signal(
+                h,
+                signal,
+                samples[si + 1],
+                samples[si + 3] > 0.5f,
+                samples[si + 4] > 0.5f,
+                float(k),
+                settings[1]
+            );
+        }
+        const int oi = (int(b) * N + k) * OUTPUT_COLS;
+        output[oi + 0] = valid ? signal.drawdown_raw : -1.0f;
+        output[oi + 1] = h.drawdown_ema;
+        output[oi + 2] = float(h.tier);
+        output[oi + 3] = h.red_active_now ? 1.0f : 0.0f;
+        output[oi + 4] = h.red_latched ? 1.0f : 0.0f;
+        output[oi + 5] = h.halted ? 1.0f : 0.0f;
+        output[oi + 6] = h.no_restart_latched ? 1.0f : 0.0f;
+        output[oi + 7] = h.cooldown_until_k;
+        output[oi + 8] = h.triggers;
+        output[oi + 9] = h.pending_stop_k;
+    }
+}
+"""
+    source = passivbot_rust.mps_ema_anchor_source_py() + trace_kernel
+    library = torch.mps.compile_shader(source)
+
+    starting_balance = 1_000.0
+    realized = np.zeros(7, dtype=np.float32)
+    unrealized = np.array(
+        [0.0, -20.0, -60.0, -120.0, -160.0, -40.0, 0.0],
+        dtype=np.float32,
+    )
+    samples = np.column_stack(
+        [
+            np.full(len(realized), starting_balance, dtype=np.float32),
+            realized,
+            unrealized,
+            np.ones(len(realized), dtype=np.float32),
+            np.zeros(len(realized), dtype=np.float32),
+        ]
+    )
+    signal_modes = ("unified", "pside", "coin")
+    params = np.array(
+        [
+            [1.0, 0.1, 2.0, 0.0, 0.3, 1.0, 0.5, 0.75, 0.0, mode, 2.0]
+            for mode in range(len(signal_modes))
+        ],
+        dtype=np.float32,
+    )
+    output = torch.zeros(
+        (len(signal_modes), len(realized), 10),
+        dtype=torch.float32,
+        device="mps",
+    )
+    library.passivbot_hsl_trace(
+        torch.as_tensor(samples, dtype=torch.float32, device="mps").contiguous(),
+        torch.as_tensor(params, dtype=torch.float32, device="mps").contiguous(),
+        torch.tensor(
+            [starting_balance, 60_000.0], dtype=torch.float32, device="mps"
+        ),
+        torch.tensor(
+            [len(signal_modes), len(realized)], dtype=torch.int32, device="mps"
+        ),
+        output,
+        threads=(len(signal_modes), 1, 1),
+    )
+    actual = output.cpu().numpy()
+
+    tier_ids = {"green": 0.0, "yellow": 1.0, "orange": 2.0, "red": 3.0}
+    for mode_index, signal_mode in enumerate(signal_modes):
+        runtime = passivbot_rust.EquityHardStopRuntime()
+        peak_strategy_pnl = float("-inf")
+        peak_coin_realized = 0.0
+        for k, (realized_pnl, unrealized_pnl) in enumerate(
+            zip(realized, unrealized)
+        ):
+            if signal_mode == "coin":
+                peak_coin_realized = max(peak_coin_realized, float(realized_pnl))
+                coin_signal = passivbot_rust.hsl_coin_drawdown_signal(
+                    balance=starting_balance,
+                    n_positions=2,
+                    peak_realized=peak_coin_realized,
+                    last_realized=float(realized_pnl),
+                    current_upnl=float(unrealized_pnl),
+                )
+                drawdown_raw = coin_signal["drawdown_raw"]
+                equity = max(1.0 - drawdown_raw, 1.0e-12)
+                peak_equity = 1.0
+            else:
+                strategy_pnl = float(realized_pnl + unrealized_pnl)
+                peak_strategy_pnl = max(peak_strategy_pnl, strategy_pnl)
+                equity = starting_balance + strategy_pnl
+                peak_equity = max(starting_balance + peak_strategy_pnl, equity)
+            exact = runtime.apply_sample(
+                timestamp_ms=k * 60_000,
+                equity=equity,
+                peak_strategy_equity=peak_equity,
+                red_threshold=0.1,
+                ema_span_minutes=2.0,
+                tier_ratio_yellow=0.5,
+                tier_ratio_orange=0.75,
+            )
+            assert actual[mode_index, k, 0] == pytest.approx(
+                exact["drawdown_raw"], abs=2.0e-6
+            )
+            assert actual[mode_index, k, 1] == pytest.approx(
+                exact["drawdown_ema"], abs=2.0e-6
+            )
+            assert actual[mode_index, k, 2] == tier_ids[exact["tier"]]
+            assert bool(actual[mode_index, k, 3]) == exact["red_active_now"]
+            assert bool(actual[mode_index, k, 4]) == exact["red_latched"]
+            assert not bool(actual[mode_index, k, 5])
+
+    restart_policies = ("always", "threshold", "never")
+    lifecycle_unrealized = np.array(
+        [0.0, -200.0, -200.0, -200.0, -200.0], dtype=np.float32
+    )
+    lifecycle_samples = np.column_stack(
+        [
+            np.full(
+                len(lifecycle_unrealized), starting_balance, dtype=np.float32
+            ),
+            np.zeros(len(lifecycle_unrealized), dtype=np.float32),
+            lifecycle_unrealized,
+            np.array([1.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            np.zeros(len(lifecycle_unrealized), dtype=np.float32),
+        ]
+    )
+    lifecycle_params = np.array(
+        [
+            [1.0, 0.1, 1.0, 5.0, 0.3, policy, 0.5, 0.75, 0.0, 0.0, 1.0]
+            for policy in range(len(restart_policies))
+        ],
+        dtype=np.float32,
+    )
+    lifecycle_output = torch.zeros(
+        (len(restart_policies), len(lifecycle_unrealized), 10),
+        dtype=torch.float32,
+        device="mps",
+    )
+    library.passivbot_hsl_trace(
+        torch.as_tensor(
+            lifecycle_samples, dtype=torch.float32, device="mps"
+        ).contiguous(),
+        torch.as_tensor(
+            lifecycle_params, dtype=torch.float32, device="mps"
+        ).contiguous(),
+        torch.tensor(
+            [starting_balance, 60_000.0], dtype=torch.float32, device="mps"
+        ),
+        torch.tensor(
+            [len(restart_policies), len(lifecycle_unrealized)],
+            dtype=torch.int32,
+            device="mps",
+        ),
+        lifecycle_output,
+        threads=(len(restart_policies), 1, 1),
+    )
+    lifecycle_actual = lifecycle_output.cpu().numpy()
+    for policy_index, restart_policy in enumerate(restart_policies):
+        exact = passivbot_rust.hsl_red_episode_finalization(
+            restart_after_red_policy=restart_policy,
+            stop_timestamp_ms=2 * 60_000,
+            stop_equity=800.0,
+            stop_peak_strategy_equity=1_000.0,
+            previous_no_restart_peak_strategy_equity=0.0,
+            drawdown_ema=0.2,
+            red_threshold=0.1,
+            no_restart_drawdown_threshold=0.3,
+            cooldown_minutes_after_red=5.0,
+        )
+        final = lifecycle_actual[policy_index, -1]
+        assert bool(final[5])
+        assert bool(final[6]) == exact["no_restart_latched"]
+        expected_cooldown_step = (
+            -1.0
+            if exact["cooldown_until_ms"] is None
+            else exact["cooldown_until_ms"] / 60_000.0
+        )
+        assert final[7] == pytest.approx(expected_cooldown_step)
+        assert final[8] == 1.0
+        assert final[9] == 2.0
 
 
 @pytest.mark.skipif(
@@ -1605,7 +1824,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         "hsl_tier_ratio_yellow": 0.5,
         "hsl_tier_ratio_orange": 0.75,
         "hsl_orange_graceful_stop": 0.0,
-        "hsl_signal_coin": 1.0,
+        "hsl_signal_mode": 2.0,
         "hsl_slot_count": 1.0,
     }.items():
         hsl[keys.index(key)] = value

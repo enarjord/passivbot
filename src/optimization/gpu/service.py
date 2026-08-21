@@ -311,6 +311,7 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             "MPS HSL requires live.hsl_signal_mode to be coin, pside, or "
             f"unified, got {signal_mode!r}"
         )
+    signal_mode_ids = {"unified": 0.0, "pside": 1.0, "coin": 2.0}
     orange_mode = str(
         bot.get("hsl_orange_tier_mode", "tp_only_with_active_entry_cancellation")
     ).strip().lower()
@@ -354,7 +355,7 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             bot.get("hsl_tier_ratio_orange", 0.75)
         ),
         "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
-        "hsl_signal_coin": float(signal_mode == "coin"),
+        "hsl_signal_mode": signal_mode_ids[signal_mode],
         # The single-coin GPU search contract pins authoritative candidate
         # n_positions to one even if the source config is outside its bounds.
         "hsl_slot_count": 1.0,
