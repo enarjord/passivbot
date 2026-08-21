@@ -112,3 +112,78 @@ inline float clamped_market_price(
     int market_k = clamp(k, first_valid, last_valid);
     return bars[(market_k * coin_count + coin) * 4 + 2];
 }
+
+// Joint-side account state for the fused multi-coin portfolio path. Exact
+// Rust processes every long fill before every short fill for a candle; callers
+// preserve that ordering while this state owns the one shared cash balance and
+// the realized-PnL scopes consumed by liquidation, loss gates, and HSL.
+struct JointPortfolioAccount {
+    float balance;
+    float realized_pnl_total;
+    float realized_pnl_peak;
+    float realized_pnl_long;
+    float realized_pnl_short;
+};
+
+inline JointPortfolioAccount init_joint_portfolio_account(
+    float starting_balance
+) {
+    JointPortfolioAccount account;
+    account.balance = starting_balance;
+    account.realized_pnl_total = 0.0f;
+    account.realized_pnl_peak = 0.0f;
+    account.realized_pnl_long = 0.0f;
+    account.realized_pnl_short = 0.0f;
+    return account;
+}
+
+inline void record_joint_portfolio_fill(
+    thread JointPortfolioAccount& account,
+    float net_pnl,
+    bool is_long
+) {
+    account.balance += net_pnl;
+    account.realized_pnl_total += net_pnl;
+    account.realized_pnl_peak = fmax(
+        account.realized_pnl_peak, account.realized_pnl_total
+    );
+    if (is_long) account.realized_pnl_long += net_pnl;
+    else account.realized_pnl_short += net_pnl;
+}
+
+inline float joint_portfolio_equity(
+    thread const JointPortfolioAccount& account,
+    float unrealized_pnl_long,
+    float unrealized_pnl_short
+) {
+    return account.balance + unrealized_pnl_long + unrealized_pnl_short;
+}
+
+inline float joint_hsl_realized_pnl(
+    thread const JointPortfolioAccount& account,
+    bool unified,
+    bool is_long
+) {
+    if (unified) return account.realized_pnl_total;
+    return is_long
+        ? account.realized_pnl_long : account.realized_pnl_short;
+}
+
+inline float joint_hsl_unrealized_pnl(
+    float unrealized_pnl_long,
+    float unrealized_pnl_short,
+    bool unified,
+    bool is_long
+) {
+    if (unified) return unrealized_pnl_long + unrealized_pnl_short;
+    return is_long ? unrealized_pnl_long : unrealized_pnl_short;
+}
+
+inline bool joint_portfolio_can_generate(
+    thread const JointPortfolioAccount& account,
+    float equity,
+    float liquidation_floor
+) {
+    return isfinite(account.balance) && account.balance > 0.0f
+        && isfinite(equity) && equity > liquidation_floor;
+}

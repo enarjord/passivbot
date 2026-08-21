@@ -102,9 +102,18 @@ mod tests {
             "inline float coin_override_or(",
             "inline float allowed_wallet_exposure_limit(",
             "inline float clamped_market_price(",
+            "inline JointPortfolioAccount init_joint_portfolio_account(",
+            "inline void record_joint_portfolio_fill(",
+            "inline float joint_portfolio_equity(",
+            "inline float joint_hsl_realized_pnl(",
+            "inline float joint_hsl_unrealized_pnl(",
+            "inline bool joint_portfolio_can_generate(",
         ] {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }
+        assert_eq!(source.matches("struct JointPortfolioAccount").count(), 1);
+        assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
+        assert!(source.contains("else account.realized_pnl_short += net_pnl"));
     }
 
     fn assert_directional_hsl_accounting_contract(source: &str) {
