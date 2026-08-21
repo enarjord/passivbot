@@ -9,10 +9,10 @@ All notable user-facing changes will be documented in this file.
   proxy models coin, pside, and unified drawdown signals; tunable RED threshold, EMA span, and
   cooldown; yellow/orange entry suppression; RED latching; resting-limit panic flattening;
   flat confirmation; positive-cooldown restart; zero-cooldown indefinite halt; cumulative
-  no-restart peak tracking; effective coin-slot scaling; and terminal no-restart. Exact Rust
-  remains authoritative, including for finite rolling PnL lookbacks. Market panic execution,
-  dual-side and multi-coin HSL, per-coin HSL overrides, and HSL-specific optimizer metrics remain
-  fail closed.
+  no-restart peak tracking; effective coin-slot scaling; and terminal no-restart. The initial
+  slice requires all-history PnL peaks and contiguous valid candles. Market panic execution,
+  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and
+  HSL-specific optimizer metrics remain fail closed.
 
 - Added auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for single-coin
   long-only, short-only, dual-side hedge/one-way, and compatible suite runs, plus one-sided

@@ -33,6 +33,7 @@ from optimization.backends.gpu_backend import (
     _gpu_candidate_source_sides,
     _gpu_hsl_parameter_active,
     _gpu_pinned_hsl_bound_contract,
+    _validate_hsl_bound_contracts,
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
@@ -1417,8 +1418,17 @@ def test_gpu_foundation_accepts_ema_long_single():
 def test_gpu_foundation_accepts_one_sided_single_coin_hsl():
     config = _long_only_ema_config()
     config["bot"]["long"]["hsl"]["enabled"] = True
+    config["live"]["pnls_max_lookback_days"] = "all"
 
     assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_hsl_fails_closed_for_finite_pnl_lookback():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="pnls_max_lookback_days='all'"):
+        _validate_scope(config, _Evaluator())
 
 
 def test_gpu_hsl_fails_closed_for_market_panic_close():
@@ -1426,6 +1436,7 @@ def test_gpu_hsl_fails_closed_for_market_panic_close():
     config["bot"]["long"]["hsl"].update(
         {"enabled": True, "panic_close_order_type": "market"}
     )
+    config["live"]["pnls_max_lookback_days"] = "all"
 
     with pytest.raises(ValueError, match="panic_close_order_type=limit"):
         _validate_scope(config, _Evaluator())
@@ -3951,6 +3962,24 @@ def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
             "long_offset": Bound(0.01, 0.01),
         }
     ) == {"long_hsl_red_threshold": 0.2}
+
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    _validate_hsl_bound_contracts(
+        {
+            "long_hsl_enabled": Bound(1.0, 1.0),
+            "long_hsl_red_threshold": Bound(0.2, 0.8),
+        },
+        config,
+    )
+    with pytest.raises(ValueError, match="enablement to match"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_enabled": Bound(0.0, 0.0)}, config
+        )
+    with pytest.raises(ValueError, match="cannot distinguish from 1.0"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(0.9, 1.0)}, config
+        )
 
 
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():

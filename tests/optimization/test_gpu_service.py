@@ -21,6 +21,7 @@ from optimization.gpu.service import (
     _hsl_params,
     _position_exposure_enforcer_params,
     _require_complete_valid_tail,
+    _require_no_internal_invalid_hsl_candles,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
     _unstuck_params,
@@ -32,6 +33,21 @@ def test_gpu_proxy_requires_complete_valid_tail():
 
     with pytest.raises(ValueError, match="force-realizes open positions"):
         _require_complete_valid_tail(98, 100)
+
+
+def test_gpu_hsl_requires_contiguous_valid_candles():
+    high = np.array([100.0, np.nan, 100.0])
+    low = np.array([99.0, np.nan, 99.0])
+    close = np.array([99.5, np.nan, 99.5])
+
+    with pytest.raises(ValueError, match="invalid candle at 1"):
+        _require_no_internal_invalid_hsl_candles(
+            high, low, close, first_valid_idx=0, last_valid_idx=2
+        )
+
+    _require_no_internal_invalid_hsl_candles(
+        high, low, close, first_valid_idx=2, last_valid_idx=2
+    )
 
 
 @pytest.mark.parametrize(
@@ -160,6 +176,15 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         "hsl_signal_coin": 1.0,
         "hsl_slot_count": 1.0,
     }
+
+    with pytest.raises(ValueError, match="cannot represent"):
+        _hsl_params(
+            {
+                "hsl_enabled": True,
+                "hsl_no_restart_drawdown_threshold": 0.99999999,
+            },
+            signal_mode="coin",
+        )
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

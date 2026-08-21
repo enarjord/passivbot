@@ -158,6 +158,19 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
             f"got {orange_mode!r}"
         )
+    float32_below_one = float(
+        np.nextafter(np.float32(1.0), np.float32(0.0))
+    )
+    for key, default in (
+        ("hsl_red_threshold", 0.15),
+        ("hsl_no_restart_drawdown_threshold", 1.0),
+    ):
+        value = float(bot.get(key, default))
+        if float32_below_one < value < 1.0:
+            raise ValueError(
+                f"MPS HSL cannot represent {key}={value} distinctly from 1.0; "
+                f"use <= {float32_below_one} or exactly 1.0"
+            )
     return {
         "hsl_enabled": float(bool(bot.get("hsl_enabled", False))),
         "hsl_red_threshold": float(bot.get("hsl_red_threshold", 0.15)),
@@ -189,6 +202,25 @@ def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None
             "GPU foundation requires the final prepared candle to be valid because "
             "the exact Rust backtest force-realizes open positions at its valid tail; "
             f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
+def _require_no_internal_invalid_hsl_candles(
+    high, low, close, *, first_valid_idx: int, last_valid_idx: int
+) -> None:
+    first = max(0, int(first_valid_idx))
+    last = min(int(last_valid_idx), len(close) - 1)
+    valid = (
+        np.isfinite(high[first : last + 1])
+        & np.isfinite(low[first : last + 1])
+        & np.isfinite(close[first : last + 1])
+        & (np.asarray(close[first : last + 1]) > 0.0)
+    )
+    if not bool(np.all(valid)):
+        first_invalid = first + int(np.flatnonzero(~valid)[0])
+        raise ValueError(
+            "MPS single-coin HSL currently requires contiguous valid candles "
+            f"between first and last valid indices; invalid candle at {first_invalid}"
         )
 
 
@@ -503,6 +535,14 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
+        if hsl_enabled_sides:
+            _require_no_internal_invalid_hsl_candles(
+                high,
+                low,
+                close,
+                first_valid_idx=self.run.first_valid_idx,
+                last_valid_idx=self.run.last_valid_idx,
+            )
         self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
         runner_cls = (
