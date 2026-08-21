@@ -1909,14 +1909,16 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
 
 
 def _single_coin_unstuck_search_sides(
-    proxy_config: dict, suite_inputs
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
 ) -> set[str]:
+    """Return target and mirrored source sides whose unstuck genes affect a scenario."""
+
     configs = (
         [item["config"] for item in suite_inputs]
         if suite_inputs
         else [proxy_config]
     )
-    return {
+    target_sides = {
         side
         for side in ("long", "short")
         if any(
@@ -1930,6 +1932,7 @@ def _single_coin_unstuck_search_sides(
             for item in configs
         )
     }
+    return _gpu_candidate_source_sides(target_sides, overrides or set())
 
 
 def _gpu_unstuck_parameter_active(
@@ -2677,7 +2680,9 @@ def run_backend(
         enabled_sides, gpu_optimizer_overrides
     )
     unstuck_search_sides = (
-        _single_coin_unstuck_search_sides(proxy_config, suite_inputs)
+        _single_coin_unstuck_search_sides(
+            proxy_config, suite_inputs, gpu_optimizer_overrides
+        )
         if max_coin_count == 1
         else set()
     )

@@ -2259,6 +2259,23 @@ def test_gpu_single_coin_suite_keeps_unstuck_genes_used_by_any_scenario():
     ) == {"long"}
 
 
+def test_gpu_single_coin_suite_keeps_mirrored_unstuck_source_genes():
+    base = _directional_ema_config(long_enabled=False, short_enabled=True)
+    scenario = copy.deepcopy(base)
+    scenario["bot"]["short"]["unstuck"]["enabled"] = True
+
+    search_sides = _single_coin_unstuck_search_sides(
+        base,
+        [{"config": scenario}],
+        {"mirror_short_from_long"},
+    )
+
+    assert search_sides == {"long", "short"}
+    assert _gpu_unstuck_parameter_active(
+        "long_unstuck_close_pct", search_sides
+    )
+
+
 def test_gpu_foundation_keeps_multicoin_unstuck_fail_closed():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
