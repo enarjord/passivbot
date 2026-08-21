@@ -564,8 +564,8 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_volume": torch.tensor([[0.1, 0.1, 0.1]]),
             "day_has_fill": torch.tensor([[True, True, True]]),
             "day_min_balance": torch.tensor([[900.0, 900.0, 900.0]]),
-            "day_net_pnl": torch.zeros((1, 3)),
-            "day_last_fill_balance": torch.full((1, 3), 1_000.0),
+            "day_net_pnl": torch.tensor([[0.0, -240.0, 0.0]]),
+            "day_last_fill_balance": torch.tensor([[1_000.0, 760.0, 760.0]]),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -591,6 +591,9 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
     assert torch.isinf(combined["day_min_eq"][0, 1])
     assert torch.isinf(combined["day_min_eq"][0, 2])
     assert combined["day_end_eq"][0, 1].item() == 0.0
+    assert combined["day_pnl_has_fill"].tolist() == [[True, True, False]]
+    assert combined["day_net_pnl"].tolist() == [[0.0, -480.0, 0.0]]
+    assert combined["day_last_fill_balance"].tolist() == [[1_000.0, 520.0, 0.0]]
     assert combined["last_eq_ts"].item() == 86_340_000.0
 
 

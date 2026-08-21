@@ -377,6 +377,10 @@ def _combine_hedged_multicoin_outputs(
     liquidation_day = terminal_day.where(
         liquidated, -no_liquidation.new_ones(())
     )
+    pnl_active = active & (
+        (~liquidated).unsqueeze(1)
+        | (day_ids.unsqueeze(0) <= terminal_day.unsqueeze(1))
+    )
     active &= (~liquidated).unsqueeze(1) | (
         day_ids.unsqueeze(0) < terminal_day.unsqueeze(1)
     )
@@ -401,14 +405,17 @@ def _combine_hedged_multicoin_outputs(
     combined["day_has_fill"] = (
         long["day_has_fill"] | short["day_has_fill"]
     ) & active
+    combined["day_pnl_has_fill"] = (
+        long["day_has_fill"] | short["day_has_fill"]
+    ) & pnl_active
     combined["day_net_pnl"] = (
         long["day_net_pnl"] + short["day_net_pnl"]
-    ).where(active, long["day_net_pnl"].new_zeros(()))
+    ).where(pnl_active, long["day_net_pnl"].new_zeros(()))
     combined["day_last_fill_balance"] = (
         long["day_last_fill_balance"]
         + short["day_last_fill_balance"]
         - float(starting_balance)
-    ).where(active, long["day_last_fill_balance"].new_zeros(()))
+    ).where(pnl_active, long["day_last_fill_balance"].new_zeros(()))
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["position_unchanged_max_ms"] = long[

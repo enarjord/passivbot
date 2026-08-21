@@ -6,9 +6,10 @@ All notable user-facing changes will be documented in this file.
 
 - Added `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` scoring and limits to
   Apple MPS optimization. Metal emits each UTC fill day's realized balance change and last fill
-  balance, matching Rust's collateral-agnostic daily PnL ratio contract while exact Rust validation
-  and drift gates remain authoritative. Weighted PnL variants remain fail closed until the proxy
-  can reproduce Rust's suffix fill-count gating.
+  balance, matching Rust's collateral-agnostic daily PnL ratio contract. Dual-side multi-coin
+  screening preserves the terminal liquidation day's fills even though its equity surface stops at
+  the preceding complete day. Exact Rust validation and drift gates remain authoritative. Weighted
+  PnL variants remain fail closed until the proxy can reproduce Rust's suffix fill-count gating.
 
 - Added the canonical USD gain, ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure
   metrics for both long and short sides to Apple MPS optimization. They reuse the validated
