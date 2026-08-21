@@ -640,7 +640,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 tradable_count += 1;
             }
         }
-        max_tradable_seen = max(max_tradable_seen, tradable_count);
+        if (alive) max_tradable_seen = max(max_tradable_seen, tradable_count);
         const int effective_n_positions = min(n_positions, max_tradable_seen);
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;

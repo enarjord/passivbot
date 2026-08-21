@@ -114,6 +114,8 @@ def _multicoin_exposure_fixture(
     highs=None,
     lows=None,
     max_realized_loss_pct=1.0,
+    first_valid_indices=(0, 0),
+    liquidation_threshold=0.05,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -142,16 +144,16 @@ def _multicoin_exposure_fixture(
         ProxyRun(
             1_000.0,
             1,
-            1,
+            max(1, first_valid_indices[coin]),
             int(timestamps[0]),
             int(timestamps[0]),
             int(timestamps[0]),
             60_000,
-            0.05,
-            0,
+            liquidation_threshold,
+            first_valid_indices[coin],
             count - 1,
         )
-        for _ in range(coin_count)
+        for coin in range(coin_count)
     ]
     data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
     if strategy_kind == "ema_anchor":
@@ -288,6 +290,31 @@ def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(
 
     # TWEL 1.0 / two effective positions, with a bounded 50% allowance.
     assert output["entry_initial_balance_pct"].item() == pytest.approx(0.1875)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
+    strategy_kind, side
+):
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=20,
+        first_valid_indices=(0, 12),
+        liquidation_threshold=1.0,
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert not output["alive"].item()
+    # The liquidation floor terminates before the second coin becomes
+    # tradable, so exact Rust retains a one-position divisor.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
@@ -1312,8 +1339,14 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
     assert output["position_unchanged_max_ms"].item() == pytest.approx(
         expected_open_tail_ms.item()
     )
-    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(0.1)
-    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(0.1)
+    expected_long = 0.1 if side == "long" else 0.0
+    expected_short = 0.1 if side == "short" else 0.0
+    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(
+        expected_long
+    )
+    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(
+        expected_short
+    )
 
 
 @pytest.mark.skipif(

@@ -1799,8 +1799,10 @@ inline void passivbot_single_coin_impl(
     scalars[so + 43] = profit_sum;
     scalars[so + 44] = loss_sum;
     scalars[so + 45] = position_unchanged_max_min * interval_ms;
-    scalars[so + 46] = long_side.allowed_wel * long_side.base_qty_pct;
-    scalars[so + 47] = short_side.allowed_wel * short_side.base_qty_pct;
+    scalars[so + 46] = long_enabled
+        ? long_side.allowed_wel * long_side.base_qty_pct : 0.0f;
+    scalars[so + 47] = short_enabled
+        ? short_side.allowed_wel * short_side.base_qty_pct : 0.0f;
 }
 
 kernel void passivbot_ema_anchor(

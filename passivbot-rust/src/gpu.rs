@@ -46,8 +46,8 @@ mod tests {
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 46] = long_side.allowed_wel"));
-        assert!(source.contains("scalars[so + 47] = short_side.allowed_wel"));
+        assert!(source.contains("scalars[so + 46] = long_enabled"));
+        assert!(source.contains("scalars[so + 47] = short_enabled"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -121,6 +121,7 @@ mod tests {
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
+        assert!(source.contains("if (alive) max_tradable_seen = max("));
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
         assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
@@ -154,8 +155,8 @@ mod tests {
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
-        assert!(source.contains("scalars[so + 46] = long_side.allowed_wel"));
-        assert!(source.contains("scalars[so + 47] = short_side.allowed_wel"));
+        assert!(source.contains("scalars[so + 46] = long_enabled"));
+        assert!(source.contains("scalars[so + 47] = short_enabled"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
@@ -271,6 +272,7 @@ mod tests {
         assert!(source.contains("twel_close_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
+        assert!(source.contains("if (alive) max_tradable_seen = max("));
         assert!(source.contains("market_price * 0.9995f / price_step"));
         assert_eq!(source.matches("clamped_market_price(").count(), 3);
         assert!(source.contains("finalized_twel_reducer_qty = ordinary_can_accompany_reducer"));
