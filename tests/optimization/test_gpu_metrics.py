@@ -174,45 +174,6 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
     )
 
 
-def test_daily_pnl_metrics_keep_dual_side_multicoin_liquidation_day():
-    day_end = torch.tensor([[100.0, 0.0, 0.0]], dtype=torch.float64)
-    out = {
-        "day_end_eq": day_end,
-        "day_min_eq": torch.tensor([[100.0, float("inf"), float("inf")]]),
-        "day_max_dd": torch.zeros_like(day_end),
-        "day_volume": torch.zeros_like(day_end),
-        "day_has_fill": torch.tensor([[True, False, False]]),
-        "day_pnl_has_fill": torch.tensor([[True, True, False]]),
-        "day_net_pnl": torch.tensor([[10.0, -90.0, 0.0]]),
-        "day_last_fill_balance": torch.tensor([[110.0, 20.0, 0.0]]),
-        "max_dd": torch.zeros(1),
-        "held_max_ms": torch.zeros(1),
-        "position_unchanged_max_ms": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1),
-        "first_fill_ts": torch.tensor([0.0]),
-        "last_fill_ts": torch.tensor([86_400_000.0]),
-        "recovery_max_ms": torch.zeros(1),
-        "last_high_ts": torch.tensor([0.0]),
-        "first_eq_ts": torch.tensor([0.0]),
-        "last_eq_ts": torch.tensor([0.0]),
-        "liq_step": torch.tensor([1]),
-    }
-
-    metrics = compute_objectives(
-        out,
-        SimpleNamespace(
-            requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
-        ),
-        {"ts0": 0.0, "n": 3},
-        needed={"adg_pnl"},
-    )
-
-    assert metrics["adg_pnl"].item() == pytest.approx(
-        ((10.0 / 110.0) + (-90.0 / 20.0)) / 2.0
-    )
-
-
 def test_empty_median_return_series_matches_rust_zero_contract():
     values = torch.empty((1, 0), dtype=torch.float64)
     mask = torch.empty((1, 0), dtype=torch.bool)

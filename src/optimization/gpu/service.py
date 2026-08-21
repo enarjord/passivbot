@@ -80,6 +80,27 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_panic_loss_drawdown_count",
 }
 
+_DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS = {
+    "adg_pnl",
+    "mdg_pnl",
+    "sharpe_ratio_pnl",
+    "sortino_ratio_pnl",
+}
+
+
+def _require_multicoin_metric_topology(sides, needed_metrics) -> None:
+    unsupported = (
+        set(needed_metrics) & _DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS
+        if len(sides) == 2
+        else set()
+    )
+    if unsupported:
+        raise ValueError(
+            "MPS dual-side multicoin proxy cannot reconstruct the intraday "
+            "shared-liquidation cutoff required by realized PnL metrics: "
+            + ", ".join(sorted(unsupported))
+        )
+
 
 def _candidate_wallet_exposure_limit_outputs(
     candidates: list[dict],
@@ -377,10 +398,6 @@ def _combine_hedged_multicoin_outputs(
     liquidation_day = terminal_day.where(
         liquidated, -no_liquidation.new_ones(())
     )
-    pnl_active = active & (
-        (~liquidated).unsqueeze(1)
-        | (day_ids.unsqueeze(0) <= terminal_day.unsqueeze(1))
-    )
     active &= (~liquidated).unsqueeze(1) | (
         day_ids.unsqueeze(0) < terminal_day.unsqueeze(1)
     )
@@ -405,17 +422,14 @@ def _combine_hedged_multicoin_outputs(
     combined["day_has_fill"] = (
         long["day_has_fill"] | short["day_has_fill"]
     ) & active
-    combined["day_pnl_has_fill"] = (
-        long["day_has_fill"] | short["day_has_fill"]
-    ) & pnl_active
     combined["day_net_pnl"] = (
         long["day_net_pnl"] + short["day_net_pnl"]
-    ).where(pnl_active, long["day_net_pnl"].new_zeros(()))
+    ).where(active, long["day_net_pnl"].new_zeros(()))
     combined["day_last_fill_balance"] = (
         long["day_last_fill_balance"]
         + short["day_last_fill_balance"]
         - float(starting_balance)
-    ).where(pnl_active, long["day_last_fill_balance"].new_zeros(()))
+    ).where(active, long["day_last_fill_balance"].new_zeros(()))
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["position_unchanged_max_ms"] = long[
@@ -999,6 +1013,7 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
+        _require_multicoin_metric_topology(self.sides, self.needed_metrics)
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
         ):

@@ -799,12 +799,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     if requested & _PNL_METRICS:
         day_net_pnl = out["day_net_pnl"].to(torch.float64)
         day_last_fill_balance = out["day_last_fill_balance"].to(torch.float64)
-        pnl_fill_days = out.get("day_pnl_has_fill")
-        pnl_day_mask = (
-            day_has_fill & active if pnl_fill_days is None else pnl_fill_days
-        )
         pnl_mask = (
-            pnl_day_mask
+            day_has_fill
+            & active
             & torch.isfinite(day_net_pnl)
             & torch.isfinite(day_last_fill_balance)
         )
