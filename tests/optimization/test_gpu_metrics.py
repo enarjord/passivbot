@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
+    _equity_shape_metrics,
     _fill_activity_metrics,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
@@ -68,6 +69,86 @@ def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
 
     assert actual.tolist() == [0.25, 1_000.0, 1.0, 1_000.0]
     assert "loss_profit_ratio" in SUPPORTED_METRICS
+
+
+def test_equity_shape_metrics_match_rust_daily_series_contract():
+    day_eq = torch.tensor(
+        [
+            [100.0, 110.0, 90.0, 120.0],
+            [100.0, 100.0, 100.0, 100.0],
+            [100.0, 110.0, float("inf"), float("inf")],
+            [100.0, 0.0, 110.0, float("inf")],
+            [100.0, float("inf"), float("inf"), float("inf")],
+        ],
+        dtype=torch.float64,
+    )
+    active = torch.isfinite(day_eq)
+
+    metrics = _equity_shape_metrics(day_eq, active)
+
+    assert metrics["equity_choppiness_usd"][0].item() == pytest.approx(3.0)
+    assert metrics["equity_jerkiness_usd"][0].item() == pytest.approx(
+        (0.3 + 0.46875) / 2.0
+    )
+    log_equity = np.log(np.array([100.0, 110.0, 90.0, 120.0]))
+    x = np.arange(4, dtype=float)
+    slope, intercept = np.polyfit(x, log_equity, 1)
+    expected_fit_error = np.mean((slope * x + intercept - log_equity) ** 2)
+    assert metrics["exponential_fit_error_usd"][0].item() == pytest.approx(
+        expected_fit_error
+    )
+    assert math.isinf(metrics["equity_choppiness_usd"][1].item())
+    assert metrics["equity_jerkiness_usd"][2].item() == 0.0
+    assert metrics["exponential_fit_error_usd"][2].item() == pytest.approx(0.0)
+    assert math.isinf(metrics["exponential_fit_error_usd"][3].item())
+    assert metrics["equity_choppiness_usd"][4].item() == 0.0
+    assert metrics["equity_jerkiness_usd"][4].item() == 0.0
+    assert math.isinf(metrics["exponential_fit_error_usd"][4].item())
+
+
+def test_equity_shape_metrics_use_rust_defaults_without_fills():
+    day_eq = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_eq,
+        "day_min_eq": day_eq.clone(),
+        "day_max_dd": torch.zeros_like(day_eq),
+        "day_volume": torch.zeros_like(day_eq),
+        "day_has_fill": torch.zeros_like(day_eq, dtype=torch.bool),
+        "fill_count": torch.zeros(1),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.full((1,), float("nan")),
+        "last_fill_ts": torch.full((1,), float("nan")),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([2 * 86_400_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+    requested = {
+        "equity_choppiness_usd",
+        "equity_jerkiness_usd",
+        "exponential_fit_error_usd",
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=86_400_000,
+        ),
+        {"ts0": 0.0, "n": 3},
+        needed=requested,
+    )
+
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    assert {name: value.item() for name, value in metrics.items()} == {
+        name: 1.0 for name in requested
+    }
 
 
 def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
