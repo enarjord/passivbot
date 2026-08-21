@@ -19,6 +19,7 @@ from optimization.gpu.model import (
     build_mps_multicoin_data,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
 
@@ -353,8 +354,8 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
         ),
         "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_mode": signal_mode_ids[signal_mode],
-        # The single-coin GPU search contract pins authoritative candidate
-        # n_positions to one even if the source config is outside its bounds.
+        # Coin-mode GPU HSL is single-coin and therefore has one slot. The
+        # value is inert for the unified/pside portfolio signal modes.
         "hsl_slot_count": 1.0,
     }
 
@@ -382,8 +383,33 @@ def _require_no_internal_invalid_hsl_candles(
     if not bool(np.all(valid)):
         first_invalid = first + int(np.flatnonzero(~valid)[0])
         raise ValueError(
-            "MPS single-coin HSL currently requires contiguous valid candles "
+            "MPS HSL currently requires contiguous valid candles "
             f"between first and last valid indices; invalid candle at {first_invalid}"
+        )
+
+
+def _require_no_internal_invalid_multicoin_hsl_candles(
+    hlcvs, *, first_valid_indices, last_valid_indices
+) -> None:
+    values = np.asarray(hlcvs)
+    if values.ndim != 3 or values.shape[2] < 3:
+        raise ValueError(
+            "MPS multi-coin HSL requires HLCVs shaped [time, coin, fields]"
+        )
+    coin_count = values.shape[1]
+    if not (
+        len(first_valid_indices) == len(last_valid_indices) == coin_count
+    ):
+        raise ValueError(
+            "MPS multi-coin HSL valid-index counts must match the coin count"
+        )
+    for coin in range(coin_count):
+        _require_no_internal_invalid_hsl_candles(
+            values[:, coin, 0],
+            values[:, coin, 1],
+            values[:, coin, 2],
+            first_valid_idx=int(first_valid_indices[coin]),
+            last_valid_idx=int(last_valid_indices[coin]),
         )
 
 
@@ -1274,7 +1300,36 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
             "hsl_enabled",
+            "hsl_red_threshold",
+            "hsl_ema_span_minutes",
+            "hsl_cooldown_minutes_after_red",
+            "hsl_no_restart_drawdown_threshold",
+            "hsl_restart_after_red_policy",
+            "hsl_tier_ratio_yellow",
+            "hsl_tier_ratio_orange",
+            "hsl_orange_tier_mode",
+            "hsl_panic_close_order_type",
         )
+        signal_mode = (
+            backtest_params.get("equity_hard_stop_loss", {})
+            .get("signal_mode", "unified")
+        )
+        hsl_enabled_sides = [
+            side
+            for side in self.sides
+            if bool(payload.bot_params_list[0][side].get("hsl_enabled"))
+        ]
+        if hsl_enabled_sides:
+            validate_hsl_signal_topology(
+                signal_mode,
+                coin_count=coin_count,
+                enabled_side_count=len(self.sides),
+            )
+            _require_no_internal_invalid_multicoin_hsl_candles(
+                values,
+                first_valid_indices=backtest_params["first_valid_indices"],
+                last_valid_indices=backtest_params["last_valid_indices"],
+            )
         self.base_total_wallet_exposure_limits = {
             side: float(
                 payload.bot_params_list[0][side]["total_wallet_exposure_limit"]
@@ -1289,9 +1344,11 @@ class MpsMulticoinProxy:
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
-            if bool(first_bot.get("hsl_enabled")):
+            if bool(first_bot.get("hsl_enabled")) and str(
+                first_bot.get("hsl_panic_close_order_type", "limit")
+            ).strip().lower() != "limit":
                 raise ValueError(
-                    f"MPS multicoin proxy requires {side} HSL disabled"
+                    f"MPS multicoin HSL requires {side} panic_close_order_type=limit"
                 )
             if len(self.sides) == 2 and any(
                 bool(item[side].get("unstuck_enabled"))
@@ -1353,6 +1410,7 @@ class MpsMulticoinProxy:
                     )
                 )
             first_strategy.update(_unstuck_params(config["bot"][side]))
+            first_strategy.update(_hsl_params(first_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
@@ -1554,7 +1612,7 @@ class MpsMulticoinProxy:
                 side: {
                     key: value.cpu()
                     for key, value in raw_side_outputs[side].items()
-                    if key in CORE_OUTPUT_KEYS
+                    if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
                 }
                 for side in self.sides
             }

@@ -11,6 +11,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
 from optimization.gpu.service import (
@@ -33,6 +34,7 @@ from optimization.gpu.service import (
     _require_complete_valid_tail,
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
+    _require_no_internal_invalid_multicoin_hsl_candles,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
     _unstuck_params,
@@ -249,6 +251,50 @@ def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():
     assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
 
 
+def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
+    torch = pytest.importorskip("torch")
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.batch_size = 1
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": 0.0}
+    proxy.run = SimpleNamespace()
+    proxy.sides = ["long"]
+    proxy.needed_metrics = {"hard_stop_panic_close_loss_sum"}
+    proxy._parameter_matrix = lambda candidates, side=None: np.zeros(
+        (len(candidates), 0)
+    )
+    raw = {
+        key: torch.zeros(1)
+        for key in (
+            "first_fill_ts",
+            "last_fill_ts",
+            "last_high_ts",
+            "first_eq_ts",
+            "last_eq_ts",
+            "profit_sum",
+            "loss_sum",
+            "entry_initial_balance_pct",
+        )
+    }
+    raw["hsl_triggers_long"] = torch.tensor([2.0])
+    raw["hsl_panic_close_loss_sum"] = torch.tensor([37.5])
+    proxy.runners = {"long": SimpleNamespace(run=lambda *args, **kwargs: raw)}
+
+    def reduce(output, *args, **kwargs):
+        assert output["hsl_triggers_long"].item() == 2.0
+        assert output["hsl_panic_close_loss_sum"].item() == 37.5
+        return {
+            "hard_stop_panic_close_loss_sum": output[
+                "hsl_panic_close_loss_sum"
+            ]
+        }
+
+    proxy._compute_objectives = reduce
+
+    assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
+
+
 def test_gpu_proxy_requires_complete_valid_tail():
     _require_complete_valid_tail(99, 100)
 
@@ -265,11 +311,21 @@ def test_gpu_hsl_requires_contiguous_valid_candles():
         _require_no_internal_invalid_hsl_candles(
             high, low, close, first_valid_idx=0, last_valid_idx=2
         )
-
     _require_no_internal_invalid_hsl_candles(
         high, low, close, first_valid_idx=2, last_valid_idx=2
     )
 
+
+def test_gpu_multicoin_hsl_requires_each_coin_to_have_contiguous_valid_candles():
+    hlcvs = np.ones((3, 2, 4), dtype=np.float64)
+    hlcvs[1, 1, :3] = np.nan
+
+    with pytest.raises(ValueError, match="invalid candle at 1"):
+        _require_no_internal_invalid_multicoin_hsl_candles(
+            hlcvs,
+            first_valid_indices=[0, 0],
+            last_valid_indices=[2, 2],
+        )
 
 def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous():
     hlcvs = np.ones((4, 2, 4), dtype=np.float64)
@@ -465,6 +521,27 @@ def test_dual_side_single_coin_hsl_rejects_unified_signal_mode():
 def test_single_coin_hsl_rejects_unknown_signal_mode():
     with pytest.raises(ValueError, match="coin, pside, or unified"):
         validate_single_coin_hsl_signal_topology("portfolio", enabled_side_count=1)
+
+
+@pytest.mark.parametrize("signal_mode", ["unified", "pside"])
+def test_one_sided_multicoin_hsl_accepts_account_modes(signal_mode):
+    validate_hsl_signal_topology(
+        signal_mode, coin_count=3, enabled_side_count=1
+    )
+
+
+def test_one_sided_multicoin_hsl_rejects_coin_mode():
+    with pytest.raises(ValueError, match="per-coin HSL remains fail closed"):
+        validate_hsl_signal_topology(
+            "coin", coin_count=3, enabled_side_count=1
+        )
+
+
+def test_dual_side_multicoin_hsl_remains_fail_closed():
+    with pytest.raises(ValueError, match="exactly one enabled side"):
+        validate_hsl_signal_topology(
+            "pside", coin_count=3, enabled_side_count=2
+        )
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

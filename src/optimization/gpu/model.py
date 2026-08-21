@@ -12,20 +12,39 @@ MPS_MULTICOIN_MAX_COINS = 64
 HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
 
 
-def validate_single_coin_hsl_signal_topology(
-    signal_mode: str, *, enabled_side_count: int
+def validate_hsl_signal_topology(
+    signal_mode: str, *, coin_count: int, enabled_side_count: int
 ) -> None:
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
             "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
             f"unified; got {signal_mode!r}"
         )
+    if coin_count > 1:
+        if enabled_side_count > 1:
+            raise ValueError(
+                "GPU multi-coin HSL currently requires exactly one enabled side"
+            )
+        if signal_mode == "coin":
+            raise ValueError(
+                "GPU one-sided multi-coin HSL currently supports only unified "
+                "or pside signal mode; per-coin HSL remains fail closed"
+            )
+        return
     if enabled_side_count > 1 and signal_mode == "unified":
         raise ValueError(
             "GPU dual-side single-coin HSL currently supports only coin or "
             "pside signal mode; unified remains fail closed pending an "
             "account-wide exact-Rust flatten contract"
         )
+
+
+def validate_single_coin_hsl_signal_topology(
+    signal_mode: str, *, enabled_side_count: int
+) -> None:
+    validate_hsl_signal_topology(
+        signal_mode, coin_count=1, enabled_side_count=enabled_side_count
+    )
 
 EMA_ANCHOR_PARAM_KEYS = (
     "base_qty_pct",
@@ -109,6 +128,7 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *EXPOSURE_PARAM_KEYS,
     *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
+    *HSL_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -163,6 +183,7 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
     *MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
+    *HSL_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
