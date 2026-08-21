@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed exact Rust backtests so `unified` HSL confirms the whole account is flat before ending a
+  RED episode. A position or blocking order on either side now prevents both unified controllers
+  from halting or beginning cooldown, matching the documented live HSL scope.
+
 - Added dual-side multi-coin `pside` HSL lifecycle and panic-loss scoring/limits to Apple MPS
   optimization. The proxy now reduces directional episode counters, durations, drawdowns,
   restarts, and absolute panic losses with the same aggregate formulas used by exact Rust, and
