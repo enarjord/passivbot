@@ -230,6 +230,9 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "last_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
         "recovery_max_ms": torch.tensor([30 * 3_600_000.0], dtype=torch.float64),
+        "pnl_recovery_max_ms": torch.tensor(
+            [18 * 3_600_000.0], dtype=torch.float64
+        ),
         "last_high_ts": torch.tensor([30 * 3_600_000.0], dtype=torch.float64),
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
         "last_eq_ts": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
@@ -248,7 +251,10 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "position_unchanged_days_max",
         "position_unchanged_hours_max",
         "strategy_eq_recovery_days_max",
+        "peak_recovery_days_strategy_eq",
         "peak_recovery_hours_strategy_eq",
+        "peak_recovery_days_pnl",
+        "peak_recovery_hours_pnl",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
         "total_wallet_exposure_max",
@@ -271,7 +277,10 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     assert metrics["position_unchanged_hours_max"].item() == pytest.approx(18.0)
     assert metrics["position_unchanged_days_max"].item() == pytest.approx(0.75)
     assert metrics["strategy_eq_recovery_days_max"].item() == pytest.approx(1.25)
+    assert metrics["peak_recovery_days_strategy_eq"].item() == pytest.approx(1.25)
     assert metrics["peak_recovery_hours_strategy_eq"].item() == pytest.approx(30.0)
+    assert metrics["peak_recovery_days_pnl"].item() == pytest.approx(0.75)
+    assert metrics["peak_recovery_hours_pnl"].item() == pytest.approx(18.0)
     assert metrics["entry_initial_balance_pct_long"].item() == pytest.approx(0.125)
     assert metrics["entry_initial_balance_pct_short"].item() == pytest.approx(0.075)
     assert metrics["total_wallet_exposure_max"].item() == pytest.approx(1.25)
@@ -813,6 +822,38 @@ def test_weighted_strategy_equity_metric_surface_is_supported():
         "sortino_ratio_w_usd",
         "sterling_ratio_w_usd",
     } <= set(SUPPORTED_METRICS)
+
+
+def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
+    day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.full((1,), float("nan")),
+        "last_fill_ts": torch.full((1,), float("nan")),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([60_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([60_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+
+    with pytest.raises(RuntimeError, match="recovery output is missing"):
+        compute_objectives(
+            out,
+            SimpleNamespace(
+                requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+            ),
+            {"ts0": 0.0, "n": 2},
+            needed={"peak_recovery_hours_pnl"},
+        )
 
 
 def test_smoothed_gain_and_adg_match_rust_terminal_contract():

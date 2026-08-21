@@ -124,6 +124,9 @@ SUPPORTED_METRICS = (
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
+    "peak_recovery_days_pnl",
+    "peak_recovery_days_strategy_eq",
+    "peak_recovery_hours_pnl",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
     "sharpe_ratio_pnl",
@@ -1040,7 +1043,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
 
     volume_days = day_has_fill.sum(dim=1).clamp(min=1).to(torch.float64)
     volume_pct = day_volume.sum(dim=1) / volume_days
-
     zeros = torch.zeros_like(adg)
     adg_pnl = mdg_pnl = sharpe_pnl = sortino_pnl = zeros
     weighted_pnl_metrics = {}
@@ -1081,6 +1083,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     recovery_max_days = (
         torch.maximum(out["recovery_max_ms"], final_recovery) / 86_400_000.0
     )
+    pnl_recovery_metrics = {
+        "peak_recovery_days_pnl",
+        "peak_recovery_hours_pnl",
+    }
+    if requested & pnl_recovery_metrics:
+        if "pnl_recovery_max_ms" not in out:
+            raise RuntimeError(
+                "MPS realized-PnL recovery output is missing from proxy results"
+            )
+        pnl_recovery_max_ms = out["pnl_recovery_max_ms"].to(torch.float64)
+    else:
+        pnl_recovery_max_ms = torch.zeros_like(recovery_max_days)
     held_days = out["held_max_ms"] / 86_400_000.0
 
     boundary_lead = torch.where(
@@ -1158,6 +1172,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "sterling_ratio_strategy_eq": sterling,
         "strategy_eq_recovery_days_max": recovery_max_days,
         "peak_recovery_hours_strategy_eq": recovery_max_days * 24.0,
+        "peak_recovery_days_strategy_eq": recovery_max_days,
+        "peak_recovery_hours_pnl": pnl_recovery_max_ms / 3_600_000.0,
+        "peak_recovery_days_pnl": pnl_recovery_max_ms / 86_400_000.0,
         "strategy_eq_underwater_pct_mean": underwater,
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,

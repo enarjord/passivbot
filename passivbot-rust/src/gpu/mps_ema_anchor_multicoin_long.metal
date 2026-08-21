@@ -6,7 +6,7 @@ constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 28;
+constant int SCALAR_COLS = 29;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -71,6 +71,10 @@ inline void record_realized_net(
     thread float& fill_count,
     thread float& fill_count_entry,
     thread float& fill_count_long,
+    thread float& pnl_recovery_peak,
+    thread float& pnl_recovery_peak_k,
+    thread float& pnl_recovery_max_min,
+    float fill_k,
     bool is_entry,
     bool is_long
 ) {
@@ -82,6 +86,15 @@ inline void record_realized_net(
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
     );
+    if (realized_pnl_cumsum_last > pnl_recovery_peak) {
+        if (pnl_recovery_peak_k >= 0.0f) {
+            pnl_recovery_max_min = fmax(
+                pnl_recovery_max_min, fill_k - pnl_recovery_peak_k
+            );
+        }
+        pnl_recovery_peak = realized_pnl_cumsum_last;
+        pnl_recovery_peak_k = fill_k;
+    }
 }
 
 inline void record_gross_pnl(
@@ -400,6 +413,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float balance = starting_balance;
     float realized_pnl_cumsum_last = 0.0f;
     float realized_pnl_cumsum_max = 0.0f;
+    float pnl_recovery_peak = -INFINITY;
+    float pnl_recovery_peak_k = -1.0f;
+    float pnl_recovery_max_min = 0.0f;
     float profit_sum = 0.0f;
     float loss_sum = 0.0f;
     float fill_count = 0.0f;
@@ -534,6 +550,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     net_pnl, realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
                     day_fill_count, fill_count, fill_count_entry, fill_count_long,
+                    pnl_recovery_peak, pnl_recovery_peak_k,
+                    pnl_recovery_max_min, float(k),
                     false, !short_side
                 );
                 if (collect_coin_fill_counts) {
@@ -576,6 +594,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     -fee, realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
                     day_fill_count, fill_count, fill_count_entry, fill_count_long,
+                    pnl_recovery_peak, pnl_recovery_peak_k,
+                    pnl_recovery_max_min, float(k),
                     true, !short_side
                 );
                 if (collect_coin_fill_counts) {
@@ -1525,6 +1545,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
             );
         }
     }
+    if (pnl_recovery_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        pnl_recovery_max_min = fmax(
+            pnl_recovery_max_min, last_eq_k - pnl_recovery_peak_k
+        );
+    }
     int scalar_offset = int(b) * SCALAR_COLS;
     scalars[scalar_offset + 0] = max_dd;
     scalars[scalar_offset + 1] = held_max_min * interval_ms;
@@ -1569,6 +1594,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 25] = fill_count_entry;
     scalars[scalar_offset + 26] = fill_count_long;
     scalars[scalar_offset + 27] = fills_active_days_count;
+    scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
 }
 
 kernel void passivbot_ema_anchor_multicoin(
