@@ -38,6 +38,97 @@ def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
     assert "loss_profit_ratio" in SUPPORTED_METRICS
 
 
+def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
+    day_end = torch.full((2, 3), 100.0, dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.tensor(
+            [[True, True, False], [False, False, False]]
+        ),
+        "day_fill_count": torch.tensor(
+            [[1.0, 1.0, 0.0], [0.0, 0.0, 0.0]], dtype=torch.float64
+        ),
+        "max_dd": torch.zeros(2),
+        "held_max_ms": torch.zeros(2),
+        "position_unchanged_max_ms": torch.zeros(2),
+        "gap_hist": torch.zeros((2, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(2),
+        "first_fill_ts": torch.tensor([0.0, float("nan")]),
+        "last_fill_ts": torch.tensor([3_600_000.0, float("nan")]),
+        "recovery_max_ms": torch.zeros(2),
+        "last_high_ts": torch.tensor([14_400_000.0, 14_400_000.0]),
+        "first_eq_ts": torch.tensor([0.0, 0.0]),
+        "last_eq_ts": torch.tensor([14_400_000.0, 14_400_000.0]),
+        "liq_step": torch.tensor([-1.0, -1.0]),
+    }
+    requested = {
+        "fills_analysis_duration_days",
+        "fills_count",
+        "fills_per_day",
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+        ),
+        {"ts0": 0.0, "n": 241},
+        needed=requested,
+    )
+
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    assert metrics["fills_analysis_duration_days"].tolist() == pytest.approx(
+        [4.0 / 24.0, 4.0 / 24.0]
+    )
+    assert metrics["fills_count"].tolist() == [2.0, 0.0]
+    assert metrics["fills_per_day"].tolist() == pytest.approx([12.0, 0.0])
+
+
+def test_fill_activity_metrics_ignore_inactive_daily_slots_and_zero_single_sample_span():
+    day_min = torch.tensor([[100.0, float("inf")]], dtype=torch.float64)
+    out = {
+        "day_end_eq": torch.tensor([[100.0, 0.0]], dtype=torch.float64),
+        "day_min_eq": day_min,
+        "day_max_dd": torch.zeros_like(day_min),
+        "day_volume": torch.zeros_like(day_min),
+        "day_has_fill": torch.tensor([[True, False]]),
+        "day_fill_count": torch.tensor([[2.0, 99.0]], dtype=torch.float64),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "position_unchanged_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([0.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([0.0]),
+        "liq_step": torch.tensor([-1.0]),
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+        ),
+        {"ts0": 0.0, "n": 1},
+        needed={
+            "fills_analysis_duration_days",
+            "fills_count",
+            "fills_per_day",
+        },
+    )
+
+    assert metrics["fills_count"].item() == 2.0
+    assert metrics["fills_analysis_duration_days"].item() == 0.0
+    assert metrics["fills_per_day"].item() == 0.0
+
+
 def test_duration_alias_metrics_match_rust_unit_contracts():
     day_end = torch.tensor([[100.0]], dtype=torch.float64)
     out = {
