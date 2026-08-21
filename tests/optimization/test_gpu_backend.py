@@ -49,7 +49,7 @@ from optimization.backends.gpu_backend import (
     _submit_gpu_exact_validation,
     _resolve_options,
     _restore_gpu_result_run_contract,
-    _single_coin_unstuck_search_sides,
+    _gpu_unstuck_search_sides,
     _single_scenario_metric_surface,
     _suite_limit_metric_value,
     _trailing_martingale_multicoin_bound_map,
@@ -1812,6 +1812,14 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
                         "we_excess_allowance_pct": 0.25,
                     },
                     "wallet_exposure_limit": 0.4,
+                    "unstuck": {
+                        "enabled": True,
+                        "ema_gating_enabled": False,
+                        "close_pct": 0.1,
+                        "ema_dist": 0.0,
+                        "loss_allowance_pct": 0.02,
+                        "threshold": 0.8,
+                    },
                 }
             }
         }
@@ -1839,7 +1847,6 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
                 }
             }
         },
-        {"bot": {"long": {"unstuck": {"enabled": True}}}},
         {"bot": {"short": {"strategy": {"ema_anchor": {"offset": 0.02}}}}},
     ],
 )
@@ -1891,6 +1898,14 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
                         "position_exposure_enforcer_threshold": 0.8,
                     },
                     "wallet_exposure_limit": 0.4,
+                    "unstuck": {
+                        "enabled": True,
+                        "ema_gating_enabled": False,
+                        "close_pct": 0.1,
+                        "ema_dist": 0.0,
+                        "loss_allowance_pct": 0.02,
+                        "threshold": 0.8,
+                    },
                 }
             }
         }
@@ -1904,7 +1919,6 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
     [
         {"live": {"leverage": 3}},
         {"bot": {"long": {"risk": {"n_positions": 2}}}},
-        {"bot": {"long": {"unstuck": {"enabled": True}}}},
         {
             "bot": {
                 "long": {
@@ -2136,6 +2150,13 @@ def test_gpu_multicoin_bound_map_exposes_forager_and_position_dimensions(
         bound_map[f"{side}_risk_twel_enforcer_threshold"]
         == f"{side}_twel_enforcer_threshold"
     )
+    for suffix in (
+        "unstuck_close_pct",
+        "unstuck_ema_dist",
+        "unstuck_loss_allowance_pct",
+        "unstuck_threshold",
+    ):
+        assert bound_map[f"{side}_{suffix}"] == f"{side}_{suffix}"
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -2163,6 +2184,13 @@ def test_gpu_tm_multicoin_bound_map_exposes_strategy_forager_and_positions(side)
         bound_map[f"{side}_risk_twel_enforcer_threshold"]
         == f"{side}_twel_enforcer_threshold"
     )
+    for suffix in (
+        "unstuck_close_pct",
+        "unstuck_ema_dist",
+        "unstuck_loss_allowance_pct",
+        "unstuck_threshold",
+    ):
+        assert bound_map[f"{side}_{suffix}"] == f"{side}_{suffix}"
 
 
 def test_gpu_short_multicoin_mirror_includes_long_forager_source_dimensions():
@@ -2229,17 +2257,17 @@ def test_gpu_foundation_accepts_single_coin_unstuck_on_short_side():
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_single_coin_unstuck_search_excludes_disabled_side_genes():
+def test_gpu_unstuck_search_excludes_disabled_side_genes():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
 
-    assert _single_coin_unstuck_search_sides(config, []) == set()
+    assert _gpu_unstuck_search_sides(config, []) == set()
     assert not _gpu_unstuck_parameter_active(
         "long_unstuck_close_pct", set()
     )
     assert _gpu_unstuck_parameter_active("long_offset", set())
 
     config["bot"]["short"]["unstuck"]["enabled"] = True
-    search_sides = _single_coin_unstuck_search_sides(config, [])
+    search_sides = _gpu_unstuck_search_sides(config, [])
     assert search_sides == {"short"}
     assert not _gpu_unstuck_parameter_active(
         "long_unstuck_threshold", search_sides
@@ -2249,22 +2277,36 @@ def test_gpu_single_coin_unstuck_search_excludes_disabled_side_genes():
     )
 
 
-def test_gpu_single_coin_suite_keeps_unstuck_genes_used_by_any_scenario():
+def test_gpu_unstuck_search_keeps_genes_enabled_by_coin_override():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"unstuck": {"enabled": True}}}}
+    }
+
+    search_sides = _gpu_unstuck_search_sides(config, [])
+
+    assert search_sides == {"long"}
+    assert _gpu_unstuck_parameter_active(
+        "long_unstuck_loss_allowance_pct", search_sides
+    )
+
+
+def test_gpu_suite_keeps_unstuck_genes_used_by_any_scenario():
     base = _directional_ema_config(long_enabled=True, short_enabled=False)
     scenario = copy.deepcopy(base)
     scenario["bot"]["long"]["unstuck"]["enabled"] = True
 
-    assert _single_coin_unstuck_search_sides(
+    assert _gpu_unstuck_search_sides(
         base, [{"config": scenario}]
     ) == {"long"}
 
 
-def test_gpu_single_coin_suite_keeps_mirrored_unstuck_source_genes():
+def test_gpu_suite_keeps_mirrored_unstuck_source_genes():
     base = _directional_ema_config(long_enabled=False, short_enabled=True)
     scenario = copy.deepcopy(base)
     scenario["bot"]["short"]["unstuck"]["enabled"] = True
 
-    search_sides = _single_coin_unstuck_search_sides(
+    search_sides = _gpu_unstuck_search_sides(
         base,
         [{"config": scenario}],
         {"mirror_short_from_long"},
@@ -2276,13 +2318,38 @@ def test_gpu_single_coin_suite_keeps_mirrored_unstuck_source_genes():
     )
 
 
-def test_gpu_foundation_keeps_multicoin_unstuck_fail_closed():
+def test_gpu_foundation_accepts_single_side_multicoin_unstuck():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["bot"]["long"]["risk"]["n_positions"] = 2
     config["bot"]["long"]["unstuck"]["enabled"] = True
 
-    with pytest.raises(ValueError, match=r"multicoin.*bot\.long\.unstuck"):
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_foundation_keeps_dual_side_multicoin_unstuck_fail_closed():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = True
+    for side in ("long", "short"):
+        config["live"]["approved_coins"][side] = ["BTC", "ETH", "SOL"]
+        config["bot"][side]["risk"]["n_positions"] = 2
+    config["bot"]["long"]["unstuck"]["enabled"] = True
+
+    with pytest.raises(ValueError, match=r"dual-side.*unstuck.*shared"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_foundation_keeps_dual_side_multicoin_override_unstuck_fail_closed():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hedge_mode"] = True
+    for side in ("long", "short"):
+        config["live"]["approved_coins"][side] = ["BTC", "ETH", "SOL"]
+        config["bot"][side]["risk"]["n_positions"] = 2
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"short": {"unstuck": {"enabled": True}}}}
+    }
+
+    with pytest.raises(ValueError, match=r"dual-side.*unstuck.*shared"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -4027,7 +4094,7 @@ def test_gpu_accepts_single_coin_exposure_policy_bounds():
     )
 
 
-def test_gpu_accepts_single_coin_unstuck_bounds_but_pins_multicoin_disabled():
+def test_gpu_accepts_unstuck_bounds_for_single_side_but_pins_dual_multicoin():
     from optimization.bounds import Bound
 
     bounds = {
@@ -4040,8 +4107,11 @@ def test_gpu_accepts_single_coin_unstuck_bounds_but_pins_multicoin_disabled():
     base = {"long_unstuck_enabled": 1.0}
 
     _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=1)
+    _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=2)
     with pytest.raises(ValueError, match="unstuck_enabled"):
-        _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=2)
+        _validate_pinned_scope_bounds(
+            bounds, base, {"long", "short"}, coin_count=2
+        )
 
 
 def test_gpu_anchor_constant_twel_threshold_is_supported_for_multicoin():

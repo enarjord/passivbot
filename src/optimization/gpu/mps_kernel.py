@@ -339,7 +339,7 @@ class MpsEmaAnchorRunner:
 class MpsEmaAnchorMulticoinRunner:
     """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
-    coin_override_cols = 13
+    coin_override_cols = 19
     coin_override_label = "EMA"
 
     def __init__(
@@ -535,7 +535,7 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
-    coin_override_cols = 28
+    coin_override_cols = 34
     coin_override_label = "Trailing Martingale"
 
     def __init__(

@@ -78,8 +78,8 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 25"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 13"));
+        assert!(source.contains("constant int PARAM_COLS = 31"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 19"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
         assert!(source.contains("constant int DAILY_COLS = 6"));
@@ -104,7 +104,8 @@ mod tests {
         assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
-        assert!(!source.contains("unstuck"));
+        assert!(source.contains("one global auto-unstuck intent"));
+        assert!(source.contains("unstuck_loss_allowance_pct"));
         assert!(!source.contains("hard_stop"));
         assert_eq!(source, mps_ema_anchor_multicoin_long_source());
     }
@@ -191,8 +192,8 @@ mod tests {
         let source = mps_trailing_martingale_multicoin_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 42"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 28"));
+        assert!(source.contains("constant int PARAM_COLS = 48"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 34"));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("twel_enforcer_enabled"));
@@ -202,12 +203,14 @@ mod tests {
         assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
         assert!(source.contains("market_price * 0.9995f / price_step"));
         assert_eq!(source.matches("clamped_market_price(").count(), 3);
-        assert!(source.contains("finalized_twel_reducer_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_twel_reducer_qty = ordinary_can_accompany_reducer"));
+        assert!(source.contains("finalized_reducer_qty_with_ordinary"));
         assert!(source.contains("finalized_wel_reducer_qty = finalized_reducer_qty"));
         assert!(source.contains("finalized_wel_reducer_qty"));
-        assert!(source.contains(">= finalized_twel_reducer_qty"));
-        assert!(source.contains("reducer_qty = raw_twel_reducer_qty"));
-        assert!(source.contains("reducer_qty = wel_reducer_qty"));
+        assert!(source.contains("finalized_unstuck_reducer_qty"));
+        assert!(source.contains("reducer_candidate_preferred"));
+        assert!(source.contains("? raw_twel_reducer_qty : wel_reducer_qty"));
+        assert!(source.contains("? raw_unstuck_reducer_qty : exposure_reducer_qty"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
         assert!(source.contains("for (int rung = 0; rung < max_rungs"));
@@ -217,7 +220,7 @@ mod tests {
         assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("close_grid_gen_psize"));
         assert!(source.contains("psize[c] - wel_reducer_qty"));
-        assert!(source.contains("use_twel && wel_reducer_qty <= 0.0f"));
+        assert!(source.contains("(use_twel || use_unstuck) && wel_reducer_qty <= 0.0f"));
         assert!(source.contains("dust_remainder"));
         assert!(!source.contains("float primary_diff = fabs"));
         assert!(source.contains("coin_override_or"));
@@ -234,7 +237,8 @@ mod tests {
         assert!(source.contains("touch_nearest_ticks[k * C + c]"));
         assert!(source.contains("as_type<float>(touch_min_qty_bits[k * C + c])"));
         assert!(source.contains("minimum_close_relation > 0"));
-        assert!(!source.contains("unstuck"));
+        assert!(source.contains("one-global-intent least-stuck selector"));
+        assert!(source.contains("unstuck_loss_allowance_pct"));
         assert!(!source.contains("hard_stop"));
     }
 }

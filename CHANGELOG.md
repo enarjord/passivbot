@@ -4,13 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Added single-coin auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for
-  long-only, short-only, dual-side hedge/one-way, and compatible suite runs. The Metal proxy models
-  EMA gating, least-stuck long/short selection, allowance-based loss sizing, exchange minimums,
-  competition with WEL/TWEL and ordinary closes, and the global realized-loss gate. Its all-history
-  realized-PnL envelope is conservative relative to exact Rust's configured rolling lookback;
-  exact validations and the existing classification, rank, and drift gates remain authoritative.
-  Multi-coin auto-unstuck remains fail closed pending a portfolio-wide selector.
+- Added auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for single-coin
+  long-only, short-only, dual-side hedge/one-way, and compatible suite runs, plus one-sided
+  multi-coin runs and suites with static per-coin overrides. The Metal proxy models EMA gating,
+  one global least-stuck selector across the enabled portfolio, allowance-based loss sizing,
+  exchange minimums, competition with WEL/TWEL and ordinary closes, and the realized-loss gate.
+  Its all-history realized-PnL envelope is conservative relative to exact Rust's configured rolling
+  lookback; exact validations and the existing classification, rank, and drift gates remain
+  authoritative. Dual-side multi-coin auto-unstuck remains fail closed pending a shared-balance
+  portfolio kernel spanning both directional surfaces.
 
 - Expanded Apple MPS optimizer scoring and limits with fill-gap mean, median, p95, and p99 hours.
   The proxy conservatively decodes its existing logarithmic inter-fill histogram at a float32-safe
@@ -21,13 +23,15 @@ All notable user-facing changes will be documented in this file.
 - Added realized-loss gating to Apple MPS EMA Anchor and Trailing Martingale screening
   for long, short, hedge-mode, and one-way runs. Single-coin EMA Anchor tracks a conservative
   all-history peak-relative realized net-PnL budget, including maker fees, and blocks lossy ordinary
-  or exposure-repair closes that exceed it. Multi-coin EMA Anchor and Trailing
-  Martingale use a stricter zero-loss proxy envelope whenever the gate is active, avoiding unsafe
-  cross-dispatch loss-budget reservation and per-candle enumeration of TM's recursive 500-rung
-  ladder. Multi-coin TM preserves the exact TWEL action set before loss screening, so a blocked
-  reducer is not reallocated to another symbol, and screens reachable recursive close groups
-  independently so later profitable rungs remain available when an earlier rung is blocked. Exact
-  Rust remains authoritative for the configured rolling PnL lookback and allowance.
+  or exposure-repair closes that exceed it. One-sided multi-coin EMA Anchor and Trailing
+  Martingale allow only their single selected auto-unstuck reducer to consume a conservative
+  realized-loss budget; other closes and dual-side multi-coin dispatches retain a stricter zero-loss
+  proxy envelope, avoiding unsafe cross-dispatch loss-budget reservation and per-candle enumeration
+  of TM's recursive 500-rung ladder. Multi-coin TM preserves the exact TWEL action set before loss
+  screening, so a blocked reducer is not reallocated to another symbol, and screens reachable
+  recursive close groups independently so later profitable rungs remain available when an earlier
+  rung is blocked. Exact Rust remains authoritative for the configured rolling PnL lookback and
+  allowance.
 
 - Expanded Apple MPS optimizer scoring and limits with weighted strategy-equity MDG, Sharpe,
   Sortino, Omega, Calmar, and Sterling metrics. The proxy maps the exact optimizer's ten-subset

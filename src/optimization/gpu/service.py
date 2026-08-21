@@ -534,7 +534,7 @@ def _build_multicoin_ema_coin_overrides(
         resolve_override = _get_backtest_coin_override
 
     override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    matrix = np.full((len(coins), 13), np.nan, dtype=np.float32)
+    matrix = np.full((len(coins), 19), np.nan, dtype=np.float32)
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
         side_patch = patch.get("bot", {}).get(side, {})
@@ -555,6 +555,20 @@ def _build_multicoin_ema_coin_overrides(
             matrix[coin_index, 12] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
             )
+        unstuck_patch = side_patch.get("unstuck", {}) or {}
+        for offset, (patch_key, bot_key) in enumerate(
+            (
+                ("enabled", "unstuck_enabled"),
+                ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
+                ("close_pct", "unstuck_close_pct"),
+                ("ema_dist", "unstuck_ema_dist"),
+                ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
+                ("threshold", "unstuck_threshold"),
+            ),
+            start=13,
+        ):
+            if patch_key in unstuck_patch:
+                matrix[coin_index, offset] = float(effective_bot[bot_key])
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -589,8 +603,9 @@ def _build_multicoin_tm_coin_overrides(
     allowance_pct_column = wallet_exposure_column + 1
     wel_enforcer_enabled_column = allowance_pct_column + 1
     wel_enforcer_threshold_column = wel_enforcer_enabled_column + 1
+    unstuck_start_column = wel_enforcer_threshold_column + 1
     matrix = np.full(
-        (len(coins), wel_enforcer_threshold_column + 1),
+        (len(coins), unstuck_start_column + 6),
         np.nan,
         dtype=np.float32,
     )
@@ -639,6 +654,20 @@ def _build_multicoin_tm_coin_overrides(
             matrix[coin_index, wel_enforcer_threshold_column] = float(
                 effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0
             )
+        unstuck_patch = side_patch.get("unstuck", {}) or {}
+        for offset, (patch_key, bot_key) in enumerate(
+            (
+                ("enabled", "unstuck_enabled"),
+                ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
+                ("close_pct", "unstuck_close_pct"),
+                ("ema_dist", "unstuck_ema_dist"),
+                ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
+                ("threshold", "unstuck_threshold"),
+            ),
+            start=unstuck_start_column,
+        ):
+            if patch_key in unstuck_patch:
+                matrix[coin_index, offset] = float(effective_bot[bot_key])
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -801,18 +830,23 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
-            "unstuck_enabled",
             "hsl_enabled",
         )
         self.base_params = {}
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
-            if bool(first_bot.get("unstuck_enabled")) or bool(
-                first_bot.get("hsl_enabled")
+            if bool(first_bot.get("hsl_enabled")):
+                raise ValueError(
+                    f"MPS multicoin proxy requires {side} HSL disabled"
+                )
+            if len(self.sides) == 2 and any(
+                bool(item[side].get("unstuck_enabled"))
+                for item in payload.bot_params_list
             ):
                 raise ValueError(
-                    f"MPS multicoin proxy requires {side} HSL and unstuck disabled"
+                    "MPS dual-side multicoin auto-unstuck requires a shared-balance "
+                    "portfolio kernel"
                 )
             if self.strategy_kind == "trailing_martingale":
                 first_strategy = flatten_trailing_martingale_params(
@@ -865,6 +899,7 @@ class MpsMulticoinProxy:
                         config["bot"][side].get("risk", {}), side=side
                     )
                 )
+            first_strategy.update(_unstuck_params(config["bot"][side]))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
