@@ -79,6 +79,29 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
 }
 
 
+def _candidate_wallet_exposure_limit_outputs(
+    candidates: list[dict],
+    base_limits: dict[str, float],
+    *,
+    torch,
+) -> dict:
+    """Expose each candidate's configured side TWEL to proxy metric reducers."""
+
+    outputs = {}
+    for side in ("long", "short"):
+        if side not in base_limits:
+            raise ValueError(f"GPU candidate TWEL context is missing {side}")
+        key = f"{side}_total_wallet_exposure_limit"
+        values = np.asarray(
+            [float(candidate.get(key, base_limits[side])) for candidate in candidates],
+            dtype=np.float64,
+        )
+        outputs[f"candidate_total_wallet_exposure_limit_{side}"] = torch.from_numpy(
+            values
+        )
+    return outputs
+
+
 def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
     allowance_mode = str(
         risk.get("we_excess_allowance_mode", "bounded")
@@ -572,6 +595,11 @@ class MpsSingleCoinProxy:
                 )
             self.base_params[side] = strategy
 
+        self.base_total_wallet_exposure_limits = {
+            side: float(self.base_params[side]["total_wallet_exposure_limit"])
+            for side in ("long", "short")
+        }
+
         market_params = payload.exchange_params[0]
         self.market = ProxyMarket(
             qty_step=float(market_params["qty_step"]),
@@ -665,8 +693,9 @@ class MpsSingleCoinProxy:
         torch = self._torch
         for start in range(0, len(candidates), self.batch_size):
             chunk = candidates[start : start + self.batch_size]
+            parameter_matrix = self._parameter_matrix(chunk)
             output = self.runner.run(
-                self._parameter_matrix(chunk),
+                parameter_matrix,
                 profile=self.profile_enabled,
             )
             output = {
@@ -685,6 +714,14 @@ class MpsSingleCoinProxy:
                 values = output[key].to(torch.float64)
                 output[key] = torch.where(
                     torch.isfinite(values), values + timestamp_origin, values
+                )
+            if any("_per_exposure_" in name for name in self.needed_metrics):
+                output.update(
+                    _candidate_wallet_exposure_limit_outputs(
+                        chunk,
+                        self.base_total_wallet_exposure_limits,
+                        torch=torch,
+                    )
                 )
             objectives = self._compute_objectives(
                 output,
@@ -1022,6 +1059,12 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_threshold",
             "hsl_enabled",
         )
+        self.base_total_wallet_exposure_limits = {
+            side: float(
+                payload.bot_params_list[0][side]["total_wallet_exposure_limit"]
+            )
+            for side in ("long", "short")
+        }
         self.base_params = {}
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
@@ -1254,9 +1297,12 @@ class MpsMulticoinProxy:
         torch = self._torch
         for start in range(0, len(candidates), self.batch_size):
             chunk = candidates[start : start + self.batch_size]
+            parameter_matrices = {
+                side: self._parameter_matrix(chunk, side) for side in self.sides
+            }
             raw_side_outputs = {
                 side: self.runners[side].run(
-                    self._parameter_matrix(chunk, side),
+                    parameter_matrices[side],
                     profile=self.profile_enabled,
                 )
                 for side in self.sides
@@ -1303,6 +1349,14 @@ class MpsMulticoinProxy:
                 values = output[key].to(torch.float64)
                 output[key] = torch.where(
                     torch.isfinite(values), values + timestamp_origin, values
+                )
+            if any("_per_exposure_" in name for name in self.needed_metrics):
+                output.update(
+                    _candidate_wallet_exposure_limit_outputs(
+                        chunk,
+                        self.base_total_wallet_exposure_limits,
+                        torch=torch,
+                    )
                 )
             objectives = self._compute_objectives(
                 output, self.run, self.metrics_data, needed=self.needed_metrics

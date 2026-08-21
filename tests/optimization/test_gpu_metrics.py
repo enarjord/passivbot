@@ -540,6 +540,12 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
         "last_eq_ts": torch.tensor([180_000.0], dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+        "candidate_total_wallet_exposure_limit_long": torch.tensor(
+            [1.25], dtype=torch.float64
+        ),
+        "candidate_total_wallet_exposure_limit_short": torch.tensor(
+            [0.5], dtype=torch.float64
+        ),
     }
     run = SimpleNamespace(
         requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
@@ -580,6 +586,20 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     }
     requested.update(alias_sources)
     requested.update(alias_sources.values())
+    per_exposure_sources = {
+        "adg_per_exposure_long_usd": ("adg_strategy_eq", 1.25),
+        "adg_per_exposure_short_usd": ("adg_strategy_eq", 0.5),
+        "adg_w_per_exposure_long_usd": ("adg_strategy_eq_w", 1.25),
+        "adg_w_per_exposure_short_usd": ("adg_strategy_eq_w", 0.5),
+        "gain_per_exposure_long_usd": ("gain_strategy_eq", 1.25),
+        "gain_per_exposure_short_usd": ("gain_strategy_eq", 0.5),
+        "mdg_per_exposure_long_usd": ("mdg_strategy_eq", 1.25),
+        "mdg_per_exposure_short_usd": ("mdg_strategy_eq", 0.5),
+        "mdg_w_per_exposure_long_usd": ("mdg_strategy_eq_w", 1.25),
+        "mdg_w_per_exposure_short_usd": ("mdg_strategy_eq_w", 0.5),
+    }
+    requested.update(per_exposure_sources)
+    assert set(per_exposure_sources) <= set(SUPPORTED_METRICS)
 
     metrics = compute_objectives(out, run, {"ts0": 0.0, "n": 4}, needed=requested)
 
@@ -602,6 +622,21 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     assert metrics["omega_ratio_strategy_eq"].item() == pytest.approx(expected_omega)
     for alias, source in alias_sources.items():
         assert metrics[alias].item() == pytest.approx(metrics[source].item())
+    for name, (source, denominator) in per_exposure_sources.items():
+        assert metrics[name].item() == pytest.approx(
+            metrics[source].item() / denominator
+        )
+
+    out["candidate_total_wallet_exposure_limit_short"] = torch.zeros(
+        1, dtype=torch.float64
+    )
+    zero_exposure = compute_objectives(
+        out,
+        run,
+        {"ts0": 0.0, "n": 4},
+        needed={"gain_per_exposure_short_usd"},
+    )
+    assert zero_exposure["gain_per_exposure_short_usd"].item() == 0.0
 
 
 def test_objectives_include_final_active_calendar_day():
