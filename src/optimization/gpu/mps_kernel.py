@@ -20,6 +20,7 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
+MPS_MULTICOIN_SCALAR_COLS = 57
 MPS_DIRECTIONAL_SCALAR_COLS = 62
 
 
@@ -135,6 +136,31 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "held_sum_ms": scalars[:, 29],
         "held_count": scalars[:, 30],
         "account_recovery_max_ms": scalars[:, 31],
+        "hsl_long_enabled": scalars[:, 32] > 0.0,
+        "hsl_short_enabled": scalars[:, 33] > 0.0,
+        "hsl_triggers_long": scalars[:, 34],
+        "hsl_triggers_short": scalars[:, 35],
+        "hsl_restarts_long": scalars[:, 36],
+        "hsl_restarts_short": scalars[:, 37],
+        "hsl_tier_samples_total": scalars[:, 38],
+        "hsl_tier_samples_yellow": scalars[:, 39],
+        "hsl_tier_samples_orange": scalars[:, 40],
+        "hsl_tier_samples_red": scalars[:, 41],
+        "hsl_duration_sum_steps": scalars[:, 42],
+        "hsl_duration_max_steps": scalars[:, 43],
+        "hsl_duration_count": scalars[:, 44],
+        "hsl_trigger_drawdown_sum": scalars[:, 45],
+        "hsl_trigger_drawdown_count": scalars[:, 46],
+        "hsl_flatten_time_sum_steps": scalars[:, 47],
+        "hsl_flatten_time_count": scalars[:, 48],
+        "hsl_restart_retrigger_count": scalars[:, 49],
+        "hsl_halt_to_restart_equity_loss": scalars[:, 50],
+        "hsl_panic_close_loss_sum": scalars[:, 51],
+        "hsl_panic_close_loss_max": scalars[:, 52],
+        "hsl_panic_loss_drawdown_min": scalars[:, 53],
+        "hsl_panic_loss_drawdown_sum": scalars[:, 54],
+        "hsl_panic_loss_drawdown_max": scalars[:, 55],
+        "hsl_panic_loss_drawdown_count": scalars[:, 56],
     }
 
 
@@ -537,7 +563,7 @@ class MpsEmaAnchorMulticoinRunner:
                         device="mps",
                     ),
                     torch.zeros(
-                        (batch_size, MPS_SCALAR_COLS),
+                        (batch_size, MPS_MULTICOIN_SCALAR_COLS),
                         dtype=torch.float32,
                         device="mps",
                     ),

@@ -236,6 +236,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_HSL_DISABLED_VALUES,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
@@ -291,6 +292,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            **_HSL_DISABLED_VALUES,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
@@ -302,6 +304,62 @@ def _multicoin_exposure_fixture(
             collect_coin_fill_counts=collect_coin_fill_counts,
         )
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("signal_mode", ["unified", "pside"])
+def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
+    strategy_kind, side, signal_mode
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    shock = 0.7 if side == "long" else 1.3
+    closes[20:] *= shock
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        closes=closes,
+        collect_coin_fill_counts=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 0.0 if signal_mode == "unified" else 1.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    enabled_key = f"hsl_{side}_enabled"
+    other_side = "short" if side == "long" else "long"
+    assert output[enabled_key].item()
+    assert not output[f"hsl_{other_side}_enabled"].item()
+    assert output[f"hsl_triggers_{side}"].item() == 1.0
+    assert output[f"hsl_triggers_{other_side}"].item() == 0.0
+    assert output["hsl_trigger_drawdown_count"].item() == 1.0
+    assert output["hsl_panic_loss_drawdown_count"].item() == 1.0
+    assert output["hsl_panic_close_loss_sum"].item() > 0.0
+    assert (output["coin_fill_counts"][0] >= 2.0).all().item()
+    assert output["open_positions"].item() == 0.0
 
 
 @pytest.mark.skipif(
@@ -940,7 +998,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 31" in source
+    assert "constant int PARAM_COLS = 42" in source
     assert "constant int OVERRIDE_COLS = 19" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
@@ -1011,6 +1069,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     ]
     row += _single_coin_exposure_fields() + [0.0, 0.0]
     row += list(_UNSTUCK_DISABLED_VALUES.values())
+    row += list(_HSL_DISABLED_VALUES.values())
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -1100,7 +1159,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 48" in source
+    assert "constant int PARAM_COLS = 59" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
@@ -1194,6 +1253,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        **_HSL_DISABLED_VALUES,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -5992,6 +6052,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     row.append(0.0)  # TWEL enforcer disabled
     row.append(0.0)  # TWEL reduce_overweight policy
     row.extend(_UNSTUCK_DISABLED_VALUES.values())
+    row.extend(_HSL_DISABLED_VALUES.values())
 
     output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side

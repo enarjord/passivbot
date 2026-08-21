@@ -28,7 +28,7 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
     gpu_side_enabled,
-    validate_single_coin_hsl_signal_topology,
+    validate_hsl_signal_topology,
 )
 from optimization.interrupts import (
     InterruptCheck,
@@ -163,6 +163,10 @@ EMA_MULTICOIN_BOUND_MAPS = {
             f"{side}_{bound_suffix}": f"{side}_{parameter}"
             for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
         },
+        **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
+        },
     }
     for side in ("long", "short")
 }
@@ -239,6 +243,10 @@ TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS = {
         **{
             f"{side}_{bound_suffix}": f"{side}_{parameter}"
             for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+        },
+        **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
         },
     }
     for side in ("long", "short")
@@ -991,10 +999,6 @@ def _validate_scope_config(
         if bool(config["bot"][side].get("hsl", {}).get("enabled"))
     ]
     if hsl_enabled_sides:
-        if coin_count != 1:
-            raise ValueError(
-                "GPU HSL currently requires one backtest coin"
-            )
         # The proxy deliberately keeps an all-history candidate-local peak for
         # finite windows. That peak is never below Rust's rolling-window peak,
         # so HSL may trigger early but cannot miss a drawdown solely because an
@@ -1006,8 +1010,10 @@ def _validate_scope_config(
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
-        validate_single_coin_hsl_signal_topology(
-            signal_mode, enabled_side_count=len(enabled_sides)
+        validate_hsl_signal_topology(
+            signal_mode,
+            coin_count=coin_count,
+            enabled_side_count=len(enabled_sides),
         )
         for side in hsl_enabled_sides:
             hsl = config["bot"][side].get("hsl", {})
@@ -1018,6 +1024,11 @@ def _validate_scope_config(
                 raise ValueError(
                     f"GPU HSL requires bot.{side}.hsl.panic_close_order_type "
                     f"to be limit or market, got {panic_order_type!r}"
+                )
+            if coin_count > 1 and panic_order_type != "limit":
+                raise ValueError(
+                    f"GPU multi-coin HSL currently requires bot.{side}.hsl."
+                    "panic_close_order_type=limit"
                 )
     for side in enabled_sides:
         side_config = config["bot"][side]
@@ -1083,13 +1094,13 @@ def _validate_dual_multicoin_metrics(
 
 
 def _validate_hsl_metric_topology(
-    needed_metrics, *, coin_count: int, hard_stop_metrics
+    needed_metrics, *, coin_count: int, enabled_sides, hard_stop_metrics
 ) -> None:
     unsupported = sorted(set(needed_metrics) & set(hard_stop_metrics))
-    if int(coin_count) > 1 and unsupported:
+    if int(coin_count) > 1 and len(set(enabled_sides)) > 1 and unsupported:
         raise ValueError(
-            "GPU HSL optimizer metrics currently require single-coin directional "
-            "Metal output; multi-coin HSL metrics remain unsupported: "
+            "GPU HSL optimizer metrics currently require one shared HSL controller; "
+            "dual-side multi-coin HSL metrics remain unsupported: "
             f"{unsupported}"
         )
 
@@ -2464,7 +2475,7 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = {}
-    if coin_count != 1 or len(enabled_sides) != 1:
+    if len(enabled_sides) != 1:
         pinned.update(
             {f"{side}_hsl_enabled": 0.0 for side in ("long", "short")}
         )
@@ -3129,6 +3140,7 @@ def run_backend(
     _validate_hsl_metric_topology(
         needed_metrics,
         coin_count=max_coin_count,
+        enabled_sides=enabled_sides,
         hard_stop_metrics=HARD_STOP_PROXY_METRICS,
     )
     _validate_dual_multicoin_metrics(
