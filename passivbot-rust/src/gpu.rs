@@ -314,6 +314,15 @@ mod tests {
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
+        assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
+        assert!(source.contains("load_ema_multicoin_side_config("));
+        assert!(source.contains("init_ema_multicoin_side_state("));
+        assert!(source.contains(
+            "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
+        ));
+        assert!(source.contains(
+            "init_ema_multicoin_side_state(\n        side, config, bars, coin_settings, coin_overrides, C"
+        ));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
         assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
@@ -372,7 +381,7 @@ mod tests {
         );
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
-        assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
+        assert!(source.contains("config.volume_drop = clamp(params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
