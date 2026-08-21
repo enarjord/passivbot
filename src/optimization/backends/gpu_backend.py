@@ -992,15 +992,14 @@ def _validate_scope_config(
             raise ValueError(
                 "GPU HSL currently requires one enabled side and one backtest coin"
             )
-        lookback = parse_pnls_max_lookback_days(
+        # The proxy deliberately keeps an all-history candidate-local peak for
+        # finite windows. That peak is never below Rust's rolling-window peak,
+        # so HSL may trigger early but cannot miss a drawdown solely because an
+        # older peak aged out. Exact validation remains authoritative.
+        parse_pnls_max_lookback_days(
             config.get("live", {}).get("pnls_max_lookback_days", 30.0),
             field_name="live.pnls_max_lookback_days",
         )
-        if not lookback.is_all:
-            raise ValueError(
-                "GPU HSL currently requires live.pnls_max_lookback_days='all'; "
-                "finite rolling HSL peaks remain exact-Rust-only"
-            )
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
