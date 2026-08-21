@@ -317,11 +317,18 @@ mod tests {
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert!(source.contains("load_ema_multicoin_side_config("));
         assert!(source.contains("init_ema_multicoin_side_state("));
+        assert!(source.contains("ema_multicoin_side_unrealized_pnl("));
+        assert!(source.contains("update_ema_multicoin_side_indicators("));
+        assert!(source.contains("count_ema_multicoin_tradable_coins("));
+        assert!(source.contains("ema_multicoin_side_has_position("));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));
         assert!(source.contains(
             "init_ema_multicoin_side_state(\n        side, config, bars, coin_settings, coin_overrides, C"
+        ));
+        assert!(source.contains(
+            "update_ema_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
         ));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));

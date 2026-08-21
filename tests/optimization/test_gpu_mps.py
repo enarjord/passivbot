@@ -309,6 +309,139 @@ kernel void passivbot_ema_multicoin_side_state_isolation_probe(
     assert output.cpu().tolist() == [1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 11.0, 15.0]
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_candle_helpers_advance_independent_sides():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_ema_multicoin_candle_helpers_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    EmaMulticoinSideState long_side;
+    EmaMulticoinSideState short_side;
+    EmaMulticoinSideConfig long_config;
+    EmaMulticoinSideConfig short_config;
+    long_config.alpha_forager_volume = 1.0f;
+    long_config.alpha_forager_volatility = 1.0f;
+    short_config.alpha_forager_volume = 0.5f;
+    short_config.alpha_forager_volatility = 0.5f;
+    for (int c = 0; c < 2; ++c) {
+        float seed = c == 0 ? 90.0f : 190.0f;
+        long_side.ema0[c] = seed;
+        long_side.ema1[c] = seed;
+        long_side.ema2[c] = seed;
+        short_side.ema0[c] = seed + 20.0f;
+        short_side.ema1[c] = seed + 20.0f;
+        short_side.ema2[c] = seed + 20.0f;
+        long_side.alpha0_coin[c] = 1.0f;
+        long_side.alpha1_coin[c] = 0.5f;
+        long_side.alpha2_coin[c] = 0.25f;
+        short_side.alpha0_coin[c] = 0.5f;
+        short_side.alpha1_coin[c] = 0.25f;
+        short_side.alpha2_coin[c] = 0.125f;
+        long_side.alpha_1m_coin[c] = 0.5f;
+        short_side.alpha_1m_coin[c] = 0.25f;
+        long_side.alpha_1h_coin[c] = 1.0f;
+        short_side.alpha_1h_coin[c] = 0.5f;
+        long_side.volatility_1m[c] = 0.0f;
+        short_side.volatility_1m[c] = 0.0f;
+        long_side.volatility_1h[c] = 0.0f;
+        short_side.volatility_1h[c] = 0.0f;
+        long_side.forager_volume[c] = 0.0f;
+        short_side.forager_volume[c] = 0.0f;
+        long_side.forager_volatility[c] = 0.0f;
+        short_side.forager_volatility[c] = 0.0f;
+        long_side.hour_high[c] = c == 0 ? 105.0f : 205.0f;
+        long_side.hour_low[c] = c == 0 ? 95.0f : 195.0f;
+        short_side.hour_high[c] = long_side.hour_high[c];
+        short_side.hour_low[c] = long_side.hour_low[c];
+        long_side.psize[c] = c == 0 ? 2.0f : 0.0f;
+        long_side.pprice[c] = c == 0 ? 90.0f : 0.0f;
+        short_side.psize[c] = c == 0 ? 3.0f : 0.0f;
+        short_side.pprice[c] = c == 0 ? 110.0f : 0.0f;
+    }
+    output[0] = ema_multicoin_side_unrealized_pnl(
+        long_side, bars, coin_settings, 1, 2, false
+    );
+    output[1] = ema_multicoin_side_unrealized_pnl(
+        short_side, bars, coin_settings, 1, 2, true
+    );
+    update_ema_multicoin_side_indicators(
+        long_side, long_config, bars, coin_settings, 1, 2, 59
+    );
+    update_ema_multicoin_side_indicators(
+        short_side, short_config, bars, coin_settings, 1, 2, 59
+    );
+    output[2] = float(count_ema_multicoin_tradable_coins(
+        bars, coin_settings, coin_overrides, 1, 2
+    ));
+    output[3] = ema_multicoin_side_has_position(long_side, 2) ? 1.0f : 0.0f;
+    output[4] = ema_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
+    output[5] = long_side.ema0[0];
+    output[6] = short_side.ema0[0];
+    output[7] = long_side.forager_volatility[0];
+    output[8] = short_side.forager_volatility[0];
+    output[9] = long_side.forager_volume[0];
+    output[10] = short_side.forager_volume[0];
+    output[11] = long_side.volatility_1h[0];
+}
+"""
+
+    bars = torch.tensor(
+        [
+            [[101.0, 99.0, 100.0, 10.0], [202.0, 198.0, 200.0, 20.0]],
+            [[110.0, 90.0, 100.0, 10.0], [220.0, 180.0, 200.0, 20.0]],
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    coin_settings = torch.zeros((2, 12), dtype=torch.float32, device="mps")
+    coin_settings[:, 4] = 1.0
+    coin_settings[:, 7] = 10.0
+    coin_overrides = torch.full(
+        (2, 29), float("nan"), dtype=torch.float32, device="mps"
+    )
+    coin_overrides[1, 11] = 0.0
+    output = torch.zeros(12, dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_ema_multicoin_candle_helpers_probe(
+        bars, coin_settings, coin_overrides, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    expected_range = np.log(110.0 / 90.0)
+    expected_hour = np.log(105.0 / 95.0)
+    np.testing.assert_allclose(
+        output.cpu().numpy(),
+        [
+            20.0,
+            30.0,
+            1.0,
+            1.0,
+            1.0,
+            100.0,
+            105.0,
+            expected_range,
+            expected_range * 0.5,
+            1_000.0,
+            500.0,
+            expected_hour,
+        ],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
 def _single_coin_exposure_fields(
     *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
 ):
