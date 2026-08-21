@@ -372,6 +372,60 @@ def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
+    strategy_kind,
+):
+    count = 128
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[20:60] *= 1.3
+    closes[60:] *= 0.65
+    outputs = {}
+    for side in ("long", "short"):
+        runner, row = _multicoin_exposure_fixture(
+            strategy_kind,
+            side,
+            count=count,
+            closes=closes,
+            collect_coin_fill_counts=True,
+        )
+        keys = (
+            EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        )
+        for key, value in {
+            "hsl_enabled": 1.0,
+            "hsl_red_threshold": 0.05,
+            "hsl_ema_span_minutes": 1.0,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_restart_policy": 2.0,
+            "hsl_tier_ratio_yellow": 0.5,
+            "hsl_tier_ratio_orange": 0.75,
+            "hsl_orange_graceful_stop": 0.0,
+            "hsl_signal_mode": 1.0,
+            "hsl_slot_count": 1.0,
+        }.items():
+            row[keys.index(key)] = value
+        outputs[side] = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    for side in ("long", "short"):
+        other_side = "short" if side == "long" else "long"
+        output = outputs[side]
+        assert output[f"hsl_{side}_enabled"].item()
+        assert not output[f"hsl_{other_side}_enabled"].item()
+        assert output[f"hsl_triggers_{side}"].item() == 1.0
+        assert output[f"hsl_triggers_{other_side}"].item() == 0.0
+        assert output["hsl_trigger_drawdown_count"].item() == 1.0
+        assert output["hsl_panic_loss_drawdown_count"].item() == 1.0
+        assert output["open_positions"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("shock_coin", [0, 1, "both"])
 def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(

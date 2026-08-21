@@ -1545,6 +1545,13 @@ class MpsMulticoinProxy:
                 },
                 "proxy_mode": "independent-side-hedge-v1",
             }
+            if hsl_enabled_sides:
+                self.coin_override_contract["hsl_proxy_mode"] = (
+                    "independent-pside-v1"
+                )
+                self.coin_override_contract["hsl_signal_mode"] = str(
+                    signal_mode
+                ).strip().lower()
         self.coin_override_contract["forager_score_hysteresis_pct"] = (
             self.forager_score_hysteresis_pct
         )
