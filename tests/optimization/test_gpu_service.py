@@ -145,7 +145,6 @@ def test_single_coin_hsl_packs_state_machine_inputs():
             "n_positions": 4,
         },
         signal_mode="coin",
-        dynamic_wel_by_tradability=False,
     )
 
     assert packed == {
@@ -159,14 +158,8 @@ def test_single_coin_hsl_packs_state_machine_inputs():
         "hsl_tier_ratio_orange": 0.75,
         "hsl_orange_graceful_stop": 1.0,
         "hsl_signal_coin": 1.0,
-        "hsl_slot_count": 4.0,
+        "hsl_slot_count": 1.0,
     }
-
-    assert _hsl_params(
-        {"hsl_enabled": True, "n_positions": 4},
-        signal_mode="coin",
-        dynamic_wel_by_tradability=True,
-    )["hsl_slot_count"] == 1.0
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():

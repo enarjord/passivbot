@@ -1837,7 +1837,9 @@ def _update_novelty_stall(
     return current
 
 
-def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
+def _gpu_suite_checkpoint_contract(
+    config: dict, suite_inputs=None, *, pinned_hsl_bounds=None
+) -> dict:
     backtest = config.get("backtest", {})
     contract = {
         key: deepcopy(backtest.get(key))
@@ -1857,6 +1859,7 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     )
     contract["unstuck"] = _gpu_unstuck_checkpoint_contract(config)
     contract["hsl"] = _gpu_hsl_checkpoint_contract(config)
+    contract["pinned_hsl_bounds"] = deepcopy(pinned_hsl_bounds or {})
     if suite_inputs is not None:
         prepared_scenarios = []
         for item in suite_inputs:
@@ -1910,6 +1913,9 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                     ),
                     "unstuck": _gpu_unstuck_checkpoint_contract(item["config"]),
                     "hsl": _gpu_hsl_checkpoint_contract(item["config"]),
+                    "pinned_hsl_bounds": deepcopy(
+                        item.get("pinned_hsl_bounds", {})
+                    ),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -1928,7 +1934,9 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     return contract
 
 
-def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
+def _gpu_runtime_checkpoint_contract(
+    config: dict, proxy, *, pinned_hsl_bounds=None
+) -> dict:
     return {
         "max_realized_loss_pct": float(
             config.get("live", {}).get("max_realized_loss_pct", 1.0)
@@ -1941,6 +1949,7 @@ def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
         ),
         "unstuck": _gpu_unstuck_checkpoint_contract(config),
         "hsl": _gpu_hsl_checkpoint_contract(config),
+        "pinned_hsl_bounds": deepcopy(pinned_hsl_bounds or {}),
     }
 
 
@@ -1995,6 +2004,51 @@ def _gpu_hsl_checkpoint_contract(config: dict) -> dict:
             for side in ("long", "short")
         },
     }
+
+
+def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
+    return {
+        key: float(bound.low)
+        for key, bound in sorted(bound_by_key.items())
+        if "_hsl_" in key
+        and math.isclose(
+            float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
+        )
+    }
+
+
+def _gpu_hsl_search_sides(
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
+) -> set[str]:
+    configs = (
+        [item["config"] for item in suite_inputs]
+        if suite_inputs
+        else [proxy_config]
+    )
+    target_sides = {
+        side
+        for side in ("long", "short")
+        if any(
+            gpu_side_enabled(item, side)
+            and bool(
+                item.get("bot", {})
+                .get(side, {})
+                .get("hsl", {})
+                .get("enabled", False)
+            )
+            for item in configs
+        )
+    }
+    return _gpu_candidate_source_sides(target_sides, overrides or set())
+
+
+def _gpu_hsl_parameter_active(
+    parameter: str, hsl_search_sides: set[str]
+) -> bool:
+    for side in ("long", "short"):
+        if parameter.startswith(f"{side}_hsl_"):
+            return side in hsl_search_sides
+    return True
 
 
 def _gpu_unstuck_search_sides(
@@ -2791,6 +2845,9 @@ def run_backend(
         if max_coin_count == 1 or len(config_enabled_sides) == 1
         else set()
     )
+    hsl_search_sides = _gpu_hsl_search_sides(
+        proxy_config, suite_inputs, gpu_optimizer_overrides
+    )
     mapped = {
         name: value
         for name, value in mapped_all.items()
@@ -2802,6 +2859,7 @@ def run_backend(
         if bound.high > bound.low
         and name not in fixed_parameter_overrides
         and _gpu_unstuck_parameter_active(name, unstuck_search_sides)
+        and _gpu_hsl_parameter_active(name, hsl_search_sides)
         and not (
             "mirror_short_from_long" in gpu_optimizer_overrides
             and name.startswith("short_")
@@ -2888,6 +2946,9 @@ def run_backend(
             coin_count=item["coin_count"],
         )
         item["parameter_overrides"] = parameter_overrides
+        item["pinned_hsl_bounds"] = _gpu_pinned_hsl_bound_contract(
+            scenario_bound_by_key
+        )
 
     for bound_key, bound in bound_by_key.items():
         if bound_key == ANCHOR_GENE_KEY or bound.high <= bound.low:
@@ -3092,14 +3153,22 @@ def run_backend(
         config["optimize"]["scoring"],
         anchor_plan=get_anchor_plan(config),
         suite_contract=(
-            _gpu_suite_checkpoint_contract(config, suite_inputs)
+            _gpu_suite_checkpoint_contract(
+                config,
+                suite_inputs,
+                pinned_hsl_bounds=_gpu_pinned_hsl_bound_contract(bound_by_key),
+            )
             if suite_enabled
             else None
         ),
         runtime_contract=(
             None
             if suite_enabled
-            else _gpu_runtime_checkpoint_contract(proxy_config, proxy)
+            else _gpu_runtime_checkpoint_contract(
+                proxy_config,
+                proxy,
+                pinned_hsl_bounds=_gpu_pinned_hsl_bound_contract(bound_by_key),
+            )
         ),
     )
     budget = int(config["optimize"]["iters"])

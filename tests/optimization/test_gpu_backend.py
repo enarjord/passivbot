@@ -31,6 +31,8 @@ from optimization.backends.gpu_backend import (
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
+    _gpu_hsl_parameter_active,
+    _gpu_pinned_hsl_bound_contract,
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
@@ -3921,6 +3923,35 @@ def test_gpu_checkpoint_signature_tracks_single_coin_hsl_contract():
             != original
         )
 
+    pinned = {"long_hsl_red_threshold": 0.2}
+    pinned_contract = _gpu_runtime_checkpoint_contract(
+        config, proxy, pinned_hsl_bounds=pinned
+    )
+    changed_pinned_contract = _gpu_runtime_checkpoint_contract(
+        config,
+        proxy,
+        pinned_hsl_bounds={"long_hsl_red_threshold": 0.25},
+    )
+    assert pinned_contract != changed_pinned_contract
+    assert _checkpoint_signature(
+        active, scoring, runtime_contract=pinned_contract
+    ) != _checkpoint_signature(
+        active, scoring, runtime_contract=changed_pinned_contract
+    )
+
+
+def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
+    assert not _gpu_hsl_parameter_active("long_hsl_red_threshold", set())
+    assert _gpu_hsl_parameter_active("long_hsl_red_threshold", {"long"})
+    assert _gpu_hsl_parameter_active("long_offset", set())
+    assert _gpu_pinned_hsl_bound_contract(
+        {
+            "long_hsl_red_threshold": Bound(0.2, 0.2),
+            "long_hsl_ema_span_minutes": Bound(30.0, 90.0),
+            "long_offset": Bound(0.01, 0.01),
+        }
+    ) == {"long_hsl_red_threshold": 0.2}
+
 
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
@@ -4007,6 +4038,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "pnls_max_lookback_days": 30.0,
             "unstuck": original["unstuck"],
             "hsl": original["hsl"],
+            "pinned_hsl_bounds": {},
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -4052,6 +4084,23 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     changed_hsl = copy.deepcopy(item)
     changed_hsl["config"]["bot"]["long"]["hsl"]["enabled"] = True
     assert _gpu_suite_checkpoint_contract(config, [changed_hsl]) != original
+
+    changed_pinned_hsl = copy.deepcopy(item)
+    changed_pinned_hsl["pinned_hsl_bounds"] = {
+        "long_hsl_red_threshold": 0.25
+    }
+    assert (
+        _gpu_suite_checkpoint_contract(config, [changed_pinned_hsl])
+        != original
+    )
+    assert (
+        _gpu_suite_checkpoint_contract(
+            config,
+            [item],
+            pinned_hsl_bounds={"long_hsl_red_threshold": 0.25},
+        )
+        != original
+    )
 
     changed_coins = copy.deepcopy(item)
     changed_coins["coins"] = ["BTC", "SOL"]

@@ -50,6 +50,8 @@ mod tests {
         assert!(source.contains("h.slot_count"));
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
+        assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
+        assert!(source.contains("0.9999999403953552f"));
         assert!(source.contains("total_exposure_reducer_qty"));
         assert!(source.contains("unstuck_reducer_variant"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
@@ -127,6 +129,8 @@ mod tests {
         assert!(source.contains("h.slot_count"));
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
+        assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
+        assert!(source.contains("0.9999999403953552f"));
         assert!(source.contains("unstuck_reducer_qty"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
         assert!(source.contains("unstuck_loss_allowance_pct"));

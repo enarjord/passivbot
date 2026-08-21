@@ -206,6 +206,7 @@ struct HslState {
     float pending_drawdown_ema;
     float pending_strategy_equity;
     float pending_peak_strategy_equity;
+    float pending_stop_k;
 };
 
 inline HslState load_hsl(constant float* params, int po) {
@@ -238,6 +239,7 @@ inline HslState load_hsl(constant float* params, int po) {
     h.pending_drawdown_ema = 0.0f;
     h.pending_strategy_equity = 0.0f;
     h.pending_peak_strategy_equity = 0.0f;
+    h.pending_stop_k = -1.0f;
     return h;
 }
 
@@ -269,7 +271,7 @@ inline void update_hsl(
         h.coin_realized_peak = fmax(h.coin_realized_peak, coin_realized);
         drawdown_raw = fmin(fmax(
             h.coin_realized_peak - (coin_realized + unrealized_pnl), 0.0f
-        ) / (balance / h.slot_count), 1.0f);
+        ) / (balance / h.slot_count), 0.9999999403953552f);
         strategy_equity = fmax(1.0f - drawdown_raw, 1.0e-12f);
         peak_strategy_equity = 1.0f;
     } else {
@@ -306,6 +308,7 @@ inline void update_hsl(
                 h.pending_drawdown_ema = h.drawdown_ema;
                 h.pending_strategy_equity = strategy_equity;
                 h.pending_peak_strategy_equity = peak_strategy_equity;
+                h.pending_stop_k = kf;
             }
             if (h.flat_confirmations >= 2) {
                 h.halted = true;
@@ -333,7 +336,7 @@ inline void update_hsl(
                             >= h.no_restart_threshold);
                 h.no_restart_latched = terminal;
                 h.cooldown_until_k = terminal || h.cooldown_minutes <= 0.0f
-                    ? -1.0f : kf + h.cooldown_minutes;
+                    ? -1.0f : h.pending_stop_k + h.cooldown_minutes;
             }
         }
     } else {
