@@ -39,10 +39,47 @@ inline float float32_floor_nonnegative(float value) {
     return as_type<float>(as_type<uint>(value) - 1u);
 }
 
+// Joint-side account state for the fused multi-coin portfolio path. Exact
+// Rust processes every long fill before every short fill for a candle; callers
+// preserve that ordering while this state owns the one shared cash balance and
+// the realized-PnL scopes consumed by liquidation, loss gates, and HSL.
+struct JointPortfolioAccount {
+    float balance;
+    float realized_pnl_total;
+    float realized_pnl_peak;
+    float realized_pnl_long;
+    float realized_pnl_short;
+};
+
+inline JointPortfolioAccount init_joint_portfolio_account(
+    float starting_balance
+) {
+    JointPortfolioAccount account;
+    account.balance = starting_balance;
+    account.realized_pnl_total = 0.0f;
+    account.realized_pnl_peak = 0.0f;
+    account.realized_pnl_long = 0.0f;
+    account.realized_pnl_short = 0.0f;
+    return account;
+}
+
+inline void record_joint_portfolio_fill(
+    thread JointPortfolioAccount& account,
+    float net_pnl,
+    bool is_long
+) {
+    account.balance += net_pnl;
+    account.realized_pnl_total += net_pnl;
+    account.realized_pnl_peak = fmax(
+        account.realized_pnl_peak, account.realized_pnl_total
+    );
+    if (is_long) account.realized_pnl_long += net_pnl;
+    else account.realized_pnl_short += net_pnl;
+}
+
 inline void record_realized_net(
     float net_pnl,
-    thread float& realized_pnl_cumsum_last,
-    thread float& realized_pnl_cumsum_max,
+    thread JointPortfolioAccount& account,
     thread float& day_fill_count,
     thread float& fill_count,
     thread float& fill_count_entry,
@@ -54,21 +91,18 @@ inline void record_realized_net(
     bool is_entry,
     bool is_long
 ) {
+    record_joint_portfolio_fill(account, net_pnl, is_long);
     day_fill_count += 1.0f;
     fill_count += 1.0f;
     if (is_entry) fill_count_entry += 1.0f;
     if (is_long) fill_count_long += 1.0f;
-    realized_pnl_cumsum_last += net_pnl;
-    realized_pnl_cumsum_max = fmax(
-        realized_pnl_cumsum_max, realized_pnl_cumsum_last
-    );
-    if (realized_pnl_cumsum_last > pnl_recovery_peak) {
+    if (account.realized_pnl_total > pnl_recovery_peak) {
         if (pnl_recovery_peak_k >= 0.0f) {
             pnl_recovery_max_min = fmax(
                 pnl_recovery_max_min, fill_k - pnl_recovery_peak_k
             );
         }
-        pnl_recovery_peak = realized_pnl_cumsum_last;
+        pnl_recovery_peak = account.realized_pnl_total;
         pnl_recovery_peak_k = fill_k;
     }
 }
@@ -111,44 +145,6 @@ inline float clamped_market_price(
     int last_valid = int(coin_settings[coin_offset + 7]);
     int market_k = clamp(k, first_valid, last_valid);
     return bars[(market_k * coin_count + coin) * 4 + 2];
-}
-
-// Joint-side account state for the fused multi-coin portfolio path. Exact
-// Rust processes every long fill before every short fill for a candle; callers
-// preserve that ordering while this state owns the one shared cash balance and
-// the realized-PnL scopes consumed by liquidation, loss gates, and HSL.
-struct JointPortfolioAccount {
-    float balance;
-    float realized_pnl_total;
-    float realized_pnl_peak;
-    float realized_pnl_long;
-    float realized_pnl_short;
-};
-
-inline JointPortfolioAccount init_joint_portfolio_account(
-    float starting_balance
-) {
-    JointPortfolioAccount account;
-    account.balance = starting_balance;
-    account.realized_pnl_total = 0.0f;
-    account.realized_pnl_peak = 0.0f;
-    account.realized_pnl_long = 0.0f;
-    account.realized_pnl_short = 0.0f;
-    return account;
-}
-
-inline void record_joint_portfolio_fill(
-    thread JointPortfolioAccount& account,
-    float net_pnl,
-    bool is_long
-) {
-    account.balance += net_pnl;
-    account.realized_pnl_total += net_pnl;
-    account.realized_pnl_peak = fmax(
-        account.realized_pnl_peak, account.realized_pnl_total
-    );
-    if (is_long) account.realized_pnl_long += net_pnl;
-    else account.realized_pnl_short += net_pnl;
 }
 
 inline float joint_portfolio_equity(

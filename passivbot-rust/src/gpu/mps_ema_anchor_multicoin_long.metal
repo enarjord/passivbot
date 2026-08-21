@@ -325,9 +325,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
 
-    float balance = starting_balance;
-    float realized_pnl_cumsum_last = 0.0f;
-    float realized_pnl_cumsum_max = 0.0f;
+    JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
+    thread float& balance = account.balance;
+    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
+    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
     float pnl_recovery_peak = -INFINITY;
     float pnl_recovery_peak_k = -1.0f;
     float pnl_recovery_max_min = 0.0f;
@@ -518,10 +519,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     }
                 }
                 record_gross_pnl(pnl, profit_sum, loss_sum);
-                balance += net_pnl;
                 record_realized_net(
-                    net_pnl, realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max,
+                    net_pnl, account,
                     day_fill_count, fill_count, fill_count_entry, fill_count_long,
                     pnl_recovery_peak, pnl_recovery_peak_k,
                     pnl_recovery_max_min, float(k),
@@ -577,10 +576,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 float fill_price = float(entry_tick[c]) * price_step;
                 float adjusted = round_step(entry_qty[c], qty_step);
                 float fee = adjusted * fill_price * c_mult * maker_fee;
-                balance -= fee;
                 record_realized_net(
-                    -fee, realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max,
+                    -fee, account,
                     day_fill_count, fill_count, fill_count_entry, fill_count_long,
                     pnl_recovery_peak, pnl_recovery_peak_k,
                     pnl_recovery_max_min, float(k),
