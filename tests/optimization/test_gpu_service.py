@@ -54,6 +54,9 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
     [
         "adg_pnl",
         "adg_pnl_w",
+        "fills_analysis_duration_days",
+        "fills_count",
+        "fills_per_day",
         "mdg_pnl",
         "mdg_pnl_w",
         "sharpe_ratio_pnl",
@@ -62,7 +65,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "sortino_ratio_pnl_w",
     ],
 )
-def test_dual_side_multicoin_realized_pnl_metrics_fail_closed(metric):
+def test_dual_side_multicoin_intraday_cutoff_metrics_fail_closed(metric):
     with pytest.raises(ValueError, match="shared-liquidation cutoff"):
         _require_multicoin_metric_topology(["long", "short"], {metric})
 

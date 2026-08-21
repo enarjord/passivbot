@@ -63,11 +63,14 @@ SUPPORTED_METRICS = (
     "entry_initial_balance_pct_short",
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
+    "fills_analysis_duration_days",
+    "fills_count",
     "fills_gap_longest_days",
     "fills_gap_mean_hours",
     "fills_gap_median_hours",
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
+    "fills_per_day",
     "gain_strategy_eq",
     "hard_stop_duration_minutes_max",
     "hard_stop_duration_minutes_mean",
@@ -140,6 +143,12 @@ _WEIGHTED_PNL_METRICS = {
     "mdg_pnl_w",
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl_w",
+}
+
+_FILL_ACTIVITY_METRICS = {
+    "fills_analysis_duration_days",
+    "fills_count",
+    "fills_per_day",
 }
 
 
@@ -665,6 +674,38 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     return adg, mdg, sharpe, sortino, count
 
 
+def _fill_activity_metrics(out: dict, active: torch.Tensor) -> dict:
+    """Match Rust's full-run fill count and timestamp-span rate contract."""
+
+    fill_count = torch.where(
+        active,
+        out["day_fill_count"].to(torch.float64),
+        torch.zeros_like(out["day_fill_count"], dtype=torch.float64),
+    ).sum(dim=1)
+    first_eq_ts = out["first_eq_ts"].to(torch.float64)
+    last_eq_ts = out["last_eq_ts"].to(torch.float64)
+    has_span = (
+        torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts > first_eq_ts)
+    )
+    duration_days = torch.where(
+        has_span,
+        (last_eq_ts - first_eq_ts) / 86_400_000.0,
+        torch.zeros_like(first_eq_ts),
+    )
+    fills_per_day = torch.where(
+        duration_days > 0.0,
+        fill_count / duration_days.clamp(min=1.0e-9),
+        torch.zeros_like(fill_count),
+    )
+    return {
+        "fills_analysis_duration_days": duration_days,
+        "fills_count": fill_count,
+        "fills_per_day": fills_per_day,
+    }
+
+
 def _weighted_pnl_metrics(
     day_net_pnl,
     day_last_fill_balance,
@@ -952,6 +993,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _FILL_GAP_HISTOGRAM_METRICS
         else {}
     )
+    fill_activity_metrics = (
+        _fill_activity_metrics(out, active)
+        if requested & _FILL_ACTIVITY_METRICS
+        else {}
+    )
     hard_stop_metrics = (
         _hard_stop_lifecycle_metrics(out, run)
         if requested & _HARD_STOP_LIFECYCLE_METRICS
@@ -1031,6 +1077,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
     objectives.update(fill_gap_metrics)
+    objectives.update(fill_activity_metrics)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)

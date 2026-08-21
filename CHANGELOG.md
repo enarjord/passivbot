@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `fills_count`, `fills_analysis_duration_days`, and `fills_per_day` scoring and limits to
+  Apple MPS optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing
+  Martingale runs. The proxy reuses Metal's authoritative per-fill daily counts and the analyzed
+  equity timestamp span; exact Rust validation and drift gates remain authoritative. Dual-side
+  multi-coin runs fail closed because independent directional summaries cannot reconstruct the
+  intraday shared-liquidation cutoff.
+
 - Added weighted `adg_pnl_w`, `mdg_pnl_w`, `sharpe_ratio_pnl_w`, and
   `sortino_ratio_pnl_w` scoring and limits to Apple MPS optimization for single-coin and one-sided
   multi-coin runs. Metal counts every proxy fill, including multiple same-candle ladder fills, so
