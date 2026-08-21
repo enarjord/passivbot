@@ -1274,6 +1274,10 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     capped_coin_hsl[keys.index("hsl_restart_policy")] = 1.0
     capped_coin_hsl[keys.index("hsl_cooldown_minutes_after_red")] = 2.0
     capped_coin_hsl[keys.index("hsl_slot_count")] = 4.0
+    tiny_threshold_hsl = list(hsl)
+    tiny_threshold_hsl[keys.index("hsl_red_threshold")] = 1.0e-8
+    negative_span_hsl = list(hsl)
+    negative_span_hsl[keys.index("hsl_ema_span_minutes")] = -2.0
     inactive = list(baseline)
     rows = (
         [
@@ -1284,6 +1288,8 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
             unscaled_coin_hsl + inactive,
             scaled_coin_hsl + inactive,
             capped_coin_hsl + inactive,
+            tiny_threshold_hsl + inactive,
+            negative_span_hsl + inactive,
         ]
         if side == "long"
         else [
@@ -1294,6 +1300,8 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
             inactive + unscaled_coin_hsl,
             inactive + scaled_coin_hsl,
             inactive + capped_coin_hsl,
+            inactive + tiny_threshold_hsl,
+            inactive + negative_span_hsl,
         ]
     )
     output = runner_cls(
@@ -1313,6 +1321,12 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output[size_key][4].item() > 0.0
     assert output[size_key][5].item() == 0.0
     assert output[size_key][6].item() > 0.0
+    assert output[size_key][7].item() == 0.0
+    assert output["balance"][7].item() < 990.0
+    assert output[size_key][8].item() == 0.0
+    assert output["balance"][8].item() == pytest.approx(
+        output["balance"][1].item(), abs=1.0e-4
+    )
     assert output["day_volume"][1].sum().item() > 1.0
 
 

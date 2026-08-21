@@ -213,7 +213,7 @@ inline HslState load_hsl(constant float* params, int po) {
     HslState h;
     h.enabled = params[po + 40] > 0.5f;
     h.red_threshold = params[po + 41];
-    h.alpha = clamp(2.0f / (params[po + 42] + 1.0f), 0.0f, 1.0f);
+    h.alpha = clamp(2.0f / (fmax(params[po + 42], 1.0f) + 1.0f), 0.0f, 1.0f);
     h.cooldown_minutes = fmax(params[po + 43], 0.0f);
     h.no_restart_threshold = fmax(params[po + 44], h.red_threshold);
     h.restart_policy = int(round(params[po + 45]));
@@ -291,11 +291,12 @@ inline void update_hsl(
     }
     h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
     float score = fmin(drawdown_raw, fmax(h.drawdown_ema, 0.0f));
-    h.red_active_now = score + 1.0e-7f >= h.red_threshold;
+    const float cmp_eps = 1.0e-12f;
+    h.red_active_now = score + cmp_eps >= h.red_threshold;
     int next_tier = h.red_latched ? 3
         : h.red_active_now ? 3
-        : score + 1.0e-7f >= h.orange_ratio * h.red_threshold ? 2
-        : score + 1.0e-7f >= h.yellow_ratio * h.red_threshold ? 1 : 0;
+        : score + cmp_eps >= h.orange_ratio * h.red_threshold ? 2
+        : score + cmp_eps >= h.yellow_ratio * h.red_threshold ? 1 : 0;
     if (next_tier == 3) h.red_latched = true;
     h.tier = h.red_latched ? 3 : next_tier;
     if (h.tier == 3) {
