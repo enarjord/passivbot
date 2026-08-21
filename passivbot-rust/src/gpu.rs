@@ -53,7 +53,7 @@ mod tests {
         assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
         assert!(source.contains("fmax(params[po + 25], 1.0f)"));
         assert!(source.contains("const float cmp_eps = 1.0e-12f"));
-        assert_eq!(source.matches("0.9999999403953552f").count(), 2);
+        assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("total_exposure_reducer_qty"));
         assert!(source.contains("unstuck_reducer_variant"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
@@ -134,7 +134,7 @@ mod tests {
         assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
         assert!(source.contains("fmax(params[po + 42], 1.0f)"));
         assert!(source.contains("const float cmp_eps = 1.0e-12f"));
-        assert_eq!(source.matches("0.9999999403953552f").count(), 2);
+        assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("unstuck_reducer_qty"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
         assert!(source.contains("unstuck_loss_allowance_pct"));

@@ -275,10 +275,13 @@ inline void update_hsl(
                 );
                 float no_restart_drawdown_raw = h.signal_coin
                     ? h.pending_drawdown_raw
-                    : fmax(
-                        1.0f - h.pending_strategy_equity
-                            / fmax(h.no_restart_peak_strategy_equity, 1.0e-12f),
-                        0.0f
+                    : fmin(
+                        fmax(
+                            1.0f - h.pending_strategy_equity
+                                / fmax(h.no_restart_peak_strategy_equity, 1.0e-12f),
+                            0.0f
+                        ),
+                        0.9999999403953552f
                     );
                 bool terminal = h.restart_policy == 2
                     || (h.restart_policy == 1

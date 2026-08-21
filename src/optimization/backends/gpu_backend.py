@@ -415,6 +415,21 @@ def _gpu_candidate_source_sides(
     return source_sides
 
 
+def _gpu_candidate_search_sides(proxy_config: dict, suite_inputs) -> set[str]:
+    """Return every side enabled by an effective independent scenario."""
+
+    configs = (
+        [item["config"] for item in suite_inputs]
+        if suite_inputs
+        else [proxy_config]
+    )
+    return {
+        side
+        for side in ("long", "short")
+        if any(gpu_side_enabled(item, side) for item in configs)
+    }
+
+
 def _ema_multicoin_bound_map(target_side: str, overrides: set[str]) -> dict:
     """Include all bound families that can feed the enabled multicoin side."""
 
@@ -2908,8 +2923,11 @@ def run_backend(
             "GPU bounds would disable both sides for exact validation; "
             f"effective seed values: {side_values}"
         )
+    candidate_search_sides = _gpu_candidate_search_sides(
+        proxy_config, suite_inputs
+    )
     candidate_source_sides = _gpu_candidate_source_sides(
-        enabled_sides, gpu_optimizer_overrides
+        candidate_search_sides, gpu_optimizer_overrides
     )
     unstuck_search_sides = (
         _gpu_unstuck_search_sides(
@@ -3029,14 +3047,18 @@ def run_backend(
         if bound_key == ANCHOR_GENE_KEY or bound.high <= bound.low:
             continue
         side = bound_key.split("_", 1)[0]
-        if side in {"long", "short"} and side not in enabled_sides:
+        if side in {"long", "short"} and side not in candidate_search_sides:
             continue
         if max_coin_count == 1 and any(
-            bound_key.startswith(f"{side}_forager_") for side in enabled_sides
+            bound_key.startswith(f"{side}_forager_")
+            for side in candidate_search_sides
         ):
             # Forager ranking cannot affect a one-coin backtest.
             continue
-        if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
+        if any(
+            bound_key.startswith(f"{side}_hsl_")
+            for side in candidate_search_sides
+        ):
             bound_side = bound_key.split("_", 1)[0]
             if bound_side not in hsl_search_sides:
                 # Dormant HSL bounds affect neither proxy nor exact Rust.
@@ -3049,7 +3071,8 @@ def run_backend(
             continue
         if (
             max_coin_count == 1
-            and bound_key in {f"{side}_n_positions" for side in enabled_sides}
+            and bound_key
+            in {f"{side}_n_positions" for side in candidate_search_sides}
         ):
             continue
         if bound_key not in bound_map:

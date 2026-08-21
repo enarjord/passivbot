@@ -30,6 +30,7 @@ from optimization.backends.gpu_backend import (
     _evaluate_gpu_suite_proxies,
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
+    _gpu_candidate_search_sides,
     _gpu_candidate_source_sides,
     _gpu_hsl_search_sides,
     _gpu_hsl_parameter_active,
@@ -4003,6 +4004,17 @@ def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
     assert _gpu_hsl_parameter_active(
         "long_hsl_no_restart_drawdown_threshold", search_sides
     )
+
+    switched = copy.deepcopy(base)
+    switched["bot"]["long"]["risk"]["n_positions"] = 0
+    switched["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    switched["bot"]["short"]["risk"]["n_positions"] = 1
+    switched["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    switched["bot"]["short"]["hsl"]["enabled"] = True
+    switched["live"]["approved_coins"] = {"long": [], "short": ["BTC"]}
+    assert _gpu_candidate_search_sides(
+        base, [{"config": switched}]
+    ) == {"short"}
 
 
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
