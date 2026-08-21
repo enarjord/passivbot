@@ -89,6 +89,130 @@ def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
     assert _encode_max_realized_loss_pct(value) == 1.0
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_joint_pside_hsl_contract_routes_unified_and_directional_signals():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_joint_pside_hsl_contract_probe(
+    constant float* hsl_params,
+    constant float* samples,
+    constant float* settings,
+    constant int* sizes,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    const int B = sizes[0];
+    const int T = sizes[1];
+    if (b >= uint(B)) return;
+    const int po = int(b) * 22;
+    HslState long_hsl = load_hsl(hsl_params, po, 0);
+    HslState short_hsl = load_hsl(hsl_params, po, 11);
+    const float starting_balance = settings[0];
+    const float interval_ms = settings[1];
+    JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
+    float unrealized_long = 0.0f;
+    float unrealized_short = 0.0f;
+    bool has_position_long = false;
+    bool has_position_short = false;
+    for (int k = 0; k < T; ++k) {
+        int so = (int(b) * T + k) * 8;
+        account.realized_pnl_long = samples[so + 0];
+        account.realized_pnl_short = samples[so + 1];
+        account.realized_pnl_total = account.realized_pnl_long
+            + account.realized_pnl_short;
+        account.realized_pnl_peak = fmax(
+            account.realized_pnl_peak, account.realized_pnl_total
+        );
+        account.balance = starting_balance + account.realized_pnl_total;
+        unrealized_long = samples[so + 2];
+        unrealized_short = samples[so + 3];
+        has_position_long = samples[so + 4] > 0.5f;
+        has_position_short = samples[so + 5] > 0.5f;
+        bool blocking_long = samples[so + 6] > 0.5f;
+        bool blocking_short = samples[so + 7] > 0.5f;
+        update_joint_pside_hsl(
+            long_hsl, short_hsl, account, starting_balance,
+            unrealized_long, unrealized_short,
+            has_position_long, has_position_short,
+            blocking_long, blocking_short, float(k), interval_ms
+        );
+        try_restart_joint_pside_hsl(
+            long_hsl, short_hsl, account, starting_balance,
+            unrealized_long, unrealized_short, float(k)
+        );
+    }
+    int oo = int(b) * 8;
+    output[oo + 0] = float(long_hsl.tier);
+    output[oo + 1] = float(short_hsl.tier);
+    output[oo + 2] = long_hsl.triggers;
+    output[oo + 3] = short_hsl.triggers;
+    output[oo + 4] = float(hsl_mode(long_hsl, has_position_long));
+    output[oo + 5] = float(hsl_mode(short_hsl, has_position_short));
+    output[oo + 6] = joint_portfolio_equity(
+        account, unrealized_long, unrealized_short
+    );
+    output[oo + 7] = float(joint_pside_hsl_global_tier(long_hsl, short_hsl));
+}
+"""
+
+    def controller(mode):
+        return [
+            1.0,
+            0.05,
+            1.0,
+            0.0,
+            1.0,
+            2.0,
+            0.5,
+            0.75,
+            0.0,
+            float(mode),
+            1.0,
+        ]
+
+    params = torch.tensor(
+        [
+            controller(0) + controller(0),
+            controller(1) + controller(1),
+            controller(2) + controller(2),
+            controller(0) + controller(1),
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    samples = torch.zeros((4, 4, 8), dtype=torch.float32, device="mps")
+    samples[:, :2, 4] = 1.0
+    samples[:, :2, 5] = 1.0
+    samples[:, 1:, 3] = -10.0
+    settings = torch.tensor([100.0, 60_000.0], device="mps")
+    sizes = torch.tensor([4, 4], dtype=torch.int32, device="mps")
+    output = torch.zeros((4, 8), dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_joint_pside_hsl_contract_probe(
+        params,
+        samples,
+        settings,
+        sizes,
+        output,
+        threads=(4, 1, 1),
+    )
+    torch.mps.synchronize()
+    values = output.cpu().numpy()
+
+    assert values[0, :4].tolist() == [3.0, 3.0, 1.0, 1.0]
+    assert values[1, :4].tolist() == [0.0, 3.0, 0.0, 1.0]
+    assert values[2, :4].tolist() == [0.0, 0.0, 0.0, 0.0]
+    assert values[3, :4].tolist() == [0.0, 0.0, 0.0, 0.0]
+    assert values[:, 6].tolist() == [90.0, 90.0, 90.0, 90.0]
+    assert values[:, 7].tolist() == [3.0, 3.0, 0.0, 0.0]
+
+
 def _single_coin_exposure_fields(
     *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
 ):

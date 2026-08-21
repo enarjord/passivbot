@@ -183,3 +183,88 @@ inline bool joint_portfolio_can_generate(
     return isfinite(account.balance) && account.balance > 0.0f
         && isfinite(equity) && equity > liquidation_floor;
 }
+
+// Fused long+short multi-coin kernels own two independent pside controllers.
+// Unified mode feeds the same shared account signal to both controllers while
+// pside mode feeds directional realized and unrealized PnL. Coin mode has a
+// separate per-coin controller topology and is deliberately rejected here.
+inline bool update_joint_pside_hsl(
+    thread HslState& long_hsl,
+    thread HslState& short_hsl,
+    thread const JointPortfolioAccount& account,
+    float starting_balance,
+    float unrealized_pnl_long,
+    float unrealized_pnl_short,
+    bool has_position_long,
+    bool has_position_short,
+    bool has_blocking_orders_long,
+    bool has_blocking_orders_short,
+    float kf,
+    float interval_ms
+) {
+    if (long_hsl.signal_mode == HSL_SIGNAL_COIN
+        || short_hsl.signal_mode == HSL_SIGNAL_COIN
+        || long_hsl.signal_mode != short_hsl.signal_mode) return false;
+    const bool unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    update_hsl(
+        long_hsl,
+        account.balance,
+        starting_balance,
+        joint_hsl_realized_pnl(account, unified, true),
+        joint_hsl_unrealized_pnl(
+            unrealized_pnl_long, unrealized_pnl_short, unified, true
+        ),
+        has_position_long,
+        has_blocking_orders_long,
+        kf,
+        interval_ms
+    );
+    update_hsl(
+        short_hsl,
+        account.balance,
+        starting_balance,
+        joint_hsl_realized_pnl(account, unified, false),
+        joint_hsl_unrealized_pnl(
+            unrealized_pnl_long, unrealized_pnl_short, unified, false
+        ),
+        has_position_short,
+        has_blocking_orders_short,
+        kf,
+        interval_ms
+    );
+    return true;
+}
+
+inline void try_restart_joint_pside_hsl(
+    thread HslState& long_hsl,
+    thread HslState& short_hsl,
+    thread const JointPortfolioAccount& account,
+    float starting_balance,
+    float unrealized_pnl_long,
+    float unrealized_pnl_short,
+    float kf
+) {
+    if (long_hsl.signal_mode == HSL_SIGNAL_COIN
+        || short_hsl.signal_mode == HSL_SIGNAL_COIN
+        || long_hsl.signal_mode != short_hsl.signal_mode) return;
+    const bool unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    float long_equity = starting_balance
+        + joint_hsl_realized_pnl(account, unified, true)
+        + joint_hsl_unrealized_pnl(
+            unrealized_pnl_long, unrealized_pnl_short, unified, true
+        );
+    float short_equity = starting_balance
+        + joint_hsl_realized_pnl(account, unified, false)
+        + joint_hsl_unrealized_pnl(
+            unrealized_pnl_long, unrealized_pnl_short, unified, false
+        );
+    try_restart_hsl(long_hsl, kf, long_equity);
+    try_restart_hsl(short_hsl, kf, short_equity);
+}
+
+inline int joint_pside_hsl_global_tier(
+    thread const HslState& long_hsl,
+    thread const HslState& short_hsl
+) {
+    return max(long_hsl.tier, short_hsl.tier);
+}
