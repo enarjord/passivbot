@@ -40,6 +40,8 @@ CORE_OUTPUT_KEYS = {
     "first_eq_ts",
     "last_eq_ts",
     "liq_step",
+    "profit_sum",
+    "loss_sum",
 }
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
@@ -384,6 +386,8 @@ def _combine_hedged_multicoin_outputs(
     )
 
     combined["liq_step"] = liquidation_day
+    combined["profit_sum"] = long["profit_sum"] + short["profit_sum"]
+    combined["loss_sum"] = long["loss_sum"] + short["loss_sum"]
     return combined
 
 

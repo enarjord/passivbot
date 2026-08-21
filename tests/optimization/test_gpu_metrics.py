@@ -13,6 +13,7 @@ from optimization.gpu.metrics import (
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
+    _loss_profit_ratio,
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
@@ -24,6 +25,16 @@ from optimization.gpu.metrics import (
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
+
+
+def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
+    actual = _loss_profit_ratio(
+        torch.tensor([25.0, 5.0, 0.0, 2_000.0]),
+        torch.tensor([100.0, 0.0, 0.0, 1.0]),
+    )
+
+    assert actual.tolist() == [0.25, 1_000.0, 1.0, 1_000.0]
+    assert "loss_profit_ratio" in SUPPORTED_METRICS
 
 
 def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():

@@ -19,8 +19,8 @@ from optimization.gpu.model import (
 
 MPS_DAILY_COLS = 5
 MPS_MULTICOIN_DAILY_COLS = 6
-MPS_SCALAR_COLS = 18
-MPS_DIRECTIONAL_SCALAR_COLS = 43
+MPS_SCALAR_COLS = 20
+MPS_DIRECTIONAL_SCALAR_COLS = 45
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -118,6 +118,8 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "open_positions": scalars[:, 14],
         "short_psize": scalars[:, 15],
         "short_pprice": scalars[:, 16],
+        "profit_sum": scalars[:, 18],
+        "loss_sum": scalars[:, 19],
     }
 
 
@@ -182,6 +184,8 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "hsl_panic_loss_drawdown_sum": scalars[:, 40],
         "hsl_panic_loss_drawdown_max": scalars[:, 41],
         "hsl_panic_loss_drawdown_count": scalars[:, 42],
+        "profit_sum": scalars[:, 43],
+        "loss_sum": scalars[:, 44],
     }
 
 

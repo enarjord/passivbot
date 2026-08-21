@@ -380,7 +380,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 43" in source
+    assert "constant int SCALAR_COLS = 45" in source
+    assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
     assert "record_hsl_panic_fill(" in source
@@ -3423,6 +3424,10 @@ def test_mps_tm_off_tick_grid_precedes_reducer_for_volume(side):
     expected_volume += reducer_qty * reducer_price / balance
 
     assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
+    assert output["profit_sum"].item() == pytest.approx(
+        grid_pnl + reducer_pnl, abs=3.0e-4
+    )
+    assert output["loss_sum"].item() == 0.0
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )
@@ -3757,6 +3762,10 @@ def test_mps_tm_multicoin_off_tick_grid_precedes_reducer_for_volume(side):
     expected_volume += reducer_qty * reducer_price / balance
 
     assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
+    assert output["profit_sum"].item() == pytest.approx(
+        grid_pnl + reducer_pnl, abs=3.0e-4
+    )
+    assert output["loss_sum"].item() == 0.0
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )

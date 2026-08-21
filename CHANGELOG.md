@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `loss_profit_ratio` scoring and limits to Apple MPS optimization for EMA Anchor and
+  Trailing Martingale across long, short, and dual-side single-coin runs and one-sided multi-coin
+  runs. Metal accumulates gross winning and losing close-fill PnL, excluding entry and close fees
+  to match Rust's `Fill.pnl` analysis contract. Dual-side multi-coin runs remain fail closed because
+  independent directional totals cannot be truncated at a shared portfolio liquidation. Exact
+  Rust validation and drift gates remain authoritative.
+
 - Added finite `live.pnls_max_lookback_days` support to the existing one-sided single-coin HSL
   Apple MPS optimizer path. Metal deliberately retains an all-history candidate-local peak as a
   conservative envelope over Rust's rolling peak, so it may trigger HSL early after an old peak

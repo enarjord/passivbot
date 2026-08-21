@@ -13,6 +13,7 @@ from optimization.gpu.model import (
     gpu_side_enabled,
 )
 from optimization.gpu.service import (
+    CORE_OUTPUT_KEYS,
     DIRECTIONAL_HSL_OUTPUT_KEYS,
     MpsEmaAnchorProxy,
     MpsSingleCoinProxy,
@@ -28,6 +29,10 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+def test_core_output_contract_retains_gross_pnl_aggregates():
+    assert {"profit_sum", "loss_sum"} <= CORE_OUTPUT_KEYS
 
 
 def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
@@ -401,6 +406,8 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "first_eq_ts": torch.tensor([100.0]),
             "last_eq_ts": torch.tensor([1_000.0]),
             "liq_step": torch.tensor([liq]),
+            "profit_sum": torch.tensor([20.0]),
+            "loss_sum": torch.tensor([5.0]),
         }
 
     long = side_output(
@@ -441,6 +448,8 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["last_fill_ts"].item() == 700.0
     assert combined["last_high_ts"].item() == 800.0
     assert combined["liq_step"].item() == -1
+    assert combined["profit_sum"].item() == 40.0
+    assert combined["loss_sum"].item() == 10.0
 
     short["day_min_eq"][0, 1] = float("inf")
     short["last_eq_ts"] = torch.tensor([800.0])
@@ -486,6 +495,8 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "first_eq_ts": torch.tensor([0.0]),
             "last_eq_ts": torch.tensor([200_000_000.0]),
             "liq_step": torch.tensor([-1]),
+            "profit_sum": torch.tensor([0.0]),
+            "loss_sum": torch.tensor([0.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(
@@ -522,6 +533,8 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "first_eq_ts": torch.tensor([0.0]),
             "last_eq_ts": torch.tensor([200_000_000.0]),
             "liq_step": torch.tensor([-1]),
+            "profit_sum": torch.tensor([0.0]),
+            "loss_sum": torch.tensor([0.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(
