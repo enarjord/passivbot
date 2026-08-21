@@ -6,7 +6,8 @@ using namespace metal;
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 42;
 constant int COIN_COLS = 12;
-constant int OVERRIDE_COLS = 19;
+constant int OVERRIDE_COLS = 29;
+constant int HSL_OVERRIDE_START = 19;
 constant int DAILY_COLS = 9;
 constant int SCALAR_COLS = 57;
 constant int GAP_BINS = 128;
@@ -284,8 +285,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float unstuck_loss_allowance_pct = params[po + 29];
     const float unstuck_threshold = params[po + 30];
     HslState hsl = load_hsl(params, po, 31);
-    const bool coin_hsl_mode = hsl.enabled
-        && hsl.signal_mode == HSL_SIGNAL_COIN;
+    const bool coin_hsl_mode = hsl.signal_mode == HSL_SIGNAL_COIN;
     HslState coin_hsl[MAX_COINS];
     ulong coin_hsl_entry_blocked_mask = 0ul;
     const float weight_sum = w_volume + w_ready + w_volatility;
@@ -391,8 +391,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
         close_is_hsl_panic[c] = false;
         coin_realized_pnl[c] = 0.0f;
         coin_hsl[c] = load_hsl(params, po, 31);
-        coin_hsl[c].enabled = coin_hsl_mode && hsl.enabled
-            && c < C;
+        if (coin_hsl_mode && c < C) {
+            apply_coin_hsl_overrides(
+                coin_hsl[c], coin_overrides, c,
+                OVERRIDE_COLS, HSL_OVERRIDE_START
+            );
+        } else {
+            coin_hsl[c].enabled = false;
+        }
         selected[c] = false;
         incumbent[c] = false;
         survivor[c] = false;
@@ -537,8 +543,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
             const float maker_fee = coin_settings[coin_offset + 5];
             const float taker_fee = coin_settings[coin_offset + 11];
 
+            bool coin_hsl_panic_market = coin_hsl_mode
+                ? coin_override_or(
+                    coin_overrides, c, HSL_OVERRIDE_START + 9,
+                    hsl_panic_market ? 1.0f : 0.0f
+                ) > 0.5f
+                : hsl_panic_market;
             bool primary_market_panic = close_is_hsl_panic[c]
-                && hsl_panic_market;
+                && coin_hsl_panic_market;
             bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
                 && (primary_market_panic || (short_side
                     ? close_tick[c] > fill_ticks[tick_offset + 1]
@@ -1622,8 +1634,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
         if (can_generate && any_valid && alive
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
+            bool hsl_sample_enabled = !coin_hsl_mode && hsl.enabled;
             if (coin_hsl_mode) {
                 for (int c = 0; c < C; ++c) {
+                    hsl_sample_enabled = hsl_sample_enabled || coin_hsl[c].enabled;
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
@@ -1655,7 +1669,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 );
                 sampled_hsl_tier = hsl.tier;
             }
-            if (hsl.enabled) {
+            if (hsl_sample_enabled) {
                 hsl_tier_samples_total += 1.0f;
                 hsl_tier_samples_yellow += sampled_hsl_tier == 1 ? 1.0f : 0.0f;
                 hsl_tier_samples_orange += sampled_hsl_tier == 2 ? 1.0f : 0.0f;

@@ -27,7 +27,9 @@ from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
+    HSL_COIN_OVERRIDE_PATHS,
     gpu_side_enabled,
+    validate_hsl_override_patch,
     validate_hsl_signal_topology,
 )
 from optimization.interrupts import (
@@ -994,9 +996,7 @@ def _validate_scope_config(
         coin_count=coin_count,
     )
     hsl_enabled_sides = [
-        side
-        for side in enabled_sides
-        if bool(config["bot"][side].get("hsl", {}).get("enabled"))
+        side for side in enabled_sides if _gpu_hsl_side_enabled(config, side)
     ]
     if hsl_enabled_sides:
         # The proxy deliberately keeps an all-history candidate-local peak for
@@ -1192,16 +1192,50 @@ def _validate_gpu_coin_overrides(
             )
             for path in strategy_paths
         )
+        allowed.update(
+            ("bot", enabled_side, "hsl", *path)
+            for _key, path in HSL_COIN_OVERRIDE_PATHS
+        )
     unsupported = []
+    hsl_override_paths = []
     for coin, patch in overrides.items():
         if not isinstance(patch, dict):
             unsupported.append(f"coin_overrides.{coin}")
             continue
-        unsupported.extend(
-            ".".join(("coin_overrides", str(coin), *path))
-            for path in leaves(patch)
-            if path not in allowed
-        )
+        for path in leaves(patch):
+            rendered = ".".join(("coin_overrides", str(coin), *path))
+            if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
+                hsl_override_paths.append(rendered)
+            if path not in allowed:
+                unsupported.append(rendered)
+    if hsl_override_paths:
+        signal_mode = str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        ).strip().lower()
+        if signal_mode != "coin" or len(enabled_sides) != 1:
+            raise ValueError(
+                "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "
+                "and exactly one enabled side; unsupported paths: "
+                f"{sorted(hsl_override_paths)}"
+            )
+        for coin, patch in overrides.items():
+            if not isinstance(patch, dict):
+                continue
+            bot_patch = patch.get("bot", {})
+            if not isinstance(bot_patch, dict):
+                continue
+            for side in enabled_sides:
+                side_patch = bot_patch.get(side, {})
+                if not isinstance(side_patch, dict):
+                    continue
+                hsl_patch = side_patch.get("hsl", {}) or {}
+                if not isinstance(hsl_patch, dict):
+                    continue
+                validate_hsl_override_patch(
+                    config.get("bot", {}).get(side, {}).get("hsl", {}) or {},
+                    hsl_patch,
+                    field_name=f"coin_overrides.{coin}.bot.{side}.hsl",
+                )
     if unsupported:
         supported_risk = (
             "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
@@ -1215,7 +1249,7 @@ def _validate_gpu_coin_overrides(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
             f"{strategy_kind} parameters, {supported_risk}, unstuck parameters, "
-            "and wallet_exposure_limit"
+            "HSL parameters in coin signal mode, and wallet_exposure_limit"
         )
 
 
@@ -2079,20 +2113,41 @@ def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
     }
 
 
+def _gpu_hsl_side_enabled(config: dict, side: str) -> bool:
+    globally_enabled = bool(
+        config.get("bot", {})
+        .get(side, {})
+        .get("hsl", {})
+        .get("enabled", False)
+    )
+    if globally_enabled:
+        return True
+    for patch in (config.get("coin_overrides") or {}).values():
+        if not isinstance(patch, dict):
+            continue
+        hsl_patch = (
+            patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
+        )
+        if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
+            return True
+    return False
+
+
 def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
     for side in ("long", "short"):
-        enabled = bool(
+        globally_enabled = bool(
             config.get("bot", {})
             .get(side, {})
             .get("hsl", {})
             .get("enabled", False)
         )
+        enabled = _gpu_hsl_side_enabled(config, side)
         enabled_bound = bound_by_key.get(f"{side}_hsl_enabled")
         if enabled_bound is not None:
-            expected = float(enabled)
+            expected = float(globally_enabled)
             endpoints = (float(enabled_bound.low), float(enabled_bound.high))
             if any(
                 not math.isclose(
@@ -2151,12 +2206,7 @@ def _gpu_hsl_search_sides(
         for side in ("long", "short")
         if any(
             gpu_side_enabled(item, side)
-            and bool(
-                item.get("bot", {})
-                .get(side, {})
-                .get("hsl", {})
-                .get("enabled", False)
-            )
+            and _gpu_hsl_side_enabled(item, side)
             for item in configs
         )
     }

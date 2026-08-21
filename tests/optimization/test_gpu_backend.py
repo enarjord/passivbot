@@ -775,7 +775,7 @@ def test_gpu_suite_inputs_accept_scenario_local_tm_coin_overrides():
     )
 
 
-def test_gpu_suite_inputs_reject_unmodeled_scenario_coin_override_leaves():
+def test_gpu_suite_inputs_accept_modeled_scenario_coin_hsl_overrides():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
@@ -806,7 +806,53 @@ def test_gpu_suite_inputs_reject_unmodeled_scenario_coin_override_leaves():
             scenario["coin_overrides"] = copy.deepcopy(overrides["coin_overrides"])
             return scenario
 
-    with pytest.raises(ValueError, match="coin_overrides do not model"):
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["config"]["coin_overrides"] == overrides["coin_overrides"]
+
+
+def test_gpu_suite_inputs_reject_invalid_scenario_coin_hsl_values():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    overrides = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "hsl": {
+                            "tier_ratios": {"yellow": 0.9, "orange": 0.2}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ctx = SimpleNamespace(
+        label="invalid_coin_hsl",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "ETH": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 2, 4)), np.ones(10), [0, 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["coin_overrides"] = copy.deepcopy(
+                overrides["coin_overrides"]
+            )
+            return scenario
+
+    with pytest.raises(ValueError, match="tier_ratios must satisfy"):
         _gpu_suite_scenario_inputs(config, Suite())
 
 
@@ -1983,6 +2029,118 @@ def test_gpu_multicoin_coin_overrides_reject_unmodeled_leaves(patch):
             config,
             strategy_kind="ema_anchor",
             enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
+def test_gpu_multicoin_accepts_complete_coin_hsl_override_group():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {
+                    "hsl": {
+                        "enabled": True,
+                        "red_threshold": 0.2,
+                        "ema_span_minutes": 5.5,
+                        "cooldown_minutes_after_red": 12.5,
+                        "no_restart_drawdown_threshold": 0.8,
+                        "restart_after_red_policy": "always",
+                        "tier_ratios": {"yellow": 0.4, "orange": 0.75},
+                        "orange_tier_mode": "graceful_stop",
+                        "panic_close_order_type": "market",
+                    }
+                }
+            }
+        }
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind="ema_anchor",
+        enabled_sides=["long"],
+        coin_count=3,
+    )
+
+
+@pytest.mark.parametrize(
+    ("hsl_patch", "match"),
+    [
+        ({"enabled": "yes"}, "enabled must be a boolean"),
+        ({"red_threshold": -0.2}, "red_threshold must satisfy"),
+        ({"ema_span_minutes": 0.0}, "ema_span_minutes must be >= 1"),
+        (
+            {"ema_span_minutes": float(np.finfo(np.float32).max) * 2.0},
+            "representable as float32",
+        ),
+        ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
+        (
+            {"cooldown_minutes_after_red": float(np.finfo(np.float32).max) * 2.0},
+            "representable as float32",
+        ),
+        (
+            {"no_restart_drawdown_threshold": 0.01},
+            "no_restart_drawdown_threshold must satisfy",
+        ),
+        ({"restart_after_red_policy": "sometimes"}, "restart_after_red_policy"),
+        ({"restart_after_red_policy": " ALWAYS "}, "restart_after_red_policy"),
+        (
+            {"tier_ratios": {"yellow": 0.8, "orange": 0.4}},
+            "tier_ratios must satisfy",
+        ),
+        (
+            {
+                "tier_ratios": {
+                    "yellow": 0.50000001,
+                    "orange": 0.50000002,
+                }
+            },
+            "remain strictly ordered.*float32",
+        ),
+        ({"tier_ratios": None}, "tier_ratios must be a dictionary"),
+        ({"orange_tier_mode": "tp_only"}, "orange_tier_mode"),
+        ({"orange_tier_mode": "GRACEFUL_STOP"}, "orange_tier_mode"),
+        ({"panic_close_order_type": "makret"}, "to be limit or market"),
+        ({"panic_close_order_type": " market "}, "to be limit or market"),
+    ],
+)
+def test_gpu_multicoin_rejects_invalid_coin_hsl_values(hsl_patch, match):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"hsl": hsl_patch}}}
+    }
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("signal_mode", "enabled_sides"),
+    [("pside", ["long"]), ("unified", ["long"]), ("coin", ["long", "short"])],
+)
+def test_gpu_multicoin_coin_hsl_overrides_fail_closed_outside_one_side_coin_mode(
+    signal_mode, enabled_sides
+):
+    config = _directional_ema_config(
+        long_enabled=True, short_enabled="short" in enabled_sides
+    )
+    config["live"]["hsl_signal_mode"] = signal_mode
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
+    }
+
+    with pytest.raises(ValueError, match="require live.hsl_signal_mode=coin"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=enabled_sides,
             coin_count=3,
         )
 
@@ -4114,6 +4272,17 @@ def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
             },
             config,
         )
+
+    override_enabled = _long_only_ema_config()
+    override_enabled["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
+    }
+    with pytest.raises(ValueError, match="red_threshold bounds must remain greater"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(-0.1, 0.2)},
+            override_enabled,
+        )
+    assert _gpu_hsl_search_sides(override_enabled, [], set()) == {"long"}
 
     base = _long_only_ema_config()
     scenario = copy.deepcopy(base)

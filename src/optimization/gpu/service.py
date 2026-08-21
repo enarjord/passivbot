@@ -6,10 +6,12 @@ import os
 
 import numpy as np
 
+from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.model import (
     EMA_ANCHOR_PARAM_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GPU_STRATEGY_PARAM_KEYS,
+    HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
@@ -17,8 +19,10 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
+    encode_hsl_panic_order_type,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_hsl_settings,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
@@ -298,61 +302,75 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
 
 
 def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
-    restart_policy = str(
-        bot.get("hsl_restart_after_red_policy", "threshold")
-    ).strip().lower()
     restart_policy_ids = {"always": 0.0, "threshold": 1.0, "never": 2.0}
-    if restart_policy not in restart_policy_ids:
-        raise ValueError(
-            "MPS HSL requires restart_after_red_policy to be always, threshold, "
-            f"or never, got {restart_policy!r}"
-        )
     signal_mode = str(signal_mode).strip().lower()
     validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=1)
     signal_mode_ids = {"unified": 0.0, "pside": 1.0, "coin": 2.0}
-    orange_mode = str(
-        bot.get("hsl_orange_tier_mode", "tp_only_with_active_entry_cancellation")
-    ).strip().lower()
-    if orange_mode not in {
-        "graceful_stop",
-        "tp_only",
-        "tp_only_with_active_entry_cancellation",
-    }:
-        raise ValueError(
-            "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
-            f"got {orange_mode!r}"
-        )
+    tier_ratios = bot.get("hsl_tier_ratios", {})
+    if isinstance(tier_ratios, dict):
+        tier_ratios = dict(tier_ratios)
+        if "hsl_tier_ratio_yellow" in bot:
+            tier_ratios["yellow"] = bot["hsl_tier_ratio_yellow"]
+        if "hsl_tier_ratio_orange" in bot:
+            tier_ratios["orange"] = bot["hsl_tier_ratio_orange"]
+    validated = validate_hsl_settings(
+        {
+            "enabled": bot.get("hsl_enabled", False),
+            "red_threshold": bot.get("hsl_red_threshold", 0.15),
+            "ema_span_minutes": bot.get("hsl_ema_span_minutes", 720.0),
+            "cooldown_minutes_after_red": bot.get(
+                "hsl_cooldown_minutes_after_red", 0.0
+            ),
+            "no_restart_drawdown_threshold": bot.get(
+                "hsl_no_restart_drawdown_threshold", 1.0
+            ),
+            "restart_after_red_policy": bot.get(
+                "hsl_restart_after_red_policy", "threshold"
+            ),
+            "tier_ratios": tier_ratios,
+            "orange_tier_mode": bot.get(
+                "hsl_orange_tier_mode",
+                "tp_only_with_active_entry_cancellation",
+            ),
+            "panic_close_order_type": bot.get(
+                "hsl_panic_close_order_type", "limit"
+            ),
+        },
+        field_name="MPS HSL",
+    )
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
-    for key, default in (
-        ("hsl_red_threshold", 0.15),
-        ("hsl_no_restart_drawdown_threshold", 1.0),
+    for key, value in (
+        ("hsl_red_threshold", validated["red_threshold"]),
+        (
+            "hsl_no_restart_drawdown_threshold",
+            validated["no_restart_drawdown_threshold"],
+        ),
     ):
-        value = float(bot.get(key, default))
         if float32_below_one < value < 1.0:
             raise ValueError(
                 f"MPS HSL cannot represent {key}={value} distinctly from 1.0; "
                 f"use <= {float32_below_one} or exactly 1.0"
             )
     return {
-        "hsl_enabled": float(bool(bot.get("hsl_enabled", False))),
-        "hsl_red_threshold": float(bot.get("hsl_red_threshold", 0.15)),
-        "hsl_ema_span_minutes": float(bot.get("hsl_ema_span_minutes", 720.0)),
-        "hsl_cooldown_minutes_after_red": float(
-            bot.get("hsl_cooldown_minutes_after_red", 0.0)
+        "hsl_enabled": float(validated["enabled"]),
+        "hsl_red_threshold": validated["red_threshold"],
+        "hsl_ema_span_minutes": validated["ema_span_minutes"],
+        "hsl_cooldown_minutes_after_red": validated[
+            "cooldown_minutes_after_red"
+        ],
+        "hsl_no_restart_drawdown_threshold": validated[
+            "no_restart_drawdown_threshold"
+        ],
+        "hsl_restart_policy": restart_policy_ids[
+            validated["restart_after_red_policy"]
+        ],
+        "hsl_tier_ratio_yellow": validated["tier_ratios"]["yellow"],
+        "hsl_tier_ratio_orange": validated["tier_ratios"]["orange"],
+        "hsl_orange_graceful_stop": float(
+            validated["orange_tier_mode"] == "graceful_stop"
         ),
-        "hsl_no_restart_drawdown_threshold": float(
-            bot.get("hsl_no_restart_drawdown_threshold", 1.0)
-        ),
-        "hsl_restart_policy": restart_policy_ids[restart_policy],
-        "hsl_tier_ratio_yellow": float(
-            bot.get("hsl_tier_ratio_yellow", 0.5)
-        ),
-        "hsl_tier_ratio_orange": float(
-            bot.get("hsl_tier_ratio_orange", 0.75)
-        ),
-        "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_mode": signal_mode_ids[signal_mode],
         # Multi-coin kernels replace this initial value with the dynamic
         # effective slot count before each per-coin HSL sample. The value is
@@ -390,7 +408,7 @@ def _require_no_internal_invalid_hsl_candles(
 
 
 def _require_no_internal_invalid_multicoin_hsl_candles(
-    hlcvs, *, first_valid_indices, last_valid_indices
+    hlcvs, *, hsl_enabled_coins, first_valid_indices, last_valid_indices
 ) -> None:
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
@@ -399,12 +417,17 @@ def _require_no_internal_invalid_multicoin_hsl_candles(
         )
     coin_count = values.shape[1]
     if not (
-        len(first_valid_indices) == len(last_valid_indices) == coin_count
+        len(hsl_enabled_coins)
+        == len(first_valid_indices)
+        == len(last_valid_indices)
+        == coin_count
     ):
         raise ValueError(
             "MPS multi-coin HSL valid-index counts must match the coin count"
         )
     for coin in range(coin_count):
+        if not bool(hsl_enabled_coins[coin]):
+            continue
         _require_no_internal_invalid_hsl_candles(
             values[:, coin, 0],
             values[:, coin, 1],
@@ -986,6 +1009,37 @@ class MpsSingleCoinProxy:
 MpsEmaAnchorProxy = MpsSingleCoinProxy
 
 
+def _pack_multicoin_hsl_overrides(
+    matrix: np.ndarray,
+    *,
+    row: int,
+    start_column: int,
+    side_patch: dict,
+    effective_bot: dict,
+) -> None:
+    hsl_patch = side_patch.get("hsl", {}) or {}
+    if not hsl_patch:
+        return
+    packed = _hsl_params(effective_bot, signal_mode="coin")
+    missing = object()
+    for offset, (key, path) in enumerate(HSL_COIN_OVERRIDE_PATHS):
+        value = hsl_patch
+        for part in path:
+            value = value.get(part, missing) if isinstance(value, dict) else missing
+            if value is missing:
+                break
+        if value is missing:
+            continue
+        if key == "hsl_panic_market":
+            encoded = encode_hsl_panic_order_type(
+                value,
+                field_name="coin override hsl.panic_close_order_type",
+            )
+        else:
+            encoded = float(packed[key])
+        matrix[row, start_column + offset] = encoded
+
+
 def _build_multicoin_ema_coin_overrides(
     *,
     config: dict,
@@ -1004,7 +1058,12 @@ def _build_multicoin_ema_coin_overrides(
         resolve_override = _get_backtest_coin_override
 
     override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    matrix = np.full((len(coins), 19), np.nan, dtype=np.float32)
+    hsl_start_column = 19
+    matrix = np.full(
+        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
+        np.nan,
+        dtype=np.float32,
+    )
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
         side_patch = patch.get("bot", {}).get(side, {})
@@ -1039,6 +1098,13 @@ def _build_multicoin_ema_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        _pack_multicoin_hsl_overrides(
+            matrix,
+            row=coin_index,
+            start_column=hsl_start_column,
+            side_patch=side_patch,
+            effective_bot=effective_bot,
+        )
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -1074,8 +1140,9 @@ def _build_multicoin_tm_coin_overrides(
     wel_enforcer_enabled_column = allowance_pct_column + 1
     wel_enforcer_threshold_column = wel_enforcer_enabled_column + 1
     unstuck_start_column = wel_enforcer_threshold_column + 1
+    hsl_start_column = unstuck_start_column + 6
     matrix = np.full(
-        (len(coins), unstuck_start_column + 6),
+        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
         np.nan,
         dtype=np.float32,
     )
@@ -1138,6 +1205,13 @@ def _build_multicoin_tm_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        _pack_multicoin_hsl_overrides(
+            matrix,
+            row=coin_index,
+            start_column=hsl_start_column,
+            side_patch=side_patch,
+            effective_bot=effective_bot,
+        )
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -1301,16 +1375,6 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
-            "hsl_enabled",
-            "hsl_red_threshold",
-            "hsl_ema_span_minutes",
-            "hsl_cooldown_minutes_after_red",
-            "hsl_no_restart_drawdown_threshold",
-            "hsl_restart_after_red_policy",
-            "hsl_tier_ratio_yellow",
-            "hsl_tier_ratio_orange",
-            "hsl_orange_tier_mode",
-            "hsl_panic_close_order_type",
         )
         signal_mode = (
             backtest_params.get("equity_hard_stop_loss", {})
@@ -1319,7 +1383,10 @@ class MpsMulticoinProxy:
         hsl_enabled_sides = [
             side
             for side in self.sides
-            if bool(payload.bot_params_list[0][side].get("hsl_enabled"))
+            if any(
+                bool(item[side].get("hsl_enabled"))
+                for item in payload.bot_params_list
+            )
         ]
         if hsl_enabled_sides:
             validate_hsl_signal_topology(
@@ -1329,6 +1396,13 @@ class MpsMulticoinProxy:
             )
             _require_no_internal_invalid_multicoin_hsl_candles(
                 values,
+                hsl_enabled_coins=[
+                    any(
+                        bool(item[side].get("hsl_enabled"))
+                        for side in hsl_enabled_sides
+                    )
+                    for item in payload.bot_params_list
+                ],
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
             )
@@ -1406,7 +1480,8 @@ class MpsMulticoinProxy:
                     )
                 )
             first_strategy.update(_unstuck_params(config["bot"][side]))
-            first_strategy.update(_hsl_params(first_bot, signal_mode=signal_mode))
+            base_bot = flatten_shared_bot_side(config["bot"][side])
+            first_strategy.update(_hsl_params(base_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
@@ -1562,15 +1637,12 @@ class MpsMulticoinProxy:
                 "market_order_slippage_pct": float(
                     backtest_params.get("market_order_slippage_pct", 0.0)
                 ),
-                "hsl_panic_market": bool(
-                    self.base_params[side]["hsl_enabled"]
-                    and str(
-                        payload.bot_params_list[0][side].get(
-                            "hsl_panic_close_order_type", "limit"
-                        )
-                    ).strip().lower()
-                    == "market"
-                ),
+                "hsl_panic_market": str(
+                    flatten_shared_bot_side(config["bot"][side]).get(
+                        "hsl_panic_close_order_type", "limit"
+                    )
+                ).strip().lower()
+                == "market",
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
             self.runners[side] = runner_cls(
