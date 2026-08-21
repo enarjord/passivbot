@@ -128,14 +128,13 @@ These are the main parity surfaces that should be reviewed together:
    - One shared Rust-owned Metal HSL controller is composed into both EMA Anchor and Trailing Martingale directional kernels
    - Unified, pside, and coin signal modes use explicit encoded identities instead of a coin/non-coin boolean
    - Deterministic M3 conformance coverage compares Metal drawdown, EMA, tier, active-RED, latch, and RED-finalization traces against the exact Rust runtime for all three signal modes and restart policies
-   - One-sided runs support unified, pside, and coin signals; dual-side runs support pside and coin signals with independent directional realized-PnL state
+   - One-sided and dual-side single-coin runs support unified, pside, and coin signals; unified controllers share account PnL and require both sides to be flat, while pside and coin retain directional realized-PnL and flatness state
    - One-sided multi-coin runs support unified and pside signals through one shared-balance portfolio controller that tracks all positions and blocking orders on the enabled side
    - One-sided multi-coin coin signals use one independent controller per coin, each with coin-local realized net PnL, drawdown EMA, warning/RED episode, panic close, halt, and restart state; the coin drawdown budget uses the dynamic effective position-slot count
    - Coin-mode lifecycle and panic-loss metrics aggregate across coin episodes, while warning-tier time samples the worst active coin tier once per minute, matching exact Rust reporting
    - Multi-coin limit and market panic closes flatten every open coin on the enabled side and export the same lifecycle and panic-loss metric surface as single-coin HSL; market execution uses each coin's taker fee and directionally quantized configured slippage
    - One-sided multi-coin coin mode resolves all ten canonical per-coin HSL settings independently, including enablement, thresholds, restart/tier behavior, and limit/market panic execution; compatible suites may supply scenario-local overrides
-   - Dual-side unified HSL remains fail closed because the documented account-wide episode-finalization scope and current exact-backtest per-side flat confirmation disagree
-   - Dual-side multi-coin HSL still fails closed
+   - Dual-side multi-coin HSL supports pside signals; coin and unified signals remain fail closed pending a fused shared-balance strategy kernel
 
 ### Confirmed Gaps / Risks
 
@@ -147,15 +146,14 @@ These are the main parity surfaces that should be reviewed together:
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 3. GPU HSL topology is intentionally narrow
-   - Dual-side unified HSL needs one resolved account-wide exact-Rust flatten contract before it can be screened safely
-   - Dual-side multi-coin HSL needs one shared-balance controller that owns both directional state machines without duplicating account balance or liquidation decisions
+   - Dual-side multi-coin coin and unified HSL need one shared-balance strategy kernel that owns both directional state machines without duplicating account balance or liquidation decisions
 
 ### Missing or Weak Test Coverage
 
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for dual-side unified and dual-side multi-coin HSL scopes
+4. Apple MPS parity for dual-side multi-coin coin and unified HSL scopes
 
 ## Optimizer Work
 

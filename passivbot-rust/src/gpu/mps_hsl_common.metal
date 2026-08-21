@@ -390,6 +390,51 @@ inline void update_hsl(
     );
 }
 
+// Fused long+short kernels share account PnL and flatness in unified mode,
+// while pside and single-coin coin modes retain directional scope.
+inline bool update_dual_side_hsl(
+    thread HslState& long_hsl,
+    thread HslState& short_hsl,
+    float balance,
+    float starting_balance,
+    float realized_pnl_total,
+    float realized_pnl_long,
+    float realized_pnl_short,
+    float unrealized_pnl_long,
+    float unrealized_pnl_short,
+    bool has_position_long,
+    bool has_position_short,
+    bool has_blocking_orders_long,
+    bool has_blocking_orders_short,
+    float kf,
+    float interval_ms
+) {
+    if (long_hsl.signal_mode != short_hsl.signal_mode) return false;
+    const bool unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    const bool shared_has_position = has_position_long || has_position_short;
+    const bool shared_has_blocking_orders = has_blocking_orders_long
+        || has_blocking_orders_short;
+    update_hsl(
+        long_hsl, balance, starting_balance,
+        unified ? realized_pnl_total : realized_pnl_long,
+        unified ? unrealized_pnl_long + unrealized_pnl_short
+            : unrealized_pnl_long,
+        unified ? shared_has_position : has_position_long,
+        unified ? shared_has_blocking_orders : has_blocking_orders_long,
+        kf, interval_ms
+    );
+    update_hsl(
+        short_hsl, balance, starting_balance,
+        unified ? realized_pnl_total : realized_pnl_short,
+        unified ? unrealized_pnl_long + unrealized_pnl_short
+            : unrealized_pnl_short,
+        unified ? shared_has_position : has_position_short,
+        unified ? shared_has_blocking_orders : has_blocking_orders_short,
+        kf, interval_ms
+    );
+    return true;
+}
+
 inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) {
     if (!h.enabled || !h.halted || h.no_restart_latched
         || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
