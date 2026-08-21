@@ -362,28 +362,28 @@ inline void init_ema_multicoin_side_state(
     }
 }
 
-inline float ema_multicoin_side_unrealized_pnl(
+inline float accumulate_ema_multicoin_side_unrealized_pnl(
     thread const EmaMulticoinSideState& side,
     constant float* bars,
     constant float* coin_settings,
     int k,
     int coin_count,
-    bool short_side
+    bool short_side,
+    float accumulator
 ) {
-    float unrealized_pnl = 0.0f;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         float close = bars[bar_offset + 2];
         if (side.psize[c] > 0.0f && finite_positive(close)) {
-            unrealized_pnl += side.psize[c]
+            accumulator += side.psize[c]
                 * coin_settings[coin_offset + 4]
                 * (short_side
                     ? side.pprice[c] - close
                     : close - side.pprice[c]);
         }
     }
-    return unrealized_pnl;
+    return accumulator;
 }
 
 inline void update_ema_multicoin_side_indicators(
@@ -692,9 +692,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
 
         bool any_fill = false;
-        float hsl_equity_before_fills = balance
-            + ema_multicoin_side_unrealized_pnl(
-                side, bars, coin_settings, k, C, short_side
+        float hsl_equity_before_fills =
+            accumulate_ema_multicoin_side_unrealized_pnl(
+                side, bars, coin_settings, k, C, short_side, balance
             );
         for (int c = 0; c < C; ++c) {
             const int coin_offset = c * COIN_COLS;

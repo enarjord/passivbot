@@ -317,7 +317,9 @@ mod tests {
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert!(source.contains("load_ema_multicoin_side_config("));
         assert!(source.contains("init_ema_multicoin_side_state("));
-        assert!(source.contains("ema_multicoin_side_unrealized_pnl("));
+        assert!(source.contains(
+            "accumulate_ema_multicoin_side_unrealized_pnl("
+        ));
         assert!(source.contains("update_ema_multicoin_side_indicators("));
         assert!(source.contains("count_ema_multicoin_tradable_coins("));
         assert!(source.contains("ema_multicoin_side_has_position("));

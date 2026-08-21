@@ -362,16 +362,16 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         long_side.hour_low[c] = c == 0 ? 95.0f : 195.0f;
         short_side.hour_high[c] = long_side.hour_high[c];
         short_side.hour_low[c] = long_side.hour_low[c];
-        long_side.psize[c] = c == 0 ? 2.0f : 0.0f;
-        long_side.pprice[c] = c == 0 ? 90.0f : 0.0f;
-        short_side.psize[c] = c == 0 ? 3.0f : 0.0f;
-        short_side.pprice[c] = c == 0 ? 110.0f : 0.0f;
+        long_side.psize[c] = c == 0 ? 2.0f : 0.2f;
+        long_side.pprice[c] = c == 0 ? 90.0f : 100.0f;
+        short_side.psize[c] = c == 0 ? 3.0f : 0.2f;
+        short_side.pprice[c] = c == 0 ? 110.0f : 300.0f;
     }
-    output[0] = ema_multicoin_side_unrealized_pnl(
-        long_side, bars, coin_settings, 1, 2, false
+    output[0] = accumulate_ema_multicoin_side_unrealized_pnl(
+        long_side, bars, coin_settings, 1, 2, false, 1.0e9f
     );
-    output[1] = ema_multicoin_side_unrealized_pnl(
-        short_side, bars, coin_settings, 1, 2, true
+    output[1] = accumulate_ema_multicoin_side_unrealized_pnl(
+        short_side, bars, coin_settings, 1, 2, true, 1.0e9f
     );
     update_ema_multicoin_side_indicators(
         long_side, long_config, bars, coin_settings, 1, 2, 59
@@ -424,8 +424,8 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
     np.testing.assert_allclose(
         output.cpu().numpy(),
         [
-            20.0,
-            30.0,
+            1.0e9,
+            1.0e9,
             1.0,
             1.0,
             1.0,
