@@ -150,6 +150,218 @@ struct EmaMulticoinSideState {
     float coin_realized_pnl[MAX_COINS];
 };
 
+struct EmaMulticoinSideConfig {
+    float base_qty_pct;
+    float span_a;
+    float span_b;
+    float alpha0;
+    float alpha1;
+    float alpha2;
+    float ddf;
+    float offset;
+    float psize_weight;
+    float weight_1h;
+    float weight_1m;
+    float span_1h;
+    float span_1m;
+    float alpha_1h;
+    float alpha_1m;
+    float cooldown_min;
+    float twel;
+    float forager_volume_span;
+    float forager_volatility_span;
+    float volume_drop;
+    float w_volume;
+    float w_ready;
+    float w_volatility;
+    int n_positions;
+    float allowance_pct;
+    bool legacy_raw_allowance;
+    bool twel_entry_gate_enabled;
+    float twel_threshold;
+    bool twel_enforcer_enabled;
+    bool twel_enforcer_reduce_portfolio;
+    bool unstuck_enabled;
+    bool unstuck_ema_gating_enabled;
+    float unstuck_close_pct;
+    float unstuck_ema_dist;
+    float unstuck_loss_allowance_pct;
+    float unstuck_threshold;
+    float alpha_forager_volume;
+    float alpha_forager_volatility;
+    HslState hsl_template;
+    bool coin_hsl_mode;
+};
+
+inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
+    constant float* params,
+    int po
+) {
+    EmaMulticoinSideConfig config;
+    config.base_qty_pct = params[po + 0];
+    config.span_a = params[po + 1];
+    config.span_b = params[po + 2];
+    float span_c = sqrt(fmax(config.span_a * config.span_b, 1.0f));
+    float span_lo = fmin(config.span_a, fmin(config.span_b, span_c));
+    float span_hi = fmax(config.span_a, fmax(config.span_b, span_c));
+    float span_mid = config.span_a + config.span_b + span_c - span_lo - span_hi;
+    config.alpha0 = clamp(2.0f / (span_lo + 1.0f), 0.0f, 1.0f);
+    config.alpha1 = clamp(2.0f / (span_mid + 1.0f), 0.0f, 1.0f);
+    config.alpha2 = clamp(2.0f / (span_hi + 1.0f), 0.0f, 1.0f);
+    config.ddf = params[po + 3];
+    config.offset = params[po + 4];
+    config.psize_weight = params[po + 5];
+    config.weight_1h = params[po + 6];
+    config.weight_1m = params[po + 7];
+    config.span_1h = params[po + 8];
+    config.span_1m = params[po + 9];
+    config.alpha_1h = config.span_1h > 0.0f
+        ? 2.0f / (fmax(config.span_1h, 1.0f) + 1.0f) : 0.0f;
+    config.alpha_1m = config.span_1m > 0.0f
+        ? clamp(2.0f / (config.span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
+    config.cooldown_min = ceil(params[po + 10]);
+    config.twel = params[po + 11];
+    config.forager_volume_span = params[po + 12];
+    config.forager_volatility_span = params[po + 13];
+    config.volume_drop = clamp(params[po + 14], 0.0f, 1.0f);
+    config.w_volume = params[po + 15];
+    config.w_ready = params[po + 16];
+    config.w_volatility = params[po + 17];
+    float weight_sum = config.w_volume + config.w_ready + config.w_volatility;
+    if (weight_sum > 0.0f) {
+        config.w_volume /= weight_sum;
+        config.w_ready /= weight_sum;
+        config.w_volatility /= weight_sum;
+    } else {
+        config.w_volume = 0.0f;
+        config.w_ready = 1.0f;
+        config.w_volatility = 0.0f;
+    }
+    config.n_positions = max(1, int(rint(params[po + 18])));
+    config.allowance_pct = params[po + 19];
+    config.legacy_raw_allowance = params[po + 20] > 0.5f;
+    config.twel_entry_gate_enabled = params[po + 21] > 0.5f;
+    config.twel_threshold = params[po + 22];
+    config.twel_enforcer_enabled = params[po + 23] > 0.5f;
+    config.twel_enforcer_reduce_portfolio = params[po + 24] > 0.5f;
+    config.unstuck_enabled = params[po + 25] > 0.5f;
+    config.unstuck_ema_gating_enabled = params[po + 26] > 0.5f;
+    config.unstuck_close_pct = params[po + 27];
+    config.unstuck_ema_dist = params[po + 28];
+    config.unstuck_loss_allowance_pct = params[po + 29];
+    config.unstuck_threshold = params[po + 30];
+    config.alpha_forager_volume = config.forager_volume_span > 0.0f
+        ? clamp(2.0f / (config.forager_volume_span + 1.0f), 0.0f, 1.0f)
+        : 0.0f;
+    config.alpha_forager_volatility = config.forager_volatility_span > 0.0f
+        ? clamp(2.0f / (config.forager_volatility_span + 1.0f), 0.0f, 1.0f)
+        : 0.0f;
+    config.hsl_template = load_hsl(params, po, 31);
+    config.coin_hsl_mode = config.hsl_template.signal_mode == HSL_SIGNAL_COIN;
+    return config;
+}
+
+inline void init_ema_multicoin_side_state(
+    thread EmaMulticoinSideState& side,
+    thread const EmaMulticoinSideConfig& config,
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int coin_count
+) {
+    side.hsl = config.hsl_template;
+    side.coin_hsl_entry_blocked_mask = 0ul;
+    for (int c = 0; c < MAX_COINS; ++c) {
+        float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
+        float seed_volume = c < coin_count ? coin_settings[c * COIN_COLS + 10] : 0.0f;
+        side.ema0[c] = seed_close;
+        side.ema1[c] = seed_close;
+        side.ema2[c] = seed_close;
+        side.volatility_1m[c] = 0.0f;
+        side.volatility_1h[c] = 0.0f;
+        side.forager_volume[c] = seed_volume;
+        side.forager_volatility[c] = 0.0f;
+        side.hour_high[c] = -INFINITY;
+        side.hour_low[c] = INFINITY;
+        if (c < coin_count && int(coin_settings[c * COIN_COLS + 6]) == 0) {
+            side.hour_high[c] = bars[c * 4 + 0];
+            side.hour_low[c] = bars[c * 4 + 1];
+        }
+        side.psize[c] = 0.0f;
+        side.pprice[c] = 0.0f;
+        side.last_increase_k[c] = -1.0e20f;
+        side.entry_qty[c] = 0.0f;
+        side.close_qty[c] = 0.0f;
+        side.secondary_close_qty[c] = 0.0f;
+        side.twel_close_qty[c] = 0.0f;
+        side.unstuck_close_qty[c] = 0.0f;
+        side.position_open_k[c] = -1.0f;
+        side.position_last_fill_k[c] = -1.0f;
+        side.score[c] = -INFINITY;
+        side.contribution[c] = 0.0f;
+        side.minimum_entry[c] = 0.0f;
+        side.entry_tick[c] = 0;
+        side.close_tick[c] = 0;
+        side.secondary_close_tick[c] = 0;
+        side.twel_close_tick[c] = 0;
+        side.unstuck_close_tick[c] = 0;
+        side.close_is_unstuck_reducer[c] = false;
+        side.close_is_hsl_panic[c] = false;
+        side.coin_realized_pnl[c] = 0.0f;
+        side.coin_hsl[c] = config.hsl_template;
+        if (config.coin_hsl_mode && c < coin_count) {
+            apply_coin_hsl_overrides(
+                side.coin_hsl[c], coin_overrides, c,
+                OVERRIDE_COLS, HSL_OVERRIDE_START
+            );
+        } else {
+            side.coin_hsl[c].enabled = false;
+        }
+        side.selected[c] = false;
+        side.incumbent[c] = false;
+        side.survivor[c] = false;
+        side.entry_candidate[c] = false;
+        if (c < coin_count) {
+            float coin_span_a = coin_override_or(
+                coin_overrides, c, 1, config.span_a
+            );
+            float coin_span_b = coin_override_or(
+                coin_overrides, c, 2, config.span_b
+            );
+            float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
+            float coin_span_lo = fmin(coin_span_a, fmin(coin_span_b, coin_span_c));
+            float coin_span_hi = fmax(coin_span_a, fmax(coin_span_b, coin_span_c));
+            float coin_span_mid = coin_span_a + coin_span_b + coin_span_c
+                - coin_span_lo - coin_span_hi;
+            side.alpha0_coin[c] = clamp(
+                2.0f / (coin_span_lo + 1.0f), 0.0f, 1.0f
+            );
+            side.alpha1_coin[c] = clamp(
+                2.0f / (coin_span_mid + 1.0f), 0.0f, 1.0f
+            );
+            side.alpha2_coin[c] = clamp(
+                2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f
+            );
+            float coin_span_1h = coin_override_or(
+                coin_overrides, c, 8, config.span_1h
+            );
+            float coin_span_1m = coin_override_or(
+                coin_overrides, c, 9, config.span_1m
+            );
+            side.alpha_1h_coin[c] = coin_span_1h > 0.0f
+                ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
+            side.alpha_1m_coin[c] = coin_span_1m > 0.0f
+                ? clamp(2.0f / (coin_span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
+        } else {
+            side.alpha0_coin[c] = config.alpha0;
+            side.alpha1_coin[c] = config.alpha1;
+            side.alpha2_coin[c] = config.alpha2;
+            side.alpha_1h_coin[c] = config.alpha_1h;
+            side.alpha_1m_coin[c] = config.alpha_1m;
+        }
+    }
+}
+
 inline void passivbot_ema_anchor_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -185,69 +397,42 @@ inline void passivbot_ema_anchor_multicoin_impl(
     }
 
     const int po = int(b) * PARAM_COLS;
-    const float base_qty_pct = params[po + 0];
-    const float span_a = params[po + 1];
-    const float span_b = params[po + 2];
-    const float span_c = sqrt(fmax(span_a * span_b, 1.0f));
-    const float span_lo = fmin(span_a, fmin(span_b, span_c));
-    const float span_hi = fmax(span_a, fmax(span_b, span_c));
-    const float span_mid = span_a + span_b + span_c - span_lo - span_hi;
-    const float alpha0 = clamp(2.0f / (span_lo + 1.0f), 0.0f, 1.0f);
-    const float alpha1 = clamp(2.0f / (span_mid + 1.0f), 0.0f, 1.0f);
-    const float alpha2 = clamp(2.0f / (span_hi + 1.0f), 0.0f, 1.0f);
-    const float ddf = params[po + 3];
-    const float offset = params[po + 4];
-    const float psize_weight = params[po + 5];
-    const float weight_1h = params[po + 6];
-    const float weight_1m = params[po + 7];
-    const float span_1h = params[po + 8];
-    const float span_1m = params[po + 9];
-    const float alpha_1h = span_1h > 0.0f
-        ? 2.0f / (fmax(span_1h, 1.0f) + 1.0f) : 0.0f;
-    const float alpha_1m = span_1m > 0.0f
-        ? clamp(2.0f / (span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
-    const float cooldown_min = ceil(params[po + 10]);
-    const float twel = params[po + 11];
-    const float forager_volume_span = params[po + 12];
-    const float forager_volatility_span = params[po + 13];
-    const float volume_drop = clamp(params[po + 14], 0.0f, 1.0f);
-    float w_volume = params[po + 15];
-    float w_ready = params[po + 16];
-    float w_volatility = params[po + 17];
-    const int n_positions = max(1, int(rint(params[po + 18])));
-    const float allowance_pct = params[po + 19];
-    const bool legacy_raw_allowance = params[po + 20] > 0.5f;
-    const bool twel_entry_gate_enabled = params[po + 21] > 0.5f;
-    const float twel_threshold = params[po + 22];
-    const bool twel_enforcer_enabled = params[po + 23] > 0.5f;
-    const bool twel_enforcer_reduce_portfolio = params[po + 24] > 0.5f;
-    const bool unstuck_enabled = params[po + 25] > 0.5f;
-    const bool unstuck_ema_gating_enabled = params[po + 26] > 0.5f;
-    const float unstuck_close_pct = params[po + 27];
-    const float unstuck_ema_dist = params[po + 28];
-    const float unstuck_loss_allowance_pct = params[po + 29];
-    const float unstuck_threshold = params[po + 30];
+    const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po);
+    const float base_qty_pct = config.base_qty_pct;
+    const float ddf = config.ddf;
+    const float offset = config.offset;
+    const float psize_weight = config.psize_weight;
+    const float weight_1h = config.weight_1h;
+    const float weight_1m = config.weight_1m;
+    const float cooldown_min = config.cooldown_min;
+    const float twel = config.twel;
+    const float volume_drop = config.volume_drop;
+    const float w_volume = config.w_volume;
+    const float w_ready = config.w_ready;
+    const float w_volatility = config.w_volatility;
+    const int n_positions = config.n_positions;
+    const float allowance_pct = config.allowance_pct;
+    const bool legacy_raw_allowance = config.legacy_raw_allowance;
+    const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
+    const float twel_threshold = config.twel_threshold;
+    const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
+    const bool twel_enforcer_reduce_portfolio = config.twel_enforcer_reduce_portfolio;
+    const bool unstuck_enabled = config.unstuck_enabled;
+    const bool unstuck_ema_gating_enabled = config.unstuck_ema_gating_enabled;
+    const float unstuck_close_pct = config.unstuck_close_pct;
+    const float unstuck_ema_dist = config.unstuck_ema_dist;
+    const float unstuck_loss_allowance_pct = config.unstuck_loss_allowance_pct;
+    const float unstuck_threshold = config.unstuck_threshold;
+    const float alpha_forager_volume = config.alpha_forager_volume;
+    const float alpha_forager_volatility = config.alpha_forager_volatility;
     EmaMulticoinSideState side;
+    init_ema_multicoin_side_state(
+        side, config, bars, coin_settings, coin_overrides, C
+    );
     thread HslState& hsl = side.hsl;
-    hsl = load_hsl(params, po, 31);
-    const bool coin_hsl_mode = hsl.signal_mode == HSL_SIGNAL_COIN;
+    const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
     thread ulong& coin_hsl_entry_blocked_mask = side.coin_hsl_entry_blocked_mask;
-    coin_hsl_entry_blocked_mask = 0ul;
-    const float weight_sum = w_volume + w_ready + w_volatility;
-    if (weight_sum > 0.0f) {
-        w_volume /= weight_sum;
-        w_ready /= weight_sum;
-        w_volatility /= weight_sum;
-    } else {
-        w_volume = 0.0f;
-        w_ready = 1.0f;
-        w_volatility = 0.0f;
-    }
-    const float alpha_forager_volume = forager_volume_span > 0.0f
-        ? clamp(2.0f / (forager_volume_span + 1.0f), 0.0f, 1.0f) : 0.0f;
-    const float alpha_forager_volatility = forager_volatility_span > 0.0f
-        ? clamp(2.0f / (forager_volatility_span + 1.0f), 0.0f, 1.0f) : 0.0f;
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -298,82 +483,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float* alpha_1h_coin = side.alpha_1h_coin;
     thread float* alpha_1m_coin = side.alpha_1m_coin;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
-
-    for (int c = 0; c < MAX_COINS; ++c) {
-        float seed_close = c < C ? coin_settings[c * COIN_COLS + 9] : 0.0f;
-        float seed_volume = c < C ? coin_settings[c * COIN_COLS + 10] : 0.0f;
-        ema0[c] = seed_close;
-        ema1[c] = seed_close;
-        ema2[c] = seed_close;
-        volatility_1m[c] = 0.0f;
-        volatility_1h[c] = 0.0f;
-        forager_volume[c] = seed_volume;
-        forager_volatility[c] = 0.0f;
-        hour_high[c] = -INFINITY;
-        hour_low[c] = INFINITY;
-        if (c < C && int(coin_settings[c * COIN_COLS + 6]) == 0) {
-            hour_high[c] = bars[c * 4 + 0];
-            hour_low[c] = bars[c * 4 + 1];
-        }
-        psize[c] = 0.0f;
-        pprice[c] = 0.0f;
-        last_increase_k[c] = -1.0e20f;
-        entry_qty[c] = 0.0f;
-        close_qty[c] = 0.0f;
-        secondary_close_qty[c] = 0.0f;
-        twel_close_qty[c] = 0.0f;
-        unstuck_close_qty[c] = 0.0f;
-        position_open_k[c] = -1.0f;
-        position_last_fill_k[c] = -1.0f;
-        score[c] = -INFINITY;
-        contribution[c] = 0.0f;
-        minimum_entry[c] = 0.0f;
-        entry_tick[c] = 0;
-        close_tick[c] = 0;
-        secondary_close_tick[c] = 0;
-        twel_close_tick[c] = 0;
-        unstuck_close_tick[c] = 0;
-        close_is_unstuck_reducer[c] = false;
-        close_is_hsl_panic[c] = false;
-        coin_realized_pnl[c] = 0.0f;
-        coin_hsl[c] = load_hsl(params, po, 31);
-        if (coin_hsl_mode && c < C) {
-            apply_coin_hsl_overrides(
-                coin_hsl[c], coin_overrides, c,
-                OVERRIDE_COLS, HSL_OVERRIDE_START
-            );
-        } else {
-            coin_hsl[c].enabled = false;
-        }
-        selected[c] = false;
-        incumbent[c] = false;
-        survivor[c] = false;
-        entry_candidate[c] = false;
-        if (c < C) {
-            float coin_span_a = coin_override_or(coin_overrides, c, 1, span_a);
-            float coin_span_b = coin_override_or(coin_overrides, c, 2, span_b);
-            float coin_span_c = sqrt(fmax(coin_span_a * coin_span_b, 1.0f));
-            float coin_span_lo = fmin(coin_span_a, fmin(coin_span_b, coin_span_c));
-            float coin_span_hi = fmax(coin_span_a, fmax(coin_span_b, coin_span_c));
-            float coin_span_mid = coin_span_a + coin_span_b + coin_span_c
-                - coin_span_lo - coin_span_hi;
-            alpha0_coin[c] = clamp(2.0f / (coin_span_lo + 1.0f), 0.0f, 1.0f);
-            alpha1_coin[c] = clamp(2.0f / (coin_span_mid + 1.0f), 0.0f, 1.0f);
-            alpha2_coin[c] = clamp(2.0f / (coin_span_hi + 1.0f), 0.0f, 1.0f);
-            float coin_span_1h = coin_override_or(coin_overrides, c, 8, span_1h);
-            float coin_span_1m = coin_override_or(coin_overrides, c, 9, span_1m);
-            alpha_1h_coin[c] = coin_span_1h > 0.0f
-                ? 2.0f / (fmax(coin_span_1h, 1.0f) + 1.0f) : 0.0f;
-            alpha_1m_coin[c] = coin_span_1m > 0.0f
-                ? clamp(2.0f / (coin_span_1m + 1.0f), 0.0f, 1.0f) : 0.0f;
-        } else {
-            alpha0_coin[c] = alpha0;
-            alpha1_coin[c] = alpha1;
-            alpha2_coin[c] = alpha2;
-            alpha_1h_coin[c] = alpha_1h;
-            alpha_1m_coin[c] = alpha_1m;
-        }
-    }
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
