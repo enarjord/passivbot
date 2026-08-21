@@ -306,6 +306,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
+        "held_sum_ms": torch.tensor([48 * 3_600_000.0], dtype=torch.float64),
+        "held_count": torch.tensor([2.0], dtype=torch.float64),
         "position_unchanged_max_ms": torch.tensor(
             [18 * 3_600_000.0], dtype=torch.float64
         ),
@@ -330,8 +332,11 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
     )
     requested = {
+        "position_held_days_mean",
         "position_held_days_max",
+        "position_held_hours_mean",
         "position_held_hours_max",
+        "positions_held_per_day",
         "position_unchanged_days_max",
         "position_unchanged_hours_max",
         "strategy_eq_recovery_days_max",
@@ -356,8 +361,11 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     )
 
     assert set(metrics) == requested
+    assert metrics["position_held_days_mean"].item() == pytest.approx(1.0)
     assert metrics["position_held_days_max"].item() == pytest.approx(1.5)
+    assert metrics["position_held_hours_mean"].item() == pytest.approx(24.0)
     assert metrics["position_held_hours_max"].item() == pytest.approx(36.0)
+    assert metrics["positions_held_per_day"].item() == pytest.approx(4.0 / 3.0)
     assert metrics["position_unchanged_hours_max"].item() == pytest.approx(18.0)
     assert metrics["position_unchanged_days_max"].item() == pytest.approx(0.75)
     assert metrics["strategy_eq_recovery_days_max"].item() == pytest.approx(1.25)

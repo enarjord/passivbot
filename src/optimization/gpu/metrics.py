@@ -122,8 +122,11 @@ SUPPORTED_METRICS = (
     "mdg_pnl_w",
     "omega_ratio_strategy_eq",
     "omega_ratio_strategy_eq_w",
+    "position_held_days_mean",
     "position_held_days_max",
+    "position_held_hours_mean",
     "position_held_hours_max",
+    "positions_held_per_day",
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
@@ -814,6 +817,31 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     return adg, mdg, sharpe, sortino, count
 
 
+def _analysis_duration_days(out: dict, run) -> torch.Tensor:
+    """Recover Rust's timestamp-span denominator from Metal candle indices."""
+
+    first_eq_ts = out["first_eq_ts"].to(torch.float64)
+    last_eq_ts = out["last_eq_ts"].to(torch.float64)
+    has_span = (
+        torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts > first_eq_ts)
+    )
+    interval_ms = max(float(run.interval_ms), 1.0)
+    # Metal exports integer candle indices multiplied by interval_ms through a
+    # float32 scalar buffer. Recover the indices before subtracting so a span
+    # on a whole-day boundary cannot round slightly upward and add a spurious
+    # active-day denominator bucket.
+    first_eq_step = torch.round(first_eq_ts / interval_ms)
+    last_eq_step = torch.round(last_eq_ts / interval_ms)
+    return torch.where(
+        has_span,
+        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms
+        / 86_400_000.0,
+        torch.zeros_like(first_eq_ts),
+    )
+
+
 def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     """Match Rust's full-run fill count and timestamp-span rate contract."""
 
@@ -834,26 +862,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         coin_fill_counts.max(dim=1).values / fill_count.clamp(min=1.0),
         torch.zeros_like(fill_count),
     )
-    first_eq_ts = out["first_eq_ts"].to(torch.float64)
-    last_eq_ts = out["last_eq_ts"].to(torch.float64)
-    has_span = (
-        torch.isfinite(first_eq_ts)
-        & torch.isfinite(last_eq_ts)
-        & (last_eq_ts > first_eq_ts)
-    )
-    interval_ms = max(float(run.interval_ms), 1.0)
-    # Metal exports integer candle indices multiplied by interval_ms through a
-    # float32 scalar buffer. Recover the indices before subtracting so a span
-    # on a whole-day boundary cannot round slightly upward and add a spurious
-    # active-day denominator bucket.
-    first_eq_step = torch.round(first_eq_ts / interval_ms)
-    last_eq_step = torch.round(last_eq_ts / interval_ms)
-    duration_days = torch.where(
-        has_span,
-        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms
-        / 86_400_000.0,
-        torch.zeros_like(first_eq_ts),
-    )
+    duration_days = _analysis_duration_days(out, run)
     fills_per_day = torch.where(
         duration_days > 0.0,
         fill_count / duration_days.clamp(min=1.0e-9),
@@ -1214,6 +1223,27 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     else:
         pnl_recovery_max_ms = torch.zeros_like(recovery_max_days)
     held_days = out["held_max_ms"] / 86_400_000.0
+    position_duration_metrics = {
+        "position_held_days_mean",
+        "position_held_hours_mean",
+        "positions_held_per_day",
+    }
+    held_hours_mean = positions_held_per_day = zeros
+    if requested & position_duration_metrics:
+        held_count = out["held_count"].to(torch.float64)
+        held_hours_mean = torch.where(
+            held_count > 0.0,
+            out["held_sum_ms"].to(torch.float64)
+            / held_count.clamp(min=1.0)
+            / 3_600_000.0,
+            torch.zeros_like(held_count),
+        )
+        duration_days = _analysis_duration_days(out, run)
+        positions_held_per_day = torch.where(
+            duration_days > 0.0,
+            held_count / duration_days.clamp(min=1.0e-9),
+            torch.zeros_like(held_count),
+        )
 
     boundary_lead = torch.where(
         torch.isfinite(out["first_fill_ts"]),
@@ -1281,8 +1311,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "mdg_strategy_eq": mdg,
         "mdg_pnl": mdg_pnl,
         "omega_ratio_strategy_eq": omega,
+        "position_held_days_mean": held_hours_mean / 24.0,
         "position_held_days_max": held_days,
+        "position_held_hours_mean": held_hours_mean,
         "position_held_hours_max": held_days * 24.0,
+        "positions_held_per_day": positions_held_per_day,
         "sharpe_ratio_strategy_eq": sharpe,
         "sharpe_ratio_pnl": sharpe_pnl,
         "sortino_ratio_strategy_eq": sortino,

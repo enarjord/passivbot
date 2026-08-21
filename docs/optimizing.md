@@ -178,12 +178,13 @@ The supported slice is intentionally narrow:
   unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
   aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate
   permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
-- `position_unchanged_hours_max` and `position_unchanged_days_max` may be used for scoring and
-  limits in single-coin and one-sided multi-coin runs. Metal tracks the latest fill independently
-  for each coin and position side, updates the maximum between-fill interval, and includes the open
-  tail through the final analyzed sample. Dual-side multi-coin runs fail closed for both unchanged-
-  and held-duration maxima because independent directional summaries cannot truncate a pre-reduced
-  maximum at shared portfolio liquidation; exact Rust validation remains authoritative
+- `position_held_hours_mean`, `position_held_days_mean`, `positions_held_per_day`,
+  `position_unchanged_hours_max`, and `position_unchanged_days_max` may be used for scoring and
+  limits in single-coin and one-sided multi-coin runs. Metal counts each completed position and
+  open tail, sums its holding duration, and tracks the latest fill independently for each coin and
+  position side. Dual-side multi-coin runs fail closed for these metrics and held-duration maxima
+  because independent directional summaries cannot truncate pre-reduced duration aggregates at
+  shared portfolio liquidation; exact Rust validation remains authoritative
 - `total_wallet_exposure_max` and `total_wallet_exposure_mean` may be used for scoring and limits
   in single-coin and one-sided multi-coin runs. Metal samples absolute net long-minus-short wallet
   exposure after every non-liquidating equity update, including flat zero-exposure samples, and
@@ -254,7 +255,8 @@ screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
 `peak_recovery_days_strategy_eq`, `peak_recovery_hours_pnl`, `peak_recovery_days_pnl`,
 `entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
-`position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
+`position_held_days_mean`, `position_held_days_max`, `position_held_hours_mean`,
+`position_held_hours_max`, `positions_held_per_day`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and
 `exposure_ratio_usd`, `exposure_mean_ratio_usd`, and `volume_pct_per_day_avg`: the independent
 directional

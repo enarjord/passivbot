@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added mean position-holding time and positions-held-per-day scoring and limits to Apple MPS
+  optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs.
+  Metal records each completed position duration plus every open tail with constant-size sum and
+  count accumulators; exact Rust validation remains authoritative.
+
 - Added daily account-equity choppiness, jerkiness, and exponential-fit-error scoring and limits
   to Apple MPS optimization. The proxy applies the exact Rust formulas to its existing active daily
   closing-equity surface for supported EMA Anchor and Trailing Martingale topologies.
