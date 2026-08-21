@@ -58,9 +58,12 @@ SUPPORTED_METRICS = (
     "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_strategy_eq",
+    "equity_choppiness_usd",
+    "equity_jerkiness_usd",
     "expected_shortfall_1pct_strategy_eq",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
+    "exponential_fit_error_usd",
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
     "fills_analysis_duration_days",
@@ -338,6 +341,108 @@ def _smoothed_gain_adg(day_eq, active):
 
 def _smoothed_adg(day_eq, active):
     return _smoothed_gain_adg(day_eq, active)[1]
+
+
+def _equity_shape_metrics(day_eq, active):
+    """Match Rust's shape metrics over active daily closing equity samples."""
+
+    batch_size, day_count = day_eq.shape
+    zeros = torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
+    if day_count == 0:
+        return {
+            "equity_choppiness_usd": zeros,
+            "equity_jerkiness_usd": zeros,
+            "exponential_fit_error_usd": torch.full_like(zeros, float("inf")),
+        }
+
+    indices = (
+        torch.arange(day_count, device=day_eq.device)
+        .unsqueeze(0)
+        .expand(batch_size, day_count)
+    )
+    counts = active.sum(dim=1)
+    # Rust builds a compact Vec of touched UTC-day closes. Preserve that order
+    # when an entirely invalid day leaves a hole in the fixed proxy surface.
+    compact_order = torch.argsort(
+        torch.where(active, indices, indices + day_count), dim=1
+    )
+    day_eq = day_eq.gather(1, compact_order)
+    active = indices < counts.unsqueeze(1)
+    first = day_eq[:, 0]
+    last_index = (counts - 1).clamp(min=0)
+    last = day_eq.gather(1, last_index.unsqueeze(1)).squeeze(1)
+
+    adjacent = active[:, :-1] & active[:, 1:]
+    variation = torch.where(
+        adjacent,
+        (day_eq[:, 1:] - day_eq[:, :-1]).abs(),
+        torch.zeros_like(day_eq[:, 1:]),
+    ).sum(dim=1)
+    net_gain = (last - first).abs()
+    epsilon = torch.finfo(day_eq.dtype).eps
+    choppiness = torch.where(
+        counts < 2,
+        zeros,
+        torch.where(
+            net_gain < epsilon,
+            torch.full_like(zeros, float("inf")),
+            variation / net_gain.clamp(min=epsilon),
+        ),
+    )
+
+    if day_count < 3:
+        jerkiness = zeros
+    else:
+        triples = active[:, :-2] & active[:, 1:-1] & active[:, 2:]
+        numerator = (
+            day_eq[:, 2:] - 2.0 * day_eq[:, 1:-1] + day_eq[:, :-2]
+        ).abs()
+        denominator = (
+            day_eq[:, :-2] + day_eq[:, 1:-1] + day_eq[:, 2:]
+        ) / 3.0
+        terms = torch.where(
+            triples & (denominator.abs() >= epsilon),
+            numerator / denominator.abs().clamp(min=epsilon),
+            torch.zeros_like(numerator),
+        )
+        jerkiness = terms.sum(dim=1) / (counts - 2).clamp(min=1).to(day_eq.dtype)
+        jerkiness = torch.where(counts >= 3, jerkiness, zeros)
+
+    ordinal = active.cumsum(dim=1).to(day_eq.dtype) - 1.0
+    count_float = counts.to(day_eq.dtype)
+    safe_equity = torch.where(
+        active, day_eq.clamp(min=epsilon), torch.ones_like(day_eq)
+    )
+    log_equity = torch.where(active, safe_equity.log(), torch.zeros_like(day_eq))
+    x = torch.where(active, ordinal, torch.zeros_like(ordinal))
+    sum_x = x.sum(dim=1)
+    sum_y = log_equity.sum(dim=1)
+    sum_xx = (x * x).sum(dim=1)
+    sum_xy = (x * log_equity).sum(dim=1)
+    fit_denominator = count_float * sum_xx - sum_x * sum_x
+    safe_fit_denominator = torch.where(
+        fit_denominator != 0.0, fit_denominator, torch.ones_like(fit_denominator)
+    )
+    slope = (count_float * sum_xy - sum_x * sum_y) / safe_fit_denominator
+    intercept = (sum_y - slope * sum_x) / count_float.clamp(min=1.0)
+    residual = slope.unsqueeze(1) * x + intercept.unsqueeze(1) - log_equity
+    fit_error = torch.where(
+        active, residual * residual, torch.zeros_like(residual)
+    ).sum(dim=1) / count_float.clamp(min=1.0)
+    invalid_fit = (
+        (counts < 2)
+        | (fit_denominator == 0.0)
+        | (active & (day_eq <= 0.0)).any(dim=1)
+    )
+    fit_error = torch.where(
+        invalid_fit, torch.full_like(fit_error, float("inf")), fit_error
+    )
+
+    return {
+        "equity_choppiness_usd": choppiness,
+        "equity_jerkiness_usd": jerkiness,
+        "exponential_fit_error_usd": fit_error,
+    }
 
 
 def _sharpe_sortino(changes, mask, adg):
@@ -1032,6 +1137,19 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         run.interval_ms,
         requested_sources,
     )
+    shape_metric_names = {
+        "equity_choppiness_usd",
+        "equity_jerkiness_usd",
+        "exponential_fit_error_usd",
+    }
+    equity_shape_metrics = {}
+    if requested & shape_metric_names:
+        equity_shape_metrics = _equity_shape_metrics(day_end_eq, active)
+        has_fills = out["fill_count"].to(torch.float64) > 0.0
+        for name, value in equity_shape_metrics.items():
+            equity_shape_metrics[name] = torch.where(
+                has_fills, value, torch.ones_like(value)
+            )
 
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
         dim=1
@@ -1211,6 +1329,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
     objectives.update(weighted_pnl_metrics)
+    objectives.update(equity_shape_metrics)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue

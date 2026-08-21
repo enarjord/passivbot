@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added daily account-equity choppiness, jerkiness, and exponential-fit-error scoring and limits
+  to Apple MPS optimization. The proxy applies the exact Rust formulas to its existing active daily
+  closing-equity surface for supported EMA Anchor and Trailing Martingale topologies.
+
 - Added peak-recovery day/hour scoring for strategy equity and realized PnL to Apple MPS
   optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs.
   Metal tracks realized-PnL recovery intervals per candidate while exact Rust validation remains

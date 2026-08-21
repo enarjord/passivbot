@@ -203,6 +203,9 @@ The supported slice is intentionally narrow:
   supported for both long and short sides. The proxy divides the matching validated equity metric
   by each candidate's effective side `total_wallet_exposure_limit`, after applying any exact-last
   suite override, and returns zero for a zero-exposure side as the CPU analysis does
+- canonical USD `equity_choppiness`, `equity_jerkiness`, and `exponential_fit_error` scoring and
+  limits use the proxy's active daily closing-equity samples and the exact Rust formulas. Candidates
+  without fills retain Rust's default value of `1.0` for all three metrics
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
@@ -325,6 +328,8 @@ position-unchanged duration, initial-entry balance percentage for each side, vol
 total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
 variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
 the corresponding canonical USD account-equity names share this strategy-equity surface.
+Daily USD equity choppiness, jerkiness, and exponential fit error are reduced from that same active
+daily closing-equity surface with Rust's no-fill defaults and short-series behavior.
 Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` are also
 supported for single-coin and one-sided multi-coin runs. Metal groups realized balance changes by
 UTC fill day and divides by that day's last fill balance, matching exact Rust's unweighted daily
