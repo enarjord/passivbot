@@ -405,3 +405,95 @@ inline void write_one_side_hsl_outputs(
     scalars[scalar_offset + 23] = h.panic_loss_drawdown_max;
     scalars[scalar_offset + 24] = h.panic_loss_drawdown_count;
 }
+
+inline void write_one_side_coin_hsl_outputs(
+    thread HslState* controllers,
+    int controller_count,
+    bool short_side,
+    float tier_samples_total,
+    float tier_samples_yellow,
+    float tier_samples_orange,
+    float tier_samples_red,
+    float last_equity_k,
+    device float* scalars,
+    int scalar_offset
+) {
+    float enabled = 0.0f;
+    float triggers = 0.0f;
+    float restarts = 0.0f;
+    float duration_sum = 0.0f;
+    float duration_max = 0.0f;
+    float duration_count = 0.0f;
+    float trigger_drawdown_sum = 0.0f;
+    float trigger_drawdown_count = 0.0f;
+    float flatten_time_sum = 0.0f;
+    float flatten_time_count = 0.0f;
+    float restart_retrigger_count = 0.0f;
+    float halt_to_restart_equity_loss = 0.0f;
+    float panic_close_loss_sum = 0.0f;
+    float panic_close_loss_max = 0.0f;
+    float panic_loss_drawdown_min = 0.0f;
+    float panic_loss_drawdown_sum = 0.0f;
+    float panic_loss_drawdown_max = 0.0f;
+    float panic_loss_drawdown_count = 0.0f;
+    for (int c = 0; c < controller_count; ++c) {
+        thread HslState& h = controllers[c];
+        if (!h.enabled) continue;
+        enabled = 1.0f;
+        triggers += h.triggers;
+        restarts += h.restarts;
+        float terminal_count = h.halted
+            && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
+            ? 1.0f : 0.0f;
+        float terminal_duration = terminal_count > 0.0f
+            ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
+        duration_sum += h.halt_duration_sum_steps + terminal_duration;
+        duration_max = fmax(
+            duration_max, fmax(h.halt_duration_max_steps, terminal_duration)
+        );
+        duration_count += h.halt_duration_count + terminal_count;
+        trigger_drawdown_sum += h.trigger_drawdown_sum;
+        trigger_drawdown_count += h.trigger_drawdown_count;
+        flatten_time_sum += h.flatten_time_sum_steps;
+        flatten_time_count += h.flatten_time_count;
+        restart_retrigger_count += h.restart_retrigger_count;
+        halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
+        panic_close_loss_sum += h.panic_close_loss_sum;
+        panic_close_loss_max = fmax(panic_close_loss_max, h.panic_close_loss_max);
+        if (h.panic_loss_drawdown_count > 0.0f) {
+            panic_loss_drawdown_min = panic_loss_drawdown_count > 0.0f
+                ? fmin(panic_loss_drawdown_min, h.panic_loss_drawdown_min)
+                : h.panic_loss_drawdown_min;
+        }
+        panic_loss_drawdown_sum += h.panic_loss_drawdown_sum;
+        panic_loss_drawdown_max = fmax(
+            panic_loss_drawdown_max, h.panic_loss_drawdown_max
+        );
+        panic_loss_drawdown_count += h.panic_loss_drawdown_count;
+    }
+    scalars[scalar_offset + 0] = !short_side ? enabled : 0.0f;
+    scalars[scalar_offset + 1] = short_side ? enabled : 0.0f;
+    scalars[scalar_offset + 2] = !short_side ? triggers : 0.0f;
+    scalars[scalar_offset + 3] = short_side ? triggers : 0.0f;
+    scalars[scalar_offset + 4] = !short_side ? restarts : 0.0f;
+    scalars[scalar_offset + 5] = short_side ? restarts : 0.0f;
+    scalars[scalar_offset + 6] = tier_samples_total;
+    scalars[scalar_offset + 7] = tier_samples_yellow;
+    scalars[scalar_offset + 8] = tier_samples_orange;
+    scalars[scalar_offset + 9] = tier_samples_red;
+    scalars[scalar_offset + 10] = duration_sum;
+    scalars[scalar_offset + 11] = duration_max;
+    scalars[scalar_offset + 12] = duration_count;
+    scalars[scalar_offset + 13] = trigger_drawdown_sum;
+    scalars[scalar_offset + 14] = trigger_drawdown_count;
+    scalars[scalar_offset + 15] = flatten_time_sum;
+    scalars[scalar_offset + 16] = flatten_time_count;
+    scalars[scalar_offset + 17] = restart_retrigger_count;
+    scalars[scalar_offset + 18] = halt_to_restart_equity_loss;
+    scalars[scalar_offset + 19] = panic_close_loss_sum;
+    scalars[scalar_offset + 20] = panic_close_loss_max;
+    scalars[scalar_offset + 21] = panic_loss_drawdown_min;
+    scalars[scalar_offset + 22] = panic_loss_drawdown_sum;
+    scalars[scalar_offset + 23] = panic_loss_drawdown_max;
+    scalars[scalar_offset + 24] = panic_loss_drawdown_count;
+}

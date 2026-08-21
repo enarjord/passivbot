@@ -373,6 +373,84 @@ def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("shock_coin", [0, 1, "both"])
+def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
+    strategy_kind, side, shock_coin
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    shock = 0.7 if side == "long" else 1.3
+    if shock_coin == "both":
+        closes[20:] *= shock
+    else:
+        closes[20:, shock_coin] *= shock
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        closes=closes,
+        collect_coin_fill_counts=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        # The kernel must derive the effective value of two; this packed
+        # single-coin default is deliberately not pre-adjusted by Python.
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    packed_slot_variant = list(row)
+    packed_slot_variant[keys.index("hsl_slot_count")] = 64.0
+    output = runner.run(
+        np.asarray([row, packed_slot_variant], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    assert output[f"hsl_{side}_enabled"].all().item()
+    expected_episode_count = 2.0 if shock_coin == "both" else 1.0
+    assert (
+        output[f"hsl_triggers_{side}"] == expected_episode_count
+    ).all().item()
+    assert (
+        output["hsl_trigger_drawdown_count"] == expected_episode_count
+    ).all().item()
+    assert (
+        output["hsl_panic_loss_drawdown_count"] == expected_episode_count
+    ).all().item()
+    assert (output["hsl_panic_close_loss_sum"] > 0.0).all().item()
+    if shock_coin == "both":
+        assert (output["coin_fill_counts"] >= 2.0).all().item()
+        expected_open_positions = 0.0
+    else:
+        assert (output["coin_fill_counts"][:, shock_coin] >= 2.0).all().item()
+        expected_open_positions = (
+            1.0 if strategy_kind == "trailing_martingale" else 0.0
+        )
+    assert (output["open_positions"] == expected_open_positions).all().item()
+    assert output["hsl_trigger_drawdown_sum"][0].item() == pytest.approx(
+        output["hsl_trigger_drawdown_sum"][1].item()
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
     strategy_kind, side
 ):

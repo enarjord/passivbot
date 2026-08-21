@@ -523,18 +523,11 @@ def test_single_coin_hsl_rejects_unknown_signal_mode():
         validate_single_coin_hsl_signal_topology("portfolio", enabled_side_count=1)
 
 
-@pytest.mark.parametrize("signal_mode", ["unified", "pside"])
-def test_one_sided_multicoin_hsl_accepts_account_modes(signal_mode):
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_one_sided_multicoin_hsl_accepts_all_signal_modes(signal_mode):
     validate_hsl_signal_topology(
         signal_mode, coin_count=3, enabled_side_count=1
     )
-
-
-def test_one_sided_multicoin_hsl_rejects_coin_mode():
-    with pytest.raises(ValueError, match="per-coin HSL remains fail closed"):
-        validate_hsl_signal_topology(
-            "coin", coin_count=3, enabled_side_count=1
-        )
 
 
 def test_dual_side_multicoin_hsl_remains_fail_closed():
