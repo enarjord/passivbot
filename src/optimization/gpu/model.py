@@ -61,6 +61,7 @@ HSL_PARAM_KEYS = (
     "hsl_tier_ratio_orange",
     "hsl_orange_graceful_stop",
     "hsl_signal_coin",
+    "hsl_slot_count",
 )
 
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (

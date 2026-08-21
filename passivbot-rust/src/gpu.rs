@@ -43,10 +43,13 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
-        assert!(source.contains("constant int SIDE_PARAMS = 33"));
+        assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
+        assert!(source.contains("h.slot_count"));
+        assert!(source.contains("h.no_restart_peak_strategy_equity"));
+        assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
         assert!(source.contains("total_exposure_reducer_qty"));
         assert!(source.contains("unstuck_reducer_variant"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
@@ -117,10 +120,13 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 50"));
+        assert!(source.contains("constant int SIDE_PARAMS = 51"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
+        assert!(source.contains("h.slot_count"));
+        assert!(source.contains("h.no_restart_peak_strategy_equity"));
+        assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
         assert!(source.contains("unstuck_reducer_qty"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
         assert!(source.contains("unstuck_loss_allowance_pct"));

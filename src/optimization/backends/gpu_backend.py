@@ -1856,6 +1856,7 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
         _gpu_pnls_max_lookback_days_checkpoint_value(config)
     )
     contract["unstuck"] = _gpu_unstuck_checkpoint_contract(config)
+    contract["hsl"] = _gpu_hsl_checkpoint_contract(config)
     if suite_inputs is not None:
         prepared_scenarios = []
         for item in suite_inputs:
@@ -1908,6 +1909,7 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                         )
                     ),
                     "unstuck": _gpu_unstuck_checkpoint_contract(item["config"]),
+                    "hsl": _gpu_hsl_checkpoint_contract(item["config"]),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -1938,6 +1940,7 @@ def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
             getattr(proxy, "coin_override_contract", None)
         ),
         "unstuck": _gpu_unstuck_checkpoint_contract(config),
+        "hsl": _gpu_hsl_checkpoint_contract(config),
     }
 
 
@@ -1965,6 +1968,33 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
             "threshold": float(unstuck.get("threshold", 0.0)),
         }
     return contract
+
+
+def _gpu_hsl_checkpoint_contract(config: dict) -> dict:
+    return {
+        "signal_mode": str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        )
+        .strip()
+        .lower(),
+        "dynamic_wel_by_tradability": bool(
+            config.get("backtest", {}).get("dynamic_wel_by_tradability", True)
+        ),
+        "sides": {
+            side: {
+                "config": deepcopy(
+                    config.get("bot", {}).get(side, {}).get("hsl", {})
+                ),
+                "n_positions": deepcopy(
+                    config.get("bot", {})
+                    .get(side, {})
+                    .get("risk", {})
+                    .get("n_positions")
+                ),
+            }
+            for side in ("long", "short")
+        },
+    }
 
 
 def _gpu_unstuck_search_sides(

@@ -137,8 +137,10 @@ The supported slice is intentionally narrow:
 - one-sided single-coin EMA Anchor and Trailing Martingale runs support HSL with `coin`, `pside`,
   or `unified` signals and resting-limit panic closes. The Metal proxy models tunable RED
   threshold, drawdown-EMA span, and cooldown, plus fixed yellow/orange ratios, orange entry
-  suppression, RED latching, panic flattening, two-sample flat confirmation, cooldown restart, and
-  terminal no-restart policy. Its candidate-local realized-PnL and strategy-equity peaks use an
+  suppression, RED latching, panic flattening, two-sample flat confirmation,
+  positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
+  effective coin-slot scaling, and terminal no-restart policy. Its candidate-local realized-PnL
+  and strategy-equity peaks use an
   all-history envelope when exact Rust is configured with a finite rolling PnL lookback; exact
   validation and drift gates remain authoritative. Market panic closes, dual-side and multi-coin
   HSL, per-coin HSL overrides, and HSL-specific scoring/limit metrics remain fail closed for now.

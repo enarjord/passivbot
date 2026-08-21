@@ -130,7 +130,9 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
     }
 
 
-def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
+def _hsl_params(
+    bot: dict, *, signal_mode: str, dynamic_wel_by_tradability: bool = True
+) -> dict[str, float]:
     restart_policy = str(
         bot.get("hsl_restart_after_red_policy", "threshold")
     ).strip().lower()
@@ -158,6 +160,7 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
             f"got {orange_mode!r}"
         )
+    configured_slots = max(1.0, float(bot.get("n_positions", 1.0)))
     return {
         "hsl_enabled": float(bool(bot.get("hsl_enabled", False))),
         "hsl_red_threshold": float(bot.get("hsl_red_threshold", 0.15)),
@@ -177,6 +180,9 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
         ),
         "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_coin": float(signal_mode == "coin"),
+        "hsl_slot_count": (
+            1.0 if bool(dynamic_wel_by_tradability) else configured_slots
+        ),
     }
 
 
@@ -426,6 +432,9 @@ class MpsSingleCoinProxy:
             backtest_params.get("equity_hard_stop_loss", {})
             .get("signal_mode", "unified")
         )
+        dynamic_wel_by_tradability = bool(
+            backtest_params.get("dynamic_wel_by_tradability", True)
+        )
         self.base_params = {}
         for side, bot in (("long", long_bot), ("short", short_bot)):
             if self.enabled[side] and bool(bot.get("hsl_enabled")) and str(
@@ -456,7 +465,13 @@ class MpsSingleCoinProxy:
                     _total_exposure_enforcer_params(risk, side=side)
                 )
                 strategy.update(_unstuck_params(bot))
-                strategy.update(_hsl_params(bot, signal_mode=signal_mode))
+                strategy.update(
+                    _hsl_params(
+                        bot,
+                        signal_mode=signal_mode,
+                        dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+                    )
+                )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(

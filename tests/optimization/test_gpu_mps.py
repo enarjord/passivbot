@@ -94,6 +94,7 @@ _HSL_DISABLED_VALUES = {
     "hsl_tier_ratio_orange": 0.75,
     "hsl_orange_graceful_stop": 0.0,
     "hsl_signal_coin": 0.0,
+    "hsl_slot_count": 1.0,
 }
 
 
@@ -367,7 +368,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 33" in source
+    assert "constant int SIDE_PARAMS = 34" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -1257,23 +1258,36 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         "hsl_tier_ratio_orange": 0.75,
         "hsl_orange_graceful_stop": 0.0,
         "hsl_signal_coin": 1.0,
+        "hsl_slot_count": 1.0,
     }.items():
         hsl[keys.index(key)] = value
     restarting_hsl = list(hsl)
     restarting_hsl[keys.index("hsl_restart_policy")] = 0.0
     restarting_hsl[keys.index("hsl_cooldown_minutes_after_red")] = 2.0
+    zero_cooldown_hsl = list(hsl)
+    zero_cooldown_hsl[keys.index("hsl_restart_policy")] = 0.0
+    unscaled_coin_hsl = list(hsl)
+    unscaled_coin_hsl[keys.index("hsl_red_threshold")] = 0.6
+    scaled_coin_hsl = list(unscaled_coin_hsl)
+    scaled_coin_hsl[keys.index("hsl_slot_count")] = 4.0
     inactive = list(baseline)
     rows = (
         [
             baseline + inactive,
             hsl + inactive,
             restarting_hsl + inactive,
+            zero_cooldown_hsl + inactive,
+            unscaled_coin_hsl + inactive,
+            scaled_coin_hsl + inactive,
         ]
         if side == "long"
         else [
             inactive + baseline,
             inactive + hsl,
             inactive + restarting_hsl,
+            inactive + zero_cooldown_hsl,
+            inactive + unscaled_coin_hsl,
+            inactive + scaled_coin_hsl,
         ]
     )
     output = runner_cls(
@@ -1289,6 +1303,9 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output[size_key][0].item() > 0.0
     assert output[size_key][1].item() == 0.0
     assert output[size_key][2].item() > 0.0
+    assert output[size_key][3].item() == 0.0
+    assert output[size_key][4].item() > 0.0
+    assert output[size_key][5].item() == 0.0
     assert output["day_volume"][1].sum().item() > 1.0
 
 
@@ -5209,7 +5226,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 50" in source
+    assert "constant int SIDE_PARAMS = 51" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source

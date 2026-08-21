@@ -3884,6 +3884,44 @@ def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
     assert effective_contract["pnls_max_lookback_days"] == 12.0
 
 
+def test_gpu_checkpoint_signature_tracks_single_coin_hsl_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    proxy = SimpleNamespace(coin_override_contract=None)
+    original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=original_contract
+    )
+
+    edits = (
+        ("live", "hsl_signal_mode", "unified"),
+        ("backtest", "dynamic_wel_by_tradability", False),
+        ("bot.long.risk", "n_positions", 2),
+        ("bot.long.hsl", "enabled", False),
+        ("bot.long.hsl", "restart_after_red_policy", "never"),
+        ("bot.long.hsl", "no_restart_drawdown_threshold", 0.9),
+        ("bot.long.hsl", "tier_ratio_yellow", 0.4),
+        ("bot.long.hsl", "orange_tier_mode", "graceful_stop"),
+        ("bot.long.hsl", "panic_close_order_type", "market"),
+    )
+    for parent_path, key, value in edits:
+        changed = copy.deepcopy(config)
+        parent = changed
+        for part in parent_path.split("."):
+            parent = parent[part]
+        parent[key] = value
+        changed_contract = _gpu_runtime_checkpoint_contract(changed, proxy)
+        assert changed_contract != original_contract
+        assert (
+            _checkpoint_signature(
+                active, scoring, runtime_contract=changed_contract
+            )
+            != original
+        )
+
+
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -3968,6 +4006,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "max_realized_loss_pct": 1.0,
             "pnls_max_lookback_days": 30.0,
             "unstuck": original["unstuck"],
+            "hsl": original["hsl"],
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -4009,6 +4048,10 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     changed_unstuck = copy.deepcopy(item)
     changed_unstuck["config"]["bot"]["long"]["unstuck"]["enabled"] = True
     assert _gpu_suite_checkpoint_contract(config, [changed_unstuck]) != original
+
+    changed_hsl = copy.deepcopy(item)
+    changed_hsl["config"]["bot"]["long"]["hsl"]["enabled"] = True
+    assert _gpu_suite_checkpoint_contract(config, [changed_hsl]) != original
 
     changed_coins = copy.deepcopy(item)
     changed_coins["coins"] = ["BTC", "SOL"]

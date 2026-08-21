@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 33;
+constant int SIDE_PARAMS = 34;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -134,9 +134,11 @@ struct HslState {
     float orange_ratio;
     bool orange_graceful_stop;
     bool signal_coin;
+    float slot_count;
     bool initialized;
     float drawdown_ema;
     float peak_strategy_pnl;
+    float no_restart_peak_strategy_equity;
     float coin_realized_baseline;
     float coin_realized_peak;
     int tier;
@@ -148,6 +150,8 @@ struct HslState {
     int flat_confirmations;
     float pending_drawdown_raw;
     float pending_drawdown_ema;
+    float pending_strategy_equity;
+    float pending_peak_strategy_equity;
 };
 
 inline HslState load_hsl(constant float* params, int po) {
@@ -162,9 +166,11 @@ inline HslState load_hsl(constant float* params, int po) {
     h.orange_ratio = params[po + 30];
     h.orange_graceful_stop = params[po + 31] > 0.5f;
     h.signal_coin = params[po + 32] > 0.5f;
+    h.slot_count = fmax(round(params[po + 33]), 1.0f);
     h.initialized = false;
     h.drawdown_ema = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
+    h.no_restart_peak_strategy_equity = 0.0f;
     h.coin_realized_baseline = 0.0f;
     h.coin_realized_peak = 0.0f;
     h.tier = 0;
@@ -176,6 +182,8 @@ inline HslState load_hsl(constant float* params, int po) {
     h.flat_confirmations = 0;
     h.pending_drawdown_raw = 0.0f;
     h.pending_drawdown_ema = 0.0f;
+    h.pending_strategy_equity = 0.0f;
+    h.pending_peak_strategy_equity = 0.0f;
     return h;
 }
 
@@ -200,16 +208,20 @@ inline void update_hsl(
     if (!h.enabled || h.halted || !(balance > 0.0f)) return;
     float drawdown_raw;
     float strategy_pnl = realized_pnl + unrealized_pnl;
+    float strategy_equity;
+    float peak_strategy_equity;
     if (h.signal_coin) {
         float coin_realized = realized_pnl - h.coin_realized_baseline;
         h.coin_realized_peak = fmax(h.coin_realized_peak, coin_realized);
-        drawdown_raw = fmax(
+        drawdown_raw = fmin(fmax(
             h.coin_realized_peak - (coin_realized + unrealized_pnl), 0.0f
-        ) / balance;
+        ) / (balance / h.slot_count), 1.0f);
+        strategy_equity = fmax(1.0f - drawdown_raw, 1.0e-12f);
+        peak_strategy_equity = 1.0f;
     } else {
         h.peak_strategy_pnl = fmax(h.peak_strategy_pnl, strategy_pnl);
-        float strategy_equity = starting_balance + strategy_pnl;
-        float peak_strategy_equity = fmax(
+        strategy_equity = starting_balance + strategy_pnl;
+        peak_strategy_equity = fmax(
             starting_balance + h.peak_strategy_pnl, strategy_equity
         );
         if (!(strategy_equity > 0.0f && peak_strategy_equity > 0.0f)) return;
@@ -238,6 +250,8 @@ inline void update_hsl(
             if (h.flat_confirmations == 1) {
                 h.pending_drawdown_raw = drawdown_raw;
                 h.pending_drawdown_ema = h.drawdown_ema;
+                h.pending_strategy_equity = strategy_equity;
+                h.pending_peak_strategy_equity = peak_strategy_equity;
             }
             if (h.flat_confirmations >= 2) {
                 h.halted = true;
@@ -245,13 +259,27 @@ inline void update_hsl(
                     h.coin_realized_baseline = realized_pnl;
                     h.coin_realized_peak = 0.0f;
                 }
+                h.no_restart_peak_strategy_equity = fmax(
+                    h.no_restart_peak_strategy_equity,
+                    fmax(
+                        h.pending_peak_strategy_equity,
+                        h.pending_strategy_equity
+                    )
+                );
+                float no_restart_drawdown_raw = h.signal_coin
+                    ? h.pending_drawdown_raw
+                    : fmax(
+                        1.0f - h.pending_strategy_equity
+                            / fmax(h.no_restart_peak_strategy_equity, 1.0e-12f),
+                        0.0f
+                    );
                 bool terminal = h.restart_policy == 2
                     || (h.restart_policy == 1
-                        && fmax(h.pending_drawdown_raw, h.pending_drawdown_ema)
+                        && fmax(no_restart_drawdown_raw, h.pending_drawdown_ema)
                             >= h.no_restart_threshold);
                 h.no_restart_latched = terminal;
-                h.cooldown_until_k = terminal
-                    ? -1.0f : kf + round(h.cooldown_minutes);
+                h.cooldown_until_k = terminal || h.cooldown_minutes <= 0.0f
+                    ? -1.0f : kf + h.cooldown_minutes;
             }
         }
     } else {
