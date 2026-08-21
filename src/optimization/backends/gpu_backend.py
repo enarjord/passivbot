@@ -145,6 +145,10 @@ EMA_MULTICOIN_BOUND_MAPS = {
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
         },
+        **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+        },
     }
     for side in ("long", "short")
 }
@@ -212,6 +216,10 @@ TRAILING_MARTINGALE_MULTICOIN_BOUND_MAPS = {
         **{
             f"{side}_{suffix}": f"{side}_{parameter}"
             for suffix, parameter in _EMA_MULTICOIN_SIDE_BOUND_SUFFIXES.items()
+        },
+        **{
+            f"{side}_{bound_suffix}": f"{side}_{parameter}"
+            for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
         },
     }
     for side in ("long", "short")
@@ -895,6 +903,8 @@ def _validate_scope_config(
         }:
             repair_paths = []
             for side in enabled_sides:
+                if bool(config["bot"][side].get("unstuck", {}).get("enabled")):
+                    repair_paths.append(f"bot.{side}.unstuck.enabled")
                 risk = config["bot"][side].get("risk", {})
                 for key in (
                     "position_exposure_enforcer_enabled",
@@ -910,6 +920,15 @@ def _validate_scope_config(
                     continue
                 for side in enabled_sides:
                     side_patch = bot_patch.get(side, {})
+                    unstuck = (
+                        side_patch.get("unstuck", {})
+                        if isinstance(side_patch, dict)
+                        else {}
+                    )
+                    if isinstance(unstuck, dict) and bool(unstuck.get("enabled")):
+                        repair_paths.append(
+                            f"coin_overrides.{coin}.bot.{side}.unstuck.enabled"
+                        )
                     risk = (
                         side_patch.get("risk", {})
                         if isinstance(side_patch, dict)
@@ -925,7 +944,7 @@ def _validate_scope_config(
                         )
             if repair_paths:
                 raise ValueError(
-                    "GPU dual-side multicoin exposure repair requires a shared-"
+                    "GPU dual-side multicoin exposure/unstuck repair requires a shared-"
                     "balance portfolio kernel; independent directional runners "
                     f"cannot model {sorted(repair_paths)}"
                 )
@@ -944,11 +963,6 @@ def _validate_scope_config(
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
             raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
-        if coin_count > 1 and bool(side_config.get("unstuck", {}).get("enabled")):
-            raise ValueError(
-                "GPU multicoin foundation requires "
-                f"bot.{side}.unstuck.enabled=false"
-            )
         risk = side_config.get("risk", {})
         required_disabled = []
         if strategy_kind != "trailing_martingale":
@@ -1044,6 +1058,17 @@ def _validate_gpu_coin_overrides(
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
         )
+        allowed.update(
+            ("bot", enabled_side, "unstuck", key)
+            for key in (
+                "enabled",
+                "ema_gating_enabled",
+                "close_pct",
+                "ema_dist",
+                "loss_allowance_pct",
+                "threshold",
+            )
+        )
         if strategy_kind == "trailing_martingale":
             allowed.update(
                 {
@@ -1093,8 +1118,8 @@ def _validate_gpu_coin_overrides(
         raise ValueError(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
-            f"{strategy_kind} parameters, {supported_risk}, and "
-            "wallet_exposure_limit"
+            f"{strategy_kind} parameters, {supported_risk}, unstuck parameters, "
+            "and wallet_exposure_limit"
         )
 
 
@@ -1908,7 +1933,7 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
     return contract
 
 
-def _single_coin_unstuck_search_sides(
+def _gpu_unstuck_search_sides(
     proxy_config: dict, suite_inputs, overrides: set[str] | None = None
 ) -> set[str]:
     """Return target and mirrored source sides whose unstuck genes affect a scenario."""
@@ -1923,11 +1948,23 @@ def _single_coin_unstuck_search_sides(
         for side in ("long", "short")
         if any(
             gpu_side_enabled(item, side)
-            and bool(
-                item.get("bot", {})
-                .get(side, {})
-                .get("unstuck", {})
-                .get("enabled", False)
+            and (
+                bool(
+                    item.get("bot", {})
+                    .get(side, {})
+                    .get("unstuck", {})
+                    .get("enabled", False)
+                )
+                or any(
+                    bool(
+                        patch.get("bot", {})
+                        .get(side, {})
+                        .get("unstuck", {})
+                        .get("enabled", False)
+                    )
+                    for patch in item.get("coin_overrides", {}).values()
+                    if isinstance(patch, dict)
+                )
             )
             for item in configs
         )
@@ -2194,7 +2231,7 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = dict(PINNED_SCOPE_BOUND_VALUES)
-    if coin_count > 1:
+    if coin_count > 1 and len(enabled_sides) == 2:
         pinned.update(
             {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
         )
@@ -2680,10 +2717,10 @@ def run_backend(
         enabled_sides, gpu_optimizer_overrides
     )
     unstuck_search_sides = (
-        _single_coin_unstuck_search_sides(
+        _gpu_unstuck_search_sides(
             proxy_config, suite_inputs, gpu_optimizer_overrides
         )
-        if max_coin_count == 1
+        if max_coin_count == 1 or len(config_enabled_sides) == 1
         else set()
     )
     mapped = {
@@ -2798,11 +2835,11 @@ def run_backend(
         if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
             # HSL remains disabled, so its dormant bounds affect neither path.
             continue
-        if max_coin_count > 1 and any(
+        if max_coin_count > 1 and len(enabled_sides) == 2 and any(
             bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
         ):
-            # Multicoin unstuck remains disabled until the proxy owns the same
-            # global least-stuck selector as exact Rust.
+            # Dual-side multicoin unstuck remains disabled until one shared
+            # portfolio kernel owns the global selector across both sides.
             continue
         if (
             max_coin_count == 1

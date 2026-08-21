@@ -441,6 +441,12 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                     "entry_cooldown_minutes": 15.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
+                    "unstuck_enabled": True,
+                    "unstuck_ema_gating_enabled": False,
+                    "unstuck_close_pct": 0.125,
+                    "unstuck_ema_dist": -0.01,
+                    "unstuck_loss_allowance_pct": 0.02,
+                    "unstuck_threshold": 0.85,
                 }
             },
         ],
@@ -458,6 +464,14 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                             "we_excess_allowance_pct": 0.25,
                         },
                         "wallet_exposure_limit": 0.4,
+                        "unstuck": {
+                            "enabled": True,
+                            "ema_gating_enabled": False,
+                            "close_pct": 0.125,
+                            "ema_dist": -0.01,
+                            "loss_allowance_pct": 0.02,
+                            "threshold": 0.85,
+                        },
                     }
                 }
             }
@@ -476,15 +490,18 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 13)
+    assert matrix.shape == (2, 19)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
     assert matrix[1, 10] == pytest.approx(15.0)
     assert matrix[1, 11] == pytest.approx(0.4)
     assert matrix[1, 12] == pytest.approx(0.25)
+    assert matrix[1, 13:].tolist() == pytest.approx(
+        [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
+    )
     assert contract["coins"] == ["BTC", "ETH"]
-    assert contract["values"][0] == [None] * 13
+    assert contract["values"][0] == [None] * 19
 
 
 def test_multicoin_coin_overrides_pack_dual_sides_independently():
@@ -615,6 +632,12 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "risk_we_excess_allowance_pct": 0.25,
                     "risk_wel_enforcer_enabled": True,
                     "risk_wel_enforcer_threshold": 0.8,
+                    "unstuck_enabled": True,
+                    "unstuck_ema_gating_enabled": False,
+                    "unstuck_close_pct": 0.125,
+                    "unstuck_ema_dist": -0.01,
+                    "unstuck_loss_allowance_pct": 0.02,
+                    "unstuck_threshold": 0.85,
                 }
             },
         ],
@@ -637,6 +660,14 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             "position_exposure_enforcer_threshold": 0.8,
                         },
                         "wallet_exposure_limit": 0.4,
+                        "unstuck": {
+                            "enabled": True,
+                            "ema_gating_enabled": False,
+                            "close_pct": 0.125,
+                            "ema_dist": -0.01,
+                            "loss_allowance_pct": 0.02,
+                            "threshold": 0.85,
+                        },
                     }
                 }
             }
@@ -655,7 +686,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 28)
+    assert matrix.shape == (2, 34)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 15] == pytest.approx(0.5)
@@ -664,7 +695,10 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 25] == pytest.approx(0.25)
     assert matrix[1, 26] == pytest.approx(1.0)
     assert matrix[1, 27] == pytest.approx(0.8)
-    assert contract["values"][0] == [None] * 28
+    assert matrix[1, 28:].tolist() == pytest.approx(
+        [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
+    )
+    assert contract["values"][0] == [None] * 34
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

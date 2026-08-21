@@ -2,9 +2,9 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 25;
+constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
-constant int OVERRIDE_COLS = 13;
+constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 6;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
@@ -56,6 +56,91 @@ inline bool realized_loss_proxy_allows_close(
         + qty * fabs(c_mult) * (fabs(close_price) + fabs(pprice));
     float margin = 1.220703125e-4f * arithmetic_scale;
     return isfinite(net_pnl) && net_pnl > margin;
+}
+
+inline float float32_floor_nonnegative(float value) {
+    if (!(value > 0.0f) || !isfinite(value)) return fmax(value, 0.0f);
+    return as_type<float>(as_type<uint>(value) - 1u);
+}
+
+inline void record_realized_net(
+    float net_pnl,
+    thread float& realized_pnl_cumsum_last,
+    thread float& realized_pnl_cumsum_max
+) {
+    realized_pnl_cumsum_last += net_pnl;
+    realized_pnl_cumsum_max = fmax(
+        realized_pnl_cumsum_max, realized_pnl_cumsum_last
+    );
+}
+
+inline bool realized_loss_proxy_allows_reducer(
+    float qty, float close_price, float pprice, bool short_side,
+    float c_mult, float maker_fee, bool is_unstuck,
+    bool gate_enabled, float balance,
+    float realized_pnl_cumsum_last, float realized_pnl_cumsum_max,
+    float max_realized_loss_pct
+) {
+    if (!is_unstuck) {
+        return realized_loss_proxy_allows_close(
+            qty, close_price, pprice, short_side,
+            c_mult, maker_fee, gate_enabled
+        );
+    }
+    if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
+    if (!gate_enabled) return true;
+    float gross_pnl = qty * c_mult * (short_side
+        ? pprice - close_price : close_price - pprice);
+    float net_pnl = gross_pnl - qty * close_price * c_mult * maker_fee;
+    if (!isfinite(net_pnl)) return false;
+    if (net_pnl >= 0.0f) return true;
+    float balance_peak = balance
+        + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
+    float allowed_loss_budget = float32_floor_nonnegative(
+        balance_peak * fmax(max_realized_loss_pct, 0.0f)
+    );
+    float current_realized_loss = fmax(
+        realized_pnl_cumsum_max - realized_pnl_cumsum_last, 0.0f
+    );
+    float remaining_loss_budget = float32_floor_nonnegative(
+        fmax(allowed_loss_budget - current_realized_loss, 0.0f)
+    );
+    return -net_pnl <= remaining_loss_budget;
+}
+
+inline float finalized_reducer_qty_with_ordinary(
+    float psize, float ordinary_qty, float ordinary_price,
+    float reducer_qty, float reducer_price,
+    float qty_step, float min_qty, float min_cost, float c_mult
+) {
+    if (!(psize > 0.0f && reducer_qty > 0.0f && reducer_price > 0.0f)) {
+        return 0.0f;
+    }
+    reducer_qty = fmin(psize, reducer_qty);
+    float reducer_min = min_entry_qty(
+        reducer_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float kept_ordinary = ordinary_qty;
+    if (kept_ordinary > 0.0f && ordinary_price > 0.0f) {
+        float ordinary_min = min_entry_qty(
+            ordinary_price, qty_step, min_qty, min_cost, c_mult
+        );
+        if (kept_ordinary + reducer_qty > psize) {
+            kept_ordinary = fmax(
+                round_step(psize - reducer_qty, qty_step), 0.0f
+            );
+        }
+        if (kept_ordinary < ordinary_min) kept_ordinary = 0.0f;
+    } else {
+        kept_ordinary = 0.0f;
+    }
+    if (!(kept_ordinary > 0.0f)) {
+        float remainder = fmax(
+            round_step(psize - reducer_qty, qty_step), 0.0f
+        );
+        if (remainder > 0.0f && remainder < reducer_min) reducer_qty = psize;
+    }
+    return reducer_qty;
 }
 
 inline float coin_override_or(
@@ -153,6 +238,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float twel_threshold = params[po + 22];
     const bool twel_enforcer_enabled = params[po + 23] > 0.5f;
     const bool twel_enforcer_reduce_portfolio = params[po + 24] > 0.5f;
+    const bool unstuck_enabled = params[po + 25] > 0.5f;
+    const bool unstuck_ema_gating_enabled = params[po + 26] > 0.5f;
+    const float unstuck_close_pct = params[po + 27];
+    const float unstuck_ema_dist = params[po + 28];
+    const float unstuck_loss_allowance_pct = params[po + 29];
+    const float unstuck_threshold = params[po + 30];
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -173,6 +264,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float interval_ms = run_settings[2];
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = run_settings[5] < 1.0f;
+    const float max_realized_loss_pct = run_settings[5];
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -191,6 +283,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
+    float unstuck_close_qty[MAX_COINS];
     float position_open_k[MAX_COINS];
     float score[MAX_COINS];
     float contribution[MAX_COINS];
@@ -199,6 +292,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
+    int unstuck_close_tick[MAX_COINS];
+    bool close_is_unstuck_reducer[MAX_COINS];
     bool selected[MAX_COINS];
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
@@ -232,6 +327,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         close_qty[c] = 0.0f;
         secondary_close_qty[c] = 0.0f;
         twel_close_qty[c] = 0.0f;
+        unstuck_close_qty[c] = 0.0f;
         position_open_k[c] = -1.0f;
         score[c] = -INFINITY;
         contribution[c] = 0.0f;
@@ -240,6 +336,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
         close_tick[c] = 0;
         secondary_close_tick[c] = 0;
         twel_close_tick[c] = 0;
+        unstuck_close_tick[c] = 0;
+        close_is_unstuck_reducer[c] = false;
         selected[c] = false;
         incumbent[c] = false;
         survivor[c] = false;
@@ -274,6 +372,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     }
 
     float balance = starting_balance;
+    float realized_pnl_cumsum_last = 0.0f;
+    float realized_pnl_cumsum_max = 0.0f;
     bool alive = true;
     bool equity_started = false;
     bool selection_initialized = false;
@@ -372,7 +472,23 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 float pnl = adjusted * c_mult * (short_side
                     ? pprice[c] - fill_price
                     : fill_price - pprice[c]);
-                balance += pnl - adjusted * fill_price * c_mult * maker_fee;
+                float net_pnl = pnl
+                    - adjusted * fill_price * c_mult * maker_fee;
+                bool is_unstuck = !use_secondary
+                    && close_is_unstuck_reducer[c];
+                if (!realized_loss_proxy_allows_reducer(
+                        adjusted, fill_price, pprice[c], short_side,
+                        c_mult, maker_fee, is_unstuck, loss_gate_enabled,
+                        balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_max, max_realized_loss_pct
+                    )) {
+                    continue;
+                }
+                balance += net_pnl;
+                record_realized_net(
+                    net_pnl, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_max
+                );
                 float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
                 bool went_flat = new_size <= 0.0f;
                 psize[c] = new_size;
@@ -388,6 +504,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     secondary_close_qty[c] = 0.0f;
                 } else {
                     close_qty[c] = 0.0f;
+                    close_is_unstuck_reducer[c] = false;
                 }
                 executed_close = true;
             }
@@ -403,7 +520,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
             if (filled_entry) {
                 float fill_price = float(entry_tick[c]) * price_step;
                 float adjusted = round_step(entry_qty[c], qty_step);
-                balance -= adjusted * fill_price * c_mult * maker_fee;
+                float fee = adjusted * fill_price * c_mult * maker_fee;
+                balance -= fee;
+                record_realized_net(
+                    -fee, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_max
+                );
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
                     : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
@@ -771,6 +893,142 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     );
                 }
             }
+
+            // Exact Rust emits one global auto-unstuck intent across all
+            // positions. A directional multicoin thread owns that complete
+            // one-side portfolio, so it can apply the same least-stuck rank.
+            for (int c = 0; c < C; ++c) {
+                unstuck_close_qty[c] = 0.0f;
+                unstuck_close_tick[c] = 0;
+                close_is_unstuck_reducer[c] = false;
+            }
+            float balance_peak = balance
+                + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
+            int unstuck_coin = -1;
+            float best_unstuck_diff = INFINITY;
+            float selected_unstuck_qty = 0.0f;
+            int selected_unstuck_tick = 0;
+            for (int c = 0; c < C; ++c) {
+                int coin_offset = c * COIN_COLS;
+                int bar_offset = (k * C + c) * 4;
+                int tick_offset = (k * C + c) * 2;
+                float price_now = bars[bar_offset + 2];
+                float c_mult = coin_settings[coin_offset + 4];
+                float qty_step = coin_settings[coin_offset + 0];
+                float price_step = coin_settings[coin_offset + 1];
+                float min_qty = coin_settings[coin_offset + 2];
+                float min_cost = coin_settings[coin_offset + 3];
+                bool coin_unstuck_enabled = coin_override_or(
+                    coin_overrides, c, 13, unstuck_enabled ? 1.0f : 0.0f
+                ) > 0.5f;
+                bool coin_ema_gate = coin_override_or(
+                    coin_overrides, c, 14,
+                    unstuck_ema_gating_enabled ? 1.0f : 0.0f
+                ) > 0.5f;
+                float coin_close_pct = coin_override_or(
+                    coin_overrides, c, 15, unstuck_close_pct
+                );
+                float coin_ema_dist = coin_override_or(
+                    coin_overrides, c, 16, unstuck_ema_dist
+                );
+                float coin_loss_allowance_pct = coin_override_or(
+                    coin_overrides, c, 17, unstuck_loss_allowance_pct
+                );
+                float coin_threshold = coin_override_or(
+                    coin_overrides, c, 18, unstuck_threshold
+                );
+                float fixed_coin_wel = coin_override_or(
+                    coin_overrides, c, 11, -1.0f
+                );
+                float coin_wel = fixed_coin_wel >= 0.0f
+                    ? fixed_coin_wel : effective_wel;
+                float coin_allowance_pct = coin_override_or(
+                    coin_overrides, c, 12, allowance_pct
+                );
+                float allowed_coin_wel = allowed_wallet_exposure_limit(
+                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
+                );
+                if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
+                    && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
+                    && balance > 0.0f && balance_peak > 0.0f
+                    && psize[c] > 0.0f && pprice[c] > 0.0f
+                    && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
+                    continue;
+                }
+                float allowance = float32_floor_nonnegative(fmax(
+                    balance - balance_peak * (
+                        1.0f - coin_loss_allowance_pct * twel
+                    ),
+                    0.0f
+                ));
+                float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
+                if (!(allowance > 0.0f
+                    && wallet_exposure / allowed_coin_wel > coin_threshold)) {
+                    continue;
+                }
+                if (coin_ema_gate) {
+                    float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
+                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+                    int trigger_tick = short_side
+                        ? int(floor(
+                            lower * (1.0f - coin_ema_dist) / price_step
+                                + 1.0e-6f
+                        ))
+                        : int(ceil(
+                            upper * (1.0f + coin_ema_dist) / price_step
+                                - 1.0e-6f
+                        ));
+                    bool triggered = short_side
+                        ? touch_ticks[tick_offset + 1] <= trigger_tick
+                        : touch_ticks[tick_offset + 0] >= trigger_tick;
+                    if (!triggered) continue;
+                }
+                int reducer_tick = max(
+                    short_side
+                        ? touch_ticks[tick_offset + 0]
+                        : touch_ticks[tick_offset + 1],
+                    1
+                );
+                float reducer_price = float(reducer_tick) * price_step;
+                float reducer_min = min_entry_qty(
+                    reducer_price, qty_step, min_qty, min_cost, c_mult
+                );
+                float target_qty = floor_step(
+                    balance * allowed_coin_wel * coin_close_pct
+                        / fmax(reducer_price * c_mult, 1.0e-12f),
+                    qty_step
+                );
+                float reducer_qty = fmin(
+                    psize[c], fmax(reducer_min, target_qty)
+                );
+                float gross_pnl = reducer_qty * c_mult * (short_side
+                    ? pprice[c] - reducer_price
+                    : reducer_price - pprice[c]);
+                if (gross_pnl < 0.0f && -gross_pnl > allowance) {
+                    float scaled_qty = fmin(
+                        psize[c], reducer_qty * allowance / -gross_pnl
+                    );
+                    reducer_qty = fmin(
+                        psize[c], fmax(
+                            reducer_min, floor_step(scaled_qty, qty_step)
+                        )
+                    );
+                }
+                float pprice_diff = short_side
+                    ? price_now / pprice[c] - 1.0f
+                    : 1.0f - price_now / pprice[c];
+                if (unstuck_coin < 0 || pprice_diff < best_unstuck_diff
+                    || (pprice_diff == best_unstuck_diff && c < unstuck_coin)) {
+                    unstuck_coin = c;
+                    best_unstuck_diff = pprice_diff;
+                    selected_unstuck_qty = reducer_qty;
+                    selected_unstuck_tick = reducer_tick;
+                }
+            }
+            if (unstuck_coin >= 0) {
+                unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
+                unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
+            }
             for (int c = 0; c < C; ++c) {
                 entry_qty[c] = 0.0f;
                 close_qty[c] = 0.0f;
@@ -905,17 +1163,62 @@ inline void passivbot_ema_anchor_multicoin_impl(
 
                 // Reserve the side-wide protective reducer and trim the
                 // ordinary EMA close first, matching finalized_closes_with_reducer.
-                float reducer_qty = twel_close_qty[c];
-                int reducer_tick = twel_close_tick[c];
-                if (reducer_qty > 0.0f && reducer_tick > 0
-                    && !realized_loss_proxy_allows_close(
-                        reducer_qty, float(reducer_tick) * price_step,
-                        pprice[c], short_side, c_mult,
-                        coin_settings[coin_offset + 5], loss_gate_enabled
-                    )) {
-                    reducer_qty = 0.0f;
-                    twel_close_qty[c] = 0.0f;
-                    twel_close_tick[c] = 0;
+                float raw_twel_qty = twel_close_qty[c];
+                int raw_twel_tick = twel_close_tick[c];
+                float raw_unstuck_qty = unstuck_close_qty[c];
+                int raw_unstuck_tick = unstuck_close_tick[c];
+                float finalized_twel_qty = finalized_reducer_qty_with_ordinary(
+                    psize[c], close_qty[c], close_price,
+                    raw_twel_qty, float(raw_twel_tick) * price_step,
+                    qty_step, min_qty, min_cost, c_mult
+                );
+                float finalized_unstuck_qty = finalized_reducer_qty_with_ordinary(
+                    psize[c], close_qty[c], close_price,
+                    raw_unstuck_qty, float(raw_unstuck_tick) * price_step,
+                    qty_step, min_qty, min_cost, c_mult
+                );
+                bool prefer_unstuck = finalized_unstuck_qty > 0.0f && (
+                    finalized_twel_qty <= 0.0f
+                    || finalized_unstuck_qty > finalized_twel_qty
+                    || (finalized_unstuck_qty == finalized_twel_qty && (
+                        raw_unstuck_tick != raw_twel_tick
+                            ? (short_side
+                                ? raw_unstuck_tick > raw_twel_tick
+                                : raw_unstuck_tick < raw_twel_tick)
+                            : true
+                    ))
+                );
+                float reducer_qty = prefer_unstuck
+                    ? raw_unstuck_qty : raw_twel_qty;
+                int reducer_tick = prefer_unstuck
+                    ? raw_unstuck_tick : raw_twel_tick;
+                bool reducer_is_unstuck = prefer_unstuck;
+                for (int reducer_attempt = 0; reducer_attempt < 2;
+                        ++reducer_attempt) {
+                    if (!(reducer_qty > 0.0f && reducer_tick > 0)) break;
+                    float finalized_qty = reducer_is_unstuck
+                        ? finalized_unstuck_qty : finalized_twel_qty;
+                    if (realized_loss_proxy_allows_reducer(
+                            finalized_qty, float(reducer_tick) * price_step,
+                            pprice[c], short_side, c_mult,
+                            coin_settings[coin_offset + 5],
+                            reducer_is_unstuck, loss_gate_enabled, balance,
+                            realized_pnl_cumsum_last,
+                            realized_pnl_cumsum_max, max_realized_loss_pct
+                        )) {
+                        break;
+                    }
+                    if (reducer_attempt > 0) {
+                        reducer_qty = 0.0f;
+                        reducer_tick = 0;
+                        reducer_is_unstuck = false;
+                        break;
+                    }
+                    reducer_is_unstuck = !reducer_is_unstuck;
+                    reducer_qty = reducer_is_unstuck
+                        ? raw_unstuck_qty : raw_twel_qty;
+                    reducer_tick = reducer_is_unstuck
+                        ? raw_unstuck_tick : raw_twel_tick;
                 }
                 if (reducer_qty > 0.0f && reducer_tick > 0) {
                     float reducer_price = float(reducer_tick) * price_step;
@@ -970,13 +1273,18 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     }
                     close_qty[c] = reducer_qty;
                     close_tick[c] = reducer_tick;
+                    close_is_unstuck_reducer[c] = reducer_is_unstuck;
                 }
-                if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_close(
+                if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_reducer(
                         close_qty[c], float(close_tick[c]) * price_step,
                         pprice[c], short_side, c_mult,
-                        coin_settings[coin_offset + 5], loss_gate_enabled
+                        coin_settings[coin_offset + 5],
+                        close_is_unstuck_reducer[c], loss_gate_enabled,
+                        balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_max, max_realized_loss_pct
                     )) {
                     close_qty[c] = 0.0f;
+                    close_is_unstuck_reducer[c] = false;
                 }
                 if (secondary_close_qty[c] > 0.0f
                     && !realized_loss_proxy_allows_close(

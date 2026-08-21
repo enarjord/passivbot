@@ -167,6 +167,7 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_threshold": 1.0,
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
+            **_UNSTUCK_DISABLED_VALUES,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
@@ -220,6 +221,7 @@ def _multicoin_exposure_fixture(
             "wel_enforcer_threshold": 1.0,
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
+            **_UNSTUCK_DISABLED_VALUES,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
@@ -449,8 +451,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 25" in source
-    assert "constant int OVERRIDE_COLS = 13" in source
+    assert "constant int PARAM_COLS = 31" in source
+    assert "constant int OVERRIDE_COLS = 19" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
     assert "twel_enforcer_enabled" in source
@@ -519,6 +521,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         2.0,
     ]
     row += _single_coin_exposure_fields() + [0.0, 0.0]
+    row += list(_UNSTUCK_DISABLED_VALUES.values())
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -557,7 +560,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"
 
-    disabled = np.full((coin_count, 13), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 19), np.nan, dtype=np.float32)
     disabled[:, 11] = 0.0
     disabled_output = MpsEmaAnchorMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -566,7 +569,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 13), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 19), np.nan, dtype=np.float32)
     exact_last[:, :11] = np.asarray(row[:11], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:11] = [
@@ -603,13 +606,13 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 42" in source
+    assert "constant int PARAM_COLS = 48" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
     assert "close_retracement_base" in source
     assert "as_type<float>(touch_min_qty_bits[k * C + c])" in source
-    assert "constant int OVERRIDE_COLS = 28" in source
+    assert "constant int OVERRIDE_COLS = 34" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
     assert "coin_override_or" in source
@@ -696,6 +699,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "wel_enforcer_threshold": 1.0,
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
+        **_UNSTUCK_DISABLED_VALUES,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -716,7 +720,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
 
-    disabled = np.full((coin_count, 28), np.nan, dtype=np.float32)
+    disabled = np.full((coin_count, 34), np.nan, dtype=np.float32)
     disabled[:, 24] = 0.0
     disabled_output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side, coin_overrides=disabled
@@ -725,7 +729,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert disabled_output["day_has_fill"].sum().item() == 0
     assert disabled_output["open_positions"].item() == 0.0
 
-    exact_last = np.full((coin_count, 28), np.nan, dtype=np.float32)
+    exact_last = np.full((coin_count, 34), np.nan, dtype=np.float32)
     exact_last[:, :25] = np.asarray(row[:25], dtype=np.float32)
     changed_candidate = list(row)
     changed_candidate[:25] = [
@@ -801,7 +805,7 @@ def test_mps_multicoin_legacy_raw_allowance_with_gate_disabled_expands_volume(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_multicoin_coin_override_allowance_expands_one_symbol(strategy_kind):
-    override_cols = 13 if strategy_kind == "ema_anchor" else 28
+    override_cols = 19 if strategy_kind == "ema_anchor" else 34
     allowance_column = 12 if strategy_kind == "ema_anchor" else 25
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     overrides[0, allowance_column] = 1.0
@@ -860,7 +864,7 @@ def test_mps_multicoin_twel_threshold_reduces_entry_volume(strategy_kind):
 def test_mps_multicoin_equal_distance_twel_tie_keeps_higher_coin_index(
     strategy_kind,
 ):
-    override_cols = 13 if strategy_kind == "ema_anchor" else 28
+    override_cols = 19 if strategy_kind == "ema_anchor" else 34
     wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     overrides[0, wallet_exposure_column] = 0.4
@@ -1419,6 +1423,121 @@ def test_mps_single_coin_auto_unstuck_scales_loss_to_own_allowance(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
+    strategy_kind, side
+):
+    count = 6
+    closes = np.full((count, 2), 100.0)
+    if side == "long":
+        closes[3:, 0] = 97.5
+        closes[3:, 1] = 98.5
+        highs = closes + 0.01
+        lows = closes.copy()
+    else:
+        closes[3:, 0] = 102.5
+        closes[3:, 1] = 101.5
+        highs = closes.copy()
+        lows = closes - 0.01
+    markets = [
+        ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0),
+        ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0),
+    ]
+    runner, disabled = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        max_realized_loss_pct=0.05,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    disabled[keys.index("entry_cooldown_minutes")] = 100.0
+    disabled[keys.index("forager_volume_drop_pct")] = 1.0
+    disabled[keys.index("twel_entry_gate_enabled")] = 0.0
+    if strategy_kind == "ema_anchor":
+        disabled[keys.index("offset")] = 0.01
+    else:
+        disabled[keys.index("entry_initial_ema_dist")] = 0.01
+        disabled[keys.index("entry_initial_qty_pct")] = 1.0
+        disabled[keys.index("entry_threshold_base_pct")] = 10.0
+        disabled[keys.index("entry_retracement_base_pct")] = 0.0
+        disabled[keys.index("close_threshold_base_pct")] = 0.5
+        disabled[keys.index("close_retracement_base_pct")] = 0.0
+        disabled[keys.index("gate_initial")] = 1.0
+    enabled = list(disabled)
+    enabled[keys.index("unstuck_enabled")] = 1.0
+    enabled[keys.index("unstuck_ema_gating_enabled")] = 0.0
+    enabled[keys.index("unstuck_close_pct")] = 0.1
+    enabled[keys.index("unstuck_loss_allowance_pct")] = 0.2
+    enabled[keys.index("unstuck_threshold")] = 0.5
+    gated = list(enabled)
+    gated[keys.index("unstuck_ema_gating_enabled")] = 1.0
+    gated[keys.index("unstuck_ema_dist")] = 0.1
+    allowance_disabled = list(disabled)
+    allowance_disabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_disabled[keys.index("twel_entry_gate_enabled")] = 1.0
+    allowance_disabled[keys.index("twel_enforcer_threshold")] = 0.5
+    allowance_enabled = list(enabled)
+    allowance_enabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_enabled[keys.index("twel_entry_gate_enabled")] = 1.0
+    allowance_enabled[keys.index("twel_enforcer_threshold")] = 0.5
+
+    output = runner.run(
+        np.asarray(
+            [
+                disabled,
+                enabled,
+                gated,
+                allowance_disabled,
+                allowance_enabled,
+            ],
+            dtype=np.float64,
+        )
+    )
+    torch.mps.synchronize()
+    key = "psize" if side == "long" else "short_psize"
+    remaining = output[key].cpu().numpy()
+    open_positions = output["open_positions"].cpu().tolist()
+    assert open_positions[:3] == [2.0] * 3
+    assert remaining[0] > 1.0
+    # Coin one is less stuck and has a two-unit minimum. Selecting coin zero,
+    # or selecting both coins, would produce a different aggregate remainder.
+    assert remaining[1] == pytest.approx(remaining[0] - 2.0)
+    assert remaining[2] == pytest.approx(remaining[0])
+    # The bounded allowance doubles each 0.5 per-coin WEL to 1.0, while the
+    # side-wide entry gate caps exposure at 0.5. Exact Rust evaluates unstuck's
+    # threshold against the allowed limit, so the position does not exceed it.
+    assert open_positions[4] == open_positions[3]
+    assert remaining[4] == pytest.approx(remaining[3])
+
+    strict_runner, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        max_realized_loss_pct=0.0005,
+    )
+    strict_output = strict_runner.run(
+        np.asarray([enabled], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+    assert strict_output[key].item() == pytest.approx(remaining[0])
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_single_coin_auto_unstuck_selects_one_least_stuck_side(strategy_kind):
     count = 6
     close = np.full(count, 100.0)
@@ -1630,6 +1749,67 @@ def test_mps_tm_unstuck_finalization_keeps_valid_ordinary_close_remainder():
     # so exact finalization keeps the unstuck selection key at 7 instead of
     # promoting it to the full 10. The genuinely larger WEL reducer therefore
     # wins and leaves less than the unstuck request would have left.
+    assert output["psize"].item() < 3.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
+    count = 7
+    closes = np.full((count, 2), 100.0)
+    highs = np.full((count, 2), 100.0)
+    lows = np.full((count, 2), 100.0)
+    lows[3, 0] = 98.0
+    highs[4, 0] = 201.0
+    markets = [
+        ProxyMarket(0.5, 0.01, 0.5, 500.0, 1.0, 0.0),
+        ProxyMarket(0.5, 0.01, 0.5, 0.0, 1.0, 0.0),
+    ]
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
+    overrides[1, 24] = 0.0
+    runner, candidate = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "long",
+        coin_overrides=overrides,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        max_realized_loss_pct=0.05,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values.update(
+        {
+            "entry_initial_ema_dist": 0.01,
+            "entry_initial_qty_pct": 1.0,
+            "entry_threshold_base_pct": 10.0,
+            "entry_retracement_base_pct": 0.0,
+            "close_qty_pct": 0.3,
+            "close_threshold_base_pct": 1.0,
+            "close_retracement_base_pct": 0.01,
+            "entry_cooldown_minutes": 100.0,
+            "gate_initial": 1.0,
+            "n_positions": 1.0,
+            "wel_enforcer_enabled": 1.0,
+            "wel_enforcer_threshold": 0.2,
+            "unstuck_enabled": 1.0,
+            "unstuck_ema_gating_enabled": 0.0,
+            "unstuck_close_pct": 0.7,
+            "unstuck_loss_allowance_pct": 0.2,
+            "unstuck_threshold": 0.5,
+        }
+    )
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # As in the directional kernel regression above, the valid ordinary close
+    # keeps unstuck's finalized selection key below the larger WEL reducer.
     assert output["psize"].item() < 3.0
 
 
@@ -3263,12 +3443,55 @@ def _tm_multicoin_off_tick_reducer_case(
     candidate = [
         values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     runner = MpsTrailingMartingaleMulticoinRunner(
         run, data, side=side, coin_overrides=overrides
     )
     return runner, candidate, market
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_unstuck_reserves_passive_grid_like_equal_wel():
+    runner, wel_candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        "long", maker_fee=0.0
+    )
+    values = dict(
+        zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, wel_candidate)
+    )
+    values.update(
+        {
+            "wel_enforcer_enabled": 0.0,
+            "unstuck_enabled": 1.0,
+            "unstuck_ema_gating_enabled": 0.0,
+            "unstuck_close_pct": 0.5102,
+            "unstuck_loss_allowance_pct": 0.2,
+            "unstuck_threshold": 0.5,
+        }
+    )
+    unstuck_candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(
+        np.asarray([wel_candidate, unstuck_candidate], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    # These candidates request the same touch and finalized reducer quantity.
+    # The ordinary passive grid must therefore be generated from the same
+    # reducer-reserved position size for WEL and unstuck.
+    assert output["psize"][1].item() == pytest.approx(
+        output["psize"][0].item(), abs=2.0e-4
+    )
+    assert output["balance"][1].item() == pytest.approx(
+        output["balance"][0].item(), abs=2.0e-4
+    )
+    assert output["day_volume"][1].sum().item() == pytest.approx(
+        output["day_volume"][0].sum().item(), rel=2.0e-5
+    )
 
 
 @pytest.mark.skipif(
@@ -3361,7 +3584,7 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_total_exposure_repair_policy(side):
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[0, 24] = 0.1
     runner, baseline = _multicoin_exposure_fixture(
         "trailing_martingale",
@@ -3407,7 +3630,7 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[0, 24] = 0.1
     runner_kwargs = {
         "strategy_kind": "trailing_martingale",
@@ -3496,7 +3719,7 @@ def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side):
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[0, 24] = 0.1
     count = 10
     blocked_highs = np.full((count, 2), 100.5)
@@ -3560,7 +3783,7 @@ def test_mps_tm_multicoin_loss_gate_scans_past_blocked_recursive_rung(side):
         highs[5:, 0] = 102.0
     else:
         lows[5:, 0] = 98.0
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     runner, candidate = _multicoin_exposure_fixture(
         "trailing_martingale",
@@ -3615,7 +3838,7 @@ def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
         ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
         for _ in range(2)
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[0, 24] = 0.6
     overrides[1, 24] = 0.4
     runner, candidate = _multicoin_exposure_fixture(
@@ -3665,7 +3888,7 @@ def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_ema_multicoin_total_exposure_repair_policy(side):
-    overrides = np.full((2, 13), np.nan, dtype=np.float32)
+    overrides = np.full((2, 19), np.nan, dtype=np.float32)
     overrides[0, 11] = 0.1
     count = 70
     highs = np.full((count, 2), 100.5)
@@ -3718,7 +3941,7 @@ def test_mps_ema_multicoin_total_exposure_repair_policy(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
-    overrides = np.full((2, 13), np.nan, dtype=np.float32)
+    overrides = np.full((2, 19), np.nan, dtype=np.float32)
     overrides[0, 11] = 0.1
     count = 70
     closes = np.full((count, 2), 100.0)
@@ -4130,7 +4353,7 @@ def test_mps_tm_multicoin_grid_can_fill_without_off_tick_reducer(side):
     candidate = [
         values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
         run, data, side=side, coin_overrides=overrides
@@ -4191,7 +4414,7 @@ def test_mps_tm_multicoin_small_excess_reducer_crosses_strict_target(side):
     candidate = [
         values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
         run, data, side=side, coin_overrides=overrides
@@ -4252,7 +4475,7 @@ def test_mps_tm_multicoin_short_post_repair_grid_uses_negative_target_tick():
     candidate = [
         values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
         run, data, side="short", coin_overrides=overrides
@@ -4443,7 +4666,7 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
         twel_only_values[key]
         for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     ]
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
         run, data, side=side, coin_overrides=overrides
@@ -4461,7 +4684,7 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_static_override_repairs_only_selected_symbol(side):
-    overrides = np.full((2, 28), np.nan, dtype=np.float32)
+    overrides = np.full((2, 34), np.nan, dtype=np.float32)
     overrides[0, 26] = 1.0
     overrides[0, 27] = 0.5
     baseline_runner, baseline = _multicoin_exposure_fixture(
@@ -4839,6 +5062,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     row.extend(_tm_wel_enforcer_fields())
     row.append(0.0)  # TWEL enforcer disabled
     row.append(0.0)  # TWEL reduce_overweight policy
+    row.extend(_UNSTUCK_DISABLED_VALUES.values())
 
     output = MpsTrailingMartingaleMulticoinRunner(
         runs[0], data, side=side
