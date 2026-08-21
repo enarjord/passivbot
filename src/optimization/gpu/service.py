@@ -832,6 +832,7 @@ class MpsSingleCoinProxy:
             min_cost=float(market_params["min_cost"]),
             c_mult=float(market_params["c_mult"]),
             maker_fee=float(market_params["maker_fee"]),
+            taker_fee=float(market_params["taker_fee"]),
         )
         interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
         self.run = ProxyRun(
@@ -1344,12 +1345,6 @@ class MpsMulticoinProxy:
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
-            if bool(first_bot.get("hsl_enabled")) and str(
-                first_bot.get("hsl_panic_close_order_type", "limit")
-            ).strip().lower() != "limit":
-                raise ValueError(
-                    f"MPS multicoin HSL requires {side} panic_close_order_type=limit"
-                )
             if len(self.sides) == 2 and any(
                 bool(item[side].get("unstuck_enabled"))
                 for item in payload.bot_params_list
@@ -1486,6 +1481,7 @@ class MpsMulticoinProxy:
                 min_cost=float(item["min_cost"]),
                 c_mult=float(item["c_mult"]),
                 maker_fee=float(item["maker_fee"]),
+                taker_fee=float(item["taker_fee"]),
             )
             for item in payload.exchange_params
         ]
@@ -1561,6 +1557,18 @@ class MpsMulticoinProxy:
                 "collect_coin_fill_counts": bool(
                     self.needed_metrics
                     & {"fills_active_symbols_count", "fills_top_symbol_share"}
+                ),
+                "market_order_slippage_pct": float(
+                    backtest_params.get("market_order_slippage_pct", 0.0)
+                ),
+                "hsl_panic_market": bool(
+                    self.base_params[side]["hsl_enabled"]
+                    and str(
+                        payload.bot_params_list[0][side].get(
+                            "hsl_panic_close_order_type", "limit"
+                        )
+                    ).strip().lower()
+                    == "market"
                 ),
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]

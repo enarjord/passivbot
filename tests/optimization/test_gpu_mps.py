@@ -168,6 +168,8 @@ def _multicoin_exposure_fixture(
     first_valid_indices=(0, 0),
     liquidation_threshold=0.05,
     collect_coin_fill_counts=False,
+    market_order_slippage_pct=0.0,
+    hsl_panic_market=False,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -246,6 +248,8 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
+            market_order_slippage_pct=market_order_slippage_pct,
+            hsl_panic_market=hsl_panic_market,
         )
     else:
         values = {
@@ -302,6 +306,8 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
+            market_order_slippage_pct=market_order_slippage_pct,
+            hsl_panic_market=hsl_panic_market,
         )
     return runner, row
 
@@ -360,6 +366,82 @@ def test_mps_one_sided_multicoin_hsl_panics_the_portfolio(
     assert output["hsl_panic_close_loss_sum"].item() > 0.0
     assert (output["coin_fill_counts"][0] >= 2.0).all().item()
     assert output["open_positions"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_one_sided_multicoin_hsl_market_panic_applies_taker_costs(
+    strategy_kind, side
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[20:] *= 0.7 if side == "long" else 1.3
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    limit_runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, count=count, closes=closes, markets=markets
+    )
+    market_runner, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        closes=closes,
+        markets=markets,
+        market_order_slippage_pct=0.02,
+        hsl_panic_market=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 1.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+    params = np.asarray([row], dtype=np.float64)
+
+    assert market_runner.settings[7].item() == pytest.approx(0.02)
+    assert market_runner.settings[8].item() == 1.0
+    assert torch.allclose(
+        market_runner.coin_settings[:, 11],
+        torch.full((2,), 0.01, device="mps"),
+    )
+    limit_output = limit_runner.run(params)
+    market_output = market_runner.run(params)
+    torch.mps.synchronize()
+
+    assert limit_output[f"hsl_triggers_{side}"].item() == 1.0
+    assert market_output[f"hsl_triggers_{side}"].item() == 1.0
+    assert limit_output["open_positions"].item() == 0.0
+    assert market_output["open_positions"].item() == 0.0
+    assert (
+        market_output["hsl_panic_close_loss_sum"].item()
+        > limit_output["hsl_panic_close_loss_sum"].item()
+    )
 
 
 @pytest.mark.skipif(
