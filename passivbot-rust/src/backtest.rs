@@ -2648,6 +2648,15 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
+    fn hard_stop_scope_has_open_position(&self, pside: usize) -> bool {
+        if self.hard_stop_signal_mode() == "unified" {
+            self.has_open_position_pside(LONG) || self.has_open_position_pside(SHORT)
+        } else {
+            self.has_open_position_pside(pside)
+        }
+    }
+
+    #[inline(always)]
     fn has_open_position_coin_pside(&self, idx: usize, pside: usize) -> bool {
         match pside {
             LONG => self.positions.long[idx].size != 0.0,
@@ -2670,6 +2679,15 @@ impl<'a> Backtest<'a> {
                 .iter()
                 .any(Self::bundle_has_blocking_open_orders),
             _ => unreachable!("invalid pside"),
+        }
+    }
+
+    #[inline(always)]
+    fn hard_stop_scope_has_blocking_open_orders(&self, pside: usize) -> bool {
+        if self.hard_stop_signal_mode() == "unified" {
+            self.has_blocking_open_orders_pside(LONG) || self.has_blocking_open_orders_pside(SHORT)
+        } else {
+            self.has_blocking_open_orders_pside(pside)
         }
     }
 
@@ -3594,8 +3612,8 @@ impl<'a> Backtest<'a> {
                 k, timestamp_ms, strategy_equity, peak_strategy_equity, pside, e
             )
         })?;
-        let has_open_position = self.has_open_position_pside(pside);
-        let has_blocking_open_orders = self.has_blocking_open_orders_pside(pside);
+        let has_open_position = self.hard_stop_scope_has_open_position(pside);
+        let has_blocking_open_orders = self.hard_stop_scope_has_blocking_open_orders(pside);
         let drawdown_ema = self.hard_stop_pside[pside]
             .state
             .as_ref()
@@ -8836,7 +8854,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_flat_confirmation_ignores_open_panic_close_orders() {
+    fn hard_stop_flat_confirmation_ignores_panic_orders_but_requires_unified_scope_flat() {
         let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
 
@@ -8921,6 +8939,21 @@ mod tests {
 
         assert_eq!(bt.hard_stop_flat_confirmations, 1);
         assert!(bt.hard_stop_pending_stop.is_some());
+
+        // Unified scope is the whole account. A position on the opposite side
+        // invalidates the pending flat confirmation even though this side has
+        // no position and its panic-only close order is non-blocking.
+        bt.positions.short[0] = Position {
+            size: -1.0,
+            price: 100.0,
+        };
+        bt.equities.timestamps_ms.push(120_000);
+        bt.equities.usd_total_equity.push(90.0);
+        bt.update_hard_stop_state(1).unwrap();
+
+        assert_eq!(bt.hard_stop_flat_confirmations, 0);
+        assert!(bt.hard_stop_pending_stop.is_none());
+        assert!(!bt.hard_stop_halted);
     }
 
     #[test]
