@@ -5,7 +5,7 @@ constant int MAX_COINS = 64;
 constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
-constant int DAILY_COLS = 8;
+constant int DAILY_COLS = 9;
 constant int SCALAR_COLS = 24;
 constant int GAP_BINS = 128;
 
@@ -66,8 +66,10 @@ inline float float32_floor_nonnegative(float value) {
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
-    thread float& realized_pnl_cumsum_max
+    thread float& realized_pnl_cumsum_max,
+    thread float& day_fill_count
 ) {
+    day_fill_count += 1.0f;
     realized_pnl_cumsum_last += net_pnl;
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
@@ -415,6 +417,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_has_fill = 0.0f;
     float day_min_balance = INFINITY;
     float day_start_balance = balance;
+    float day_fill_count = 0.0f;
 
     for (int k = 1; k < T - 1; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
@@ -429,6 +432,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 5] = day_min_balance;
                 daily[output + 6] = balance - day_start_balance;
                 daily[output + 7] = balance;
+                daily[output + 8] = day_fill_count;
             }
             current_day = day_index;
             day_touched = false;
@@ -439,6 +443,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_has_fill = 0.0f;
             day_min_balance = INFINITY;
             day_start_balance = balance;
+            day_fill_count = 0.0f;
         }
 
         bool any_fill = false;
@@ -507,7 +512,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 balance += net_pnl;
                 record_realized_net(
                     net_pnl, realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
                 bool went_flat = new_size <= 0.0f;
@@ -544,7 +550,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 balance -= fee;
                 record_realized_net(
                     -fee, realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
@@ -1462,6 +1469,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 5] = day_min_balance;
         daily[output + 6] = balance - day_start_balance;
         daily[output + 7] = balance;
+        daily[output + 8] = day_fill_count;
     }
 
     float total_size = 0.0f;

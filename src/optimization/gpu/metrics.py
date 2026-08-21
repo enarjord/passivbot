@@ -50,6 +50,7 @@ _USD_PER_EXPOSURE_METRICS = {
 # metrics may guide Metal screening or proxy-side limits.
 SUPPORTED_METRICS = (
     "adg_pnl",
+    "adg_pnl_w",
     "adg_strategy_eq",
     "adg_strategy_eq_w",
     "backtest_completion_ratio",
@@ -96,6 +97,7 @@ SUPPORTED_METRICS = (
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
     "mdg_pnl",
+    "mdg_pnl_w",
     "omega_ratio_strategy_eq",
     "omega_ratio_strategy_eq_w",
     "position_held_days_max",
@@ -106,9 +108,11 @@ SUPPORTED_METRICS = (
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
     "sharpe_ratio_pnl",
+    "sharpe_ratio_pnl_w",
     "sortino_ratio_strategy_eq",
     "sortino_ratio_strategy_eq_w",
     "sortino_ratio_pnl",
+    "sortino_ratio_pnl_w",
     "sterling_ratio_strategy_eq",
     "sterling_ratio_strategy_eq_w",
     "strategy_eq_recovery_days_max",
@@ -129,6 +133,13 @@ _PNL_METRICS = {
     "mdg_pnl",
     "sharpe_ratio_pnl",
     "sortino_ratio_pnl",
+}
+
+_WEIGHTED_PNL_METRICS = {
+    "adg_pnl_w",
+    "mdg_pnl_w",
+    "sharpe_ratio_pnl_w",
+    "sortino_ratio_pnl_w",
 }
 
 
@@ -627,6 +638,81 @@ def _weighted_strategy_eq_metrics(
     return {name: value / 10.0 for name, value in totals.items()}
 
 
+def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
+    finite_mask = (
+        mask
+        & torch.isfinite(day_net_pnl)
+        & torch.isfinite(day_last_fill_balance)
+    )
+    ratios = torch.where(
+        finite_mask,
+        day_net_pnl / day_last_fill_balance.abs().clamp(min=1e-12),
+        torch.zeros_like(day_net_pnl),
+    )
+    count = finite_mask.sum(dim=1)
+    adg = ratios.sum(dim=1) / count.clamp(min=1).to(ratios.dtype)
+    adg = torch.where(count > 0, adg, torch.zeros_like(adg))
+    mdg = _masked_median(ratios, finite_mask)
+    sharpe, sortino = _sharpe_sortino(ratios, finite_mask, adg)
+    return adg, mdg, sharpe, sortino, count
+
+
+def _weighted_pnl_metrics(
+    day_net_pnl,
+    day_last_fill_balance,
+    day_fill_count,
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+    requested,
+):
+    requested = set(requested) & _WEIGHTED_PNL_METRICS
+    if not requested:
+        return {}
+    _, subsets = _weighted_subsets(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    fill_count = torch.where(
+        active, day_fill_count, torch.zeros_like(day_fill_count)
+    )
+    eligible = fill_count.sum(dim=1) > 1.0
+    totals = {
+        name: torch.zeros(
+            day_net_pnl.shape[0],
+            dtype=day_net_pnl.dtype,
+            device=day_net_pnl.device,
+        )
+        for name in requested
+    }
+    for subset in subsets:
+        subset_fill_count = torch.where(
+            subset, fill_count, torch.zeros_like(fill_count)
+        ).sum(dim=1)
+        adg, mdg, sharpe, sortino, _ = _daily_pnl_stats(
+            day_net_pnl,
+            day_last_fill_balance,
+            subset & (fill_count > 0.0),
+        )
+        include = eligible & (subset_fill_count > 0.0)
+        values = {
+            "adg_pnl_w": adg,
+            "mdg_pnl_w": mdg,
+            "sharpe_ratio_pnl_w": sharpe,
+            "sortino_ratio_pnl_w": sortino,
+        }
+        for name in requested:
+            totals[name] += torch.where(
+                include, values[name], torch.zeros_like(values[name])
+            )
+    return {name: value / 10.0 for name, value in totals.items()}
+
+
 def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     """Reduce directional HSL counters using the authoritative Rust formulas."""
 
@@ -796,29 +882,28 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
 
     zeros = torch.zeros_like(adg)
     adg_pnl = mdg_pnl = sharpe_pnl = sortino_pnl = zeros
-    if requested & _PNL_METRICS:
+    weighted_pnl_metrics = {}
+    if requested & (_PNL_METRICS | _WEIGHTED_PNL_METRICS):
         day_net_pnl = out["day_net_pnl"].to(torch.float64)
         day_last_fill_balance = out["day_last_fill_balance"].to(torch.float64)
-        pnl_mask = (
-            day_has_fill
-            & active
-            & torch.isfinite(day_net_pnl)
-            & torch.isfinite(day_last_fill_balance)
-        )
-        daily_pnl_ratios = torch.where(
-            pnl_mask,
-            day_net_pnl / day_last_fill_balance.abs().clamp(min=1e-12),
-            torch.zeros_like(day_net_pnl),
-        )
-        pnl_days = pnl_mask.sum(dim=1)
-        adg_pnl = daily_pnl_ratios.sum(dim=1) / pnl_days.clamp(min=1).to(
-            daily_pnl_ratios.dtype
-        )
-        adg_pnl = torch.where(pnl_days > 0, adg_pnl, torch.zeros_like(adg_pnl))
-        mdg_pnl = _masked_median(daily_pnl_ratios, pnl_mask)
-        sharpe_pnl, sortino_pnl = _sharpe_sortino(
-            daily_pnl_ratios, pnl_mask, adg_pnl
-        )
+        if requested & _PNL_METRICS:
+            adg_pnl, mdg_pnl, sharpe_pnl, sortino_pnl, _ = _daily_pnl_stats(
+                day_net_pnl,
+                day_last_fill_balance,
+                day_has_fill & active,
+            )
+        if requested & _WEIGHTED_PNL_METRICS:
+            weighted_pnl_metrics = _weighted_pnl_metrics(
+                day_net_pnl,
+                day_last_fill_balance,
+                out["day_fill_count"].to(torch.float64),
+                active,
+                out["first_eq_ts"],
+                out["last_eq_ts"],
+                data["ts0"],
+                run.interval_ms,
+                requested,
+            )
 
     last_eq_ts = out["last_eq_ts"]
     first_eq_ts = out["first_eq_ts"]
@@ -941,6 +1026,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
+    objectives.update(weighted_pnl_metrics)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue

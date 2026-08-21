@@ -174,6 +174,125 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
     )
 
 
+def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
+    day_ms = 86_400_000
+    ratios = torch.tensor(
+        [0.10, -0.05, 0.02, -0.01, 0.03, 0.04, -0.02, 0.01, 0.05, -0.03],
+        dtype=torch.float64,
+    )
+    balances = torch.full((1, 10), 100.0, dtype=torch.float64)
+    day_end = torch.full((1, 10), 100.0, dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones((1, 10), dtype=torch.bool),
+        "day_net_pnl": ratios.unsqueeze(0) * balances,
+        "day_last_fill_balance": balances,
+        "day_fill_count": torch.ones((1, 10), dtype=torch.float64),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "position_unchanged_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([9.0 * day_ms]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([9.0 * day_ms]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([9.0 * day_ms]),
+        "liq_step": torch.tensor([-1]),
+    }
+    requested = {
+        "adg_pnl_w",
+        "mdg_pnl_w",
+        "sharpe_ratio_pnl_w",
+        "sortino_ratio_pnl_w",
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=day_ms),
+        {"ts0": 0.0, "n": 10},
+        needed=requested,
+    )
+
+    suffixes = [
+        ratios,
+        ratios[5:],
+        ratios[7:],
+        ratios[8:],
+        ratios[8:],
+        ratios[8:],
+        ratios[9:],
+        ratios[9:],
+        ratios[9:],
+        ratios[9:],
+    ]
+    expected = {name: 0.0 for name in requested}
+    for suffix in suffixes:
+        mean = suffix.mean()
+        median = suffix.median() if len(suffix) % 2 else suffix.sort().values[
+            len(suffix) // 2 - 1 : len(suffix) // 2 + 1
+        ].mean()
+        std = torch.sqrt(((suffix - mean) ** 2).mean())
+        downside_values = suffix[suffix < 0.0]
+        downside = (
+            torch.sqrt((downside_values**2).mean())
+            if len(downside_values)
+            else torch.tensor(0.0)
+        )
+        expected["adg_pnl_w"] += mean.item() / 10.0
+        expected["mdg_pnl_w"] += median.item() / 10.0
+        expected["sharpe_ratio_pnl_w"] += (
+            0.0 if std.item() == 0.0 else (mean / std).item() / 10.0
+        )
+        expected["sortino_ratio_pnl_w"] += (
+            0.0 if downside.item() == 0.0 else (mean / downside).item() / 10.0
+        )
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    for name, value in expected.items():
+        assert metrics[name].item() == pytest.approx(value)
+
+
+def test_weighted_pnl_uses_fill_count_not_fill_day_count_for_eligibility():
+    day_ms = 86_400_000
+    day_end = torch.full((1, 10), 100.0, dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.tensor([[True] + [False] * 9]),
+        "day_net_pnl": torch.tensor([[10.0] + [0.0] * 9]),
+        "day_last_fill_balance": torch.tensor([[110.0] + [100.0] * 9]),
+        "day_fill_count": torch.tensor([[2.0] + [0.0] * 9]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "position_unchanged_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([0.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([9.0 * day_ms]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([9.0 * day_ms]),
+        "liq_step": torch.tensor([-1]),
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=day_ms),
+        {"ts0": 0.0, "n": 10},
+        needed={"adg_pnl_w"},
+    )
+
+    assert metrics["adg_pnl_w"].item() == pytest.approx((10.0 / 110.0) / 10.0)
+
+
 def test_empty_median_return_series_matches_rust_zero_contract():
     values = torch.empty((1, 0), dtype=torch.float64)
     mask = torch.empty((1, 0), dtype=torch.bool)

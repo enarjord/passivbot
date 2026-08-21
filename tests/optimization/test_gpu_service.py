@@ -45,12 +45,22 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "entry_initial_balance_pct_short",
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
+        "day_fill_count",
     } <= CORE_OUTPUT_KEYS
 
 
 @pytest.mark.parametrize(
     "metric",
-    ["adg_pnl", "mdg_pnl", "sharpe_ratio_pnl", "sortino_ratio_pnl"],
+    [
+        "adg_pnl",
+        "adg_pnl_w",
+        "mdg_pnl",
+        "mdg_pnl_w",
+        "sharpe_ratio_pnl",
+        "sharpe_ratio_pnl_w",
+        "sortino_ratio_pnl",
+        "sortino_ratio_pnl_w",
+    ],
 )
 def test_dual_side_multicoin_realized_pnl_metrics_fail_closed(metric):
     with pytest.raises(ValueError, match="shared-liquidation cutoff"):
@@ -483,6 +493,9 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
                 [[end[0] - 1_000.0, end[1] - end[0]]]
             ),
             "day_last_fill_balance": torch.tensor([end]),
+            "day_fill_count": torch.tensor(
+                [[float(fill[0]), float(fill[1])]]
+            ),
             "max_dd": torch.tensor([0.20]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -536,6 +549,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["day_has_fill"].tolist() == [[True, True]]
     assert combined["day_net_pnl"].tolist() == [[50.0, 50.0]]
     assert combined["day_last_fill_balance"].tolist() == [[1_050.0, 1_100.0]]
+    assert combined["day_fill_count"].tolist() == [[1.0, 1.0]]
     assert combined["first_fill_ts"].item() == 300.0
     assert combined["last_fill_ts"].item() == 700.0
     assert combined["last_high_ts"].item() == 800.0
@@ -579,6 +593,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_min_balance": torch.tensor([[900.0, 900.0, 900.0]]),
             "day_net_pnl": torch.zeros((1, 3)),
             "day_last_fill_balance": torch.full((1, 3), 1_000.0),
+            "day_fill_count": torch.ones((1, 3)),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -620,6 +635,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "day_min_balance": torch.tensor([[900.0, 450.0, 700.0]]),
             "day_net_pnl": torch.zeros((1, 3)),
             "day_last_fill_balance": torch.full((1, 3), 1_000.0),
+            "day_fill_count": torch.ones((1, 3)),
             "max_dd": torch.tensor([0.40]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),

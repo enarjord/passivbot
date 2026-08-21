@@ -41,7 +41,7 @@ mod tests {
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert!(source.contains("kernel void passivbot_ema_anchor"));
-        assert!(source.contains("constant int DAILY_COLS = 7"));
+        assert!(source.contains("constant int DAILY_COLS = 8"));
         assert!(source.contains("constant int SCALAR_COLS = 50"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
@@ -111,7 +111,7 @@ mod tests {
         assert!(source.contains("constant int OVERRIDE_COLS = 19"));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 11"));
-        assert!(source.contains("constant int DAILY_COLS = 8"));
+        assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 24"));
         assert!(source.contains("record_gross_pnl"));
