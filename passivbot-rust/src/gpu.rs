@@ -108,12 +108,24 @@ mod tests {
             "inline float joint_hsl_realized_pnl(",
             "inline float joint_hsl_unrealized_pnl(",
             "inline bool joint_portfolio_can_generate(",
+            "inline bool update_joint_pside_hsl(",
+            "inline void try_restart_joint_pside_hsl(",
+            "inline int joint_pside_hsl_global_tier(",
         ] {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }
         assert_eq!(source.matches("struct JointPortfolioAccount").count(), 1);
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
+        assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
+        assert!(source.contains(
+            "const bool shared_has_position = has_position_long || has_position_short"
+        ));
+        assert!(source.contains(
+            "const bool shared_has_blocking_orders = has_blocking_orders_long"
+        ));
+        assert!(source.contains("joint_hsl_realized_pnl(account, unified, true)"));
+        assert!(source.contains("joint_hsl_realized_pnl(account, unified, false)"));
     }
 
     fn assert_directional_hsl_accounting_contract(source: &str) {
@@ -166,6 +178,20 @@ mod tests {
             assert!(!body.contains("float balance = starting_balance"));
             assert!(!body.contains("balance += net_pnl"));
             assert!(!body.contains("balance -= fee"));
+        }
+    }
+
+    #[test]
+    fn multicoin_sources_compose_hsl_before_joint_controller_helpers() {
+        for source in [
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            let hsl = source.find("struct HslState").unwrap();
+            let joint = source.find("inline bool update_joint_pside_hsl(").unwrap();
+            assert!(hsl < joint);
+            assert_shared_hsl_contract(source);
+            assert_shared_multicoin_contract(source);
         }
     }
 

@@ -10,9 +10,9 @@ constant int DAILY_COLS = 9;
 constant int SCALAR_COLS = 57;
 constant int GAP_BINS = 128;
 
-// PASSIVBOT_MULTICOIN_COMMON
-
 // PASSIVBOT_HSL_COMMON
+
+// PASSIVBOT_MULTICOIN_COMMON
 
 inline bool realized_loss_proxy_allows_close(
     float qty, float close_price, float pprice, bool short_side,
