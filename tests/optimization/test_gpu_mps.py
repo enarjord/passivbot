@@ -382,14 +382,30 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
     shock = 0.7 if side == "long" else 1.3
     if shock_coin == "both":
         closes[20:] *= shock
+        markets = [
+            ProxyMarket(
+                0.001,
+                0.01,
+                0.001,
+                0.0,
+                1.0,
+                maker_fee=0.0,
+                taker_fee=0.01,
+            )
+            for _ in range(2)
+        ]
     else:
         closes[20:, shock_coin] *= shock
+        markets = None
     runner, row = _multicoin_exposure_fixture(
         strategy_kind,
         side,
         count=count,
         closes=closes,
+        markets=markets,
         collect_coin_fill_counts=True,
+        market_order_slippage_pct=0.02 if shock_coin == "both" else 0.0,
+        hsl_panic_market=shock_coin == "both",
     )
     keys = (
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS
@@ -434,6 +450,14 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
     assert (output["hsl_panic_close_loss_sum"] > 0.0).all().item()
     if shock_coin == "both":
         assert (output["coin_fill_counts"] >= 2.0).all().item()
+        assert (
+            output["hsl_panic_loss_drawdown_max"]
+            > output["hsl_panic_loss_drawdown_min"]
+        ).all().item()
+        assert output["hsl_panic_loss_drawdown_sum"][0].item() == pytest.approx(
+            output["hsl_panic_loss_drawdown_min"][0].item()
+            + output["hsl_panic_loss_drawdown_max"][0].item()
+        )
         expected_open_positions = 0.0
     else:
         assert (output["coin_fill_counts"][:, shock_coin] >= 2.0).all().item()
@@ -444,6 +468,53 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
     assert output["hsl_trigger_drawdown_sum"][0].item() == pytest.approx(
         output["hsl_trigger_drawdown_sum"][1].item()
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_coin_hsl_reselects_around_blocked_forager_coin(
+    strategy_kind, side
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[20:, 1] *= 0.7 if side == "long" else 1.3
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        closes=closes,
+        collect_coin_fill_counts=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "n_positions": 1.0,
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output[f"hsl_triggers_{side}"].item() == 1.0
+    assert output["coin_fill_counts"][0, 1].item() >= 2.0
+    assert output["coin_fill_counts"][0, 0].item() >= 1.0
 
 
 @pytest.mark.skipif(
@@ -800,6 +871,46 @@ def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
     assert not hour_valid[1]
     assert hour_valid[61]
     assert hour_log_range[61] == pytest.approx(np.log(106.0 / 94.0))
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_coin_hsl_preserves_intraminute_realized_peak():
+    import passivbot_rust
+
+    trace_kernel = r"""
+kernel void passivbot_hsl_coin_fill_peak(
+    constant float* params [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    HslState h = load_hsl(params, 0, 0);
+    record_coin_hsl_realized_fill(h, 100.0f);
+    record_coin_hsl_realized_fill(h, 90.0f);
+    HslSignal signal;
+    bool valid = derive_hsl_signal(
+        h, 1000.0f, 1000.0f, 90.0f, 0.0f, signal
+    );
+    output[0] = valid ? h.coin_realized_peak : -1.0f;
+    output[1] = valid ? signal.drawdown_raw : -1.0f;
+}
+"""
+    source = passivbot_rust.mps_ema_anchor_source_py() + trace_kernel
+    library = torch.mps.compile_shader(source)
+    params = torch.tensor(
+        [1.0, 0.1, 1.0, 0.0, 1.0, 2.0, 0.5, 0.75, 0.0, 2.0, 2.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+
+    library.passivbot_hsl_coin_fill_peak(params, output, threads=(1, 1, 1))
+    actual = output.cpu().numpy()
+
+    assert actual[0] == pytest.approx(100.0)
+    assert actual[1] == pytest.approx(0.02)
 
 
 @pytest.mark.skipif(

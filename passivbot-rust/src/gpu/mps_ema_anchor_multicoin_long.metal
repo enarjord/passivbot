@@ -287,6 +287,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const bool coin_hsl_mode = hsl.enabled
         && hsl.signal_mode == HSL_SIGNAL_COIN;
     HslState coin_hsl[MAX_COINS];
+    ulong coin_hsl_entry_blocked_mask = 0ul;
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -602,7 +603,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 if (is_hsl_panic) {
                     if (coin_hsl_mode) {
                         record_hsl_panic_fill(
-                            coin_hsl[c], net_pnl, hsl_equity_before_fills
+                            coin_hsl[c], net_pnl,
+                            hsl_equity_before_fills
                         );
                     } else {
                         record_hsl_panic_fill(
@@ -621,6 +623,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     false, !short_side
                 );
                 coin_realized_pnl[c] += net_pnl;
+                if (coin_hsl_mode) {
+                    record_coin_hsl_realized_fill(
+                        coin_hsl[c], coin_realized_pnl[c]
+                    );
+                    advance_coin_hsl_equity_after_close_fill(
+                        hsl_equity_before_fills,
+                        net_pnl, adjusted, pprice[c], close,
+                        c_mult, short_side
+                    );
+                }
                 if (collect_coin_fill_counts) {
                     coin_fill_counts[int(b) * C + c] += 1.0f;
                 }
@@ -670,6 +682,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     true, !short_side
                 );
                 coin_realized_pnl[c] -= fee;
+                if (coin_hsl_mode) {
+                    record_coin_hsl_realized_fill(
+                        coin_hsl[c], coin_realized_pnl[c]
+                    );
+                    advance_coin_hsl_equity_after_entry_fill(
+                        hsl_equity_before_fills,
+                        fee, adjusted, fill_price, close,
+                        c_mult, short_side
+                    );
+                }
                 if (collect_coin_fill_counts) {
                     coin_fill_counts[int(b) * C + c] += 1.0f;
                 }
@@ -793,7 +815,20 @@ inline void passivbot_ema_anchor_multicoin_impl(
             // Exact Rust ranks flat candidates every minute. Re-ranking only
             // after state changes keeps the proxy inexpensive; independent
             // exact validations and drift gates police this approximation.
+            bool coin_hsl_eligibility_changed = false;
+            if (coin_hsl_mode) {
+                ulong blocked_mask = 0ul;
+                for (int c = 0; c < C; ++c) {
+                    if (hsl_mode(coin_hsl[c], false) != 0) {
+                        blocked_mask |= 1ul << ulong(c);
+                    }
+                }
+                coin_hsl_eligibility_changed =
+                    blocked_mask != coin_hsl_entry_blocked_mask;
+                coin_hsl_entry_blocked_mask = blocked_mask;
+            }
             bool reselect = !selection_initialized || any_fill
+                || coin_hsl_eligibility_changed
                 || effective_n_positions != previous_effective_n_positions;
             if (reselect) {
                 int active_count = 0;
@@ -812,7 +847,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     bool enabled = !selected[c]
                         && k >= int(coin_settings[coin_offset + 8])
                         && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(bars[bar_offset + 2]) && coin_wel != 0.0f;
+                        && finite_positive(bars[bar_offset + 2])
+                        && coin_wel != 0.0f
+                        && (!coin_hsl_mode || (
+                            coin_hsl_entry_blocked_mask & (1ul << ulong(c))
+                        ) == 0ul);
                     survivor[c] = enabled;
                     if (enabled) enabled_count += 1;
                 }

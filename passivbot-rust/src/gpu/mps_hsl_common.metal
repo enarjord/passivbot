@@ -177,6 +177,47 @@ inline bool derive_hsl_signal(
     return true;
 }
 
+inline void record_coin_hsl_realized_fill(
+    thread HslState& h,
+    float realized_pnl
+) {
+    if (!h.enabled || h.signal_mode != HSL_SIGNAL_COIN) return;
+    h.coin_realized_peak = fmax(
+        h.coin_realized_peak,
+        realized_pnl - h.coin_realized_baseline
+    );
+}
+
+inline void advance_coin_hsl_equity_after_close_fill(
+    thread float& equity,
+    float net_pnl,
+    float qty,
+    float position_price,
+    float mark_price,
+    float c_mult,
+    bool short_side
+) {
+    float removed_unrealized = qty * c_mult * (
+        short_side ? position_price - mark_price : mark_price - position_price
+    );
+    equity += net_pnl - removed_unrealized;
+}
+
+inline void advance_coin_hsl_equity_after_entry_fill(
+    thread float& equity,
+    float fee,
+    float qty,
+    float fill_price,
+    float mark_price,
+    float c_mult,
+    bool short_side
+) {
+    float added_unrealized = qty * c_mult * (
+        short_side ? fill_price - mark_price : mark_price - fill_price
+    );
+    equity += added_unrealized - fee;
+}
+
 inline void update_hsl_from_signal(
     thread HslState& h,
     thread HslSignal& signal,
