@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-constant int SCALAR_COLS = 57;
+constant int SCALAR_COLS = 58;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -1147,6 +1147,9 @@ inline void passivbot_single_coin_impl(
     float total_wallet_exposure_samples = 0.0f;
     float last_high_k = -1.0f;
     float recovery_max_min = 0.0f;
+    float account_peak = -INFINITY;
+    float account_peak_k = -1.0f;
+    float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
@@ -1737,6 +1740,15 @@ inline void passivbot_single_coin_impl(
             }
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
+            if (eqf >= account_peak) {
+                if (account_peak_k >= 0.0f) {
+                    account_recovery_max_min = fmax(
+                        account_recovery_max_min, kf - account_peak_k
+                    );
+                }
+                account_peak = eqf;
+                account_peak_k = kf;
+            }
             if (eqf > run_peak) {
                 if (last_high_k >= 0.0f) {
                     recovery_max_min = fmax(recovery_max_min, kf - last_high_k);
@@ -1912,6 +1924,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 54] = pnl_recovery_max_min * interval_ms;
     scalars[so + 55] = held_sum_min * interval_ms;
     scalars[so + 56] = held_count;
+    scalars[so + 57] = account_recovery_max_min * interval_ms;
 }
 
 kernel void passivbot_ema_anchor(

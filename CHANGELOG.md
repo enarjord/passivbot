@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added account-equity peak-recovery hours and days scoring and limits to Apple MPS optimization
+  for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs. The proxy
+  reuses Metal's full-resolution completed peak-to-peak recovery accumulator; exact Rust
+  validation remains authoritative.
+
 - Added mean position-holding time and positions-held-per-day scoring and limits to Apple MPS
   optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs.
   Metal records each completed position duration plus every open tail with constant-size sum and

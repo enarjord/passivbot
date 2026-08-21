@@ -64,6 +64,14 @@ def _assert_fill_scalar_contract(output):
             recovery_steps[has_fills]
             <= (last_eq_step - first_fill_step).clamp(min=0.0)[has_fills]
         ).all()
+    account_recovery = output["account_recovery_max_ms"]
+    assert (account_recovery >= 0.0).all()
+    equity_span = output["last_eq_ts"] - output["first_eq_ts"]
+    has_equity = torch.isfinite(equity_span) & (equity_span >= 0.0)
+    assert (
+        account_recovery[has_equity] <= equity_span[has_equity] + 1.0e-6
+    ).all()
+    assert (account_recovery[~has_equity] == 0.0).all()
 
 
 @pytest.mark.parametrize(
@@ -596,7 +604,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 57" in source
+    assert "constant int SCALAR_COLS = 58" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -604,6 +612,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "scalars[so + 54] = pnl_recovery_max_min * interval_ms" in source
     assert "scalars[so + 55] = held_sum_min * interval_ms" in source
     assert "scalars[so + 56] = held_count" in source
+    assert "scalars[so + 57] = account_recovery_max_min * interval_ms" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source

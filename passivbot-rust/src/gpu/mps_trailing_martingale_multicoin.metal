@@ -6,7 +6,7 @@ constant int PARAM_COLS = 48;
 constant int OVERRIDE_COLS = 34;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 31;
+constant int SCALAR_COLS = 32;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -702,6 +702,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float gap_max_min = 0.0f;
     float last_high_k = -1.0f;
     float recovery_max_min = 0.0f;
+    float account_peak = -INFINITY;
+    float account_peak_k = -1.0f;
+    float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     int liquidation_day = -1;
@@ -2304,6 +2307,15 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
             float effective_equity = liquidated ? liquidation_floor : equity;
+            if (effective_equity >= account_peak) {
+                if (account_peak_k >= 0.0f) {
+                    account_recovery_max_min = fmax(
+                        account_recovery_max_min, float(k) - account_peak_k
+                    );
+                }
+                account_peak = effective_equity;
+                account_peak_k = float(k);
+            }
             if (effective_equity > run_peak) {
                 if (last_high_k >= 0.0f) {
                     recovery_max_min = fmax(
@@ -2425,6 +2437,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
+    scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

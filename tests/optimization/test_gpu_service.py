@@ -53,6 +53,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_active_days_count",
         "coin_fill_counts",
         "pnl_recovery_max_ms",
+        "account_recovery_max_ms",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -82,6 +83,8 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_top_symbol_share",
         "mdg_pnl",
         "mdg_pnl_w",
+        "peak_recovery_days_equity_usd",
+        "peak_recovery_hours_equity_usd",
         "peak_recovery_days_pnl",
         "peak_recovery_hours_pnl",
         "sharpe_ratio_pnl",

@@ -42,7 +42,7 @@ mod tests {
         let source = mps_ema_anchor_source();
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
-        assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert!(source.contains("constant int SCALAR_COLS = 58"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -57,6 +57,8 @@ mod tests {
         assert!(source.contains("scalars[so + 54] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));
+        assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
+        assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -120,7 +122,7 @@ mod tests {
         assert!(source.contains("constant int COIN_COLS = 11"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 31"));
+        assert!(source.contains("constant int SCALAR_COLS = 32"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
@@ -135,6 +137,10 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 29] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 30] = held_count"));
+        assert!(
+            source.contains("scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms")
+        );
+        assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
@@ -180,7 +186,7 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert!(source.contains("constant int SCALAR_COLS = 58"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -195,6 +201,8 @@ mod tests {
         assert!(source.contains("scalars[so + 54] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));
+        assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
+        assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
@@ -297,7 +305,7 @@ mod tests {
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 48"));
         assert!(source.contains("constant int OVERRIDE_COLS = 34"));
-        assert!(source.contains("constant int SCALAR_COLS = 31"));
+        assert!(source.contains("constant int SCALAR_COLS = 32"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
@@ -312,6 +320,10 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 29] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[scalar_offset + 30] = held_count"));
+        assert!(
+            source.contains("scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms")
+        );
+        assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
