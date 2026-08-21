@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
+    _fill_activity_metrics,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
@@ -26,6 +27,30 @@ from optimization.gpu.metrics import (
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
+
+
+def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
+    first_step = 7_509
+    last_step = first_step + 1_440
+    first_ts = np.float32(first_step * 60_000)
+    last_ts = np.float32(last_step * 60_000)
+    assert (float(last_ts) - float(first_ts)) / 86_400_000.0 > 1.0
+
+    metrics = _fill_activity_metrics(
+        {
+            "fill_count": torch.tensor([1.0]),
+            "fill_count_entry": torch.tensor([1.0]),
+            "fill_count_long": torch.tensor([1.0]),
+            "fills_active_days_count": torch.tensor([1.0]),
+            "first_eq_ts": torch.tensor([first_ts]),
+            "last_eq_ts": torch.tensor([last_ts]),
+        },
+        SimpleNamespace(interval_ms=60_000),
+        {"fills_active_days_ratio", "fills_analysis_duration_days"},
+    )
+
+    assert metrics["fills_analysis_duration_days"].item() == 1.0
+    assert metrics["fills_active_days_ratio"].item() == 1.0
 
 
 def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():

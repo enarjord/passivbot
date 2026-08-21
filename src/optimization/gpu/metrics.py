@@ -702,7 +702,7 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     return adg, mdg, sharpe, sortino, count
 
 
-def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
+def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     """Match Rust's full-run fill count and timestamp-span rate contract."""
 
     fill_count = out["fill_count"].to(torch.float64)
@@ -718,9 +718,17 @@ def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
         & torch.isfinite(last_eq_ts)
         & (last_eq_ts > first_eq_ts)
     )
+    interval_ms = max(float(run.interval_ms), 1.0)
+    # Metal exports integer candle indices multiplied by interval_ms through a
+    # float32 scalar buffer. Recover the indices before subtracting so a span
+    # on a whole-day boundary cannot round slightly upward and add a spurious
+    # active-day denominator bucket.
+    first_eq_step = torch.round(first_eq_ts / interval_ms)
+    last_eq_step = torch.round(last_eq_ts / interval_ms)
     duration_days = torch.where(
         has_span,
-        (last_eq_ts - first_eq_ts) / 86_400_000.0,
+        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms
+        / 86_400_000.0,
         torch.zeros_like(first_eq_ts),
     )
     fills_per_day = torch.where(
@@ -1081,7 +1089,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
     fill_activity_metrics = (
-        _fill_activity_metrics(out, requested)
+        _fill_activity_metrics(out, run, requested)
         if requested & _FILL_ACTIVITY_METRICS
         else {}
     )
