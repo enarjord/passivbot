@@ -19,6 +19,7 @@ from optimization.gpu.model import (
     build_mps_multicoin_data,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_single_coin_hsl_signal_topology,
 )
 
 
@@ -306,11 +307,7 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             f"or never, got {restart_policy!r}"
         )
     signal_mode = str(signal_mode).strip().lower()
-    if signal_mode not in {"coin", "pside", "unified"}:
-        raise ValueError(
-            "MPS HSL requires live.hsl_signal_mode to be coin, pside, or "
-            f"unified, got {signal_mode!r}"
-        )
+    validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=1)
     signal_mode_ids = {"unified": 0.0, "pside": 1.0, "coin": 2.0}
     orange_mode = str(
         bot.get("hsl_orange_tier_mode", "tp_only_with_active_entry_cancellation")
@@ -738,14 +735,14 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
-        if hsl_enabled_sides and sum(self.enabled.values()) != 1:
-            raise ValueError(
-                "MPS single-coin HSL currently requires exactly one enabled side"
-            )
         signal_mode = (
             backtest_params.get("equity_hard_stop_loss", {})
             .get("signal_mode", "unified")
         )
+        if hsl_enabled_sides:
+            validate_single_coin_hsl_signal_topology(
+                signal_mode, enabled_side_count=sum(self.enabled.values())
+            )
         hsl_panic_market = {}
         self.base_params = {}
         for side, bot in (("long", long_bot), ("short", short_bot)):

@@ -1966,6 +1966,110 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("signal_mode", ["pside", "coin"])
+def test_mps_dual_side_single_coin_hsl_keeps_directional_state_separate(
+    strategy_kind, signal_mode
+):
+    count = 48
+    close = np.full(count, 100.0)
+    close[8:20] = 70.0
+    close[20:32] = 100.0
+    close[32:] = 130.0
+    high = close * 1.02
+    low = close * 0.98
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "trailing_martingale":
+        baseline = _tm_single_row(initial_ema_dist=0.0)
+        baseline[6] = 0.5
+        baseline[7] = 0.5
+        baseline[16] = 0.5
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        baseline = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.5,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 1.0,
+                "offset": 0.0,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsEmaAnchorRunner
+    hsl = list(baseline)
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.01,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 1.0 if signal_mode == "pside" else 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        hsl[keys.index(key)] = value
+    rows = np.asarray(
+        [
+            hsl + baseline,
+            baseline + hsl,
+            hsl + hsl,
+        ],
+        dtype=np.float64,
+    )
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+    ).run(rows)
+    torch.mps.synchronize()
+
+    assert output["hsl_triggers_long"][0].item() == 1.0
+    assert output["hsl_triggers_short"][0].item() == 0.0
+    assert output["hsl_triggers_long"][1].item() == 0.0
+    assert output["hsl_triggers_short"][1].item() == 1.0
+    assert output["hsl_triggers_long"][2].item() == 1.0
+    assert output["hsl_triggers_short"][2].item() == 1.0
+    assert output["hsl_trigger_drawdown_count"][2].item() == 2.0
+    assert output["hsl_panic_loss_drawdown_count"][2].item() == 2.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
     strategy_kind, side

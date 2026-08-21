@@ -11,6 +11,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_single_coin_hsl_signal_topology,
 )
 from optimization.gpu.service import (
     CORE_OUTPUT_KEYS,
@@ -445,6 +446,25 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
     packed = _hsl_params({"hsl_enabled": False}, signal_mode=signal_mode)
 
     assert packed["hsl_signal_mode"] == expected_id
+
+
+@pytest.mark.parametrize("signal_mode", ["coin", "pside"])
+def test_dual_side_single_coin_hsl_accepts_scoped_signal_modes(signal_mode):
+    validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=2)
+
+
+def test_one_sided_single_coin_hsl_accepts_unified_signal_mode():
+    validate_single_coin_hsl_signal_topology("unified", enabled_side_count=1)
+
+
+def test_dual_side_single_coin_hsl_rejects_unified_signal_mode():
+    with pytest.raises(ValueError, match="account-wide exact-Rust flatten contract"):
+        validate_single_coin_hsl_signal_topology("unified", enabled_side_count=2)
+
+
+def test_single_coin_hsl_rejects_unknown_signal_mode():
+    with pytest.raises(ValueError, match="coin, pside, or unified"):
+        validate_single_coin_hsl_signal_topology("portfolio", enabled_side_count=1)
 
 
 def test_directional_parameter_matrix_keeps_side_values_separate():
