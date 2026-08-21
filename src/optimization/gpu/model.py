@@ -178,6 +178,13 @@ def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
         raise ValueError(
             f"{field_name}.tier_ratios must satisfy 0 < yellow < orange < 1"
         )
+    yellow_f32 = float(np.float32(yellow))
+    orange_f32 = float(np.float32(orange))
+    if not 0.0 < yellow_f32 < orange_f32 < 1.0:
+        raise ValueError(
+            f"{field_name}.tier_ratios must remain strictly ordered inside "
+            "(0, 1) when represented as float32"
+        )
 
     restart_policy = settings.get("restart_after_red_policy", "threshold")
     if not isinstance(restart_policy, str):

@@ -539,6 +539,18 @@ def test_hsl_params_reject_invalid_effective_settings(bot_patch, match):
         _hsl_params(bot, signal_mode="coin")
 
 
+def test_hsl_params_reject_tier_ratios_that_collapse_in_float32():
+    with pytest.raises(ValueError, match="remain strictly ordered.*float32"):
+        _hsl_params(
+            {
+                "hsl_enabled": True,
+                "hsl_tier_ratio_yellow": 0.50000001,
+                "hsl_tier_ratio_orange": 0.50000002,
+            },
+            signal_mode="coin",
+        )
+
+
 @pytest.mark.parametrize(
     ("signal_mode", "expected_id"),
     [("unified", 0.0), ("pside", 1.0), ("coin", 2.0)],

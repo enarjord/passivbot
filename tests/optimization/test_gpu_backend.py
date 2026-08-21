@@ -2089,6 +2089,15 @@ def test_gpu_multicoin_accepts_complete_coin_hsl_override_group():
             {"tier_ratios": {"yellow": 0.8, "orange": 0.4}},
             "tier_ratios must satisfy",
         ),
+        (
+            {
+                "tier_ratios": {
+                    "yellow": 0.50000001,
+                    "orange": 0.50000002,
+                }
+            },
+            "remain strictly ordered.*float32",
+        ),
         ({"tier_ratios": None}, "tier_ratios must be a dictionary"),
         ({"orange_tier_mode": "tp_only"}, "orange_tier_mode"),
         ({"orange_tier_mode": "GRACEFUL_STOP"}, "orange_tier_mode"),
