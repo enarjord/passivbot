@@ -119,6 +119,120 @@ def encode_hsl_panic_order_type(value, *, field_name: str) -> float:
     return float(normalized == "market")
 
 
+def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
+    if not isinstance(settings, dict):
+        raise TypeError(f"{field_name} must be a dictionary")
+    enabled = settings.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise TypeError(f"{field_name}.enabled must be a boolean")
+
+    def finite_float(key: str, default: float) -> float:
+        try:
+            value = float(settings.get(key, default))
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{field_name}.{key} must be numeric") from exc
+        if not math.isfinite(value):
+            raise ValueError(f"{field_name}.{key} must be finite")
+        return value
+
+    red_threshold = finite_float("red_threshold", 0.15)
+    ema_span_minutes = finite_float("ema_span_minutes", 720.0)
+    cooldown_minutes = finite_float("cooldown_minutes_after_red", 0.0)
+    no_restart_threshold = finite_float(
+        "no_restart_drawdown_threshold", 1.0
+    )
+    if not 0.0 < red_threshold <= 1.0:
+        raise ValueError(
+            f"{field_name}.red_threshold must satisfy 0 < value <= 1"
+        )
+    if ema_span_minutes < 1.0:
+        raise ValueError(f"{field_name}.ema_span_minutes must be >= 1")
+    if cooldown_minutes < 0.0:
+        raise ValueError(
+            f"{field_name}.cooldown_minutes_after_red must be >= 0"
+        )
+    if not red_threshold <= no_restart_threshold <= 1.0:
+        raise ValueError(
+            f"{field_name}.no_restart_drawdown_threshold must satisfy "
+            "red_threshold <= value <= 1"
+        )
+
+    tier_ratios = settings.get(
+        "tier_ratios", {"yellow": 0.5, "orange": 0.75}
+    )
+    if not isinstance(tier_ratios, dict):
+        raise TypeError(f"{field_name}.tier_ratios must be a dictionary")
+    try:
+        yellow = float(tier_ratios.get("yellow", 0.5))
+        orange = float(tier_ratios.get("orange", 0.75))
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{field_name}.tier_ratios values must be numeric") from exc
+    if not (math.isfinite(yellow) and math.isfinite(orange)):
+        raise ValueError(f"{field_name}.tier_ratios values must be finite")
+    if not 0.0 < yellow < orange < 1.0:
+        raise ValueError(
+            f"{field_name}.tier_ratios must satisfy 0 < yellow < orange < 1"
+        )
+
+    restart_policy = str(
+        settings.get("restart_after_red_policy", "threshold")
+    ).strip().lower()
+    if restart_policy not in {"always", "threshold", "never"}:
+        raise ValueError(
+            f"{field_name}.restart_after_red_policy must be always, threshold, "
+            f"or never, got {restart_policy!r}"
+        )
+    orange_mode = str(
+        settings.get(
+            "orange_tier_mode", "tp_only_with_active_entry_cancellation"
+        )
+    ).strip().lower()
+    if orange_mode not in {
+        "graceful_stop",
+        "tp_only_with_active_entry_cancellation",
+    }:
+        raise ValueError(
+            f"{field_name}.orange_tier_mode must be graceful_stop or "
+            "tp_only_with_active_entry_cancellation, got "
+            f"{orange_mode!r}"
+        )
+    panic_order_type = str(
+        settings.get("panic_close_order_type", "limit")
+    ).strip().lower()
+    encode_hsl_panic_order_type(
+        panic_order_type,
+        field_name=f"{field_name}.panic_close_order_type",
+    )
+    return {
+        "enabled": enabled,
+        "red_threshold": red_threshold,
+        "ema_span_minutes": ema_span_minutes,
+        "cooldown_minutes_after_red": cooldown_minutes,
+        "no_restart_drawdown_threshold": no_restart_threshold,
+        "restart_after_red_policy": restart_policy,
+        "tier_ratios": {"yellow": yellow, "orange": orange},
+        "orange_tier_mode": orange_mode,
+        "panic_close_order_type": panic_order_type,
+    }
+
+
+def validate_hsl_override_patch(
+    base_hsl: dict, override_hsl: dict, *, field_name: str
+) -> dict:
+    if not isinstance(base_hsl, dict) or not isinstance(override_hsl, dict):
+        raise TypeError(f"{field_name} must be a dictionary")
+    effective = dict(base_hsl)
+    base_ratios = base_hsl.get("tier_ratios", {})
+    override_ratios = override_hsl.get("tier_ratios", {})
+    if not isinstance(base_ratios, dict) or not isinstance(override_ratios, dict):
+        raise TypeError(f"{field_name}.tier_ratios must be a dictionary")
+    effective.update(
+        {key: value for key, value in override_hsl.items() if key != "tier_ratios"}
+    )
+    effective["tier_ratios"] = {**base_ratios, **override_ratios}
+    return validate_hsl_settings(effective, field_name=field_name)
+
+
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     "twel_enforcer_reduce_portfolio",

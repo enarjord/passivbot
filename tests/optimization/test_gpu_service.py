@@ -511,6 +511,27 @@ def test_single_coin_hsl_packs_state_machine_inputs():
 
 
 @pytest.mark.parametrize(
+    ("bot_patch", "match"),
+    [
+        ({"hsl_red_threshold": -0.2}, "red_threshold must satisfy"),
+        ({"hsl_ema_span_minutes": 0.0}, "ema_span_minutes must be >= 1"),
+        (
+            {
+                "hsl_tier_ratio_yellow": 0.9,
+                "hsl_tier_ratio_orange": 0.2,
+            },
+            "tier_ratios must satisfy",
+        ),
+    ],
+)
+def test_hsl_params_reject_invalid_effective_settings(bot_patch, match):
+    bot = {"hsl_enabled": True, **bot_patch}
+
+    with pytest.raises(ValueError, match=match):
+        _hsl_params(bot, signal_mode="coin")
+
+
+@pytest.mark.parametrize(
     ("signal_mode", "expected_id"),
     [("unified", 0.0), ("pside", 1.0), ("coin", 2.0)],
 )

@@ -22,6 +22,7 @@ from optimization.gpu.model import (
     encode_hsl_panic_order_type,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    validate_hsl_settings,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
@@ -301,67 +302,75 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
 
 
 def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
-    restart_policy = str(
-        bot.get("hsl_restart_after_red_policy", "threshold")
-    ).strip().lower()
     restart_policy_ids = {"always": 0.0, "threshold": 1.0, "never": 2.0}
-    if restart_policy not in restart_policy_ids:
-        raise ValueError(
-            "MPS HSL requires restart_after_red_policy to be always, threshold, "
-            f"or never, got {restart_policy!r}"
-        )
     signal_mode = str(signal_mode).strip().lower()
     validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=1)
     signal_mode_ids = {"unified": 0.0, "pside": 1.0, "coin": 2.0}
-    orange_mode = str(
-        bot.get("hsl_orange_tier_mode", "tp_only_with_active_entry_cancellation")
-    ).strip().lower()
-    if orange_mode not in {
-        "graceful_stop",
-        "tp_only",
-        "tp_only_with_active_entry_cancellation",
-    }:
-        raise ValueError(
-            "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
-            f"got {orange_mode!r}"
-        )
-    tier_ratios = bot.get("hsl_tier_ratios", {}) or {}
-    if not isinstance(tier_ratios, dict):
-        raise ValueError(
-            "MPS HSL requires tier_ratios to be a dictionary, got "
-            f"{type(tier_ratios).__name__}"
-        )
+    tier_ratios = bot.get("hsl_tier_ratios", {})
+    if isinstance(tier_ratios, dict):
+        tier_ratios = dict(tier_ratios)
+        if "hsl_tier_ratio_yellow" in bot:
+            tier_ratios["yellow"] = bot["hsl_tier_ratio_yellow"]
+        if "hsl_tier_ratio_orange" in bot:
+            tier_ratios["orange"] = bot["hsl_tier_ratio_orange"]
+    validated = validate_hsl_settings(
+        {
+            "enabled": bot.get("hsl_enabled", False),
+            "red_threshold": bot.get("hsl_red_threshold", 0.15),
+            "ema_span_minutes": bot.get("hsl_ema_span_minutes", 720.0),
+            "cooldown_minutes_after_red": bot.get(
+                "hsl_cooldown_minutes_after_red", 0.0
+            ),
+            "no_restart_drawdown_threshold": bot.get(
+                "hsl_no_restart_drawdown_threshold", 1.0
+            ),
+            "restart_after_red_policy": bot.get(
+                "hsl_restart_after_red_policy", "threshold"
+            ),
+            "tier_ratios": tier_ratios,
+            "orange_tier_mode": bot.get(
+                "hsl_orange_tier_mode",
+                "tp_only_with_active_entry_cancellation",
+            ),
+            "panic_close_order_type": bot.get(
+                "hsl_panic_close_order_type", "limit"
+            ),
+        },
+        field_name="MPS HSL",
+    )
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
-    for key, default in (
-        ("hsl_red_threshold", 0.15),
-        ("hsl_no_restart_drawdown_threshold", 1.0),
+    for key, value in (
+        ("hsl_red_threshold", validated["red_threshold"]),
+        (
+            "hsl_no_restart_drawdown_threshold",
+            validated["no_restart_drawdown_threshold"],
+        ),
     ):
-        value = float(bot.get(key, default))
         if float32_below_one < value < 1.0:
             raise ValueError(
                 f"MPS HSL cannot represent {key}={value} distinctly from 1.0; "
                 f"use <= {float32_below_one} or exactly 1.0"
             )
     return {
-        "hsl_enabled": float(bool(bot.get("hsl_enabled", False))),
-        "hsl_red_threshold": float(bot.get("hsl_red_threshold", 0.15)),
-        "hsl_ema_span_minutes": float(bot.get("hsl_ema_span_minutes", 720.0)),
-        "hsl_cooldown_minutes_after_red": float(
-            bot.get("hsl_cooldown_minutes_after_red", 0.0)
+        "hsl_enabled": float(validated["enabled"]),
+        "hsl_red_threshold": validated["red_threshold"],
+        "hsl_ema_span_minutes": validated["ema_span_minutes"],
+        "hsl_cooldown_minutes_after_red": validated[
+            "cooldown_minutes_after_red"
+        ],
+        "hsl_no_restart_drawdown_threshold": validated[
+            "no_restart_drawdown_threshold"
+        ],
+        "hsl_restart_policy": restart_policy_ids[
+            validated["restart_after_red_policy"]
+        ],
+        "hsl_tier_ratio_yellow": validated["tier_ratios"]["yellow"],
+        "hsl_tier_ratio_orange": validated["tier_ratios"]["orange"],
+        "hsl_orange_graceful_stop": float(
+            validated["orange_tier_mode"] == "graceful_stop"
         ),
-        "hsl_no_restart_drawdown_threshold": float(
-            bot.get("hsl_no_restart_drawdown_threshold", 1.0)
-        ),
-        "hsl_restart_policy": restart_policy_ids[restart_policy],
-        "hsl_tier_ratio_yellow": float(
-            bot.get("hsl_tier_ratio_yellow", tier_ratios.get("yellow", 0.5))
-        ),
-        "hsl_tier_ratio_orange": float(
-            bot.get("hsl_tier_ratio_orange", tier_ratios.get("orange", 0.75))
-        ),
-        "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_mode": signal_mode_ids[signal_mode],
         # Multi-coin kernels replace this initial value with the dynamic
         # effective slot count before each per-coin HSL sample. The value is

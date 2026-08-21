@@ -28,8 +28,8 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
-    encode_hsl_panic_order_type,
     gpu_side_enabled,
+    validate_hsl_override_patch,
     validate_hsl_signal_topology,
 )
 from optimization.interrupts import (
@@ -1231,14 +1231,11 @@ def _validate_gpu_coin_overrides(
                 hsl_patch = side_patch.get("hsl", {}) or {}
                 if not isinstance(hsl_patch, dict):
                     continue
-                if "panic_close_order_type" in hsl_patch:
-                    encode_hsl_panic_order_type(
-                        hsl_patch["panic_close_order_type"],
-                        field_name=(
-                            f"coin_overrides.{coin}.bot.{side}.hsl."
-                            "panic_close_order_type"
-                        ),
-                    )
+                validate_hsl_override_patch(
+                    config.get("bot", {}).get(side, {}).get("hsl", {}) or {},
+                    hsl_patch,
+                    field_name=f"coin_overrides.{coin}.bot.{side}.hsl",
+                )
     if unsupported:
         supported_risk = (
             "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
