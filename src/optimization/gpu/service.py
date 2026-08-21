@@ -55,6 +55,10 @@ CORE_OUTPUT_KEYS = {
     "liq_step",
     "profit_sum",
     "loss_sum",
+    "profit_sum_long",
+    "loss_sum_long",
+    "profit_sum_short",
+    "loss_sum_short",
     "entry_initial_balance_pct",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
@@ -112,6 +116,9 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "fills_per_day_per_position_slot_short",
     "fills_per_day_short",
     "fills_top_symbol_share",
+    "long_short_profit_ratio",
+    "loss_profit_ratio_long",
+    "loss_profit_ratio_short",
     "mdg_pnl",
     "mdg_pnl_w",
     "peak_recovery_days_equity_usd",
@@ -121,6 +128,7 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "position_held_days_mean",
     "position_held_hours_mean",
     "positions_held_per_day",
+    "pnl_ratio_long_short",
     "sharpe_ratio_pnl",
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
@@ -459,6 +467,20 @@ def _directional_entry_initial_metrics(side: str, entry_pct):
     }
 
 
+def _directional_gross_pnl_outputs(side: str, profit_sum, loss_sum):
+    """Expand one directional gross-PnL pair into the shared two-side surface."""
+
+    if side not in {"long", "short"}:
+        raise ValueError(f"expected long or short gross PnL side, got {side!r}")
+    other_side = "short" if side == "long" else "long"
+    return {
+        f"profit_sum_{side}": profit_sum,
+        f"loss_sum_{side}": loss_sum,
+        f"profit_sum_{other_side}": profit_sum.new_zeros(profit_sum.shape),
+        f"loss_sum_{other_side}": loss_sum.new_zeros(loss_sum.shape),
+    }
+
+
 def _prepared_single_coin_side_enabled(config: dict, side: str, bot: dict) -> bool:
     """Match exact Rust eligibility for the one coin prepared by the payload."""
 
@@ -597,6 +619,10 @@ def _combine_hedged_multicoin_outputs(
     combined["liq_step"] = liquidation_day
     combined["profit_sum"] = long["profit_sum"] + short["profit_sum"]
     combined["loss_sum"] = long["loss_sum"] + short["loss_sum"]
+    combined["profit_sum_long"] = long["profit_sum"]
+    combined["loss_sum_long"] = long["loss_sum"]
+    combined["profit_sum_short"] = short["profit_sum"]
+    combined["loss_sum_short"] = short["loss_sum"]
     combined["fill_count"] = long["fill_count"] + short["fill_count"]
     combined["fill_count_entry"] = (
         long["fill_count_entry"] + short["fill_count_entry"]
@@ -1537,6 +1563,11 @@ class MpsMulticoinProxy:
             if len(self.sides) == 1:
                 side = self.sides[0]
                 output = side_outputs[side]
+                output.update(
+                    _directional_gross_pnl_outputs(
+                        side, output["profit_sum"], output["loss_sum"]
+                    )
+                )
                 output.update(
                     _directional_entry_initial_metrics(
                         side, output["entry_initial_balance_pct"]

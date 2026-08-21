@@ -116,12 +116,16 @@ SUPPORTED_METRICS = (
     "hard_stop_triggers_per_year",
     "hard_stop_triggers_short",
     "loss_profit_ratio",
+    "loss_profit_ratio_long",
+    "loss_profit_ratio_short",
+    "long_short_profit_ratio",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
     "mdg_pnl",
     "mdg_pnl_w",
     "omega_ratio_strategy_eq",
     "omega_ratio_strategy_eq_w",
+    "pnl_ratio_long_short",
     "position_held_days_mean",
     "position_held_days_max",
     "position_held_hours_mean",
@@ -254,6 +258,31 @@ def _loss_profit_ratio(loss_sum: torch.Tensor, profit_sum: torch.Tensor):
         torch.where(loss > 1.0e-12, cap, neutral),
         finite_ratio,
     )
+
+
+def _directional_pnl_metrics(out: dict) -> dict:
+    """Match Rust's directional gross-loss and signed-PnL ratio contracts."""
+
+    values = {}
+    for side in ("long", "short"):
+        values[f"loss_profit_ratio_{side}"] = _loss_profit_ratio(
+            out[f"loss_sum_{side}"], out[f"profit_sum_{side}"]
+        )
+    long_pnl = out["profit_sum_long"].to(torch.float64) - out[
+        "loss_sum_long"
+    ].to(torch.float64)
+    short_pnl = out["profit_sum_short"].to(torch.float64) - out[
+        "loss_sum_short"
+    ].to(torch.float64)
+    pnl_sum = long_pnl + short_pnl
+    long_short_ratio = torch.where(
+        pnl_sum != 0.0,
+        long_pnl / pnl_sum,
+        torch.full_like(pnl_sum, 0.5),
+    )
+    values["pnl_ratio_long_short"] = long_short_ratio
+    values["long_short_profit_ratio"] = long_short_ratio
+    return values
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
@@ -1353,6 +1382,20 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]
+        )
+    directional_pnl_metrics = {
+        "loss_profit_ratio_long",
+        "loss_profit_ratio_short",
+        "long_short_profit_ratio",
+        "pnl_ratio_long_short",
+    }
+    if requested & directional_pnl_metrics:
+        objectives.update(
+            {
+                name: value
+                for name, value in _directional_pnl_metrics(out).items()
+                if name in requested
+            }
         )
     for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean"):
         if name in requested:

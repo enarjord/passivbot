@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added directional close-fill PnL scoring and limits to Apple MPS optimization:
+  `loss_profit_ratio_long`, `loss_profit_ratio_short`, `pnl_ratio_long_short`, and its
+  `long_short_profit_ratio` alias. The proxy preserves long/short gross profit and loss separately
+  across supported single- and multi-coin topologies and applies exact Rust neutral/cap formulas;
+  exact Rust validation remains authoritative.
+
 - Added account-equity peak-recovery hours and days scoring and limits to Apple MPS optimization
   for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs. The proxy
   reuses Metal's full-resolution completed peak-to-peak recovery accumulator; exact Rust
