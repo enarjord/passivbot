@@ -79,6 +79,7 @@ def test_equity_shape_metrics_match_rust_daily_series_contract():
             [100.0, 110.0, float("inf"), float("inf")],
             [100.0, 0.0, 110.0, float("inf")],
             [100.0, float("inf"), float("inf"), float("inf")],
+            [100.0, float("inf"), 110.0, 90.0],
         ],
         dtype=torch.float64,
     )
@@ -104,6 +105,8 @@ def test_equity_shape_metrics_match_rust_daily_series_contract():
     assert metrics["equity_choppiness_usd"][4].item() == 0.0
     assert metrics["equity_jerkiness_usd"][4].item() == 0.0
     assert math.isinf(metrics["exponential_fit_error_usd"][4].item())
+    assert metrics["equity_choppiness_usd"][5].item() == pytest.approx(3.0)
+    assert metrics["equity_jerkiness_usd"][5].item() == pytest.approx(0.3)
 
 
 def test_equity_shape_metrics_use_rust_defaults_without_fills():

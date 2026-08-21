@@ -355,19 +355,21 @@ def _equity_shape_metrics(day_eq, active):
             "exponential_fit_error_usd": torch.full_like(zeros, float("inf")),
         }
 
-    counts = active.sum(dim=1)
     indices = (
         torch.arange(day_count, device=day_eq.device)
         .unsqueeze(0)
         .expand(batch_size, day_count)
     )
-    first_index = torch.where(
-        active, indices, torch.full_like(indices, day_count)
-    ).min(dim=1).values.clamp(max=day_count - 1)
-    last_index = torch.where(active, indices, torch.full_like(indices, -1)).max(
-        dim=1
-    ).values.clamp(min=0)
-    first = day_eq.gather(1, first_index.unsqueeze(1)).squeeze(1)
+    counts = active.sum(dim=1)
+    # Rust builds a compact Vec of touched UTC-day closes. Preserve that order
+    # when an entirely invalid day leaves a hole in the fixed proxy surface.
+    compact_order = torch.argsort(
+        torch.where(active, indices, indices + day_count), dim=1
+    )
+    day_eq = day_eq.gather(1, compact_order)
+    active = indices < counts.unsqueeze(1)
+    first = day_eq[:, 0]
+    last_index = (counts - 1).clamp(min=0)
     last = day_eq.gather(1, last_index.unsqueeze(1)).squeeze(1)
 
     adjacent = active[:, :-1] & active[:, 1:]
