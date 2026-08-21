@@ -48,6 +48,7 @@ CORE_OUTPUT_KEYS = {
     "first_fill_ts",
     "last_fill_ts",
     "recovery_max_ms",
+    "account_recovery_max_ms",
     "last_high_ts",
     "first_eq_ts",
     "last_eq_ts",
@@ -113,6 +114,8 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "fills_top_symbol_share",
     "mdg_pnl",
     "mdg_pnl_w",
+    "peak_recovery_days_equity_usd",
+    "peak_recovery_hours_equity_usd",
     "peak_recovery_days_pnl",
     "peak_recovery_hours_pnl",
     "position_held_days_mean",
@@ -122,6 +125,11 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
+}
+
+_ACCOUNT_EQUITY_RECOVERY_METRICS = {
+    "peak_recovery_days_equity_usd",
+    "peak_recovery_hours_equity_usd",
 }
 
 
@@ -371,6 +379,50 @@ def _require_no_internal_invalid_hsl_candles(
             "MPS single-coin HSL currently requires contiguous valid candles "
             f"between first and last valid indices; invalid candle at {first_invalid}"
         )
+
+
+def _require_no_internal_invalid_account_recovery_candles(
+    hlcvs,
+    *,
+    exposure_eligible_coins,
+    first_valid_indices,
+    last_valid_indices,
+    tracking_start_indices,
+) -> None:
+    """Keep completed account-equity recovery aligned with Rust's per-step series."""
+
+    values = np.asarray(hlcvs)
+    if values.ndim != 3 or values.shape[2] < 3:
+        raise ValueError(
+            "MPS account-equity recovery requires HLCVs shaped [time, coin, fields]"
+        )
+    for coin in range(values.shape[1]):
+        if not bool(exposure_eligible_coins[coin]):
+            continue
+        first = max(
+            0,
+            int(tracking_start_indices[coin]),
+            int(first_valid_indices[coin]),
+        )
+        last = min(int(last_valid_indices[coin]), values.shape[0] - 1)
+        if first > last:
+            continue
+        high = values[first : last + 1, coin, 0]
+        low = values[first : last + 1, coin, 1]
+        close = values[first : last + 1, coin, 2]
+        valid = (
+            np.isfinite(high)
+            & np.isfinite(low)
+            & np.isfinite(close)
+            & (close > 0.0)
+        )
+        if not bool(np.all(valid)):
+            first_invalid = first + int(np.flatnonzero(~valid)[0])
+            raise ValueError(
+                "MPS account-equity peak-recovery metrics require contiguous "
+                "valid candles after equity tracking starts; "
+                f"coin index {coin}, invalid candle at {first_invalid}"
+            )
 
 
 def _nan_min(left, right):
@@ -757,6 +809,14 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
+        if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
+            _require_no_internal_invalid_account_recovery_candles(
+                hlcvs,
+                exposure_eligible_coins=[True],
+                first_valid_indices=backtest_params["first_valid_indices"],
+                last_valid_indices=backtest_params["last_valid_indices"],
+                tracking_start_indices=[self.run.trade_start_idx],
+            )
         if hsl_enabled_sides:
             _require_no_internal_invalid_hsl_candles(
                 high,
@@ -1380,6 +1440,25 @@ class MpsMulticoinProxy:
             last_valid_idx=max(run.last_valid_idx for run in runs),
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
+        if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
+            side = self.sides[0]
+            wallet_exposure_column = (
+                11
+                if self.strategy_kind == "ema_anchor"
+                else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
+            )
+            fixed_coin_wels = per_side_coin_overrides[side][
+                :, wallet_exposure_column
+            ]
+            _require_no_internal_invalid_account_recovery_candles(
+                values,
+                exposure_eligible_coins=(
+                    ~np.isfinite(fixed_coin_wels) | (fixed_coin_wels != 0.0)
+                ),
+                first_valid_indices=backtest_params["first_valid_indices"],
+                last_valid_indices=backtest_params["last_valid_indices"],
+                tracking_start_indices=[run.trade_start_idx for run in runs],
+            )
         self.data = build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets
         )

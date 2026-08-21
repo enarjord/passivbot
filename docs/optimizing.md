@@ -207,6 +207,13 @@ The supported slice is intentionally narrow:
 - canonical USD `equity_choppiness`, `equity_jerkiness`, and `exponential_fit_error` scoring and
   limits use the proxy's active daily closing-equity samples and the exact Rust formulas. Candidates
   without fills retain Rust's default value of `1.0` for all three metrics
+- canonical USD `peak_recovery_hours_equity` and `peak_recovery_days_equity` scoring and limits
+  use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
+  an unrecovered final tail is not included and a candidate without fills returns zero. Dual-side
+  multi-coin runs fail closed because independent directional kernels cannot reconstruct the
+  shared portfolio equity path. These metrics also require contiguous valid candles for each
+  exposure-eligible coin after that coin's equity tracking starts because Rust records an equity
+  sample on every tracked step
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
@@ -255,6 +262,7 @@ screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
 `peak_recovery_days_strategy_eq`, `peak_recovery_hours_pnl`, `peak_recovery_days_pnl`,
 `entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
+`peak_recovery_hours_equity_usd`, `peak_recovery_days_equity_usd`,
 `position_held_days_mean`, `position_held_days_max`, `position_held_hours_mean`,
 `position_held_hours_max`, `positions_held_per_day`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and

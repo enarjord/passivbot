@@ -29,6 +29,7 @@ from optimization.gpu.service import (
     _prepared_single_coin_side_enabled,
     _require_multicoin_metric_topology,
     _require_complete_valid_tail,
+    _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
@@ -53,6 +54,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_active_days_count",
         "coin_fill_counts",
         "pnl_recovery_max_ms",
+        "account_recovery_max_ms",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -82,6 +84,8 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_top_symbol_share",
         "mdg_pnl",
         "mdg_pnl_w",
+        "peak_recovery_days_equity_usd",
+        "peak_recovery_hours_equity_usd",
         "peak_recovery_days_pnl",
         "peak_recovery_hours_pnl",
         "sharpe_ratio_pnl",
@@ -243,6 +247,36 @@ def test_gpu_hsl_requires_contiguous_valid_candles():
 
     _require_no_internal_invalid_hsl_candles(
         high, low, close, first_valid_idx=2, last_valid_idx=2
+    )
+
+
+def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous():
+    hlcvs = np.ones((4, 2, 4), dtype=np.float64)
+    hlcvs[2, 1, :3] = np.nan
+
+    with pytest.raises(ValueError, match="coin index 1, invalid candle at 2"):
+        _require_no_internal_invalid_account_recovery_candles(
+            hlcvs,
+            exposure_eligible_coins=[True, True],
+            first_valid_indices=[0, 0],
+            last_valid_indices=[3, 3],
+            tracking_start_indices=[1, 1],
+        )
+
+    _require_no_internal_invalid_account_recovery_candles(
+        hlcvs,
+        exposure_eligible_coins=[True, True],
+        first_valid_indices=[0, 0],
+        last_valid_indices=[3, 3],
+        tracking_start_indices=[1, 3],
+    )
+
+    _require_no_internal_invalid_account_recovery_candles(
+        hlcvs,
+        exposure_eligible_coins=[True, False],
+        first_valid_indices=[0, 0],
+        last_valid_indices=[3, 3],
+        tracking_start_indices=[1, 1],
     )
 
 

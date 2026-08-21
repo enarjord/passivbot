@@ -1054,6 +1054,8 @@ def _validate_dual_multicoin_metrics(
             "fills_gap_p95_hours",
             "fills_gap_p99_hours",
             "loss_profit_ratio",
+            "peak_recovery_days_equity_usd",
+            "peak_recovery_hours_equity_usd",
             "peak_recovery_days_pnl",
             "peak_recovery_days_strategy_eq",
             "peak_recovery_hours_strategy_eq",

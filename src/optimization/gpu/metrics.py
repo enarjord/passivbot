@@ -130,6 +130,8 @@ SUPPORTED_METRICS = (
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
+    "peak_recovery_days_equity_usd",
+    "peak_recovery_hours_equity_usd",
     "peak_recovery_days_pnl",
     "peak_recovery_days_strategy_eq",
     "peak_recovery_hours_pnl",
@@ -1210,6 +1212,22 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     recovery_max_days = (
         torch.maximum(out["recovery_max_ms"], final_recovery) / 86_400_000.0
     )
+    account_recovery_metrics = {
+        "peak_recovery_days_equity_usd",
+        "peak_recovery_hours_equity_usd",
+    }
+    if requested & account_recovery_metrics:
+        if "account_recovery_max_ms" not in out:
+            raise RuntimeError(
+                "MPS account-equity recovery output is missing from proxy results"
+            )
+        account_recovery_max_ms = torch.where(
+            out["fill_count"].to(torch.float64) > 0.0,
+            out["account_recovery_max_ms"].to(torch.float64),
+            torch.zeros_like(recovery_max_days),
+        )
+    else:
+        account_recovery_max_ms = torch.zeros_like(recovery_max_days)
     pnl_recovery_metrics = {
         "peak_recovery_days_pnl",
         "peak_recovery_hours_pnl",
@@ -1324,6 +1342,8 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_recovery_days_max": recovery_max_days,
         "peak_recovery_hours_strategy_eq": recovery_max_days * 24.0,
         "peak_recovery_days_strategy_eq": recovery_max_days,
+        "peak_recovery_hours_equity_usd": account_recovery_max_ms / 3_600_000.0,
+        "peak_recovery_days_equity_usd": account_recovery_max_ms / 86_400_000.0,
         "peak_recovery_hours_pnl": pnl_recovery_max_ms / 3_600_000.0,
         "peak_recovery_days_pnl": pnl_recovery_max_ms / 86_400_000.0,
         "strategy_eq_underwater_pct_mean": underwater,
