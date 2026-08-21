@@ -53,6 +53,7 @@ SUPPORTED_METRICS = (
     "hard_stop_triggers_long",
     "hard_stop_triggers_per_year",
     "hard_stop_triggers_short",
+    "loss_profit_ratio",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
     "omega_ratio_strategy_eq",
@@ -70,9 +71,8 @@ SUPPORTED_METRICS = (
     "volume_pct_per_day_avg",
 )
 
-# Reserved for a later PR that validates metrics requiring per-fill/trade
-# aggregates. Keeping this empty avoids allocating the larger Metal buffers.
-EXTRA_KERNEL_METRICS = ()
+# Metrics backed by additional per-fill aggregates emitted by Metal.
+EXTRA_KERNEL_METRICS = ("loss_profit_ratio",)
 
 
 _GAP_HIST_BINS = 128
@@ -114,6 +114,26 @@ _HARD_STOP_PANIC_LOSS_METRICS = {
 HARD_STOP_PROXY_METRICS = tuple(
     sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
 )
+
+
+def _loss_profit_ratio(loss_sum: torch.Tensor, profit_sum: torch.Tensor):
+    """Match Rust's capped gross close-fill loss/profit ratio contract."""
+
+    loss = loss_sum.to(torch.float64)
+    profit = profit_sum.to(torch.float64)
+    cap = torch.full_like(profit, 1_000.0)
+    neutral = torch.ones_like(profit)
+    ratio = loss / profit
+    finite_ratio = torch.where(
+        torch.isfinite(ratio),
+        ratio.clamp(max=1_000.0),
+        torch.where(loss > 1.0e-12, cap, neutral),
+    )
+    return torch.where(
+        profit <= 1.0e-12,
+        torch.where(loss > 1.0e-12, cap, neutral),
+        finite_ratio,
+    )
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
@@ -793,6 +813,10 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    if "loss_profit_ratio" in requested:
+        objectives["loss_profit_ratio"] = _loss_profit_ratio(
+            out["loss_sum"], out["profit_sum"]
+        )
     objectives.update(fill_gap_metrics)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)

@@ -6,7 +6,7 @@ constant int PARAM_COLS = 48;
 constant int OVERRIDE_COLS = 34;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
-constant int SCALAR_COLS = 18;
+constant int SCALAR_COLS = 20;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -73,6 +73,13 @@ inline void record_realized_net(
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
     );
+}
+
+inline void record_gross_pnl(
+    float pnl, thread float& profit_sum, thread float& loss_sum
+) {
+    if (pnl > 0.0f) profit_sum += pnl;
+    else loss_sum += fabs(pnl);
 }
 
 inline bool realized_loss_proxy_allows_reducer(
@@ -634,6 +641,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float balance = starting_balance;
     float realized_pnl_cumsum_last = 0.0f;
     float realized_pnl_cumsum_max = 0.0f;
+    float profit_sum = 0.0f;
+    float loss_sum = 0.0f;
     bool alive = true;
     bool equity_started = false;
     bool selection_initialized = false;
@@ -932,6 +941,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             )) {
                             float net_pnl = pnl
                                 - qty * fill_price * c_mult * maker_fee;
+                            record_gross_pnl(pnl, profit_sum, loss_sum);
                             balance += net_pnl;
                             record_realized_net(
                                 net_pnl, realized_pnl_cumsum_last,
@@ -965,6 +975,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     }
                     float grid_net_pnl = grid_pnl
                         - grid_qty * group.price * c_mult * maker_fee;
+                    record_gross_pnl(grid_pnl, profit_sum, loss_sum);
                     balance += grid_net_pnl;
                     record_realized_net(
                         grid_net_pnl, realized_pnl_cumsum_last,
@@ -1012,6 +1023,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         continue;
                     }
                     float net_pnl = pnl - qty * price * c_mult * maker_fee;
+                    record_gross_pnl(pnl, profit_sum, loss_sum);
                     balance += net_pnl;
                     record_realized_net(
                         net_pnl, realized_pnl_cumsum_last,
@@ -2258,6 +2270,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 14] = float(open_positions);
     scalars[scalar_offset + 15] = short_side ? total_size : 0.0f;
     scalars[scalar_offset + 16] = short_side ? total_cost : 0.0f;
+    scalars[scalar_offset + 18] = profit_sum;
+    scalars[scalar_offset + 19] = loss_sum;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(
