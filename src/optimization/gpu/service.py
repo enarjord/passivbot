@@ -36,6 +36,7 @@ CORE_OUTPUT_KEYS = {
     "fill_count_long",
     "fills_active_days_count",
     "coin_fill_counts",
+    "pnl_recovery_max_ms",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -110,6 +111,8 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "fills_top_symbol_share",
     "mdg_pnl",
     "mdg_pnl_w",
+    "peak_recovery_days_pnl",
+    "peak_recovery_hours_pnl",
     "sharpe_ratio_pnl",
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
@@ -548,6 +551,9 @@ def _combine_hedged_multicoin_outputs(
     combined["fills_active_days_count"] = long[
         "fills_active_days_count"
     ].maximum(short["fills_active_days_count"])
+    combined["pnl_recovery_max_ms"] = long["pnl_recovery_max_ms"].maximum(
+        short["pnl_recovery_max_ms"]
+    )
     return combined
 
 

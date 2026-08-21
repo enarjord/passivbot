@@ -124,6 +124,9 @@ SUPPORTED_METRICS = (
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
+    "peak_recovery_days_pnl",
+    "peak_recovery_days_strategy_eq",
+    "peak_recovery_hours_pnl",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
     "sharpe_ratio_pnl",
@@ -140,6 +143,7 @@ SUPPORTED_METRICS = (
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
     *_USD_STRATEGY_EQ_ALIASES,
     *_USD_PER_EXPOSURE_METRICS,
 )
@@ -874,6 +878,43 @@ def _weighted_pnl_metrics(
     return {name: value / 10.0 for name, value in totals.items()}
 
 
+def _weighted_volume_pct_per_day(
+    day_volume,
+    day_has_fill,
+    fill_count,
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+):
+    """Match Rust's mean of ten tail-slice active-fill-day averages."""
+
+    eligible, subsets = _weighted_subsets(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    # Rust returns the basic analysis unchanged when there are at most one
+    # fills, leaving all weighted metrics at their default zero values.
+    eligible &= fill_count > 1.0
+    total = torch.zeros(
+        day_volume.shape[0], dtype=day_volume.dtype, device=day_volume.device
+    )
+    for subset in subsets:
+        fill_days = subset & day_has_fill
+        count = fill_days.sum(dim=1)
+        value = torch.where(
+            fill_days, day_volume, torch.zeros_like(day_volume)
+        ).sum(dim=1) / count.clamp(min=1).to(day_volume.dtype)
+        total += torch.where(
+            eligible & (count > 0), value, torch.zeros_like(value)
+        )
+    return total / 10.0
+
+
 def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     """Reduce directional HSL counters using the authoritative Rust formulas."""
 
@@ -1040,6 +1081,20 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
 
     volume_days = day_has_fill.sum(dim=1).clamp(min=1).to(torch.float64)
     volume_pct = day_volume.sum(dim=1) / volume_days
+    volume_pct_w = (
+        _weighted_volume_pct_per_day(
+            day_volume,
+            day_has_fill,
+            out["fill_count"].to(torch.float64),
+            active,
+            out["first_eq_ts"],
+            out["last_eq_ts"],
+            data["ts0"],
+            run.interval_ms,
+        )
+        if "volume_pct_per_day_avg_w" in requested
+        else None
+    )
 
     zeros = torch.zeros_like(adg)
     adg_pnl = mdg_pnl = sharpe_pnl = sortino_pnl = zeros
@@ -1081,6 +1136,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     recovery_max_days = (
         torch.maximum(out["recovery_max_ms"], final_recovery) / 86_400_000.0
     )
+    pnl_recovery_metrics = {
+        "peak_recovery_days_pnl",
+        "peak_recovery_hours_pnl",
+    }
+    if requested & pnl_recovery_metrics:
+        if "pnl_recovery_max_ms" not in out:
+            raise RuntimeError(
+                "MPS realized-PnL recovery output is missing from proxy results"
+            )
+        pnl_recovery_max_ms = out["pnl_recovery_max_ms"].to(torch.float64)
+    else:
+        pnl_recovery_max_ms = torch.zeros_like(recovery_max_days)
     held_days = out["held_max_ms"] / 86_400_000.0
 
     boundary_lead = torch.where(
@@ -1158,10 +1225,15 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "sterling_ratio_strategy_eq": sterling,
         "strategy_eq_recovery_days_max": recovery_max_days,
         "peak_recovery_hours_strategy_eq": recovery_max_days * 24.0,
+        "peak_recovery_days_strategy_eq": recovery_max_days,
+        "peak_recovery_hours_pnl": pnl_recovery_max_ms / 3_600_000.0,
+        "peak_recovery_days_pnl": pnl_recovery_max_ms / 86_400_000.0,
         "strategy_eq_underwater_pct_mean": underwater,
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    if volume_pct_w is not None:
+        objectives["volume_pct_per_day_avg_w"] = volume_pct_w
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]

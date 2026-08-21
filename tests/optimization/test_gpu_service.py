@@ -52,6 +52,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fill_count_long",
         "fills_active_days_count",
         "coin_fill_counts",
+        "pnl_recovery_max_ms",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -81,6 +82,8 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_top_symbol_share",
         "mdg_pnl",
         "mdg_pnl_w",
+        "peak_recovery_days_pnl",
+        "peak_recovery_hours_pnl",
         "sharpe_ratio_pnl",
         "sharpe_ratio_pnl_w",
         "sortino_ratio_pnl",
@@ -546,6 +549,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "first_fill_ts": torch.tensor([first_fill]),
             "last_fill_ts": torch.tensor([last_fill]),
             "recovery_max_ms": torch.tensor([400.0]),
+            "pnl_recovery_max_ms": torch.tensor([350.0]),
             "last_high_ts": torch.tensor([900.0]),
             "first_eq_ts": torch.tensor([100.0]),
             "last_eq_ts": torch.tensor([1_000.0]),
@@ -581,6 +585,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     short["position_unchanged_max_ms"] = torch.tensor([250.0])
     short["gap_max_ms"] = torch.tensor([250.0])
     short["recovery_max_ms"] = torch.tensor([500.0])
+    short["pnl_recovery_max_ms"] = torch.tensor([450.0])
     short["last_high_ts"] = torch.tensor([800.0])
 
     combined = _combine_hedged_multicoin_outputs(
@@ -607,6 +612,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["fill_count_long"].item() == 2.0
     assert combined["fills_active_days_count"].item() == 1.0
     assert combined["position_unchanged_max_ms"].item() == 250.0
+    assert combined["pnl_recovery_max_ms"].item() == 450.0
 
     short["day_min_eq"][0, 1] = float("inf")
     short["last_eq_ts"] = torch.tensor([800.0])
@@ -652,6 +658,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "first_fill_ts": torch.tensor([100.0]),
             "last_fill_ts": torch.tensor([200_000_000.0]),
             "recovery_max_ms": torch.tensor([400.0]),
+            "pnl_recovery_max_ms": torch.tensor([350.0]),
             "last_high_ts": torch.tensor([1_000.0]),
             "first_eq_ts": torch.tensor([0.0]),
             "last_eq_ts": torch.tensor([200_000_000.0]),
@@ -698,6 +705,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "first_fill_ts": torch.tensor([100.0]),
             "last_fill_ts": torch.tensor([200_000_000.0]),
             "recovery_max_ms": torch.tensor([400.0]),
+            "pnl_recovery_max_ms": torch.tensor([350.0]),
             "last_high_ts": torch.tensor([1_000.0]),
             "first_eq_ts": torch.tensor([0.0]),
             "last_eq_ts": torch.tensor([200_000_000.0]),

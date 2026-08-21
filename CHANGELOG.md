@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added weighted daily fill-volume and peak-recovery day/hour scoring for strategy equity and
+  realized PnL to Apple MPS optimization for single-coin and one-sided multi-coin EMA Anchor and
+  Trailing Martingale runs. Metal tracks realized-PnL recovery intervals per candidate while exact
+  Rust validation remains authoritative.
+
 - Added active-symbol count and top-symbol fill-share scoring and limits to Apple MPS optimization
   for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs. Multi-coin
   kernels emit per-symbol fill counts only when either metric is requested, preserving the normal
