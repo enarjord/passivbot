@@ -31,6 +31,9 @@ CORE_OUTPUT_KEYS = {
     "day_net_pnl",
     "day_last_fill_balance",
     "day_fill_count",
+    "fill_count",
+    "fill_count_entry",
+    "fill_count_long",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -86,7 +89,19 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "adg_pnl_w",
     "fills_analysis_duration_days",
     "fills_count",
+    "fills_count_close",
+    "fills_count_entry",
+    "fills_count_long",
+    "fills_count_short",
+    "fills_entry_per_close",
     "fills_per_day",
+    "fills_per_day_close",
+    "fills_per_day_entry",
+    "fills_per_day_long",
+    "fills_per_day_per_position_slot",
+    "fills_per_day_per_position_slot_long",
+    "fills_per_day_per_position_slot_short",
+    "fills_per_day_short",
     "mdg_pnl",
     "mdg_pnl_w",
     "sharpe_ratio_pnl",
@@ -129,6 +144,36 @@ def _candidate_wallet_exposure_limit_outputs(
         )
         outputs[f"candidate_total_wallet_exposure_limit_{side}"] = torch.from_numpy(
             values
+        )
+    return outputs
+
+
+def _candidate_position_slot_outputs(
+    candidates: list[dict],
+    base_n_positions: dict[str, float],
+    base_limits: dict[str, float],
+    *,
+    torch,
+) -> dict:
+    """Expose Rust analysis' configured active position-slot denominators."""
+
+    outputs = {}
+    for side in ("long", "short"):
+        if side not in base_n_positions or side not in base_limits:
+            raise ValueError(f"GPU candidate position-slot context is missing {side}")
+        n_positions_key = f"{side}_n_positions"
+        limit_key = f"{side}_total_wallet_exposure_limit"
+        values = []
+        for candidate in candidates:
+            n_positions = float(
+                candidate.get(n_positions_key, base_n_positions[side])
+            )
+            limit = float(candidate.get(limit_key, base_limits[side]))
+            values.append(
+                n_positions if n_positions > 0.0 and limit > 0.0 else 0.0
+            )
+        outputs[f"position_slots_{side}"] = torch.from_numpy(
+            np.asarray(values, dtype=np.float64)
         )
     return outputs
 
@@ -484,6 +529,13 @@ def _combine_hedged_multicoin_outputs(
     combined["liq_step"] = liquidation_day
     combined["profit_sum"] = long["profit_sum"] + short["profit_sum"]
     combined["loss_sum"] = long["loss_sum"] + short["loss_sum"]
+    combined["fill_count"] = long["fill_count"] + short["fill_count"]
+    combined["fill_count_entry"] = (
+        long["fill_count_entry"] + short["fill_count_entry"]
+    )
+    combined["fill_count_long"] = (
+        long["fill_count_long"] + short["fill_count_long"]
+    )
     return combined
 
 
@@ -641,6 +693,9 @@ class MpsSingleCoinProxy:
             side: float(self.base_params[side]["total_wallet_exposure_limit"])
             for side in ("long", "short")
         }
+        self.base_n_positions = {
+            side: float(self.enabled[side]) for side in ("long", "short")
+        }
 
         market_params = payload.exchange_params[0]
         self.market = ProxyMarket(
@@ -761,6 +816,15 @@ class MpsSingleCoinProxy:
                 output.update(
                     _candidate_wallet_exposure_limit_outputs(
                         chunk,
+                        self.base_total_wallet_exposure_limits,
+                        torch=torch,
+                    )
+                )
+            if any("_per_position_slot" in name for name in self.needed_metrics):
+                output.update(
+                    _candidate_position_slot_outputs(
+                        chunk,
+                        self.base_n_positions,
                         self.base_total_wallet_exposure_limits,
                         torch=torch,
                     )
@@ -1108,6 +1172,10 @@ class MpsMulticoinProxy:
             )
             for side in ("long", "short")
         }
+        self.base_n_positions = {
+            side: float(payload.bot_params_list[0][side]["n_positions"])
+            for side in ("long", "short")
+        }
         self.base_params = {}
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
@@ -1397,6 +1465,15 @@ class MpsMulticoinProxy:
                 output.update(
                     _candidate_wallet_exposure_limit_outputs(
                         chunk,
+                        self.base_total_wallet_exposure_limits,
+                        torch=torch,
+                    )
+                )
+            if any("_per_position_slot" in name for name in self.needed_metrics):
+                output.update(
+                    _candidate_position_slot_outputs(
+                        chunk,
+                        self.base_n_positions,
                         self.base_total_wallet_exposure_limits,
                         torch=torch,
                     )

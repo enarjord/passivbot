@@ -21,6 +21,7 @@ from optimization.gpu.service import (
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
     _candidate_wallet_exposure_limit_outputs,
+    _candidate_position_slot_outputs,
     _combine_hedged_multicoin_outputs,
     _directional_entry_initial_metrics,
     _hsl_params,
@@ -46,6 +47,9 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "day_fill_count",
+        "fill_count",
+        "fill_count_entry",
+        "fill_count_long",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -56,7 +60,19 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "adg_pnl_w",
         "fills_analysis_duration_days",
         "fills_count",
+        "fills_count_close",
+        "fills_count_entry",
+        "fills_count_long",
+        "fills_count_short",
+        "fills_entry_per_close",
         "fills_per_day",
+        "fills_per_day_close",
+        "fills_per_day_entry",
+        "fills_per_day_long",
+        "fills_per_day_per_position_slot",
+        "fills_per_day_per_position_slot_long",
+        "fills_per_day_per_position_slot_short",
+        "fills_per_day_short",
         "mdg_pnl",
         "mdg_pnl_w",
         "sharpe_ratio_pnl",
@@ -109,6 +125,23 @@ def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
         0.5,
         0.75,
     ]
+
+
+def test_candidate_position_slots_follow_candidate_positions_and_enabledness():
+    torch = pytest.importorskip("torch")
+
+    outputs = _candidate_position_slot_outputs(
+        [
+            {"long_n_positions": 3.0, "short_total_wallet_exposure_limit": 0.0},
+            {"short_n_positions": 2.0},
+        ],
+        {"long": 2.0, "short": 1.0},
+        {"long": 1.0, "short": 0.5},
+        torch=torch,
+    )
+
+    assert outputs["position_slots_long"].tolist() == [3.0, 2.0]
+    assert outputs["position_slots_short"].tolist() == [0.0, 2.0]
 
 
 def test_single_coin_side_eligibility_uses_prepared_coin_payload():
@@ -513,6 +546,9 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "liq_step": torch.tensor([liq]),
             "profit_sum": torch.tensor([20.0]),
             "loss_sum": torch.tensor([5.0]),
+            "fill_count": torch.tensor([float(sum(fill))]),
+            "fill_count_entry": torch.tensor([float(sum(fill))]),
+            "fill_count_long": torch.tensor([float(sum(fill))]),
         }
 
     long = side_output(
@@ -559,6 +595,9 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["liq_step"].item() == -1
     assert combined["profit_sum"].item() == 40.0
     assert combined["loss_sum"].item() == 10.0
+    assert combined["fill_count"].item() == 2.0
+    assert combined["fill_count_entry"].item() == 2.0
+    assert combined["fill_count_long"].item() == 2.0
     assert combined["position_unchanged_max_ms"].item() == 250.0
 
     short["day_min_eq"][0, 1] = float("inf")
@@ -611,6 +650,9 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "liq_step": torch.tensor([-1]),
             "profit_sum": torch.tensor([0.0]),
             "loss_sum": torch.tensor([0.0]),
+            "fill_count": torch.tensor([3.0]),
+            "fill_count_entry": torch.tensor([2.0]),
+            "fill_count_long": torch.tensor([2.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(
@@ -653,6 +695,9 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "liq_step": torch.tensor([-1]),
             "profit_sum": torch.tensor([0.0]),
             "loss_sum": torch.tensor([0.0]),
+            "fill_count": torch.tensor([3.0]),
+            "fill_count_entry": torch.tensor([2.0]),
+            "fill_count_long": torch.tensor([2.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(
