@@ -1358,6 +1358,10 @@ inline void passivbot_single_coin_impl(
     const bool filter_by_min_effective_cost = settings[12] > 0.5f;
     const float max_effective_min_cost = settings[13];
     const float max_realized_loss_pct = settings[14];
+    const float taker_fee = settings[15];
+    const float market_order_slippage_pct = fmax(settings[16], 0.0f);
+    const bool long_hsl_panic_market = settings[17] > 0.5f;
+    const bool short_hsl_panic_market = settings[18] > 0.5f;
     const bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
@@ -1450,7 +1454,8 @@ inline void passivbot_single_coin_impl(
             && long_side.psize > 0.0f;
         bool long_recursive_close = long_side.close_retracement_base <= 0.0f;
         bool long_scan_close_grid = long_close_ready
-            && long_side.close_ticks <= high_fill_max_tick;
+            && ((long_side.close_is_panic && long_hsl_panic_market)
+                || long_side.close_ticks <= high_fill_max_tick);
         if (long_close_ready && long_recursive_close
             && long_side.close_is_exposure_reducer) {
             // A touch-clamped grid order uses nearest-tick quantization while
@@ -1760,15 +1765,23 @@ inline void passivbot_single_coin_impl(
                 bool reachable = use_secondary
                     ? long_secondary_close_fill : long_scan_close_grid;
                 if (!reachable || long_side.psize <= 0.0f) continue;
-                float cp = use_secondary
-                    ? long_side.secondary_close_price : long_side.close_price;
+                bool market_panic = !use_secondary && long_side.close_is_panic
+                    && long_hsl_panic_market;
+                float cp = use_secondary ? long_side.secondary_close_price
+                    : market_panic
+                        ? float(max(directional_ticks(
+                            close * (1.0f - market_order_slippage_pct),
+                            price_step, false
+                        ), 1)) * price_step
+                        : long_side.close_price;
                 float requested_qty = use_secondary
                     ? long_side.secondary_close_qty : long_side.close_qty;
                 float adj = fmin(
                     round_step(requested_qty, qty_step), long_side.psize
                 );
                 float pnl = adj * c_mult * (cp - long_side.pprice);
-                float fee = adj * cp * c_mult * maker_fee;
+                float fee = adj * cp * c_mult
+                    * (market_panic ? taker_fee : maker_fee);
                 bool selected_unstuck = !use_secondary
                     && long_side.close_is_unstuck_reducer;
                 if (!long_side.close_is_panic
@@ -1881,7 +1894,8 @@ inline void passivbot_single_coin_impl(
             && short_side.psize > 0.0f;
         bool short_recursive_close = short_side.close_retracement_base <= 0.0f;
         bool short_scan_close_grid = short_close_ready
-            && short_side.close_ticks > low_nonfill_max_tick;
+            && ((short_side.close_is_panic && short_hsl_panic_market)
+                || short_side.close_ticks > low_nonfill_max_tick);
         if (short_close_ready && short_recursive_close
             && short_side.close_is_exposure_reducer) {
             // Mirror the long-side nearest-tick scan: a touch-clamped grid
@@ -2189,15 +2203,23 @@ inline void passivbot_single_coin_impl(
                 bool reachable = use_secondary
                     ? short_secondary_close_fill : short_scan_close_grid;
                 if (!reachable || short_side.psize <= 0.0f) continue;
-                float cp = use_secondary
-                    ? short_side.secondary_close_price : short_side.close_price;
+                bool market_panic = !use_secondary && short_side.close_is_panic
+                    && short_hsl_panic_market;
+                float cp = use_secondary ? short_side.secondary_close_price
+                    : market_panic
+                        ? float(max(directional_ticks(
+                            close * (1.0f + market_order_slippage_pct),
+                            price_step, true
+                        ), 1)) * price_step
+                        : short_side.close_price;
                 float requested_qty = use_secondary
                     ? short_side.secondary_close_qty : short_side.close_qty;
                 float adj = fmin(
                     round_step(requested_qty, qty_step), short_side.psize
                 );
                 float pnl = adj * c_mult * (short_side.pprice - cp);
-                float fee = adj * cp * c_mult * maker_fee;
+                float fee = adj * cp * c_mult
+                    * (market_panic ? taker_fee : maker_fee);
                 bool selected_unstuck = !use_secondary
                     && short_side.close_is_unstuck_reducer;
                 if (!short_side.close_is_panic

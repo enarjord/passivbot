@@ -75,6 +75,13 @@ mod tests {
         assert!(source.contains("float32_floor_nonnegative"));
         assert!(source.contains("record_realized_net"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
+        assert!(source.contains("const float taker_fee = settings[15]"));
+        assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
+        assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
+        assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
+        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
+        assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));
@@ -198,6 +205,13 @@ mod tests {
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));
+        assert!(source.contains("const float taker_fee = settings[15]"));
+        assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
+        assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
+        assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
+        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
+        assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
         assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));

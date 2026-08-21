@@ -135,7 +135,10 @@ The supported slice is intentionally narrow:
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed
 - one-sided single-coin EMA Anchor and Trailing Martingale runs support HSL with `coin`, `pside`,
-  or `unified` signals and resting-limit panic closes. The Metal proxy models tunable RED
+  or `unified` signals and both resting-limit and market panic closes. Market panic orders fill on
+  the next valid bar at its close shifted adversely by `backtest.market_order_slippage_pct`, rounded
+  directionally to the exchange price step, and charged the resolved taker fee. The Metal proxy
+  models tunable RED
   threshold, drawdown-EMA span, and cooldown, plus fixed yellow/orange ratios, orange entry
   suppression, RED latching, panic flattening, two-sample flat confirmation,
   positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
@@ -145,10 +148,10 @@ The supported slice is intentionally narrow:
   the float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
   drift gates remain authoritative. The non-loss HSL lifecycle metrics (trigger/restart counts and
   yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
-  post-restart retriggers) and resting-limit panic-loss metrics (loss sum/max, per-episode loss
+  post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
-  Market panic closes, finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL
-  overrides, and HSL strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
+  Finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and HSL
+  strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
   Compatible single-coin suites may use the supported topology.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs

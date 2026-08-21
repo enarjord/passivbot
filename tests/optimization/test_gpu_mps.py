@@ -375,6 +375,11 @@ def test_mps_ema_anchor_shader_smoke():
     assert "float32_floor_nonnegative" in source
     assert "record_realized_net" in source
     assert "const float max_realized_loss_pct = settings[14]" in source
+    assert "const float taker_fee = settings[15]" in source
+    assert "const float market_order_slippage_pct = fmax(settings[16], 0.0f)" in source
+    assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
+    assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
+    assert "market_panic ? taker_fee : maker_fee" in source
     assert "constant int SCALAR_COLS = 43" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -1319,6 +1324,20 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         long_enabled=side == "long",
         short_enabled=side == "short",
     ).run(np.asarray(rows, dtype=np.float64))
+    market_runner = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        taker_fee=0.01,
+        market_order_slippage_pct=0.02,
+        hsl_panic_market_long=side == "long",
+        hsl_panic_market_short=side == "short",
+    )
+    market_output = market_runner.run(
+        np.asarray([rows[1]], dtype=np.float64)
+    )
     gated_output = runner_cls(
         market,
         run,
@@ -1372,6 +1391,16 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output["hsl_panic_loss_drawdown_count"][9].item() == 1.0
     assert gated_output[size_key].item() == 0.0
     assert gated_output["hsl_panic_close_loss_sum"].item() > 0.0
+    assert market_runner.settings[15].item() == pytest.approx(0.01)
+    assert market_runner.settings[16].item() == pytest.approx(0.02)
+    assert market_runner.settings[17].item() == float(side == "long")
+    assert market_runner.settings[18].item() == float(side == "short")
+    assert market_output[size_key].item() == 0.0
+    assert market_output["balance"].item() < output["balance"][1].item()
+    assert (
+        market_output["hsl_panic_close_loss_sum"].item()
+        > output["hsl_panic_close_loss_sum"][1].item()
+    )
 
 
 @pytest.mark.skipif(
@@ -5313,6 +5342,11 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "realized_loss_proxy_allows_close" in source
     assert "const float max_realized_loss_pct = settings[14]" in source
     assert "const bool loss_gate_enabled = max_realized_loss_pct < 1.0f" in source
+    assert "const float taker_fee = settings[15]" in source
+    assert "const float market_order_slippage_pct = fmax(settings[16], 0.0f)" in source
+    assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
+    assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
+    assert "market_panic ? taker_fee : maker_fee" in source
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
