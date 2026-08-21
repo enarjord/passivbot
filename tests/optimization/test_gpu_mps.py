@@ -375,9 +375,10 @@ def test_mps_ema_anchor_shader_smoke():
     assert "float32_floor_nonnegative" in source
     assert "record_realized_net" in source
     assert "const float max_realized_loss_pct = settings[14]" in source
-    assert "constant int SCALAR_COLS = 36" in source
+    assert "constant int SCALAR_COLS = 43" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
+    assert "record_hsl_panic_fill(" in source
     assert "side.psize * price_now * c_mult / balance" in source
     assert "short_side.psize * c_mult * (short_side.pprice - close)" in source
     assert "long_close_fill || long_entry_fill" in source
@@ -1280,6 +1281,9 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     tiny_threshold_hsl[keys.index("hsl_red_threshold")] = 1.0e-8
     negative_span_hsl = list(hsl)
     negative_span_hsl[keys.index("hsl_ema_span_minutes")] = -2.0
+    recursive_close_hsl = list(hsl)
+    if strategy_kind == "trailing_martingale":
+        recursive_close_hsl[keys.index("close_retracement_base_pct")] = 0.0
     inactive = list(baseline)
     rows = (
         [
@@ -1292,6 +1296,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
             capped_coin_hsl + inactive,
             tiny_threshold_hsl + inactive,
             negative_span_hsl + inactive,
+            recursive_close_hsl + inactive,
         ]
         if side == "long"
         else [
@@ -1304,6 +1309,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
             inactive + capped_coin_hsl,
             inactive + tiny_threshold_hsl,
             inactive + negative_span_hsl,
+            inactive + recursive_close_hsl,
         ]
     )
     output = runner_cls(
@@ -1313,6 +1319,14 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         long_enabled=side == "long",
         short_enabled=side == "short",
     ).run(np.asarray(rows, dtype=np.float64))
+    gated_output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.0,
+    ).run(np.asarray([rows[9]], dtype=np.float64))
     torch.mps.synchronize()
 
     size_key = "psize" if side == "long" else "short_psize"
@@ -1347,6 +1361,17 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output["hsl_trigger_drawdown_sum"][1].item() > 0.0
     assert output["hsl_trigger_drawdown_count"][1].item() == 1.0
     assert output["hsl_flatten_time_count"][1].item() == 1.0
+    assert output["hsl_panic_close_loss_sum"][1].item() > 0.0
+    assert output["hsl_panic_close_loss_max"][1].item() > 0.0
+    assert output["hsl_panic_loss_drawdown_count"][1].item() == 1.0
+    assert output["hsl_panic_loss_drawdown_min"][1].item() > 0.0
+    assert output["hsl_panic_loss_drawdown_sum"][1].item() > 0.0
+    assert output["hsl_panic_loss_drawdown_max"][1].item() > 0.0
+    assert output[size_key][9].item() == 0.0
+    assert output["hsl_panic_close_loss_sum"][9].item() > 0.0
+    assert output["hsl_panic_loss_drawdown_count"][9].item() == 1.0
+    assert gated_output[size_key].item() == 0.0
+    assert gated_output["hsl_panic_close_loss_sum"].item() > 0.0
 
 
 @pytest.mark.skipif(

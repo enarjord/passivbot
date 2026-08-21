@@ -4,11 +4,19 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added resting-limit HSL panic-loss scoring and limit metrics to the supported one-sided
+  single-coin Apple MPS optimizer path: panic-close loss sum/max, per-episode loss drawdown
+  min/mean/max, and halt-to-restart equity loss. The proxy tags only HSL panic fills and retains
+  exact Rust validation and drift gates as authoritative. Trailing Martingale panic closes now
+  remain one exclusive full-position order and bypass the ordinary realized-loss gate, matching
+  Rust instead of being reinterpreted as recursive close-grid rungs. Directional proxy filtering
+  retains every HSL lifecycle and panic-loss accumulator; missing directional output and requests
+  for these metrics on multi-coin kernels fail closed instead of substituting zeros.
+
 - Added non-loss HSL lifecycle scoring and limit metrics to the supported one-sided single-coin
   Apple MPS optimizer path: trigger/restart counts and yearly rates, warning-tier occupancy, halt
   and flatten durations, trigger drawdown, and post-restart retriggers. Exact Rust validation and
-  drift gates remain authoritative; panic-loss and HSL strategy-equity time-series metrics remain
-  fail closed.
+  drift gates remain authoritative; HSL strategy-equity time-series metrics remain fail closed.
 
 - Added the first HSL slice to Apple MPS optimization for one-sided single-coin EMA Anchor and
   Trailing Martingale runs, in both long and short directions and compatible suites. The Metal
@@ -17,8 +25,8 @@ All notable user-facing changes will be documented in this file.
   flat confirmation; positive-cooldown restart; zero-cooldown indefinite halt; cumulative
   no-restart peak tracking; effective coin-slot scaling; and terminal no-restart. The initial
   slice requires all-history PnL peaks and contiguous valid candles. Market panic execution,
-  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, panic-loss
-  metrics, and HSL strategy-equity time-series metrics remain fail closed.
+  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and HSL
+  strategy-equity time-series metrics remain fail closed.
 
 - Added auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for single-coin
   long-only, short-only, dual-side hedge/one-way, and compatible suite runs, plus one-sided

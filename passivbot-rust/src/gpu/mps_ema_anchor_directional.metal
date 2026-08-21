@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 5;
-constant int SCALAR_COLS = 36;
+constant int SCALAR_COLS = 43;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -112,6 +112,7 @@ struct EmaSide {
     int close_without_reducer_ticks;
     float close_without_reducer_qty;
     bool close_is_protective_reducer;
+    bool close_is_panic;
 };
 
 struct ReducerVariant {
@@ -166,6 +167,16 @@ struct HslState {
     float flatten_time_sum_steps;
     float flatten_time_count;
     float restart_retrigger_count;
+    float equity_at_halt;
+    float halt_to_restart_equity_loss;
+    float panic_event_start_equity;
+    float panic_event_loss;
+    float panic_close_loss_sum;
+    float panic_close_loss_max;
+    float panic_loss_drawdown_min;
+    float panic_loss_drawdown_sum;
+    float panic_loss_drawdown_max;
+    float panic_loss_drawdown_count;
 };
 
 inline HslState load_hsl(constant float* params, int po) {
@@ -212,6 +223,16 @@ inline HslState load_hsl(constant float* params, int po) {
     h.flatten_time_sum_steps = 0.0f;
     h.flatten_time_count = 0.0f;
     h.restart_retrigger_count = 0.0f;
+    h.equity_at_halt = 0.0f;
+    h.halt_to_restart_equity_loss = 0.0f;
+    h.panic_event_start_equity = -1.0f;
+    h.panic_event_loss = 0.0f;
+    h.panic_close_loss_sum = 0.0f;
+    h.panic_close_loss_max = 0.0f;
+    h.panic_loss_drawdown_min = 0.0f;
+    h.panic_loss_drawdown_sum = 0.0f;
+    h.panic_loss_drawdown_max = 0.0f;
+    h.panic_loss_drawdown_count = 0.0f;
     return h;
 }
 
@@ -293,6 +314,7 @@ inline void update_hsl(
                 h.halted = true;
                 h.current_halt_start_k = h.pending_stop_k;
                 h.triggers += 1.0f;
+                h.equity_at_halt = strategy_equity;
                 if (h.signal_coin) {
                     h.coin_realized_baseline = realized_pnl;
                     h.coin_realized_peak = 0.0f;
@@ -336,6 +358,23 @@ inline void update_hsl(
                     h.restart_retrigger_count += 1.0f;
                 }
                 h.last_restart_k = -1.0f;
+                if (h.panic_event_start_equity >= 0.0f) {
+                    float loss_drawdown = fmax(
+                        h.panic_event_loss
+                            / fmax(h.panic_event_start_equity, 1.0e-12f),
+                        0.0f
+                    );
+                    h.panic_loss_drawdown_min = h.panic_loss_drawdown_count > 0.0f
+                        ? fmin(h.panic_loss_drawdown_min, loss_drawdown)
+                        : loss_drawdown;
+                    h.panic_loss_drawdown_sum += loss_drawdown;
+                    h.panic_loss_drawdown_max = fmax(
+                        h.panic_loss_drawdown_max, loss_drawdown
+                    );
+                    h.panic_loss_drawdown_count += 1.0f;
+                    h.panic_event_start_equity = -1.0f;
+                    h.panic_event_loss = 0.0f;
+                }
                 bool terminal = h.restart_policy == 2
                     || (h.restart_policy == 1
                         && fmax(no_restart_drawdown_raw, h.pending_drawdown_ema)
@@ -350,7 +389,7 @@ inline void update_hsl(
     }
 }
 
-inline void try_restart_hsl(thread HslState& h, float kf) {
+inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) {
     if (!h.enabled || !h.halted || h.no_restart_latched
         || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
     if (h.current_halt_start_k >= 0.0f) {
@@ -361,6 +400,11 @@ inline void try_restart_hsl(thread HslState& h, float kf) {
         h.current_halt_start_k = -1.0f;
     }
     h.restarts += 1.0f;
+    if (!h.signal_coin && h.equity_at_halt > 0.0f) {
+        h.halt_to_restart_equity_loss += fmax(
+            h.equity_at_halt - current_equity, 0.0f
+        );
+    }
     h.last_restart_k = kf;
     h.initialized = false;
     h.drawdown_ema = 0.0f;
@@ -372,6 +416,20 @@ inline void try_restart_hsl(thread HslState& h, float kf) {
     h.cooldown_until_k = -1.0f;
     h.flat_confirmations = 0;
     h.current_red_start_k = -1.0f;
+}
+
+inline void record_hsl_panic_fill(
+    thread HslState& h,
+    float net_pnl,
+    float current_equity
+) {
+    if (h.panic_event_start_equity < 0.0f) {
+        h.panic_event_start_equity = fmax(current_equity, 1.0e-12f);
+    }
+    float panic_loss = fmax(-net_pnl, 0.0f);
+    h.panic_event_loss += panic_loss;
+    h.panic_close_loss_sum += panic_loss;
+    h.panic_close_loss_max = fmax(h.panic_close_loss_max, panic_loss);
 }
 
 inline EmaSide load_side(constant float* params, int po, float seed_close) {
@@ -436,6 +494,7 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.close_without_reducer_ticks = 0;
     side.close_without_reducer_qty = 0.0f;
     side.close_is_protective_reducer = false;
+    side.close_is_panic = false;
     return side;
 }
 
@@ -1117,6 +1176,14 @@ inline void passivbot_single_coin_impl(
             float pnl = adj * c_mult * (cp - long_side.pprice);
             float fee = adj * cp * c_mult * maker_fee;
             float net_pnl = pnl - fee;
+            if (!use_secondary && long_side.close_is_panic) {
+                float current_equity = balance
+                    + long_side.psize * c_mult * (close - long_side.pprice)
+                    + (short_side.psize > 0.0f
+                        ? short_side.psize * c_mult * (short_side.pprice - close)
+                        : 0.0f);
+                record_hsl_panic_fill(long_hsl, net_pnl, current_equity);
+            }
             balance += net_pnl;
             record_realized_net(
                 net_pnl, realized_pnl_cumsum_last, realized_pnl_cumsum_max
@@ -1189,6 +1256,14 @@ inline void passivbot_single_coin_impl(
             float pnl = adj * c_mult * (short_side.pprice - cp);
             float fee = adj * cp * c_mult * maker_fee;
             float net_pnl = pnl - fee;
+            if (!use_secondary && short_side.close_is_panic) {
+                float current_equity = balance
+                    + (long_side.psize > 0.0f
+                        ? long_side.psize * c_mult * (close - long_side.pprice)
+                        : 0.0f)
+                    + short_side.psize * c_mult * (short_side.pprice - close);
+                record_hsl_panic_fill(short_hsl, net_pnl, current_equity);
+            }
             balance += net_pnl;
             record_realized_net(
                 net_pnl, realized_pnl_cumsum_last, realized_pnl_cumsum_max
@@ -1265,6 +1340,8 @@ inline void passivbot_single_coin_impl(
         int long_hsl_mode = hsl_mode(long_hsl, long_side.psize > 0.0f);
         int short_hsl_mode = hsl_mode(short_hsl, short_side.psize > 0.0f);
         if (gen) {
+            long_side.close_is_panic = false;
+            short_side.close_is_panic = false;
             // When both sides are flat, an exact Rust path that remains alive has
             // balance above liq_floor. If either side is open, equity cannot bound
             // exact cash balance, so flat-side eligibility uses zero and fails closed.
@@ -1478,12 +1555,14 @@ inline void passivbot_single_coin_impl(
                 long_side.close_qty = long_side.psize;
                 long_side.secondary_close_qty = 0.0f;
                 long_side.close_is_protective_reducer = false;
+                long_side.close_is_panic = true;
             }
             if (short_enabled && short_hsl_mode == 3) {
                 short_side.close_ticks = max(touch_up_tick + 1, 1);
                 short_side.close_qty = short_side.psize;
                 short_side.secondary_close_qty = 0.0f;
                 short_side.close_is_protective_reducer = false;
+                short_side.close_is_panic = true;
             }
         }
 
@@ -1520,8 +1599,8 @@ inline void passivbot_single_coin_impl(
                 hsl_tier_samples_orange += hsl_tier == 2 ? 1.0f : 0.0f;
                 hsl_tier_samples_red += hsl_tier == 3 ? 1.0f : 0.0f;
             }
-            try_restart_hsl(long_hsl, kf);
-            try_restart_hsl(short_hsl, kf);
+            try_restart_hsl(long_hsl, kf, equity);
+            try_restart_hsl(short_hsl, kf, equity);
         }
         bool active = eq_started && alive && valid;
         if (active) {
@@ -1625,6 +1704,31 @@ inline void passivbot_single_coin_impl(
         + short_hsl.flatten_time_count;
     scalars[so + 35] = long_hsl.restart_retrigger_count
         + short_hsl.restart_retrigger_count;
+    float panic_drawdown_count = long_hsl.panic_loss_drawdown_count
+        + short_hsl.panic_loss_drawdown_count;
+    float panic_drawdown_min = long_hsl.panic_loss_drawdown_count > 0.0f
+        ? (short_hsl.panic_loss_drawdown_count > 0.0f
+            ? fmin(
+                long_hsl.panic_loss_drawdown_min,
+                short_hsl.panic_loss_drawdown_min
+            ) : long_hsl.panic_loss_drawdown_min)
+        : (short_hsl.panic_loss_drawdown_count > 0.0f
+            ? short_hsl.panic_loss_drawdown_min : 0.0f);
+    scalars[so + 36] = long_hsl.halt_to_restart_equity_loss
+        + short_hsl.halt_to_restart_equity_loss;
+    scalars[so + 37] = long_hsl.panic_close_loss_sum
+        + short_hsl.panic_close_loss_sum;
+    scalars[so + 38] = fmax(
+        long_hsl.panic_close_loss_max, short_hsl.panic_close_loss_max
+    );
+    scalars[so + 39] = panic_drawdown_min;
+    scalars[so + 40] = long_hsl.panic_loss_drawdown_sum
+        + short_hsl.panic_loss_drawdown_sum;
+    scalars[so + 41] = fmax(
+        long_hsl.panic_loss_drawdown_max,
+        short_hsl.panic_loss_drawdown_max
+    );
+    scalars[so + 42] = panic_drawdown_count;
 }
 
 kernel void passivbot_ema_anchor(

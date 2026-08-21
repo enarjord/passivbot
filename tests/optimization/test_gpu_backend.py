@@ -36,6 +36,7 @@ from optimization.backends.gpu_backend import (
     _gpu_hsl_parameter_active,
     _gpu_pinned_hsl_bound_contract,
     _validate_hsl_bound_contracts,
+    _validate_hsl_metric_topology,
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
@@ -1460,6 +1461,21 @@ def test_gpu_hsl_fails_closed_for_multicoin():
 
     with pytest.raises(ValueError, match="one backtest coin"):
         _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_hsl_metrics_fail_closed_for_multicoin_proxy_outputs():
+    with pytest.raises(ValueError, match="single-coin directional Metal output"):
+        _validate_hsl_metric_topology(
+            {"hard_stop_panic_close_loss_sum"},
+            coin_count=3,
+            hard_stop_metrics={"hard_stop_panic_close_loss_sum"},
+        )
+
+    _validate_hsl_metric_topology(
+        {"hard_stop_panic_close_loss_sum"},
+        coin_count=1,
+        hard_stop_metrics={"hard_stop_panic_close_loss_sum"},
+    )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

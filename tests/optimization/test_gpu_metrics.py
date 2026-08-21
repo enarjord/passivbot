@@ -12,6 +12,7 @@ from optimization.gpu.metrics import (
     _GAP_HIST_UPPER_STEPS,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
+    _hard_stop_panic_loss_metrics,
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
@@ -212,15 +213,7 @@ def test_hard_stop_lifecycle_metric_surface_is_supported():
         "hard_stop_flatten_time_minutes_mean",
         "hard_stop_post_restart_retrigger_pct",
     } <= set(SUPPORTED_METRICS)
-    assert {
-        "hard_stop_halt_to_restart_equity_loss_pct",
-        "hard_stop_panic_close_loss_sum",
-        "hard_stop_panic_close_loss_max",
-        "hard_stop_panic_close_loss_drawdown_pct_min",
-        "hard_stop_panic_close_loss_drawdown_pct_mean",
-        "hard_stop_panic_close_loss_drawdown_pct_max",
-        "drawdown_worst_ema_strategy_eq",
-    }.isdisjoint(SUPPORTED_METRICS)
+    assert "drawdown_worst_ema_strategy_eq" not in SUPPORTED_METRICS
 
 
 def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
@@ -280,16 +273,53 @@ def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
     assert metrics["hard_stop_post_restart_retrigger_pct"].tolist() == [0.5, 0.0]
 
 
-def test_hard_stop_lifecycle_metrics_are_zero_without_directional_hsl_outputs():
-    metrics = _hard_stop_lifecycle_metrics(
-        {"max_dd": torch.tensor([0.1, 0.2])},
-        SimpleNamespace(interval_ms=60_000),
+def test_hard_stop_lifecycle_metrics_fail_closed_without_directional_outputs():
+    with pytest.raises(RuntimeError, match="lifecycle outputs are missing"):
+        _hard_stop_lifecycle_metrics(
+            {"max_dd": torch.tensor([0.1, 0.2])},
+            SimpleNamespace(interval_ms=60_000),
+        )
+
+
+def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
+    out = {
+        "max_dd": torch.zeros(2, dtype=torch.float32),
+        "hsl_halt_to_restart_equity_loss": torch.tensor([25.0, 0.0]),
+        "hsl_panic_close_loss_sum": torch.tensor([45.0, 0.0]),
+        "hsl_panic_close_loss_max": torch.tensor([30.0, 0.0]),
+        "hsl_panic_loss_drawdown_min": torch.tensor([0.01, 0.0]),
+        "hsl_panic_loss_drawdown_sum": torch.tensor([0.06, 0.0]),
+        "hsl_panic_loss_drawdown_max": torch.tensor([0.05, 0.0]),
+        "hsl_panic_loss_drawdown_count": torch.tensor([2.0, 0.0]),
+    }
+
+    metrics = _hard_stop_panic_loss_metrics(
+        out, SimpleNamespace(starting_balance=1_000.0)
     )
 
-    assert set(metrics) == {
-        name for name in SUPPORTED_METRICS if name.startswith("hard_stop_")
-    }
-    assert all(metric.tolist() == [0.0, 0.0] for metric in metrics.values())
+    assert metrics["hard_stop_halt_to_restart_equity_loss_pct"].tolist() == [
+        0.025,
+        0.0,
+    ]
+    assert metrics["hard_stop_panic_close_loss_sum"].tolist() == [45.0, 0.0]
+    assert metrics["hard_stop_panic_close_loss_max"].tolist() == [30.0, 0.0]
+    assert metrics[
+        "hard_stop_panic_close_loss_drawdown_pct_min"
+    ].tolist() == pytest.approx([0.01, 0.0])
+    assert metrics[
+        "hard_stop_panic_close_loss_drawdown_pct_mean"
+    ].tolist() == pytest.approx([0.03, 0.0])
+    assert metrics[
+        "hard_stop_panic_close_loss_drawdown_pct_max"
+    ].tolist() == pytest.approx([0.05, 0.0])
+
+
+def test_hard_stop_panic_loss_metrics_fail_closed_without_directional_outputs():
+    with pytest.raises(RuntimeError, match="panic-loss outputs are missing"):
+        _hard_stop_panic_loss_metrics(
+            {"max_dd": torch.tensor([0.1, 0.2])},
+            SimpleNamespace(starting_balance=1_000.0),
+        )
 
 
 def test_weighted_strategy_equity_metric_surface_is_supported():
