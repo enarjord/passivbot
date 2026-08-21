@@ -487,6 +487,14 @@ def _weighted_subsets(
     interval_ms,
 ):
     finite_timestamps = torch.isfinite(first_eq_ts) & torch.isfinite(last_eq_ts)
+    timestamp_origin = float(first_timestamp)
+    relative_timestamps = finite_timestamps & (first_eq_ts < timestamp_origin)
+    first_eq_ts = torch.where(
+        relative_timestamps, first_eq_ts + timestamp_origin, first_eq_ts
+    )
+    last_eq_ts = torch.where(
+        relative_timestamps, last_eq_ts + timestamp_origin, last_eq_ts
+    )
     sample_span = torch.where(
         finite_timestamps,
         (last_eq_ts - first_eq_ts) / float(interval_ms),
@@ -500,7 +508,7 @@ def _weighted_subsets(
     )
     eligible = finite_timestamps & (sample_count >= 2)
     subsets = [active]
-    first_day = int(first_timestamp) // 86_400_000
+    first_day = int(timestamp_origin) // 86_400_000
     day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
         fraction = 1.0 / (1.0 + index)

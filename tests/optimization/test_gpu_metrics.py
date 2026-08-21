@@ -22,6 +22,7 @@ from optimization.gpu.metrics import (
     _smoothed_adg,
     _smoothed_gain_adg,
     _weighted_adg,
+    _weighted_subsets,
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
@@ -255,6 +256,33 @@ def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
     assert requested <= set(SUPPORTED_METRICS)
     for name, value in expected.items():
         assert metrics[name].item() == pytest.approx(value)
+
+
+def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():
+    day_ms = 86_400_000
+    origin = 1_704_067_200_000.0
+    active = torch.ones((1, 10), dtype=torch.bool)
+
+    relative_eligible, relative_subsets = _weighted_subsets(
+        active,
+        torch.tensor([0.0]),
+        torch.tensor([9.0 * day_ms]),
+        origin,
+        day_ms,
+    )
+    absolute_eligible, absolute_subsets = _weighted_subsets(
+        active,
+        torch.tensor([origin]),
+        torch.tensor([origin + 9.0 * day_ms]),
+        origin,
+        day_ms,
+    )
+
+    assert relative_eligible.item()
+    assert torch.equal(relative_eligible, absolute_eligible)
+    for relative, absolute in zip(relative_subsets, absolute_subsets):
+        assert torch.equal(relative, absolute)
+    assert relative_subsets[1].tolist() == [[False] * 5 + [True] * 5]
 
 
 def test_weighted_pnl_uses_fill_count_not_fill_day_count_for_eligibility():
