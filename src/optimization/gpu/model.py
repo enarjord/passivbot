@@ -95,6 +95,19 @@ HSL_PARAM_KEYS = (
     "hsl_slot_count",
 )
 
+HSL_COIN_OVERRIDE_PATHS = (
+    ("hsl_enabled", ("enabled",)),
+    ("hsl_red_threshold", ("red_threshold",)),
+    ("hsl_ema_span_minutes", ("ema_span_minutes",)),
+    ("hsl_cooldown_minutes_after_red", ("cooldown_minutes_after_red",)),
+    ("hsl_no_restart_drawdown_threshold", ("no_restart_drawdown_threshold",)),
+    ("hsl_restart_policy", ("restart_after_red_policy",)),
+    ("hsl_tier_ratio_yellow", ("tier_ratios", "yellow")),
+    ("hsl_tier_ratio_orange", ("tier_ratios", "orange")),
+    ("hsl_orange_graceful_stop", ("orange_tier_mode",)),
+    ("hsl_panic_market", ("panic_close_order_type",)),
+)
+
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     "twel_enforcer_reduce_portfolio",

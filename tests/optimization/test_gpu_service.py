@@ -962,18 +962,19 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 19)
+    assert matrix.shape == (2, 29)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
     assert matrix[1, 10] == pytest.approx(15.0)
     assert matrix[1, 11] == pytest.approx(0.4)
     assert matrix[1, 12] == pytest.approx(0.25)
-    assert matrix[1, 13:].tolist() == pytest.approx(
+    assert matrix[1, 13:19].tolist() == pytest.approx(
         [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
     )
+    assert np.isnan(matrix[1, 19:]).all()
     assert contract["coins"] == ["BTC", "ETH"]
-    assert contract["values"][0] == [None] * 19
+    assert contract["values"][0] == [None] * 29
 
 
 def test_multicoin_coin_overrides_pack_dual_sides_independently():
@@ -1042,6 +1043,62 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
     assert short_matrix[1, offset_index] == pytest.approx(0.5)
     assert short_matrix[1, 10] == pytest.approx(30.0)
     assert np.isnan(short_matrix[1, 11])
+
+
+def test_multicoin_coin_overrides_pack_complete_hsl_group():
+    strategy = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
+    effective_hsl = {
+        "hsl_enabled": False,
+        "hsl_red_threshold": 0.2,
+        "hsl_ema_span_minutes": 5.5,
+        "hsl_cooldown_minutes_after_red": 12.5,
+        "hsl_no_restart_drawdown_threshold": 0.8,
+        "hsl_restart_after_red_policy": "always",
+        "hsl_tier_ratio_yellow": 0.4,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_tier_mode": "graceful_stop",
+        "hsl_panic_close_order_type": "market",
+    }
+    payload = SimpleNamespace(
+        strategy_params_list=[{"long": strategy}, {"long": strategy}],
+        bot_params_list=[
+            {"long": {}},
+            {"long": effective_hsl},
+        ],
+    )
+    hsl_patch = {
+        "enabled": False,
+        "red_threshold": 0.2,
+        "ema_span_minutes": 5.5,
+        "cooldown_minutes_after_red": 12.5,
+        "no_restart_drawdown_threshold": 0.8,
+        "restart_after_red_policy": "always",
+        "tier_ratios": {"yellow": 0.4, "orange": 0.75},
+        "orange_tier_mode": "graceful_stop",
+        "panic_close_order_type": "market",
+    }
+    config = {
+        "coin_overrides": {"ETH": {"bot": {"long": {"hsl": hsl_patch}}}}
+    }
+
+    matrix, contract = _build_multicoin_ema_coin_overrides(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda config, _mss, _exchange, coin: config[
+            "coin_overrides"
+        ].get(coin, {}),
+    )
+
+    assert matrix.shape == (2, 29)
+    assert np.isnan(matrix[0]).all()
+    assert matrix[1, 19:].tolist() == pytest.approx(
+        [0.0, 0.2, 5.5, 12.5, 0.8, 0.0, 0.4, 0.75, 1.0, 1.0]
+    )
+    assert contract["values"][1][19:] == pytest.approx(matrix[1, 19:].tolist())
 
 
 def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
@@ -1158,7 +1215,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 34)
+    assert matrix.shape == (2, 44)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 15] == pytest.approx(0.5)
@@ -1167,10 +1224,11 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 25] == pytest.approx(0.25)
     assert matrix[1, 26] == pytest.approx(1.0)
     assert matrix[1, 27] == pytest.approx(0.8)
-    assert matrix[1, 28:].tolist() == pytest.approx(
+    assert matrix[1, 28:34].tolist() == pytest.approx(
         [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
     )
-    assert contract["values"][0] == [None] * 34
+    assert np.isnan(matrix[1, 34:]).all()
+    assert contract["values"][0] == [None] * 44
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

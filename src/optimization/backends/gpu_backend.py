@@ -27,6 +27,7 @@ from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
+    HSL_COIN_OVERRIDE_PATHS,
     gpu_side_enabled,
     validate_hsl_signal_topology,
 )
@@ -993,11 +994,22 @@ def _validate_scope_config(
         enabled_sides=enabled_sides,
         coin_count=coin_count,
     )
-    hsl_enabled_sides = [
-        side
-        for side in enabled_sides
-        if bool(config["bot"][side].get("hsl", {}).get("enabled"))
-    ]
+    hsl_enabled_sides = []
+    for side in enabled_sides:
+        globally_enabled = bool(
+            config["bot"][side].get("hsl", {}).get("enabled")
+        )
+        override_enabled = any(
+            bool(
+                (patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}).get(
+                    "enabled", globally_enabled
+                )
+            )
+            for patch in (config.get("coin_overrides") or {}).values()
+            if isinstance(patch, dict)
+        )
+        if globally_enabled or override_enabled:
+            hsl_enabled_sides.append(side)
     if hsl_enabled_sides:
         # The proxy deliberately keeps an all-history candidate-local peak for
         # finite windows. That peak is never below Rust's rolling-window peak,
@@ -1192,16 +1204,32 @@ def _validate_gpu_coin_overrides(
             )
             for path in strategy_paths
         )
+        allowed.update(
+            ("bot", enabled_side, "hsl", *path)
+            for _key, path in HSL_COIN_OVERRIDE_PATHS
+        )
     unsupported = []
+    hsl_override_paths = []
     for coin, patch in overrides.items():
         if not isinstance(patch, dict):
             unsupported.append(f"coin_overrides.{coin}")
             continue
-        unsupported.extend(
-            ".".join(("coin_overrides", str(coin), *path))
-            for path in leaves(patch)
-            if path not in allowed
-        )
+        for path in leaves(patch):
+            rendered = ".".join(("coin_overrides", str(coin), *path))
+            if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
+                hsl_override_paths.append(rendered)
+            if path not in allowed:
+                unsupported.append(rendered)
+    if hsl_override_paths:
+        signal_mode = str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        ).strip().lower()
+        if signal_mode != "coin" or len(enabled_sides) != 1:
+            raise ValueError(
+                "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "
+                "and exactly one enabled side; unsupported paths: "
+                f"{sorted(hsl_override_paths)}"
+            )
     if unsupported:
         supported_risk = (
             "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
@@ -1215,7 +1243,7 @@ def _validate_gpu_coin_overrides(
             "GPU coin_overrides do not model these paths yet: "
             f"{sorted(unsupported)}; supported leaves are enabled-side "
             f"{strategy_kind} parameters, {supported_risk}, unstuck parameters, "
-            "and wallet_exposure_limit"
+            "HSL parameters in coin signal mode, and wallet_exposure_limit"
         )
 
 

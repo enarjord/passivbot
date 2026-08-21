@@ -6,10 +6,12 @@ import os
 
 import numpy as np
 
+from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.model import (
     EMA_ANCHOR_PARAM_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GPU_STRATEGY_PARAM_KEYS,
+    HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
@@ -986,6 +988,34 @@ class MpsSingleCoinProxy:
 MpsEmaAnchorProxy = MpsSingleCoinProxy
 
 
+def _pack_multicoin_hsl_overrides(
+    matrix: np.ndarray,
+    *,
+    row: int,
+    start_column: int,
+    side_patch: dict,
+    effective_bot: dict,
+) -> None:
+    hsl_patch = side_patch.get("hsl", {}) or {}
+    if not hsl_patch:
+        return
+    packed = _hsl_params(effective_bot, signal_mode="coin")
+    missing = object()
+    for offset, (key, path) in enumerate(HSL_COIN_OVERRIDE_PATHS):
+        value = hsl_patch
+        for part in path:
+            value = value.get(part, missing) if isinstance(value, dict) else missing
+            if value is missing:
+                break
+        if value is missing:
+            continue
+        if key == "hsl_panic_market":
+            encoded = float(str(value).strip().lower() == "market")
+        else:
+            encoded = float(packed[key])
+        matrix[row, start_column + offset] = encoded
+
+
 def _build_multicoin_ema_coin_overrides(
     *,
     config: dict,
@@ -1004,7 +1034,12 @@ def _build_multicoin_ema_coin_overrides(
         resolve_override = _get_backtest_coin_override
 
     override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    matrix = np.full((len(coins), 19), np.nan, dtype=np.float32)
+    hsl_start_column = 19
+    matrix = np.full(
+        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
+        np.nan,
+        dtype=np.float32,
+    )
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
         side_patch = patch.get("bot", {}).get(side, {})
@@ -1039,6 +1074,13 @@ def _build_multicoin_ema_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        _pack_multicoin_hsl_overrides(
+            matrix,
+            row=coin_index,
+            start_column=hsl_start_column,
+            side_patch=side_patch,
+            effective_bot=effective_bot,
+        )
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -1074,8 +1116,9 @@ def _build_multicoin_tm_coin_overrides(
     wel_enforcer_enabled_column = allowance_pct_column + 1
     wel_enforcer_threshold_column = wel_enforcer_enabled_column + 1
     unstuck_start_column = wel_enforcer_threshold_column + 1
+    hsl_start_column = unstuck_start_column + 6
     matrix = np.full(
-        (len(coins), unstuck_start_column + 6),
+        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
         np.nan,
         dtype=np.float32,
     )
@@ -1138,6 +1181,13 @@ def _build_multicoin_tm_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        _pack_multicoin_hsl_overrides(
+            matrix,
+            row=coin_index,
+            start_column=hsl_start_column,
+            side_patch=side_patch,
+            effective_bot=effective_bot,
+        )
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -1301,16 +1351,6 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
-            "hsl_enabled",
-            "hsl_red_threshold",
-            "hsl_ema_span_minutes",
-            "hsl_cooldown_minutes_after_red",
-            "hsl_no_restart_drawdown_threshold",
-            "hsl_restart_after_red_policy",
-            "hsl_tier_ratio_yellow",
-            "hsl_tier_ratio_orange",
-            "hsl_orange_tier_mode",
-            "hsl_panic_close_order_type",
         )
         signal_mode = (
             backtest_params.get("equity_hard_stop_loss", {})
@@ -1319,7 +1359,10 @@ class MpsMulticoinProxy:
         hsl_enabled_sides = [
             side
             for side in self.sides
-            if bool(payload.bot_params_list[0][side].get("hsl_enabled"))
+            if any(
+                bool(item[side].get("hsl_enabled"))
+                for item in payload.bot_params_list
+            )
         ]
         if hsl_enabled_sides:
             validate_hsl_signal_topology(
@@ -1406,7 +1449,8 @@ class MpsMulticoinProxy:
                     )
                 )
             first_strategy.update(_unstuck_params(config["bot"][side]))
-            first_strategy.update(_hsl_params(first_bot, signal_mode=signal_mode))
+            base_bot = flatten_shared_bot_side(config["bot"][side])
+            first_strategy.update(_hsl_params(base_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
@@ -1562,15 +1606,12 @@ class MpsMulticoinProxy:
                 "market_order_slippage_pct": float(
                     backtest_params.get("market_order_slippage_pct", 0.0)
                 ),
-                "hsl_panic_market": bool(
-                    self.base_params[side]["hsl_enabled"]
-                    and str(
-                        payload.bot_params_list[0][side].get(
-                            "hsl_panic_close_order_type", "limit"
-                        )
-                    ).strip().lower()
-                    == "market"
-                ),
+                "hsl_panic_market": str(
+                    flatten_shared_bot_side(config["bot"][side]).get(
+                        "hsl_panic_close_order_type", "limit"
+                    )
+                ).strip().lower()
+                == "market",
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
             self.runners[side] = runner_cls(

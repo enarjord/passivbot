@@ -133,7 +133,8 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
-  other override leaves fail closed
+  other override leaves fail closed. In one-sided `live.hsl_signal_mode: coin` runs, all ten HSL
+  leaves documented in `coin_overrides.md` are also supported; other HSL topologies fail closed
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
   `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
   pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
@@ -155,8 +156,9 @@ The supported slice is intentionally narrow:
   yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
   post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
-  Dual-side multi-coin HSL, per-coin HSL setting overrides, and HSL strategy-equity
-  EMA/recovery-distribution metrics remain fail closed for now.
+  One-sided coin-mode multi-coin runs may resolve all canonical HSL settings independently per
+  coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin HSL and HSL
+  strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs

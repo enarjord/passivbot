@@ -4,13 +4,20 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added all ten canonical per-coin HSL setting overrides to one-sided multi-coin Apple MPS
+  optimization for EMA Anchor and Trailing Martingale in `coin` signal mode. Each Metal coin
+  controller now resolves its own enablement, thresholds, EMA span, cooldown, restart policy,
+  tier ratios, orange behavior, and limit/market panic execution. Compatible suites may also
+  supply scenario-local HSL coin overrides. Exact Rust validation remains authoritative;
+  per-coin HSL overrides outside this topology fail closed.
+
 - Added `coin` signal mode to one-sided multi-coin HSL Apple MPS optimization for EMA Anchor
   and Trailing Martingale. Metal now maintains an independent HSL episode per coin, including
   realized net PnL and fees, dynamic effective-slot scaling, warning/RED state, panic flattening,
   halt/restart lifecycle, and per-episode metrics. Directional outputs aggregate the same way as
   exact Rust: episode metrics are combined across coins while time-in-tier uses the worst active
-  coin tier once per minute. Exact Rust validation remains authoritative; per-coin HSL setting
-  overrides and dual-side multi-coin HSL remain fail closed.
+  coin tier once per minute. Exact Rust validation remains authoritative; dual-side multi-coin
+  HSL remains fail closed.
 
 - Added market panic-close execution to one-sided multi-coin HSL Apple MPS optimization for EMA
   Anchor and Trailing Martingale. The portfolio proxy now fills every panic close on the next
@@ -23,14 +30,14 @@ All notable user-facing changes will be documented in this file.
   candidate now applies one shared-balance portfolio HSL controller across every coin on the
   enabled side, including warning tiers, RED entry blocking, limit panic flattening, cooldown
   restart, lifecycle metrics, and panic-loss metrics. Exact Rust validation remains authoritative;
-  dual-side multi-coin HSL and per-coin HSL overrides remain fail closed.
+  dual-side multi-coin HSL remains fail closed.
 
 - Added dual-side single-coin HSL to Apple MPS optimization for EMA Anchor and Trailing
   Martingale in `coin` and `pside` signal modes, including compatible suites. Metal now tracks
   realized net PnL independently for long and short while retaining shared account balance and
   exact Rust validation. Dual-side `unified` HSL remains fail closed until its documented
-  account-wide flatten contract and exact-backtest finalization scope are reconciled; multi-coin
-  and per-coin-override HSL remain unsupported.
+  account-wide flatten contract and exact-backtest finalization scope are reconciled; dual-side
+  multi-coin HSL remains unsupported.
 
 - Consolidated the supported one-sided single-coin HSL Apple MPS screening behavior into one
   Rust-owned Metal controller shared by EMA Anchor and Trailing Martingale. Signal modes now use

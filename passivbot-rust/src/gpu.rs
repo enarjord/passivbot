@@ -190,7 +190,9 @@ mod tests {
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 42"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 19"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 29"));
+        assert!(source.contains("constant int HSL_OVERRIDE_START = 19"));
+        assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
@@ -408,7 +410,9 @@ mod tests {
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 34"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 44"));
+        assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
+        assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
         assert!(source.contains("load_hsl(params, po, 48)"));

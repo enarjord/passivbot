@@ -130,6 +130,37 @@ inline HslState load_hsl(
     return h;
 }
 
+inline void apply_coin_hsl_overrides(
+    thread HslState& h,
+    constant float* coin_overrides,
+    int coin,
+    int override_cols,
+    int start_column
+) {
+    int offset = coin * override_cols + start_column;
+    float value = coin_overrides[offset + 0];
+    if (isfinite(value)) h.enabled = value > 0.5f;
+    value = coin_overrides[offset + 1];
+    if (isfinite(value)) h.red_threshold = value;
+    value = coin_overrides[offset + 2];
+    if (isfinite(value)) {
+        h.alpha = clamp(2.0f / (fmax(value, 1.0f) + 1.0f), 0.0f, 1.0f);
+    }
+    value = coin_overrides[offset + 3];
+    if (isfinite(value)) h.cooldown_minutes = fmax(value, 0.0f);
+    value = coin_overrides[offset + 4];
+    if (isfinite(value)) h.no_restart_threshold = value;
+    value = coin_overrides[offset + 5];
+    if (isfinite(value)) h.restart_policy = int(round(value));
+    value = coin_overrides[offset + 6];
+    if (isfinite(value)) h.yellow_ratio = value;
+    value = coin_overrides[offset + 7];
+    if (isfinite(value)) h.orange_ratio = value;
+    value = coin_overrides[offset + 8];
+    if (isfinite(value)) h.orange_graceful_stop = value > 0.5f;
+    h.no_restart_threshold = fmax(h.no_restart_threshold, h.red_threshold);
+}
+
 inline int hsl_mode(thread HslState& h, bool has_position) {
     if (!h.enabled) return 0;
     if (h.halted) return has_position ? 3 : 1;
