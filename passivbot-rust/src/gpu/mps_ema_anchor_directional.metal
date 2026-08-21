@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 5;
-constant int SCALAR_COLS = 18;
+constant int SCALAR_COLS = 36;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -153,6 +153,19 @@ struct HslState {
     float pending_strategy_equity;
     float pending_peak_strategy_equity;
     float pending_stop_k;
+    float current_red_start_k;
+    float current_halt_start_k;
+    float last_restart_k;
+    float triggers;
+    float restarts;
+    float halt_duration_sum_steps;
+    float halt_duration_max_steps;
+    float halt_duration_count;
+    float trigger_drawdown_sum;
+    float trigger_drawdown_count;
+    float flatten_time_sum_steps;
+    float flatten_time_count;
+    float restart_retrigger_count;
 };
 
 inline HslState load_hsl(constant float* params, int po) {
@@ -186,6 +199,19 @@ inline HslState load_hsl(constant float* params, int po) {
     h.pending_strategy_equity = 0.0f;
     h.pending_peak_strategy_equity = 0.0f;
     h.pending_stop_k = -1.0f;
+    h.current_red_start_k = -1.0f;
+    h.current_halt_start_k = -1.0f;
+    h.last_restart_k = -1.0f;
+    h.triggers = 0.0f;
+    h.restarts = 0.0f;
+    h.halt_duration_sum_steps = 0.0f;
+    h.halt_duration_max_steps = 0.0f;
+    h.halt_duration_count = 0.0f;
+    h.trigger_drawdown_sum = 0.0f;
+    h.trigger_drawdown_count = 0.0f;
+    h.flatten_time_sum_steps = 0.0f;
+    h.flatten_time_count = 0.0f;
+    h.restart_retrigger_count = 0.0f;
     return h;
 }
 
@@ -205,7 +231,8 @@ inline void update_hsl(
     float unrealized_pnl,
     bool has_position,
     bool has_blocking_orders,
-    float kf
+    float kf,
+    float interval_ms
 ) {
     if (!h.enabled || h.halted || !(balance > 0.0f)) return;
     float drawdown_raw;
@@ -246,8 +273,10 @@ inline void update_hsl(
         : h.red_active_now ? 3
         : score + cmp_eps >= h.orange_ratio * h.red_threshold ? 2
         : score + cmp_eps >= h.yellow_ratio * h.red_threshold ? 1 : 0;
+    if (next_tier == 3 && h.tier != 3) h.current_red_start_k = kf;
     if (next_tier == 3) h.red_latched = true;
     h.tier = h.red_latched ? 3 : next_tier;
+    if (h.tier != 3) h.current_red_start_k = -1.0f;
     if (h.tier == 3) {
         if (has_position || has_blocking_orders) {
             h.flat_confirmations = 0;
@@ -262,6 +291,8 @@ inline void update_hsl(
             }
             if (h.flat_confirmations >= 2) {
                 h.halted = true;
+                h.current_halt_start_k = h.pending_stop_k;
+                h.triggers += 1.0f;
                 if (h.signal_coin) {
                     h.coin_realized_baseline = realized_pnl;
                     h.coin_realized_peak = 0.0f;
@@ -283,6 +314,28 @@ inline void update_hsl(
                         ),
                         0.9999999403953552f
                     );
+                float stop_drawdown_raw = fmax(
+                    h.pending_drawdown_raw,
+                    fmax(
+                        1.0f - h.pending_strategy_equity
+                            / fmax(h.pending_peak_strategy_equity, 1.0e-12f),
+                        0.0f
+                    )
+                );
+                h.trigger_drawdown_sum += stop_drawdown_raw;
+                h.trigger_drawdown_count += 1.0f;
+                if (h.current_red_start_k >= 0.0f) {
+                    h.flatten_time_sum_steps += fmax(
+                        h.pending_stop_k - h.current_red_start_k, 0.0f
+                    );
+                    h.flatten_time_count += 1.0f;
+                }
+                if (h.last_restart_k >= 0.0f
+                    && (h.pending_stop_k - h.last_restart_k) * interval_ms
+                        <= 86400000.0f) {
+                    h.restart_retrigger_count += 1.0f;
+                }
+                h.last_restart_k = -1.0f;
                 bool terminal = h.restart_policy == 2
                     || (h.restart_policy == 1
                         && fmax(no_restart_drawdown_raw, h.pending_drawdown_ema)
@@ -300,6 +353,15 @@ inline void update_hsl(
 inline void try_restart_hsl(thread HslState& h, float kf) {
     if (!h.enabled || !h.halted || h.no_restart_latched
         || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
+    if (h.current_halt_start_k >= 0.0f) {
+        float duration = fmax(kf - h.current_halt_start_k, 0.0f);
+        h.halt_duration_sum_steps += duration;
+        h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
+        h.halt_duration_count += 1.0f;
+        h.current_halt_start_k = -1.0f;
+    }
+    h.restarts += 1.0f;
+    h.last_restart_k = kf;
     h.initialized = false;
     h.drawdown_ema = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
@@ -309,6 +371,7 @@ inline void try_restart_hsl(thread HslState& h, float kf) {
     h.halted = false;
     h.cooldown_until_k = -1.0f;
     h.flat_confirmations = 0;
+    h.current_red_start_k = -1.0f;
 }
 
 inline EmaSide load_side(constant float* params, int po, float seed_close) {
@@ -976,6 +1039,10 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
+    float hsl_tier_samples_total = 0.0f;
+    float hsl_tier_samples_yellow = 0.0f;
+    float hsl_tier_samples_orange = 0.0f;
+    float hsl_tier_samples_red = 0.0f;
 
     int cur_day = flags[2];
     bool day_touched = false;
@@ -1438,14 +1505,21 @@ inline void passivbot_single_coin_impl(
                 long_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
                 long_unreal, long_side.psize > 0.0f,
-                long_blocking_orders, kf
+                long_blocking_orders, kf, interval_ms
             );
             update_hsl(
                 short_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
                 short_unreal, short_side.psize > 0.0f,
-                short_blocking_orders, kf
+                short_blocking_orders, kf, interval_ms
             );
+            if (long_hsl.enabled || short_hsl.enabled) {
+                int hsl_tier = max(long_hsl.tier, short_hsl.tier);
+                hsl_tier_samples_total += 1.0f;
+                hsl_tier_samples_yellow += hsl_tier == 1 ? 1.0f : 0.0f;
+                hsl_tier_samples_orange += hsl_tier == 2 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += hsl_tier == 3 ? 1.0f : 0.0f;
+            }
             try_restart_hsl(long_hsl, kf);
             try_restart_hsl(short_hsl, kf);
         }
@@ -1511,6 +1585,46 @@ inline void passivbot_single_coin_impl(
     scalars[so + 15] = short_side.psize;
     scalars[so + 16] = short_side.pprice;
     scalars[so + 17] = 0.0f;
+    float long_terminal_count = long_hsl.halted
+        && long_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+        ? 1.0f : 0.0f;
+    float short_terminal_count = short_hsl.halted
+        && short_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
+        ? 1.0f : 0.0f;
+    float long_terminal_duration = long_terminal_count > 0.0f
+        ? fmax(last_eq_k - long_hsl.current_halt_start_k, 0.0f) : 0.0f;
+    float short_terminal_duration = short_terminal_count > 0.0f
+        ? fmax(last_eq_k - short_hsl.current_halt_start_k, 0.0f) : 0.0f;
+    float terminal_count = long_terminal_count + short_terminal_count;
+    scalars[so + 18] = long_hsl.enabled ? 1.0f : 0.0f;
+    scalars[so + 19] = short_hsl.enabled ? 1.0f : 0.0f;
+    scalars[so + 20] = long_hsl.triggers;
+    scalars[so + 21] = short_hsl.triggers;
+    scalars[so + 22] = long_hsl.restarts;
+    scalars[so + 23] = short_hsl.restarts;
+    scalars[so + 24] = hsl_tier_samples_total;
+    scalars[so + 25] = hsl_tier_samples_yellow;
+    scalars[so + 26] = hsl_tier_samples_orange;
+    scalars[so + 27] = hsl_tier_samples_red;
+    scalars[so + 28] = long_hsl.halt_duration_sum_steps
+        + short_hsl.halt_duration_sum_steps
+        + long_terminal_duration + short_terminal_duration;
+    scalars[so + 29] = fmax(
+        fmax(long_hsl.halt_duration_max_steps, short_hsl.halt_duration_max_steps),
+        fmax(long_terminal_duration, short_terminal_duration)
+    );
+    scalars[so + 30] = long_hsl.halt_duration_count
+        + short_hsl.halt_duration_count + terminal_count;
+    scalars[so + 31] = long_hsl.trigger_drawdown_sum
+        + short_hsl.trigger_drawdown_sum;
+    scalars[so + 32] = long_hsl.trigger_drawdown_count
+        + short_hsl.trigger_drawdown_count;
+    scalars[so + 33] = long_hsl.flatten_time_sum_steps
+        + short_hsl.flatten_time_sum_steps;
+    scalars[so + 34] = long_hsl.flatten_time_count
+        + short_hsl.flatten_time_count;
+    scalars[so + 35] = long_hsl.restart_retrigger_count
+        + short_hsl.restart_retrigger_count;
 }
 
 kernel void passivbot_ema_anchor(

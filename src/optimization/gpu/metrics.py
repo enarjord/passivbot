@@ -29,6 +29,24 @@ SUPPORTED_METRICS = (
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
     "gain_strategy_eq",
+    "hard_stop_duration_minutes_max",
+    "hard_stop_duration_minutes_mean",
+    "hard_stop_flatten_time_minutes_mean",
+    "hard_stop_post_restart_retrigger_pct",
+    "hard_stop_restarts",
+    "hard_stop_restarts_long",
+    "hard_stop_restarts_per_year",
+    "hard_stop_restarts_per_year_long",
+    "hard_stop_restarts_per_year_short",
+    "hard_stop_restarts_short",
+    "hard_stop_time_in_orange_pct",
+    "hard_stop_time_in_red_pct",
+    "hard_stop_time_in_yellow_pct",
+    "hard_stop_trigger_drawdown_mean",
+    "hard_stop_triggers",
+    "hard_stop_triggers_long",
+    "hard_stop_triggers_per_year",
+    "hard_stop_triggers_short",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
     "omega_ratio_strategy_eq",
@@ -58,6 +76,26 @@ _FILL_GAP_HISTOGRAM_METRICS = {
     "fills_gap_median_hours",
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
+}
+_HARD_STOP_LIFECYCLE_METRICS = {
+    "hard_stop_duration_minutes_max",
+    "hard_stop_duration_minutes_mean",
+    "hard_stop_flatten_time_minutes_mean",
+    "hard_stop_post_restart_retrigger_pct",
+    "hard_stop_restarts",
+    "hard_stop_restarts_long",
+    "hard_stop_restarts_per_year",
+    "hard_stop_restarts_per_year_long",
+    "hard_stop_restarts_per_year_short",
+    "hard_stop_restarts_short",
+    "hard_stop_time_in_orange_pct",
+    "hard_stop_time_in_red_pct",
+    "hard_stop_time_in_yellow_pct",
+    "hard_stop_trigger_drawdown_mean",
+    "hard_stop_triggers",
+    "hard_stop_triggers_long",
+    "hard_stop_triggers_per_year",
+    "hard_stop_triggers_short",
 }
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
@@ -495,6 +533,86 @@ def _weighted_strategy_eq_metrics(
     return {name: value / 10.0 for name, value in totals.items()}
 
 
+def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
+    """Reduce directional HSL counters using the authoritative Rust formulas."""
+
+    reference = out["max_dd"].to(torch.float64)
+    zeros = torch.zeros_like(reference)
+    if "hsl_triggers_long" not in out:
+        return {name: zeros for name in _HARD_STOP_LIFECYCLE_METRICS}
+
+    def value(name: str):
+        return out[name].to(torch.float64)
+
+    triggers_long = value("hsl_triggers_long")
+    triggers_short = value("hsl_triggers_short")
+    restarts_long = value("hsl_restarts_long")
+    restarts_short = value("hsl_restarts_short")
+    triggers = triggers_long + triggers_short
+    restarts = restarts_long + restarts_short
+    sample_count = value("hsl_tier_samples_total")
+    first_eq_ts = out["first_eq_ts"].to(torch.float64)
+    last_eq_ts = out["last_eq_ts"].to(torch.float64)
+    interval_days = float(run.interval_ms) / 86_400_000.0
+    timestamp_days = ((last_eq_ts - first_eq_ts) / 86_400_000.0).clamp(
+        min=interval_days
+    )
+    has_equity = (
+        torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts >= first_eq_ts)
+    )
+    n_days = torch.where(has_equity, timestamp_days, zeros)
+    per_year_scale = torch.where(n_days > 0.0, 365.25 / n_days, zeros)
+
+    total_samples = sample_count.clamp(min=1.0)
+    duration_count = value("hsl_duration_count")
+    trigger_drawdown_count = value("hsl_trigger_drawdown_count")
+    flatten_count = value("hsl_flatten_time_count")
+    minutes_per_step = float(run.interval_ms) / 60_000.0
+
+    return {
+        "hard_stop_triggers": triggers,
+        "hard_stop_triggers_per_year": triggers * per_year_scale,
+        "hard_stop_triggers_long": triggers_long,
+        "hard_stop_triggers_short": triggers_short,
+        "hard_stop_restarts": restarts,
+        "hard_stop_restarts_per_year": restarts * per_year_scale,
+        "hard_stop_restarts_per_year_long": restarts_long * per_year_scale,
+        "hard_stop_restarts_per_year_short": restarts_short * per_year_scale,
+        "hard_stop_restarts_long": restarts_long,
+        "hard_stop_restarts_short": restarts_short,
+        "hard_stop_time_in_yellow_pct": value("hsl_tier_samples_yellow")
+        / total_samples,
+        "hard_stop_time_in_orange_pct": value("hsl_tier_samples_orange")
+        / total_samples,
+        "hard_stop_time_in_red_pct": value("hsl_tier_samples_red")
+        / total_samples,
+        "hard_stop_duration_minutes_mean": torch.where(
+            duration_count > 0.0,
+            value("hsl_duration_sum_steps") / duration_count * minutes_per_step,
+            zeros,
+        ),
+        "hard_stop_duration_minutes_max": value("hsl_duration_max_steps")
+        * minutes_per_step,
+        "hard_stop_trigger_drawdown_mean": torch.where(
+            trigger_drawdown_count > 0.0,
+            value("hsl_trigger_drawdown_sum") / trigger_drawdown_count,
+            zeros,
+        ),
+        "hard_stop_flatten_time_minutes_mean": torch.where(
+            flatten_count > 0.0,
+            value("hsl_flatten_time_sum_steps") / flatten_count * minutes_per_step,
+            zeros,
+        ),
+        "hard_stop_post_restart_retrigger_pct": torch.where(
+            restarts > 0.0,
+            value("hsl_restart_retrigger_count") / restarts,
+            zeros,
+        ),
+    }
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -575,6 +693,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _FILL_GAP_HISTOGRAM_METRICS
         else {}
     )
+    hard_stop_metrics = (
+        _hard_stop_lifecycle_metrics(out, run)
+        if requested & _HARD_STOP_LIFECYCLE_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -612,6 +735,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "volume_pct_per_day_avg": volume_pct,
     }
     objectives.update(fill_gap_metrics)
+    objectives.update(hard_stop_metrics)
     objectives.update(weighted_metrics)
     if needed is None:
         return objectives

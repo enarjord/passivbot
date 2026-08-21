@@ -11,6 +11,7 @@ from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
     _fill_gap_metrics,
+    _hard_stop_lifecycle_metrics,
     _masked_median,
     _mean_worst_one_pct_abs,
     _omega_ratio,
@@ -188,6 +189,107 @@ def test_strategy_equity_summary_metric_surface_is_supported():
         "sterling_ratio_strategy_eq",
         "strategy_eq_underwater_pct_median",
     } <= set(SUPPORTED_METRICS)
+
+
+def test_hard_stop_lifecycle_metric_surface_is_supported():
+    assert {
+        "hard_stop_triggers",
+        "hard_stop_triggers_per_year",
+        "hard_stop_triggers_long",
+        "hard_stop_triggers_short",
+        "hard_stop_restarts",
+        "hard_stop_restarts_per_year",
+        "hard_stop_restarts_per_year_long",
+        "hard_stop_restarts_per_year_short",
+        "hard_stop_restarts_long",
+        "hard_stop_restarts_short",
+        "hard_stop_time_in_yellow_pct",
+        "hard_stop_time_in_orange_pct",
+        "hard_stop_time_in_red_pct",
+        "hard_stop_duration_minutes_mean",
+        "hard_stop_duration_minutes_max",
+        "hard_stop_trigger_drawdown_mean",
+        "hard_stop_flatten_time_minutes_mean",
+        "hard_stop_post_restart_retrigger_pct",
+    } <= set(SUPPORTED_METRICS)
+    assert {
+        "hard_stop_halt_to_restart_equity_loss_pct",
+        "hard_stop_panic_close_loss_sum",
+        "hard_stop_panic_close_loss_max",
+        "hard_stop_panic_close_loss_drawdown_pct_min",
+        "hard_stop_panic_close_loss_drawdown_pct_mean",
+        "hard_stop_panic_close_loss_drawdown_pct_max",
+        "drawdown_worst_ema_strategy_eq",
+    }.isdisjoint(SUPPORTED_METRICS)
+
+
+def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
+    out = {
+        "day_end_eq": torch.zeros((2, 1), dtype=torch.float32),
+        "max_dd": torch.zeros(2, dtype=torch.float32),
+        "first_eq_ts": torch.tensor([0.0, 0.0]),
+        "last_eq_ts": torch.tensor([86_400_000.0, 0.0]),
+        "hsl_triggers_long": torch.tensor([2.0, 0.0]),
+        "hsl_triggers_short": torch.tensor([1.0, 0.0]),
+        "hsl_restarts_long": torch.tensor([1.0, 0.0]),
+        "hsl_restarts_short": torch.tensor([1.0, 0.0]),
+        "hsl_tier_samples_total": torch.tensor([1441.0, 1.0]),
+        "hsl_tier_samples_yellow": torch.tensor([144.0, 0.0]),
+        "hsl_tier_samples_orange": torch.tensor([288.0, 0.0]),
+        "hsl_tier_samples_red": torch.tensor([720.0, 0.0]),
+        "hsl_duration_sum_steps": torch.tensor([45.0, 0.0]),
+        "hsl_duration_max_steps": torch.tensor([30.0, 0.0]),
+        "hsl_duration_count": torch.tensor([3.0, 0.0]),
+        "hsl_trigger_drawdown_sum": torch.tensor([0.9, 0.0]),
+        "hsl_trigger_drawdown_count": torch.tensor([3.0, 0.0]),
+        "hsl_flatten_time_sum_steps": torch.tensor([9.0, 0.0]),
+        "hsl_flatten_time_count": torch.tensor([3.0, 0.0]),
+        "hsl_restart_retrigger_count": torch.tensor([1.0, 0.0]),
+    }
+
+    metrics = _hard_stop_lifecycle_metrics(
+        out, SimpleNamespace(interval_ms=60_000)
+    )
+
+    assert metrics["hard_stop_triggers"].tolist() == [3.0, 0.0]
+    assert metrics["hard_stop_triggers_per_year"].tolist() == pytest.approx(
+        [3.0 * 365.25, 0.0]
+    )
+    assert metrics["hard_stop_restarts"].tolist() == [2.0, 0.0]
+    assert metrics["hard_stop_restarts_per_year_long"].tolist() == pytest.approx(
+        [365.25, 0.0]
+    )
+    assert metrics["hard_stop_restarts_per_year_short"].tolist() == pytest.approx(
+        [365.25, 0.0]
+    )
+    assert metrics["hard_stop_time_in_yellow_pct"][0].item() == pytest.approx(
+        144.0 / 1441.0
+    )
+    assert metrics["hard_stop_time_in_orange_pct"][0].item() == pytest.approx(
+        288.0 / 1441.0
+    )
+    assert metrics["hard_stop_time_in_red_pct"][0].item() == pytest.approx(
+        720.0 / 1441.0
+    )
+    assert metrics["hard_stop_duration_minutes_mean"].tolist() == [15.0, 0.0]
+    assert metrics["hard_stop_duration_minutes_max"].tolist() == [30.0, 0.0]
+    assert metrics["hard_stop_trigger_drawdown_mean"].tolist() == pytest.approx(
+        [0.3, 0.0]
+    )
+    assert metrics["hard_stop_flatten_time_minutes_mean"].tolist() == [3.0, 0.0]
+    assert metrics["hard_stop_post_restart_retrigger_pct"].tolist() == [0.5, 0.0]
+
+
+def test_hard_stop_lifecycle_metrics_are_zero_without_directional_hsl_outputs():
+    metrics = _hard_stop_lifecycle_metrics(
+        {"max_dd": torch.tensor([0.1, 0.2])},
+        SimpleNamespace(interval_ms=60_000),
+    )
+
+    assert set(metrics) == {
+        name for name in SUPPORTED_METRICS if name.startswith("hard_stop_")
+    }
+    assert all(metric.tolist() == [0.0, 0.0] for metric in metrics.values())
 
 
 def test_weighted_strategy_equity_metric_surface_is_supported():
