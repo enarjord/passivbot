@@ -1498,7 +1498,7 @@ def test_gpu_hsl_fails_closed_for_multicoin_coin_mode():
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_hsl_fails_closed_for_multicoin_market_panic():
+def test_gpu_hsl_accepts_one_sided_multicoin_market_panic():
     config = _long_only_ema_config()
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "XRP"]
     config["live"]["hsl_signal_mode"] = "unified"
@@ -1507,8 +1507,7 @@ def test_gpu_hsl_fails_closed_for_multicoin_market_panic():
         {"enabled": True, "panic_close_order_type": "market"}
     )
 
-    with pytest.raises(ValueError, match="panic_close_order_type=limit"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_hsl_fails_closed_for_dual_side_multicoin():

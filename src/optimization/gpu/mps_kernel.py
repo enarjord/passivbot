@@ -468,6 +468,8 @@ class MpsEmaAnchorMulticoinRunner:
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
+        market_order_slippage_pct: float = 0.0,
+        hsl_panic_market: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -515,6 +517,14 @@ class MpsEmaAnchorMulticoinRunner:
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             max_realized_loss_pct
         )
+        market_order_slippage_pct = float(market_order_slippage_pct)
+        if (
+            not np.isfinite(market_order_slippage_pct)
+            or market_order_slippage_pct < 0.0
+        ):
+            raise ValueError(
+                "market_order_slippage_pct must be finite and non-negative"
+            )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
@@ -527,6 +537,8 @@ class MpsEmaAnchorMulticoinRunner:
                 forager_score_hysteresis_pct,
                 encoded_max_realized_loss_pct,
                 float(self.collect_coin_fill_counts),
+                market_order_slippage_pct,
+                float(bool(hsl_panic_market)),
             ],
             dtype=torch.float32,
             device="mps",
@@ -678,6 +690,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
+        market_order_slippage_pct: float = 0.0,
+        hsl_panic_market: bool = False,
     ):
         super().__init__(
             run,
@@ -687,6 +701,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             forager_score_hysteresis_pct=forager_score_hysteresis_pct,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
+            market_order_slippage_pct=market_order_slippage_pct,
+            hsl_panic_market=hsl_panic_market,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:

@@ -329,6 +329,7 @@ class ProxyMarket:
     min_cost: float
     c_mult: float
     maker_fee: float
+    taker_fee: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -747,7 +748,7 @@ def build_mps_multicoin_data(
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
-    coin_settings = np.empty((coin_count, 11), dtype=np.float32)
+    coin_settings = np.empty((coin_count, 12), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
             raise ValueError("MPS multicoin runs must use one shared candle interval")
@@ -790,6 +791,7 @@ def build_mps_multicoin_data(
             run.trade_start_idx,
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
+            market.taker_fee,
         )
 
     invariant_bytes = (

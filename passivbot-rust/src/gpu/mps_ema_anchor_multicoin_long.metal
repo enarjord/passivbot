@@ -5,7 +5,7 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 42;
-constant int COIN_COLS = 11;
+constant int COIN_COLS = 12;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 9;
 constant int SCALAR_COLS = 57;
@@ -305,6 +305,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = run_settings[5] < 1.0f;
     const float max_realized_loss_pct = run_settings[5];
+    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const bool hsl_panic_market = run_settings[8] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     float ema0[MAX_COINS];
@@ -524,11 +526,14 @@ inline void passivbot_ema_anchor_multicoin_impl(
             const float price_step = coin_settings[coin_offset + 1];
             const float c_mult = coin_settings[coin_offset + 4];
             const float maker_fee = coin_settings[coin_offset + 5];
+            const float taker_fee = coin_settings[coin_offset + 11];
 
+            bool primary_market_panic = close_is_hsl_panic[c]
+                && hsl_panic_market;
             bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
-                && (short_side
+                && (primary_market_panic || (short_side
                     ? close_tick[c] > fill_ticks[tick_offset + 1]
-                    : close_tick[c] <= fill_ticks[tick_offset + 0]);
+                    : close_tick[c] <= fill_ticks[tick_offset + 0]));
             bool filled_secondary_close = secondary_close_qty[c] > 0.0f
                 && psize[c] > 0.0f
                 && (short_side
@@ -549,7 +554,21 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     ? secondary_close_tick[c] : close_tick[c];
                 float requested_qty = use_secondary
                     ? secondary_close_qty[c] : close_qty[c];
-                float fill_price = float(executed_tick) * price_step;
+                bool market_panic = !use_secondary && primary_market_panic;
+                float fill_price = market_panic
+                    ? fmax(
+                        short_side
+                            ? ceil_step(
+                                close * (1.0f + market_order_slippage_pct),
+                                price_step
+                            )
+                            : floor_step(
+                                close * (1.0f - market_order_slippage_pct),
+                                price_step
+                            ),
+                        price_step
+                    )
+                    : float(executed_tick) * price_step;
                 float adjusted = fmin(
                     round_step(requested_qty, qty_step), psize[c]
                 );
@@ -558,7 +577,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     ? pprice[c] - fill_price
                     : fill_price - pprice[c]);
                 float net_pnl = pnl
-                    - adjusted * fill_price * c_mult * maker_fee;
+                    - adjusted * fill_price * c_mult
+                        * (market_panic ? taker_fee : maker_fee);
                 bool is_unstuck = !use_secondary
                     && close_is_unstuck_reducer[c];
                 bool is_hsl_panic = !use_secondary

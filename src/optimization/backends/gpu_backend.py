@@ -1025,11 +1025,6 @@ def _validate_scope_config(
                     f"GPU HSL requires bot.{side}.hsl.panic_close_order_type "
                     f"to be limit or market, got {panic_order_type!r}"
                 )
-            if coin_count > 1 and panic_order_type != "limit":
-                raise ValueError(
-                    f"GPU multi-coin HSL currently requires bot.{side}.hsl."
-                    "panic_close_order_type=limit"
-                )
     for side in enabled_sides:
         side_config = config["bot"][side]
         risk = side_config.get("risk", {})

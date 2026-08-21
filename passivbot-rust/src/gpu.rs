@@ -192,13 +192,14 @@ mod tests {
         assert!(source.contains("constant int PARAM_COLS = 42"));
         assert!(source.contains("constant int OVERRIDE_COLS = 19"));
         assert!(source.contains("coin_override_or"));
-        assert!(source.contains("constant int COIN_COLS = 11"));
+        assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
         assert!(source.contains("load_hsl(params, po, 31)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
@@ -287,6 +288,7 @@ mod tests {
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
         assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
         assert!(source.contains("h.panic_loss_drawdown_sum"));
         assert!(source.contains("&& !long_side.close_is_panic"));
         assert!(source.contains("&& !short_side.close_is_panic"));
@@ -387,10 +389,12 @@ mod tests {
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
         assert!(source.contains("constant int OVERRIDE_COLS = 34"));
+        assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
         assert!(source.contains("load_hsl(params, po, 48)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source

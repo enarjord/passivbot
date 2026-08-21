@@ -130,9 +130,9 @@ These are the main parity surfaces that should be reviewed together:
    - Deterministic M3 conformance coverage compares Metal drawdown, EMA, tier, active-RED, latch, and RED-finalization traces against the exact Rust runtime for all three signal modes and restart policies
    - One-sided runs support unified, pside, and coin signals; dual-side runs support pside and coin signals with independent directional realized-PnL state
    - One-sided multi-coin runs support unified and pside signals through one shared-balance portfolio controller that tracks all positions and blocking orders on the enabled side
-   - Multi-coin limit panic closes flatten every open coin on the enabled side and export the same lifecycle and panic-loss metric surface as single-coin HSL
+   - Multi-coin limit and market panic closes flatten every open coin on the enabled side and export the same lifecycle and panic-loss metric surface as single-coin HSL; market execution uses each coin's taker fee and directionally quantized configured slippage
    - Dual-side unified HSL remains fail closed because the documented account-wide episode-finalization scope and current exact-backtest per-side flat confirmation disagree
-   - Dual-side multi-coin HSL, multi-coin coin signals, multi-coin market panic closes, and per-coin-override HSL still fail closed
+   - Dual-side multi-coin HSL, multi-coin coin signals, and per-coin-override HSL still fail closed
 
 ### Confirmed Gaps / Risks
 
@@ -148,14 +148,13 @@ These are the main parity surfaces that should be reviewed together:
    - Dual-side multi-coin HSL needs one shared-balance controller that owns both directional state machines without duplicating account balance or liquidation decisions
    - Multi-coin coin mode needs one controller per effective coin+pside scope rather than the single portfolio controller used by unified and pside modes
    - Per-coin HSL overrides require candidate-local resolved settings in those coin controllers
-   - Multi-coin market panic execution needs explicit taker/slippage parity across every same-candle portfolio flatten
 
 ### Missing or Weak Test Coverage
 
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for dual-side unified, dual-side multi-coin, multi-coin coin-mode/market-panic, and per-coin-override HSL scopes
+4. Apple MPS parity for dual-side unified, dual-side multi-coin, multi-coin coin-mode, and per-coin-override HSL scopes
 
 ## Optimizer Work
 
