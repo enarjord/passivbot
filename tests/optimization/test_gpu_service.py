@@ -259,14 +259,14 @@ def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous()
             hlcvs,
             first_valid_indices=[0, 0],
             last_valid_indices=[3, 3],
-            tracking_start_idx=1,
+            tracking_start_indices=[1, 1],
         )
 
     _require_no_internal_invalid_account_recovery_candles(
         hlcvs,
         first_valid_indices=[0, 0],
         last_valid_indices=[3, 3],
-        tracking_start_idx=3,
+        tracking_start_indices=[1, 3],
     )
 
 

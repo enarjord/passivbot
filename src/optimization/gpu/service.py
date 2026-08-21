@@ -386,7 +386,7 @@ def _require_no_internal_invalid_account_recovery_candles(
     *,
     first_valid_indices,
     last_valid_indices,
-    tracking_start_idx: int,
+    tracking_start_indices,
 ) -> None:
     """Keep completed account-equity recovery aligned with Rust's per-step series."""
 
@@ -398,7 +398,7 @@ def _require_no_internal_invalid_account_recovery_candles(
     for coin in range(values.shape[1]):
         first = max(
             0,
-            int(tracking_start_idx),
+            int(tracking_start_indices[coin]),
             int(first_valid_indices[coin]),
         )
         last = min(int(last_valid_indices[coin]), values.shape[0] - 1)
@@ -811,7 +811,7 @@ class MpsSingleCoinProxy:
                 hlcvs,
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
-                tracking_start_idx=self.run.trade_start_idx,
+                tracking_start_indices=[self.run.trade_start_idx],
             )
         if hsl_enabled_sides:
             _require_no_internal_invalid_hsl_candles(
@@ -1441,7 +1441,7 @@ class MpsMulticoinProxy:
                 values,
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
-                tracking_start_idx=self.run.trade_start_idx,
+                tracking_start_indices=[run.trade_start_idx for run in runs],
             )
         self.data = build_mps_multicoin_data(
             values, timestamps, runs=runs, markets=markets
