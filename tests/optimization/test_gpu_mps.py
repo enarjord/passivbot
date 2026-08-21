@@ -262,6 +262,32 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     unchanged_ms = output["position_unchanged_max_ms"].item()
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.5)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(
+    strategy_kind, side
+):
+    override_cols = 19 if strategy_kind == "ema_anchor" else 34
+    initial_qty_column = 0 if strategy_kind == "ema_anchor" else 6
+    allowance_column = 12 if strategy_kind == "ema_anchor" else 25
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[0, initial_qty_column] = 0.25
+    overrides[0, allowance_column] = 0.5
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, coin_overrides=overrides, count=16
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # TWEL 1.0 / two effective positions, with a bounded 50% allowance.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.1875)
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
@@ -396,7 +422,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 46" in source
+    assert "constant int SCALAR_COLS = 48" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -1286,6 +1312,8 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
     assert output["position_unchanged_max_ms"].item() == pytest.approx(
         expected_open_tail_ms.item()
     )
+    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(0.1)
+    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(0.1)
 
 
 @pytest.mark.skipif(

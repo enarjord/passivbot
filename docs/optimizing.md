@@ -298,9 +298,12 @@ hash-canonicalizes those dead genes using the same rule as exact candidate mater
 Proxy scoring and limits are likewise fail-closed. The supported strategy-equity surface includes
 gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
 drawdown, mean and median underwater percentage, maximum recovery and position-held duration,
-volume per active day, backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino,
-Omega, Calmar, and Sterling. Fill-gap longest, mean, median, p95, and p99 metrics are also
-supported. Metal coalesces multiple fills in the same candle and records positive inter-candle gaps
+position-unchanged duration, initial-entry balance percentage for each side, volume per active day,
+backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and
+Sterling. Initial-entry allocation uses the candidate's effective position count and the same
+first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
+p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and
+records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
 fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.

@@ -6,7 +6,7 @@ constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 6;
-constant int SCALAR_COLS = 21;
+constant int SCALAR_COLS = 22;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -1483,6 +1483,18 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 18] = profit_sum;
     scalars[scalar_offset + 19] = loss_sum;
     scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
+    int entry_effective_n_positions = min(n_positions, max_tradable_seen);
+    float entry_base_limit = entry_effective_n_positions > 0
+        ? twel / float(entry_effective_n_positions) : 0.0f;
+    float entry_initial_qty_pct = coin_override_or(
+        coin_overrides, 0, 0, base_qty_pct
+    );
+    float entry_allowance_pct = coin_override_or(
+        coin_overrides, 0, 12, allowance_pct
+    );
+    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
+        entry_base_limit, twel, entry_allowance_pct, legacy_raw_allowance
+    ) * entry_initial_qty_pct;
 }
 
 kernel void passivbot_ema_anchor_multicoin(

@@ -43,6 +43,9 @@ CORE_OUTPUT_KEYS = {
     "liq_step",
     "profit_sum",
     "loss_sum",
+    "entry_initial_balance_pct",
+    "entry_initial_balance_pct_long",
+    "entry_initial_balance_pct_short",
 }
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
@@ -275,6 +278,18 @@ def _nan_max(left, right):
         left_finite & ~right_finite,
         right.where(right_finite & ~left_finite, left.maximum(right)),
     )
+
+
+def _directional_entry_initial_metrics(side: str, entry_pct):
+    """Expand one directional Metal value into the shared two-side surface."""
+
+    if side not in {"long", "short"}:
+        raise ValueError(f"expected long or short entry metric side, got {side!r}")
+    zeros = entry_pct.new_zeros(entry_pct.shape)
+    return {
+        "entry_initial_balance_pct_long": entry_pct if side == "long" else zeros,
+        "entry_initial_balance_pct_short": entry_pct if side == "short" else zeros,
+    }
 
 
 def _combine_hedged_multicoin_outputs(
@@ -1242,7 +1257,13 @@ class MpsMulticoinProxy:
                 for side in self.sides
             }
             if len(self.sides) == 1:
-                output = side_outputs[self.sides[0]]
+                side = self.sides[0]
+                output = side_outputs[side]
+                output.update(
+                    _directional_entry_initial_metrics(
+                        side, output["entry_initial_balance_pct"]
+                    )
+                )
             else:
                 output = _combine_hedged_multicoin_outputs(
                     side_outputs["long"],
@@ -1252,6 +1273,12 @@ class MpsMulticoinProxy:
                     self.runners["long"].start_minute_of_day,
                     self.run.interval_ms,
                 )
+                output["entry_initial_balance_pct_long"] = side_outputs[
+                    "long"
+                ]["entry_initial_balance_pct"]
+                output["entry_initial_balance_pct_short"] = side_outputs[
+                    "short"
+                ]["entry_initial_balance_pct"]
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

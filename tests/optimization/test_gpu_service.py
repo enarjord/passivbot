@@ -21,6 +21,7 @@ from optimization.gpu.service import (
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
+    _directional_entry_initial_metrics,
     _hsl_params,
     _position_exposure_enforcer_params,
     _require_complete_valid_tail,
@@ -32,7 +33,27 @@ from optimization.gpu.service import (
 
 
 def test_core_output_contract_retains_gross_pnl_aggregates():
-    assert {"profit_sum", "loss_sum", "position_unchanged_max_ms"} <= CORE_OUTPUT_KEYS
+    assert {
+        "profit_sum",
+        "loss_sum",
+        "position_unchanged_max_ms",
+        "entry_initial_balance_pct",
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
+    } <= CORE_OUTPUT_KEYS
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
+    torch = pytest.importorskip("torch")
+    values = torch.tensor([0.1, 0.2, 0.3])
+
+    metrics = _directional_entry_initial_metrics(side, values)
+
+    assert metrics[f"entry_initial_balance_pct_{side}"].tolist() == values.tolist()
+    other = "short" if side == "long" else "long"
+    assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
+    assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
 
 
 def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():

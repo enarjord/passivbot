@@ -23,6 +23,8 @@ SUPPORTED_METRICS = (
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_strategy_eq",
     "expected_shortfall_1pct_strategy_eq",
+    "entry_initial_balance_pct_long",
+    "entry_initial_balance_pct_short",
     "fills_gap_longest_days",
     "fills_gap_mean_hours",
     "fills_gap_median_hours",
@@ -829,6 +831,10 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         )
         objectives["position_unchanged_hours_max"] = position_unchanged_hours_max
         objectives["position_unchanged_days_max"] = position_unchanged_hours_max / 24.0
+    for side in ("long", "short"):
+        name = f"entry_initial_balance_pct_{side}"
+        if name in requested:
+            objectives[name] = out[name].to(torch.float64)
     objectives.update(fill_gap_metrics)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
