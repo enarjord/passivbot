@@ -199,6 +199,10 @@ class MpsEmaAnchorRunner:
         hedge_mode: bool = True,
         filter_by_min_effective_cost: bool = False,
         max_realized_loss_pct: float = 1.0,
+        taker_fee: float | None = None,
+        market_order_slippage_pct: float = 0.0,
+        hsl_panic_market_long: bool = False,
+        hsl_panic_market_short: bool = False,
     ):
         self.market = market
         self.run_config = run
@@ -215,6 +219,17 @@ class MpsEmaAnchorRunner:
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             max_realized_loss_pct
         )
+        taker_fee = market.maker_fee if taker_fee is None else float(taker_fee)
+        market_order_slippage_pct = float(market_order_slippage_pct)
+        if not np.isfinite(taker_fee):
+            raise ValueError("taker_fee must be finite")
+        if (
+            not np.isfinite(market_order_slippage_pct)
+            or market_order_slippage_pct < 0.0
+        ):
+            raise ValueError(
+                "market_order_slippage_pct must be finite and non-negative"
+            )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
         self.bars = (
@@ -269,6 +284,10 @@ class MpsEmaAnchorRunner:
                 float(bool(filter_by_min_effective_cost)),
                 data["max_effective_min_cost"],
                 encoded_max_realized_loss_pct,
+                taker_fee,
+                market_order_slippage_pct,
+                float(bool(hsl_panic_market_long)),
+                float(bool(hsl_panic_market_short)),
             ],
             dtype=torch.float32,
             device="mps",

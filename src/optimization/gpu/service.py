@@ -489,15 +489,23 @@ class MpsSingleCoinProxy:
             backtest_params.get("equity_hard_stop_loss", {})
             .get("signal_mode", "unified")
         )
+        hsl_panic_market = {}
         self.base_params = {}
         for side, bot in (("long", long_bot), ("short", short_bot)):
-            if self.enabled[side] and bool(bot.get("hsl_enabled")) and str(
+            panic_close_order_type = str(
                 bot.get("hsl_panic_close_order_type", "limit")
-            ).strip().lower() != "limit":
+            ).strip().lower()
+            if panic_close_order_type not in {"limit", "market"}:
                 raise ValueError(
-                    f"MPS single-coin HSL currently requires bot.{side}.hsl."
-                    "panic_close_order_type=limit"
+                    f"MPS single-coin HSL requires bot.{side}.hsl."
+                    "panic_close_order_type to be limit or market, got "
+                    f"{panic_close_order_type!r}"
                 )
+            hsl_panic_market[side] = (
+                self.enabled[side]
+                and bool(bot.get("hsl_enabled"))
+                and panic_close_order_type == "market"
+            )
             strategy = dict(payload.strategy_params_list[0][side])
             risk = config["bot"][side]["risk"]
             if self.strategy_kind == "trailing_martingale":
@@ -591,6 +599,12 @@ class MpsSingleCoinProxy:
             max_realized_loss_pct=float(
                 backtest_params.get("max_realized_loss_pct", 1.0)
             ),
+            taker_fee=float(market_params["taker_fee"]),
+            market_order_slippage_pct=float(
+                backtest_params.get("market_order_slippage_pct", 0.0)
+            ),
+            hsl_panic_market_long=hsl_panic_market["long"],
+            hsl_panic_market_short=hsl_panic_market["short"],
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:

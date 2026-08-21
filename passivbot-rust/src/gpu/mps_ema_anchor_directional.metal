@@ -1072,6 +1072,10 @@ inline void passivbot_single_coin_impl(
     const bool filter_by_min_effective_cost = settings[12] > 0.5f;
     const float max_effective_min_cost = settings[13];
     const float max_realized_loss_pct = settings[14];
+    const float taker_fee = settings[15];
+    const float market_order_slippage_pct = fmax(settings[16], 0.0f);
+    const bool long_hsl_panic_market = settings[17] > 0.5f;
+    const bool short_hsl_panic_market = settings[18] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
@@ -1154,7 +1158,8 @@ inline void passivbot_single_coin_impl(
         bool long_close_fill = false;
         bool long_primary_close_fill = valid && alive && long_enabled
             && long_side.close_qty > 0.0f && long_side.psize > 0.0f
-            && long_side.close_ticks <= high_fill_max_tick;
+            && ((long_side.close_is_panic && long_hsl_panic_market)
+                || long_side.close_ticks <= high_fill_max_tick);
         bool long_secondary_close_fill = valid && alive && long_enabled
             && long_side.secondary_close_qty > 0.0f && long_side.psize > 0.0f
             && long_side.secondary_close_ticks <= high_fill_max_tick;
@@ -1170,11 +1175,21 @@ inline void passivbot_single_coin_impl(
                 ? long_side.secondary_close_ticks : long_side.close_ticks;
             float requested_qty = use_secondary
                 ? long_side.secondary_close_qty : long_side.close_qty;
-            float cp = float(close_ticks) * price_step;
+            bool market_panic = !use_secondary && long_side.close_is_panic
+                && long_hsl_panic_market;
+            float cp = market_panic
+                ? fmax(
+                    floor_step(
+                        close * (1.0f - market_order_slippage_pct), price_step
+                    ),
+                    price_step
+                )
+                : float(close_ticks) * price_step;
             float adj = fmin(round_step(requested_qty, qty_step), long_side.psize);
             if (!(adj > 0.0f)) continue;
             float pnl = adj * c_mult * (cp - long_side.pprice);
-            float fee = adj * cp * c_mult * maker_fee;
+            float fee = adj * cp * c_mult
+                * (market_panic ? taker_fee : maker_fee);
             float net_pnl = pnl - fee;
             if (!use_secondary && long_side.close_is_panic) {
                 float current_equity = balance
@@ -1234,7 +1249,8 @@ inline void passivbot_single_coin_impl(
         bool short_close_fill = false;
         bool short_primary_close_fill = valid && alive && short_enabled
             && short_side.close_qty > 0.0f && short_side.psize > 0.0f
-            && short_side.close_ticks > low_nonfill_max_tick;
+            && ((short_side.close_is_panic && short_hsl_panic_market)
+                || short_side.close_ticks > low_nonfill_max_tick);
         bool short_secondary_close_fill = valid && alive && short_enabled
             && short_side.secondary_close_qty > 0.0f && short_side.psize > 0.0f
             && short_side.secondary_close_ticks > low_nonfill_max_tick;
@@ -1250,11 +1266,21 @@ inline void passivbot_single_coin_impl(
                 ? short_side.secondary_close_ticks : short_side.close_ticks;
             float requested_qty = use_secondary
                 ? short_side.secondary_close_qty : short_side.close_qty;
-            float cp = float(close_ticks) * price_step;
+            bool market_panic = !use_secondary && short_side.close_is_panic
+                && short_hsl_panic_market;
+            float cp = market_panic
+                ? fmax(
+                    ceil_step(
+                        close * (1.0f + market_order_slippage_pct), price_step
+                    ),
+                    price_step
+                )
+                : float(close_ticks) * price_step;
             float adj = fmin(round_step(requested_qty, qty_step), short_side.psize);
             if (!(adj > 0.0f)) continue;
             float pnl = adj * c_mult * (short_side.pprice - cp);
-            float fee = adj * cp * c_mult * maker_fee;
+            float fee = adj * cp * c_mult
+                * (market_panic ? taker_fee : maker_fee);
             float net_pnl = pnl - fee;
             if (!use_secondary && short_side.close_is_panic) {
                 float current_equity = balance

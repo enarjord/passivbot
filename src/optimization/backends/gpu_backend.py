@@ -1014,10 +1014,10 @@ def _validate_scope_config(
             panic_order_type = str(
                 hsl.get("panic_close_order_type", "limit")
             ).strip().lower()
-            if panic_order_type != "limit":
+            if panic_order_type not in {"limit", "market"}:
                 raise ValueError(
-                    f"GPU HSL currently requires bot.{side}.hsl."
-                    "panic_close_order_type=limit"
+                    f"GPU HSL requires bot.{side}.hsl.panic_close_order_type "
+                    f"to be limit or market, got {panic_order_type!r}"
                 )
     for side in enabled_sides:
         side_config = config["bot"][side]

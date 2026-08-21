@@ -1434,14 +1434,24 @@ def test_gpu_hsl_fails_closed_for_finite_pnl_lookback():
         _validate_scope(config, _Evaluator())
 
 
-def test_gpu_hsl_fails_closed_for_market_panic_close():
+def test_gpu_hsl_accepts_market_panic_close():
     config = _long_only_ema_config()
     config["bot"]["long"]["hsl"].update(
         {"enabled": True, "panic_close_order_type": "market"}
     )
     config["live"]["pnls_max_lookback_days"] = "all"
 
-    with pytest.raises(ValueError, match="panic_close_order_type=limit"):
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_hsl_fails_closed_for_unknown_panic_close_type():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"].update(
+        {"enabled": True, "panic_close_order_type": "immediate_or_cancel"}
+    )
+    config["live"]["pnls_max_lookback_days"] = "all"
+
+    with pytest.raises(ValueError, match="to be limit or market"):
         _validate_scope(config, _Evaluator())
 
 

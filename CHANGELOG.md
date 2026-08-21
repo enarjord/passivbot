@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added HSL market panic-close execution to the supported one-sided single-coin EMA Anchor and
+  Trailing Martingale Apple MPS optimizer path. The Metal proxy guarantees the persisted panic
+  order on the next valid bar, uses that bar's close with directionally adverse configured
+  slippage and price-step rounding, and charges the resolved taker fee. Resting-limit behavior is
+  unchanged, while exact Rust validation and drift gates remain authoritative.
+
 - Added resting-limit HSL panic-loss scoring and limit metrics to the supported one-sided
   single-coin Apple MPS optimizer path: panic-close loss sum/max, per-episode loss drawdown
   min/mean/max, and halt-to-restart equity loss. The proxy tags only HSL panic fills and retains
