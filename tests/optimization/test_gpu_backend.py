@@ -2163,6 +2163,8 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
 @pytest.mark.parametrize(
     "metric",
     [
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
         "fills_gap_longest_days",
         "fills_gap_mean_hours",
         "fills_gap_median_hours",
@@ -2190,6 +2192,8 @@ def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
 def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
     _validate_dual_multicoin_metrics(
         {
+            "entry_initial_balance_pct_long",
+            "entry_initial_balance_pct_short",
             "fills_gap_longest_days",
             "fills_gap_mean_hours",
             "fills_gap_median_hours",

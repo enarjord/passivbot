@@ -6,7 +6,7 @@ constant int PARAM_COLS = 48;
 constant int OVERRIDE_COLS = 34;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 6;
-constant int SCALAR_COLS = 21;
+constant int SCALAR_COLS = 22;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -1199,7 +1199,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 tradable_count += 1;
             }
         }
-        max_tradable_seen = max(max_tradable_seen, tradable_count);
+        const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
+        if (alive && !post_fill_balance_depleted) {
+            max_tradable_seen = max(max_tradable_seen, tradable_count);
+        }
         const int effective_n_positions = min(n_positions, max_tradable_seen);
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;
@@ -2291,6 +2294,18 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 18] = profit_sum;
     scalars[scalar_offset + 19] = loss_sum;
     scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
+    int entry_effective_n_positions = min(n_positions, max_tradable_seen);
+    float entry_base_limit = entry_effective_n_positions > 0
+        ? twel / float(entry_effective_n_positions) : 0.0f;
+    float entry_initial_qty_pct = coin_override_or(
+        coin_overrides, 0, 6, initial_qty_pct
+    );
+    float entry_allowance_pct = coin_override_or(
+        coin_overrides, 0, 25, allowance_pct
+    );
+    scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
+        entry_base_limit, twel, entry_allowance_pct, legacy_raw_allowance
+    ) * entry_initial_qty_pct;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

@@ -21,8 +21,10 @@ from optimization.gpu.service import (
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
+    _directional_entry_initial_metrics,
     _hsl_params,
     _position_exposure_enforcer_params,
+    _prepared_single_coin_side_enabled,
     _require_complete_valid_tail,
     _require_no_internal_invalid_hsl_candles,
     _single_coin_exposure_params,
@@ -32,7 +34,48 @@ from optimization.gpu.service import (
 
 
 def test_core_output_contract_retains_gross_pnl_aggregates():
-    assert {"profit_sum", "loss_sum", "position_unchanged_max_ms"} <= CORE_OUTPUT_KEYS
+    assert {
+        "profit_sum",
+        "loss_sum",
+        "position_unchanged_max_ms",
+        "entry_initial_balance_pct",
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
+    } <= CORE_OUTPUT_KEYS
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
+    torch = pytest.importorskip("torch")
+    values = torch.tensor([0.1, 0.2, 0.3])
+
+    metrics = _directional_entry_initial_metrics(side, values)
+
+    assert metrics[f"entry_initial_balance_pct_{side}"].tolist() == values.tolist()
+    other = "short" if side == "long" else "long"
+    assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
+    assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_single_coin_side_eligibility_uses_prepared_coin_payload():
+    config = {
+        "bot": {
+            "long": {"risk": {"total_wallet_exposure_limit": 1.0, "n_positions": 1}}
+        },
+        "live": {"approved_coins": {"long": ["BTC"]}},
+    }
+
+    assert _prepared_single_coin_side_enabled(
+        config, "long", {"entry_eligible": True}
+    )
+    assert not _prepared_single_coin_side_enabled(
+        config, "long", {"entry_eligible": False}
+    )
+
+
+def test_single_coin_side_eligibility_requires_canonical_payload_flag():
+    with pytest.raises(ValueError, match="entry_eligible"):
+        _prepared_single_coin_side_enabled({}, "short", {})
 
 
 def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():

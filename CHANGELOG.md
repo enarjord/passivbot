@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `entry_initial_balance_pct_long` and `entry_initial_balance_pct_short` scoring and limits
+  to Apple MPS optimization for EMA Anchor and Trailing Martingale across single-coin,
+  one-sided multi-coin, and compatible suite runs. Metal derives the value from each candidate's
+  effective position count, total exposure, initial quantity, bounded or legacy excess allowance,
+  and first-coin override precedence, while exact Rust validation remains authoritative. Dual-side
+  multi-coin runs fail closed for these metrics because independent directional summaries cannot
+  truncate their effective coin counts at shared portfolio liquidation.
+
 - Added `position_unchanged_hours_max` and `position_unchanged_days_max` scoring and limits to
   Apple MPS optimization for EMA
   Anchor and Trailing Martingale across long, short, dual-side, single-coin, multi-coin, and

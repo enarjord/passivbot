@@ -59,6 +59,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "first_eq_ts": torch.tensor([0.0], dtype=torch.float64),
         "last_eq_ts": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
+        "entry_initial_balance_pct_long": torch.tensor([0.125]),
+        "entry_initial_balance_pct_short": torch.tensor([0.075]),
     }
     run = SimpleNamespace(
         requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
@@ -70,6 +72,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "position_unchanged_hours_max",
         "strategy_eq_recovery_days_max",
         "peak_recovery_hours_strategy_eq",
+        "entry_initial_balance_pct_long",
+        "entry_initial_balance_pct_short",
     }
 
     metrics = compute_objectives(
@@ -86,6 +90,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     assert metrics["position_unchanged_days_max"].item() == pytest.approx(0.75)
     assert metrics["strategy_eq_recovery_days_max"].item() == pytest.approx(1.25)
     assert metrics["peak_recovery_hours_strategy_eq"].item() == pytest.approx(30.0)
+    assert metrics["entry_initial_balance_pct_long"].item() == pytest.approx(0.125)
+    assert metrics["entry_initial_balance_pct_short"].item() == pytest.approx(0.075)
     assert requested <= set(SUPPORTED_METRICS)
 
 

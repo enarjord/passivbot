@@ -230,11 +230,12 @@ screening also rejects `fills_gap_longest_days`,
 `fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
 `fills_gap_p99_hours`,
 `strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
+`entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
 `position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
-duration maxima truncated at shared portfolio liquidation, or fill volume normalized by the shared
-balance safely.
+effective coin counts and duration maxima truncated at shared portfolio liquidation, or fill volume
+normalized by the shared balance safely.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
@@ -298,9 +299,12 @@ hash-canonicalizes those dead genes using the same rule as exact candidate mater
 Proxy scoring and limits are likewise fail-closed. The supported strategy-equity surface includes
 gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
 drawdown, mean and median underwater percentage, maximum recovery and position-held duration,
-volume per active day, backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino,
-Omega, Calmar, and Sterling. Fill-gap longest, mean, median, p95, and p99 metrics are also
-supported. Metal coalesces multiple fills in the same candle and records positive inter-candle gaps
+position-unchanged duration, initial-entry balance percentage for each side, volume per active day,
+backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and
+Sterling. Initial-entry allocation uses the candidate's effective position count and the same
+first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
+p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and
+records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
 fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a histogram bin.

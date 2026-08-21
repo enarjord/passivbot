@@ -114,6 +114,8 @@ def _multicoin_exposure_fixture(
     highs=None,
     lows=None,
     max_realized_loss_pct=1.0,
+    first_valid_indices=(0, 0),
+    liquidation_threshold=0.05,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -142,16 +144,16 @@ def _multicoin_exposure_fixture(
         ProxyRun(
             1_000.0,
             1,
-            1,
+            max(1, first_valid_indices[coin]),
             int(timestamps[0]),
             int(timestamps[0]),
             int(timestamps[0]),
             60_000,
-            0.05,
-            0,
+            liquidation_threshold,
+            first_valid_indices[coin],
             count - 1,
         )
-        for _ in range(coin_count)
+        for coin in range(coin_count)
     ]
     data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
     if strategy_kind == "ema_anchor":
@@ -262,6 +264,87 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     unchanged_ms = output["position_unchanged_max_ms"].item()
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.5)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(
+    strategy_kind, side
+):
+    override_cols = 19 if strategy_kind == "ema_anchor" else 34
+    initial_qty_column = 0 if strategy_kind == "ema_anchor" else 6
+    allowance_column = 12 if strategy_kind == "ema_anchor" else 25
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[0, initial_qty_column] = 0.25
+    overrides[0, allowance_column] = 0.5
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, coin_overrides=overrides, count=16
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # TWEL 1.0 / two effective positions, with a bounded 50% allowance.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(0.1875)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
+    strategy_kind, side
+):
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=20,
+        first_valid_indices=(0, 12),
+        liquidation_threshold=1.0,
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert not output["alive"].item()
+    # The liquidation floor terminates before the second coin becomes
+    # tradable, so exact Rust retains a one-position divisor.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_freezes_before_post_fill_balance_depletion(
+    strategy_kind, side
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 2.0),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 2.0),
+    ]
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=12,
+        markets=markets,
+        first_valid_indices=(0, 3),
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert not output["alive"].item()
+    # Coin one fills and its fee depletes balance on the same candle that coin
+    # two first becomes tradable. Exact Rust liquidates before growing the
+    # effective-position denominator.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
 
 
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
@@ -396,7 +479,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 46" in source
+    assert "constant int SCALAR_COLS = 48" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -1285,6 +1368,14 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
     assert expected_open_tail_ms.item() > 0.0
     assert output["position_unchanged_max_ms"].item() == pytest.approx(
         expected_open_tail_ms.item()
+    )
+    expected_long = 0.1 if side == "long" else 0.0
+    expected_short = 0.1 if side == "short" else 0.0
+    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(
+        expected_long
+    )
+    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(
+        expected_short
     )
 
 
