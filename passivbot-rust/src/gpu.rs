@@ -4,17 +4,35 @@
 //! still live behind the Rust ownership boundary. Python only compiles and
 //! dispatches this source through the optional Apple MPS backend.
 
-pub const MPS_EMA_ANCHOR_SOURCE: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
+use std::sync::LazyLock;
+
+const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
+const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
+const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
+const MPS_TRAILING_MARTINGALE_BODY: &str =
+    include_str!("gpu/mps_trailing_martingale_directional.metal");
+
+fn compose_directional_source(body: &str) -> String {
+    assert_eq!(
+        body.matches(MPS_HSL_MARKER).count(),
+        1,
+        "directional MPS source must contain exactly one shared-HSL marker"
+    );
+    body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
+}
+
+pub static MPS_EMA_ANCHOR_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_directional_source(MPS_EMA_ANCHOR_BODY));
 pub const MPS_EMA_ANCHOR_MULTICOIN_SOURCE: &str =
     include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
 pub const MPS_EMA_ANCHOR_MULTICOIN_LONG_SOURCE: &str = MPS_EMA_ANCHOR_MULTICOIN_SOURCE;
-pub const MPS_TRAILING_MARTINGALE_SOURCE: &str =
-    include_str!("gpu/mps_trailing_martingale_directional.metal");
+pub static MPS_TRAILING_MARTINGALE_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_directional_source(MPS_TRAILING_MARTINGALE_BODY));
 pub const MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE: &str =
     include_str!("gpu/mps_trailing_martingale_multicoin.metal");
 
 pub fn mps_ema_anchor_source() -> &'static str {
-    MPS_EMA_ANCHOR_SOURCE
+    MPS_EMA_ANCHOR_SOURCE.as_str()
 }
 
 pub fn mps_ema_anchor_multicoin_source() -> &'static str {
@@ -26,7 +44,7 @@ pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
 }
 
 pub fn mps_trailing_martingale_source() -> &'static str {
-    MPS_TRAILING_MARTINGALE_SOURCE
+    MPS_TRAILING_MARTINGALE_SOURCE.as_str()
 }
 
 pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
@@ -37,9 +55,42 @@ pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
 mod tests {
     use super::*;
 
+    fn assert_shared_hsl_contract(source: &str) {
+        assert!(!source.contains(MPS_HSL_MARKER));
+        assert!(source.contains(MPS_HSL_COMMON_SOURCE));
+        assert_eq!(source.matches("struct HslState").count(), 1);
+        assert_eq!(source.matches("inline HslState load_hsl(").count(), 1);
+        assert_eq!(source.matches("inline bool derive_hsl_signal(").count(), 1);
+        assert_eq!(
+            source
+                .matches("inline void update_hsl_from_signal(")
+                .count(),
+            1
+        );
+        assert_eq!(source.matches("inline void update_hsl(").count(), 1);
+        assert!(source.contains("constant int HSL_SIGNAL_UNIFIED = 0"));
+        assert!(source.contains("constant int HSL_SIGNAL_PSIDE = 1"));
+        assert!(source.contains("constant int HSL_SIGNAL_COIN = 2"));
+        assert!(source.contains("int ho = po + hsl_param_offset"));
+    }
+
+    #[test]
+    fn directional_sources_compose_one_shared_hsl_controller() {
+        assert_eq!(MPS_EMA_ANCHOR_BODY.matches(MPS_HSL_MARKER).count(), 1);
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_BODY.matches(MPS_HSL_MARKER).count(),
+            1
+        );
+        assert!(!MPS_EMA_ANCHOR_BODY.contains("struct HslState"));
+        assert!(!MPS_TRAILING_MARTINGALE_BODY.contains("struct HslState"));
+        assert_shared_hsl_contract(mps_ema_anchor_source());
+        assert_shared_hsl_contract(mps_trailing_martingale_source());
+    }
+
     #[test]
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
+        assert_shared_hsl_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
         assert!(source.contains("constant int SCALAR_COLS = 62"));
@@ -74,7 +125,8 @@ mod tests {
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
         assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
-        assert!(source.contains("fmax(params[po + 25], 1.0f)"));
+        assert!(source.contains("load_hsl(params, po, 23)"));
+        assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 23)"));
         assert!(source.contains("const float cmp_eps = 1.0e-12f"));
         assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("total_exposure_reducer_qty"));
@@ -183,6 +235,7 @@ mod tests {
     #[test]
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
+        assert_shared_hsl_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
         assert!(source.contains("constant int SIDE_PARAMS = 51"));
         assert!(source.contains("struct HslState"));
@@ -220,7 +273,8 @@ mod tests {
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
         assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
-        assert!(source.contains("fmax(params[po + 42], 1.0f)"));
+        assert!(source.contains("load_hsl(params, po, 40)"));
+        assert!(source.contains("load_hsl(params, po + SIDE_PARAMS, 40)"));
         assert!(source.contains("const float cmp_eps = 1.0e-12f"));
         assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("unstuck_reducer_qty"));

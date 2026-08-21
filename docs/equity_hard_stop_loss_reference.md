@@ -121,26 +121,34 @@ These are the main parity surfaces that should be reviewed together:
    - Backtest simulates that intent with slippage and taker fees for market execution
 7. Terminal no-restart policy
    - Live and backtest both evaluate `hsl_no_restart_drawdown_threshold` from persistent cross-restart HSL drawdown
+8. Rust-owned HSL primitives
+   - Live orchestration and exact backtests share the Rust drawdown-step, coin-signal, and RED-episode-finalization contracts
+   - Apple MPS screening remains approximate and is always revalidated by exact Rust
+9. Apple MPS single-coin controller
+   - One shared Rust-owned Metal HSL controller is composed into both EMA Anchor and Trailing Martingale directional kernels
+   - Unified, pside, and coin signal modes use explicit encoded identities instead of a coin/non-coin boolean
+   - Deterministic M3 conformance coverage compares Metal drawdown, EMA, tier, active-RED, latch, and RED-finalization traces against the exact Rust runtime for all three signal modes and restart policies
+   - The supported GPU scope remains one enabled side and one coin; dual-side, multi-coin, and per-coin-override HSL still fail closed
 
 ### Confirmed Gaps / Risks
 
 1. All-positions-closed confirmation parity
-   - Live RED supervisor finalization still depends on live exchange state and open-order cleanup details
-   - Backtest finalization remains an approximation of that process
-2. Stateless restart coverage is still incomplete
-   - Startup reconstruction from exchange-derived history is implemented in live
-   - But the edge-case matrix still needs broader regression coverage
-3. Global strategy-equity metrics are aggregate diagnostics, not a runtime controller
+   - Live RED supervision necessarily depends on exchange position state, fill evidence, and open-order cleanup
+   - Exact backtests model deterministic fills and therefore cannot prove connector-specific exchange races
+2. Global strategy-equity metrics are aggregate diagnostics, not a runtime controller
    - Runtime decisions are made per `pside`
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
+3. GPU HSL topology is intentionally narrow
+   - Dual-side and multi-coin HSL need a shared-balance portfolio controller before they can be screened safely
+   - Per-coin HSL overrides require candidate-local resolved settings in that portfolio controller
 
 ### Missing or Weak Test Coverage
 
-1. Direct live/backtest sample-parity regression for per-`pside` strategy drawdown reconstruction
-2. Restart during active RED before all positions on one `pside` are fully closed
-3. Restart while panic-close orders are still open
-4. Manual trading during downtime
+1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
+2. Connector-level restart races while protective panic-close orders are live on an exchange
+3. Manual or external trading during downtime across the full exchange-adapter matrix
+4. Apple MPS parity for dual-side, multi-coin, and per-coin-override HSL scopes
 
 ## Optimizer Work
 
@@ -177,10 +185,11 @@ These are candidate regions to test, not final shipped defaults:
 
 ## Remaining Cleanup / Hardening
 
-1. Add stronger direct live/backtest sample-parity regression coverage
+1. Add an end-to-end live-replay/exact-backtest orchestration parity fixture
 2. Enrich user docs with:
    - execution-intent table
    - HSL lifecycle table
    - optimizer recipe
 3. Decide final shipped example/default HSL profile
-4. Add live/manual validation on a tiny account before merge
+4. Add explicitly authorized live/manual validation on a tiny account before declaring exchange-level operational proof
+5. Extend the shared Metal controller only through fail-closed, exact-Rust-validated topology slices
