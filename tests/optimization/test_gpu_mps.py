@@ -134,6 +134,7 @@ def _multicoin_exposure_fixture(
     max_realized_loss_pct=1.0,
     first_valid_indices=(0, 0),
     liquidation_threshold=0.05,
+    collect_coin_fill_counts=False,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -210,6 +211,7 @@ def _multicoin_exposure_fixture(
             side=side,
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
+            collect_coin_fill_counts=collect_coin_fill_counts,
         )
     else:
         values = {
@@ -264,6 +266,7 @@ def _multicoin_exposure_fixture(
             side=side,
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
+            collect_coin_fill_counts=collect_coin_fill_counts,
         )
     return runner, row
 
@@ -279,6 +282,7 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     output = runner.run(np.asarray([row], dtype=np.float64))
     torch.mps.synchronize()
 
+    assert "coin_fill_counts" not in output
     unchanged_ms = output["position_unchanged_max_ms"].item()
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
@@ -333,6 +337,26 @@ def test_mps_multicoin_active_fill_days_use_equity_start_buckets(
     ).item() / 86_400_000.0
     assert output["fills_active_days_count"].item() == int(np.ceil(duration_days))
     assert output["fills_active_days_count"].item() >= 3.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_tracks_fill_counts_by_symbol(strategy_kind, side):
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, count=32, collect_coin_fill_counts=True
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    coin_counts = output["coin_fill_counts"]
+    assert coin_counts.shape == (1, 2)
+    assert torch.equal(coin_counts, coin_counts.round())
+    assert (coin_counts > 0.0).all()
+    assert coin_counts.sum().item() == output["fill_count"].item()
 
 
 @pytest.mark.skipif(

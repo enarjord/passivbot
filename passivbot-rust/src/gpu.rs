@@ -129,6 +129,14 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));
         assert!(source.contains("scalars[scalar_offset + 27] = fills_active_days_count"));
+        assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
+        assert!(source.contains("device float* coin_fill_counts"));
+        assert_eq!(
+            source
+                .matches("coin_fill_counts[int(b) * C + c] += 1.0f")
+                .count(),
+            2
+        );
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
@@ -292,6 +300,14 @@ mod tests {
         assert!(source.contains("scalars[scalar_offset + 25] = fill_count_entry"));
         assert!(source.contains("scalars[scalar_offset + 26] = fill_count_long"));
         assert!(source.contains("scalars[scalar_offset + 27] = fills_active_days_count"));
+        assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
+        assert!(source.contains("device float* coin_fill_counts"));
+        assert_eq!(
+            source
+                .matches("coin_fill_counts[int(b) * C + c] += 1.0f")
+                .count(),
+            4
+        );
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("twel_enforcer_enabled"));

@@ -433,6 +433,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
+    device float* coin_fill_counts,
     uint b,
     bool short_side
 ) {
@@ -444,7 +445,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
     const int start_hour_minute = sizes[7];
+    const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
     if (b >= uint(B)) return;
+    if (collect_coin_fill_counts) {
+        for (int c = 0; c < C; ++c) {
+            coin_fill_counts[int(b) * C + c] = 0.0f;
+        }
+    }
 
     const int po = int(b) * PARAM_COLS;
     const float span_a = params[po + 0];
@@ -977,6 +984,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                                 day_fill_count, fill_count, fill_count_entry,
                                 fill_count_long, false, !short_side
                             );
+                            if (collect_coin_fill_counts) {
+                                coin_fill_counts[int(b) * C + c] += 1.0f;
+                            }
                             psize[c] = fmax(
                                 round_step(psize[c] - qty, qty_step), 0.0f
                             );
@@ -1013,6 +1023,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         day_fill_count, fill_count, fill_count_entry,
                         fill_count_long, false, !short_side
                     );
+                    if (collect_coin_fill_counts) {
+                        coin_fill_counts[int(b) * C + c] += 1.0f;
+                    }
                     psize[c] = fmax(
                         round_step(psize[c] - grid_qty, qty_step), 0.0f
                     );
@@ -1063,6 +1076,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         day_fill_count, fill_count, fill_count_entry,
                         fill_count_long, false, !short_side
                     );
+                    if (collect_coin_fill_counts) {
+                        coin_fill_counts[int(b) * C + c] += 1.0f;
+                    }
                     psize[c] = fmax(
                         round_step(psize[c] - qty, qty_step), 0.0f
                     );
@@ -1107,6 +1123,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     day_fill_count, fill_count, fill_count_entry,
                     fill_count_long, true, !short_side
                 );
+                if (collect_coin_fill_counts) {
+                    coin_fill_counts[int(b) * C + c] += 1.0f;
+                }
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
                     : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
@@ -2385,6 +2404,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
+    device float* coin_fill_counts,
     uint b [[thread_position_in_grid]]
 ) {
     const bool short_side = run_settings[3] > 0.5f;
@@ -2392,7 +2412,7 @@ kernel void passivbot_trailing_martingale_multicoin(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         coin_overrides, params, run_settings,
-        sizes, daily, scalars, gap_hist, b, short_side
+        sizes, daily, scalars, gap_hist, coin_fill_counts, b, short_side
     );
 }
 
@@ -2411,12 +2431,13 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
+    device float* coin_fill_counts,
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_trailing_martingale_multicoin_impl(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         coin_overrides, params, run_settings,
-        sizes, daily, scalars, gap_hist, b, false
+        sizes, daily, scalars, gap_hist, coin_fill_counts, b, false
     );
 }

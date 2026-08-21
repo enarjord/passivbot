@@ -66,6 +66,7 @@ SUPPORTED_METRICS = (
     "fills_analysis_duration_days",
     "fills_active_days_count",
     "fills_active_days_ratio",
+    "fills_active_symbols_count",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -85,6 +86,7 @@ SUPPORTED_METRICS = (
     "fills_per_day_per_position_slot_long",
     "fills_per_day_per_position_slot_short",
     "fills_per_day_short",
+    "fills_top_symbol_share",
     "gain_strategy_eq",
     "hard_stop_duration_minutes_max",
     "hard_stop_duration_minutes_mean",
@@ -163,6 +165,7 @@ _FILL_ACTIVITY_METRICS = {
     "fills_analysis_duration_days",
     "fills_active_days_count",
     "fills_active_days_ratio",
+    "fills_active_symbols_count",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -177,6 +180,7 @@ _FILL_ACTIVITY_METRICS = {
     "fills_per_day_per_position_slot_long",
     "fills_per_day_per_position_slot_short",
     "fills_per_day_short",
+    "fills_top_symbol_share",
 }
 
 
@@ -711,6 +715,17 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     fills_count_close = (fill_count - fills_count_entry).clamp(min=0.0)
     fills_count_short = (fill_count - fills_count_long).clamp(min=0.0)
     fills_active_days_count = out["fills_active_days_count"].to(torch.float64)
+    coin_fill_counts = out.get("coin_fill_counts")
+    if coin_fill_counts is None:
+        coin_fill_counts = fill_count.unsqueeze(1)
+    else:
+        coin_fill_counts = coin_fill_counts.to(torch.float64)
+    fills_active_symbols_count = (coin_fill_counts > 0.0).sum(dim=1).to(torch.float64)
+    fills_top_symbol_share = torch.where(
+        fill_count > 0.0,
+        coin_fill_counts.max(dim=1).values / fill_count.clamp(min=1.0),
+        torch.zeros_like(fill_count),
+    )
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
     last_eq_ts = out["last_eq_ts"].to(torch.float64)
     has_span = (
@@ -751,6 +766,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         "fills_active_days_count": fills_active_days_count,
         "fills_active_days_ratio": fills_active_days_count
         / duration_days.ceil().clamp(min=1.0),
+        "fills_active_symbols_count": fills_active_symbols_count,
         "fills_analysis_duration_days": duration_days,
         "fills_count": fill_count,
         "fills_count_close": fills_count_close,
@@ -764,6 +780,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         "fills_per_day_entry": fills_per_day_entry,
         "fills_per_day_long": fills_per_day_long,
         "fills_per_day_short": fills_per_day_short,
+        "fills_top_symbol_share": fills_top_symbol_share,
     }
     slot_metrics = {
         "fills_per_day_per_position_slot",

@@ -51,6 +51,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fill_count_entry",
         "fill_count_long",
         "fills_active_days_count",
+        "coin_fill_counts",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -62,6 +63,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_analysis_duration_days",
         "fills_active_days_count",
         "fills_active_days_ratio",
+        "fills_active_symbols_count",
         "fills_count",
         "fills_count_close",
         "fills_count_entry",
@@ -76,6 +78,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_per_day_per_position_slot_long",
         "fills_per_day_per_position_slot_short",
         "fills_per_day_short",
+        "fills_top_symbol_share",
         "mdg_pnl",
         "mdg_pnl_w",
         "sharpe_ratio_pnl",

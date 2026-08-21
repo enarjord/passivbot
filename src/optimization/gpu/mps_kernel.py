@@ -429,12 +429,14 @@ class MpsEmaAnchorMulticoinRunner:
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
+        collect_coin_fill_counts: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
                 f"MPS multicoin runner side must be long or short, got {side!r}"
             )
         self.side = side
+        self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
         self.run_config = run
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
@@ -486,11 +488,12 @@ class MpsEmaAnchorMulticoinRunner:
                 float(side == "short"),
                 forager_score_hysteresis_pct,
                 encoded_max_realized_loss_pct,
+                float(self.collect_coin_fill_counts),
             ],
             dtype=torch.float32,
             device="mps",
         )
-        self._buffers: dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+        self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
         self.start_minute_of_day = int(data["start_minute_of_day"])
@@ -529,6 +532,13 @@ class MpsEmaAnchorMulticoinRunner:
                     torch.zeros(
                         (batch_size, GAP_BINS), dtype=torch.int32, device="mps"
                     ),
+                    torch.zeros(
+                        (batch_size, self.n_coins)
+                        if self.collect_coin_fill_counts
+                        else (1,),
+                        dtype=torch.float32,
+                        device="mps",
+                    ),
                 )
             }
         else:
@@ -544,7 +554,7 @@ class MpsEmaAnchorMulticoinRunner:
         packed = time.perf_counter()
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
-        daily, scalars, gaps = self._output_buffers(batch_size)
+        daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             self._sizes[sizes_key] = torch.tensor(
@@ -581,6 +591,7 @@ class MpsEmaAnchorMulticoinRunner:
             daily,
             scalars,
             gaps,
+            coin_fill_counts,
             threads=(batch_size, 1, 1),
         )
         if profile:
@@ -593,7 +604,10 @@ class MpsEmaAnchorMulticoinRunner:
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        return _decode_outputs(daily, scalars, gaps)
+        output = _decode_outputs(daily, scalars, gaps)
+        if self.collect_coin_fill_counts:
+            output["coin_fill_counts"] = coin_fill_counts
+        return output
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -625,6 +639,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis_pct: float = 0.0,
         max_realized_loss_pct: float = 1.0,
+        collect_coin_fill_counts: bool = False,
     ):
         super().__init__(
             run,
@@ -633,6 +648,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             coin_overrides=coin_overrides,
             forager_score_hysteresis_pct=forager_score_hysteresis_pct,
             max_realized_loss_pct=max_realized_loss_pct,
+            collect_coin_fill_counts=collect_coin_fill_counts,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -651,7 +667,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         packed = time.perf_counter()
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
-        daily, scalars, gaps = self._output_buffers(batch_size)
+        daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             self._sizes[sizes_key] = torch.tensor(
@@ -691,6 +707,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             daily,
             scalars,
             gaps,
+            coin_fill_counts,
             threads=(batch_size, 1, 1),
         )
         if profile:
@@ -703,7 +720,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        return _decode_outputs(daily, scalars, gaps)
+        output = _decode_outputs(daily, scalars, gaps)
+        if self.collect_coin_fill_counts:
+            output["coin_fill_counts"] = coin_fill_counts
+        return output
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
