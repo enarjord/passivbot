@@ -1051,6 +1051,10 @@ def _validate_dual_multicoin_metrics(
             "fills_gap_p99_hours",
             "loss_profit_ratio",
             "peak_recovery_hours_strategy_eq",
+            "position_held_days_max",
+            "position_held_hours_max",
+            "position_unchanged_days_max",
+            "position_unchanged_hours_max",
             "strategy_eq_recovery_days_max",
             "volume_pct_per_day_avg",
         }

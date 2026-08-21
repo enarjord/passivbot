@@ -248,6 +248,22 @@ def _multicoin_exposure_fixture(
     return runner, row
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
+    runner, row = _multicoin_exposure_fixture(strategy_kind, side, count=16)
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    unchanged_ms = output["position_unchanged_max_ms"].item()
+    assert unchanged_ms > 0.0
+    assert unchanged_ms <= output["held_max_ms"].item()
+
+
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
     down, up, nearest = _directional_touch_ticks(
         np.array([100.0, 100.006, 0.1 + 0.2]), 0.01
@@ -380,7 +396,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 45" in source
+    assert "constant int SCALAR_COLS = 46" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -1194,6 +1210,81 @@ def _tm_single_row(
         unstuck_ema_dist=unstuck_ema_dist,
         unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
         unstuck_threshold=unstuck_threshold,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
+    count = 10
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if side == "long":
+        low[3] = 98.0
+    else:
+        high[3] = 102.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row(initial_ema_dist=0.01)
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 0.0,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    position_size = output["psize" if side == "long" else "short_psize"]
+    assert position_size.item() > 0.0
+    expected_open_tail_ms = output["last_eq_ts"] - output["last_fill_ts"]
+    assert expected_open_tail_ms.item() > 0.0
+    assert output["position_unchanged_max_ms"].item() == pytest.approx(
+        expected_open_tail_ms.item()
     )
 
 

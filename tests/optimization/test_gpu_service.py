@@ -32,7 +32,7 @@ from optimization.gpu.service import (
 
 
 def test_core_output_contract_retains_gross_pnl_aggregates():
-    assert {"profit_sum", "loss_sum"} <= CORE_OUTPUT_KEYS
+    assert {"profit_sum", "loss_sum", "position_unchanged_max_ms"} <= CORE_OUTPUT_KEYS
 
 
 def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
@@ -397,6 +397,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "day_min_balance": torch.tensor([[1_000.0, 1_000.0]]),
             "max_dd": torch.tensor([0.20]),
             "held_max_ms": torch.tensor([100.0]),
+            "position_unchanged_max_ms": torch.tensor([150.0]),
             "gap_hist": torch.tensor([[1, 2]]),
             "gap_max_ms": torch.tensor([300.0]),
             "first_fill_ts": torch.tensor([first_fill]),
@@ -430,6 +431,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     short["day_volume"] = torch.tensor([[0.1, 0.2]])
     short["max_dd"] = torch.tensor([0.30])
     short["held_max_ms"] = torch.tensor([200.0])
+    short["position_unchanged_max_ms"] = torch.tensor([250.0])
     short["gap_max_ms"] = torch.tensor([250.0])
     short["recovery_max_ms"] = torch.tensor([500.0])
     short["last_high_ts"] = torch.tensor([800.0])
@@ -450,6 +452,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["liq_step"].item() == -1
     assert combined["profit_sum"].item() == 40.0
     assert combined["loss_sum"].item() == 10.0
+    assert combined["position_unchanged_max_ms"].item() == 250.0
 
     short["day_min_eq"][0, 1] = float("inf")
     short["last_eq_ts"] = torch.tensor([800.0])
@@ -486,6 +489,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_min_balance": torch.tensor([[900.0, 900.0, 900.0]]),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
+            "position_unchanged_max_ms": torch.tensor([150.0]),
             "gap_hist": torch.tensor([[1, 2]]),
             "gap_max_ms": torch.tensor([300.0]),
             "first_fill_ts": torch.tensor([100.0]),
@@ -524,6 +528,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "day_min_balance": torch.tensor([[900.0, 450.0, 700.0]]),
             "max_dd": torch.tensor([0.40]),
             "held_max_ms": torch.tensor([100.0]),
+            "position_unchanged_max_ms": torch.tensor([150.0]),
             "gap_hist": torch.tensor([[1, 2]]),
             "gap_max_ms": torch.tensor([300.0]),
             "first_fill_ts": torch.tensor([100.0]),
