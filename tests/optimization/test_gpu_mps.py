@@ -71,7 +71,7 @@ def _tm_twel_enforcer_fields(
         unstuck_ema_dist,
         unstuck_loss_allowance_pct,
         unstuck_threshold,
-    ]
+    ] + list(_HSL_DISABLED_VALUES.values())
 
 
 _UNSTUCK_DISABLED_VALUES = {
@@ -83,9 +83,23 @@ _UNSTUCK_DISABLED_VALUES = {
     "unstuck_threshold": 0.5,
 }
 
+_HSL_DISABLED_VALUES = {
+    "hsl_enabled": 0.0,
+    "hsl_red_threshold": 0.2,
+    "hsl_ema_span_minutes": 60.0,
+    "hsl_cooldown_minutes_after_red": 0.0,
+    "hsl_no_restart_drawdown_threshold": 1.0,
+    "hsl_restart_policy": 1.0,
+    "hsl_tier_ratio_yellow": 0.5,
+    "hsl_tier_ratio_orange": 0.75,
+    "hsl_orange_graceful_stop": 0.0,
+    "hsl_signal_coin": 0.0,
+    "hsl_slot_count": 1.0,
+}
+
 
 def _single_coin_param_row(values, keys):
-    merged = {**_UNSTUCK_DISABLED_VALUES, **values}
+    merged = {**_UNSTUCK_DISABLED_VALUES, **_HSL_DISABLED_VALUES, **values}
     return [merged[key] for key in keys]
 
 
@@ -354,7 +368,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 23" in source
+    assert "constant int SIDE_PARAMS = 34" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -1172,6 +1186,148 @@ def _tm_single_row(
         unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
         unstuck_threshold=unstuck_threshold,
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
+    count = 30
+    close = np.full(count, 100.0)
+    close[8:] = 70.0 if side == "long" else 130.0
+    high = close * 1.02
+    low = close * 0.98
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "trailing_martingale":
+        baseline = _tm_single_row(initial_ema_dist=0.0)
+        baseline[6] = 0.5
+        baseline[7] = 0.5
+        baseline[16] = 0.5
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        baseline = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.5,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 1.0,
+                "offset": 0.0,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsEmaAnchorRunner
+    hsl = list(baseline)
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.01,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_coin": 1.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        hsl[keys.index(key)] = value
+    restarting_hsl = list(hsl)
+    restarting_hsl[keys.index("hsl_restart_policy")] = 0.0
+    restarting_hsl[keys.index("hsl_cooldown_minutes_after_red")] = 2.0
+    zero_cooldown_hsl = list(hsl)
+    zero_cooldown_hsl[keys.index("hsl_restart_policy")] = 0.0
+    unscaled_coin_hsl = list(hsl)
+    unscaled_coin_hsl[keys.index("hsl_red_threshold")] = 0.6
+    scaled_coin_hsl = list(unscaled_coin_hsl)
+    scaled_coin_hsl[keys.index("hsl_slot_count")] = 4.0
+    capped_coin_hsl = list(hsl)
+    capped_coin_hsl[keys.index("hsl_restart_policy")] = 1.0
+    capped_coin_hsl[keys.index("hsl_cooldown_minutes_after_red")] = 2.0
+    capped_coin_hsl[keys.index("hsl_slot_count")] = 4.0
+    tiny_threshold_hsl = list(hsl)
+    tiny_threshold_hsl[keys.index("hsl_red_threshold")] = 1.0e-8
+    negative_span_hsl = list(hsl)
+    negative_span_hsl[keys.index("hsl_ema_span_minutes")] = -2.0
+    inactive = list(baseline)
+    rows = (
+        [
+            baseline + inactive,
+            hsl + inactive,
+            restarting_hsl + inactive,
+            zero_cooldown_hsl + inactive,
+            unscaled_coin_hsl + inactive,
+            scaled_coin_hsl + inactive,
+            capped_coin_hsl + inactive,
+            tiny_threshold_hsl + inactive,
+            negative_span_hsl + inactive,
+        ]
+        if side == "long"
+        else [
+            inactive + baseline,
+            inactive + hsl,
+            inactive + restarting_hsl,
+            inactive + zero_cooldown_hsl,
+            inactive + unscaled_coin_hsl,
+            inactive + scaled_coin_hsl,
+            inactive + capped_coin_hsl,
+            inactive + tiny_threshold_hsl,
+            inactive + negative_span_hsl,
+        ]
+    )
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray(rows, dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key][0].item() > 0.0
+    assert output[size_key][1].item() == 0.0
+    assert output[size_key][2].item() > 0.0
+    assert output[size_key][3].item() == 0.0
+    assert output[size_key][4].item() > 0.0
+    assert output[size_key][5].item() == 0.0
+    assert output[size_key][6].item() > 0.0
+    assert output[size_key][7].item() == 0.0
+    assert output["balance"][7].item() < 990.0
+    assert output[size_key][8].item() == 0.0
+    assert output["balance"][8].item() == pytest.approx(
+        output["balance"][1].item(), abs=1.0e-4
+    )
+    assert output["day_volume"][1].sum().item() > 1.0
 
 
 @pytest.mark.skipif(
@@ -5091,7 +5247,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 40" in source
+    assert "constant int SIDE_PARAMS = 51" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source

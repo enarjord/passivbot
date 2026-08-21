@@ -4,7 +4,7 @@ using namespace metal;
 constant int DAILY_COLS = 5;
 constant int SCALAR_COLS = 18;
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 23;
+constant int SIDE_PARAMS = 34;
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -122,6 +122,194 @@ struct ReducerVariant {
     int secondary_ticks;
     float secondary_qty;
 };
+
+struct HslState {
+    bool enabled;
+    float red_threshold;
+    float alpha;
+    float cooldown_minutes;
+    float no_restart_threshold;
+    int restart_policy;
+    float yellow_ratio;
+    float orange_ratio;
+    bool orange_graceful_stop;
+    bool signal_coin;
+    float slot_count;
+    bool initialized;
+    float drawdown_ema;
+    float peak_strategy_pnl;
+    float no_restart_peak_strategy_equity;
+    float coin_realized_baseline;
+    float coin_realized_peak;
+    int tier;
+    bool red_latched;
+    bool red_active_now;
+    bool halted;
+    bool no_restart_latched;
+    float cooldown_until_k;
+    int flat_confirmations;
+    float pending_drawdown_raw;
+    float pending_drawdown_ema;
+    float pending_strategy_equity;
+    float pending_peak_strategy_equity;
+    float pending_stop_k;
+};
+
+inline HslState load_hsl(constant float* params, int po) {
+    HslState h;
+    h.enabled = params[po + 23] > 0.5f;
+    h.red_threshold = params[po + 24];
+    h.alpha = clamp(2.0f / (fmax(params[po + 25], 1.0f) + 1.0f), 0.0f, 1.0f);
+    h.cooldown_minutes = fmax(params[po + 26], 0.0f);
+    h.no_restart_threshold = fmax(params[po + 27], h.red_threshold);
+    h.restart_policy = int(round(params[po + 28]));
+    h.yellow_ratio = params[po + 29];
+    h.orange_ratio = params[po + 30];
+    h.orange_graceful_stop = params[po + 31] > 0.5f;
+    h.signal_coin = params[po + 32] > 0.5f;
+    h.slot_count = fmax(round(params[po + 33]), 1.0f);
+    h.initialized = false;
+    h.drawdown_ema = 0.0f;
+    h.peak_strategy_pnl = -INFINITY;
+    h.no_restart_peak_strategy_equity = 0.0f;
+    h.coin_realized_baseline = 0.0f;
+    h.coin_realized_peak = 0.0f;
+    h.tier = 0;
+    h.red_latched = false;
+    h.red_active_now = false;
+    h.halted = false;
+    h.no_restart_latched = false;
+    h.cooldown_until_k = -1.0f;
+    h.flat_confirmations = 0;
+    h.pending_drawdown_raw = 0.0f;
+    h.pending_drawdown_ema = 0.0f;
+    h.pending_strategy_equity = 0.0f;
+    h.pending_peak_strategy_equity = 0.0f;
+    h.pending_stop_k = -1.0f;
+    return h;
+}
+
+inline int hsl_mode(thread HslState& h, bool has_position) {
+    if (!h.enabled) return 0;
+    if (h.halted) return has_position ? 3 : 1;
+    if (h.tier == 3) return h.red_active_now ? 3 : 2;
+    if (h.tier == 2) return h.orange_graceful_stop ? 1 : 2;
+    return 0;
+}
+
+inline void update_hsl(
+    thread HslState& h,
+    float balance,
+    float starting_balance,
+    float realized_pnl,
+    float unrealized_pnl,
+    bool has_position,
+    bool has_blocking_orders,
+    float kf
+) {
+    if (!h.enabled || h.halted || !(balance > 0.0f)) return;
+    float drawdown_raw;
+    float strategy_pnl = realized_pnl + unrealized_pnl;
+    float strategy_equity;
+    float peak_strategy_equity;
+    if (h.signal_coin) {
+        float coin_realized = realized_pnl - h.coin_realized_baseline;
+        h.coin_realized_peak = fmax(h.coin_realized_peak, coin_realized);
+        drawdown_raw = fmin(fmax(
+            h.coin_realized_peak - (coin_realized + unrealized_pnl), 0.0f
+        ) / (balance / h.slot_count), 0.9999999403953552f);
+        strategy_equity = fmax(1.0f - drawdown_raw, 1.0e-12f);
+        peak_strategy_equity = 1.0f;
+    } else {
+        h.peak_strategy_pnl = fmax(h.peak_strategy_pnl, strategy_pnl);
+        strategy_equity = starting_balance + strategy_pnl;
+        peak_strategy_equity = fmax(
+            starting_balance + h.peak_strategy_pnl, strategy_equity
+        );
+        if (!(strategy_equity > 0.0f && peak_strategy_equity > 0.0f)) return;
+        drawdown_raw = fmin(
+            fmax(1.0f - strategy_equity / peak_strategy_equity, 0.0f),
+            0.9999999403953552f
+        );
+    }
+    if (!h.initialized) {
+        h.initialized = true;
+        h.drawdown_ema = 0.0f;
+        h.tier = 0;
+        return;
+    }
+    h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
+    float score = fmin(drawdown_raw, fmax(h.drawdown_ema, 0.0f));
+    const float cmp_eps = 1.0e-12f;
+    h.red_active_now = score + cmp_eps >= h.red_threshold;
+    int next_tier = h.red_latched ? 3
+        : h.red_active_now ? 3
+        : score + cmp_eps >= h.orange_ratio * h.red_threshold ? 2
+        : score + cmp_eps >= h.yellow_ratio * h.red_threshold ? 1 : 0;
+    if (next_tier == 3) h.red_latched = true;
+    h.tier = h.red_latched ? 3 : next_tier;
+    if (h.tier == 3) {
+        if (has_position || has_blocking_orders) {
+            h.flat_confirmations = 0;
+        } else {
+            h.flat_confirmations += 1;
+            if (h.flat_confirmations == 1) {
+                h.pending_drawdown_raw = drawdown_raw;
+                h.pending_drawdown_ema = h.drawdown_ema;
+                h.pending_strategy_equity = strategy_equity;
+                h.pending_peak_strategy_equity = peak_strategy_equity;
+                h.pending_stop_k = kf;
+            }
+            if (h.flat_confirmations >= 2) {
+                h.halted = true;
+                if (h.signal_coin) {
+                    h.coin_realized_baseline = realized_pnl;
+                    h.coin_realized_peak = 0.0f;
+                }
+                h.no_restart_peak_strategy_equity = fmax(
+                    h.no_restart_peak_strategy_equity,
+                    fmax(
+                        h.pending_peak_strategy_equity,
+                        h.pending_strategy_equity
+                    )
+                );
+                float no_restart_drawdown_raw = h.signal_coin
+                    ? h.pending_drawdown_raw
+                    : fmin(
+                        fmax(
+                            1.0f - h.pending_strategy_equity
+                                / fmax(h.no_restart_peak_strategy_equity, 1.0e-12f),
+                            0.0f
+                        ),
+                        0.9999999403953552f
+                    );
+                bool terminal = h.restart_policy == 2
+                    || (h.restart_policy == 1
+                        && fmax(no_restart_drawdown_raw, h.pending_drawdown_ema)
+                            >= h.no_restart_threshold);
+                h.no_restart_latched = terminal;
+                h.cooldown_until_k = terminal || h.cooldown_minutes <= 0.0f
+                    ? -1.0f : h.pending_stop_k + h.cooldown_minutes;
+            }
+        }
+    } else {
+        h.flat_confirmations = 0;
+    }
+}
+
+inline void try_restart_hsl(thread HslState& h, float kf) {
+    if (!h.enabled || !h.halted || h.no_restart_latched
+        || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
+    h.initialized = false;
+    h.drawdown_ema = 0.0f;
+    h.peak_strategy_pnl = -INFINITY;
+    h.tier = 0;
+    h.red_latched = false;
+    h.red_active_now = false;
+    h.halted = false;
+    h.cooldown_until_k = -1.0f;
+    h.flat_confirmations = 0;
+}
 
 inline EmaSide load_side(constant float* params, int po, float seed_close) {
     EmaSide side;
@@ -769,6 +957,8 @@ inline void passivbot_single_coin_impl(
     const float seed_close = bars[seed_k * 5 + 2];
     EmaSide long_side = load_side(params, po, seed_close);
     EmaSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
+    HslState long_hsl = load_hsl(params, po);
+    HslState short_hsl = load_hsl(params, po + SIDE_PARAMS);
 
     float balance = starting_balance;
     float realized_pnl_cumsum_last = 0.0f;
@@ -1005,6 +1195,8 @@ inline void passivbot_single_coin_impl(
 
         bool gen = can_gen && alive;
         eq_started = eq_started || gen;
+        int long_hsl_mode = hsl_mode(long_hsl, long_side.psize > 0.0f);
+        int short_hsl_mode = hsl_mode(short_hsl, short_side.psize > 0.0f);
         if (gen) {
             // When both sides are flat, an exact Rust path that remains alive has
             // balance above liq_floor. If either side is open, equity cannot bound
@@ -1020,8 +1212,8 @@ inline void passivbot_single_coin_impl(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
                 short_side.allowed_wel, short_side.base_qty_pct, max_effective_min_cost
             );
-            bool block_long_initial = !long_min_cost_eligible;
-            bool block_short_initial = !short_min_cost_eligible;
+            bool block_long_initial = !long_min_cost_eligible || long_hsl_mode != 0;
+            bool block_short_initial = !short_min_cost_eligible || short_hsl_mode != 0;
             if (long_enabled && short_enabled && !hedge_mode) {
                 if (long_side.psize > 0.0f) {
                     block_short_initial = true;
@@ -1207,6 +1399,25 @@ inline void passivbot_single_coin_impl(
                     );
                 }
             }
+
+            if (long_enabled && long_hsl_mode >= 2) {
+                long_side.entry_qty = 0.0f;
+            }
+            if (short_enabled && short_hsl_mode >= 2) {
+                short_side.entry_qty = 0.0f;
+            }
+            if (long_enabled && long_hsl_mode == 3) {
+                long_side.close_ticks = max(touch_down_tick - 1, 1);
+                long_side.close_qty = long_side.psize;
+                long_side.secondary_close_qty = 0.0f;
+                long_side.close_is_protective_reducer = false;
+            }
+            if (short_enabled && short_hsl_mode == 3) {
+                short_side.close_ticks = max(touch_up_tick + 1, 1);
+                short_side.close_qty = short_side.psize;
+                short_side.secondary_close_qty = 0.0f;
+                short_side.close_is_protective_reducer = false;
+            }
         }
 
         float long_unreal = long_side.psize > 0.0f
@@ -1214,6 +1425,30 @@ inline void passivbot_single_coin_impl(
         float short_unreal = short_side.psize > 0.0f
             ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f;
         float equity = balance + long_unreal + short_unreal;
+        if (gen && valid && alive && balance > 0.0f && equity > liq_floor) {
+            bool long_blocking_orders = long_hsl_mode != 3 && (
+                long_side.entry_qty > 0.0f || long_side.close_qty > 0.0f
+                    || long_side.secondary_close_qty > 0.0f
+            );
+            bool short_blocking_orders = short_hsl_mode != 3 && (
+                short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
+                    || short_side.secondary_close_qty > 0.0f
+            );
+            update_hsl(
+                long_hsl, balance, starting_balance,
+                realized_pnl_cumsum_last,
+                long_unreal, long_side.psize > 0.0f,
+                long_blocking_orders, kf
+            );
+            update_hsl(
+                short_hsl, balance, starting_balance,
+                realized_pnl_cumsum_last,
+                short_unreal, short_side.psize > 0.0f,
+                short_blocking_orders, kf
+            );
+            try_restart_hsl(long_hsl, kf);
+            try_restart_hsl(short_hsl, kf);
+        }
         bool active = eq_started && alive && valid;
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;

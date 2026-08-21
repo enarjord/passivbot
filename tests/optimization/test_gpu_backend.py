@@ -30,7 +30,12 @@ from optimization.backends.gpu_backend import (
     _evaluate_gpu_suite_proxies,
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
+    _gpu_candidate_search_sides,
     _gpu_candidate_source_sides,
+    _gpu_hsl_search_sides,
+    _gpu_hsl_parameter_active,
+    _gpu_pinned_hsl_bound_contract,
+    _validate_hsl_bound_contracts,
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
@@ -380,6 +385,9 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "unstuck_ema_dist",
         "unstuck_loss_allowance_pct",
         "unstuck_threshold",
+        "hsl_cooldown_minutes_after_red",
+        "hsl_ema_span_minutes",
+        "hsl_red_threshold",
     }
 
     assert set(TRAILING_MARTINGALE_BOUND_MAP) == {
@@ -1378,10 +1386,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             "trailing_martingale",
         ),
         (
-            lambda config: config["bot"]["long"]["hsl"].__setitem__("enabled", True),
-            "hsl",
-        ),
-        (
             lambda config: config["backtest"].__setitem__(
                 "btc_collateral_cap", 0.5
             ),
@@ -1411,6 +1415,51 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_accepts_one_sided_single_coin_hsl():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["live"]["pnls_max_lookback_days"] = "all"
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_hsl_fails_closed_for_finite_pnl_lookback():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="pnls_max_lookback_days='all'"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_hsl_fails_closed_for_market_panic_close():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"].update(
+        {"enabled": True, "panic_close_order_type": "market"}
+    )
+    config["live"]["pnls_max_lookback_days"] = "all"
+
+    with pytest.raises(ValueError, match="panic_close_order_type=limit"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_hsl_fails_closed_for_dual_side_single_coin():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="one enabled side"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_hsl_fails_closed_for_multicoin():
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "XRP"]
+    config["bot"]["long"]["risk"]["n_positions"] = 3
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="one backtest coin"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -3850,6 +3899,124 @@ def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
     assert effective_contract["pnls_max_lookback_days"] == 12.0
 
 
+def test_gpu_checkpoint_signature_tracks_single_coin_hsl_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    proxy = SimpleNamespace(coin_override_contract=None)
+    original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=original_contract
+    )
+
+    edits = (
+        ("live", "hsl_signal_mode", "unified"),
+        ("backtest", "dynamic_wel_by_tradability", False),
+        ("bot.long.risk", "n_positions", 2),
+        ("bot.long.hsl", "enabled", False),
+        ("bot.long.hsl", "restart_after_red_policy", "never"),
+        ("bot.long.hsl", "no_restart_drawdown_threshold", 0.9),
+        ("bot.long.hsl", "tier_ratio_yellow", 0.4),
+        ("bot.long.hsl", "orange_tier_mode", "graceful_stop"),
+        ("bot.long.hsl", "panic_close_order_type", "market"),
+    )
+    for parent_path, key, value in edits:
+        changed = copy.deepcopy(config)
+        parent = changed
+        for part in parent_path.split("."):
+            parent = parent[part]
+        parent[key] = value
+        changed_contract = _gpu_runtime_checkpoint_contract(changed, proxy)
+        assert changed_contract != original_contract
+        assert (
+            _checkpoint_signature(
+                active, scoring, runtime_contract=changed_contract
+            )
+            != original
+        )
+
+    pinned = {"long_hsl_red_threshold": 0.2}
+    pinned_contract = _gpu_runtime_checkpoint_contract(
+        config, proxy, pinned_hsl_bounds=pinned
+    )
+    changed_pinned_contract = _gpu_runtime_checkpoint_contract(
+        config,
+        proxy,
+        pinned_hsl_bounds={"long_hsl_red_threshold": 0.25},
+    )
+    assert pinned_contract != changed_pinned_contract
+    assert _checkpoint_signature(
+        active, scoring, runtime_contract=pinned_contract
+    ) != _checkpoint_signature(
+        active, scoring, runtime_contract=changed_pinned_contract
+    )
+
+
+def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
+    assert not _gpu_hsl_parameter_active("long_hsl_red_threshold", set())
+    assert _gpu_hsl_parameter_active("long_hsl_red_threshold", {"long"})
+    assert _gpu_hsl_parameter_active("long_offset", set())
+    assert _gpu_pinned_hsl_bound_contract(
+        {
+            "long_hsl_red_threshold": Bound(0.2, 0.2),
+            "long_hsl_ema_span_minutes": Bound(30.0, 90.0),
+            "long_offset": Bound(0.01, 0.01),
+        }
+    ) == {"long_hsl_red_threshold": 0.2}
+
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    _validate_hsl_bound_contracts(
+        {
+            "long_hsl_enabled": Bound(1.0, 1.0),
+            "long_hsl_red_threshold": Bound(0.2, 0.8),
+        },
+        config,
+    )
+    with pytest.raises(ValueError, match="enablement to match"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_enabled": Bound(0.0, 0.0)}, config
+        )
+    with pytest.raises(ValueError, match="cannot distinguish from 1.0"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(0.9, 1.0)}, config
+        )
+    with pytest.raises(ValueError, match="red_threshold bounds must remain greater"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(-0.1, 0.2)}, config
+        )
+    with pytest.raises(ValueError, match="cooldown_minutes_after_red bounds"):
+        _validate_hsl_bound_contracts(
+            {
+                "long_hsl_cooldown_minutes_after_red": Bound(-10.0, 10.0)
+            },
+            config,
+        )
+
+    base = _long_only_ema_config()
+    scenario = copy.deepcopy(base)
+    scenario["bot"]["long"]["hsl"]["enabled"] = True
+    search_sides = _gpu_hsl_search_sides(
+        base, [{"config": scenario}], set()
+    )
+    assert search_sides == {"long"}
+    assert _gpu_hsl_parameter_active(
+        "long_hsl_no_restart_drawdown_threshold", search_sides
+    )
+
+    switched = copy.deepcopy(base)
+    switched["bot"]["long"]["risk"]["n_positions"] = 0
+    switched["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    switched["bot"]["short"]["risk"]["n_positions"] = 1
+    switched["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    switched["bot"]["short"]["hsl"]["enabled"] = True
+    switched["live"]["approved_coins"] = {"long": [], "short": ["BTC"]}
+    assert _gpu_candidate_search_sides(
+        base, [{"config": switched}]
+    ) == {"short"}
+
+
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -3934,6 +4101,8 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "max_realized_loss_pct": 1.0,
             "pnls_max_lookback_days": 30.0,
             "unstuck": original["unstuck"],
+            "hsl": original["hsl"],
+            "pinned_hsl_bounds": {},
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -3975,6 +4144,27 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     changed_unstuck = copy.deepcopy(item)
     changed_unstuck["config"]["bot"]["long"]["unstuck"]["enabled"] = True
     assert _gpu_suite_checkpoint_contract(config, [changed_unstuck]) != original
+
+    changed_hsl = copy.deepcopy(item)
+    changed_hsl["config"]["bot"]["long"]["hsl"]["enabled"] = True
+    assert _gpu_suite_checkpoint_contract(config, [changed_hsl]) != original
+
+    changed_pinned_hsl = copy.deepcopy(item)
+    changed_pinned_hsl["pinned_hsl_bounds"] = {
+        "long_hsl_red_threshold": 0.25
+    }
+    assert (
+        _gpu_suite_checkpoint_contract(config, [changed_pinned_hsl])
+        != original
+    )
+    assert (
+        _gpu_suite_checkpoint_contract(
+            config,
+            [item],
+            pinned_hsl_bounds={"long_hsl_red_threshold": 0.25},
+        )
+        != original
+    )
 
     changed_coins = copy.deepcopy(item)
     changed_coins["coins"] = ["BTC", "SOL"]

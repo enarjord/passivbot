@@ -134,7 +134,19 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed
-- HSL disabled. Single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
+- one-sided single-coin EMA Anchor and Trailing Martingale runs support HSL with `coin`, `pside`,
+  or `unified` signals and resting-limit panic closes. The Metal proxy models tunable RED
+  threshold, drawdown-EMA span, and cooldown, plus fixed yellow/orange ratios, orange entry
+  suppression, RED latching, panic flattening, two-sample flat confirmation,
+  positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
+  effective coin-slot scaling, and terminal no-restart policy. Its candidate-local realized-PnL
+  and strategy-equity peaks require `live.pnls_max_lookback_days: all`, and the selected history
+  must have no internal invalid candles between its first and last valid samples. Thresholds in
+  the float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
+  drift gates remain authoritative. Market panic closes, finite rolling PnL lookbacks, dual-side
+  and multi-coin HSL, per-coin HSL overrides, and HSL-specific scoring/limit metrics remain fail
+  closed for now. Compatible single-coin suites may use the supported topology.
+- single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal
   models the enable and EMA-gating toggles, tunable close percentage, EMA distance, loss allowance,

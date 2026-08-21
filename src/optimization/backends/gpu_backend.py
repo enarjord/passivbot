@@ -104,6 +104,12 @@ _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES = {
     "unstuck_threshold": "unstuck_threshold",
 }
 
+_SINGLE_COIN_HSL_BOUND_SUFFIXES = {
+    "hsl_cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
+    "hsl_ema_span_minutes": "hsl_ema_span_minutes",
+    "hsl_red_threshold": "hsl_red_threshold",
+}
+
 EMA_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
@@ -121,6 +127,11 @@ EMA_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
     },
 }
 
@@ -203,6 +214,11 @@ TRAILING_MARTINGALE_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
     },
 }
 
@@ -399,6 +415,21 @@ def _gpu_candidate_source_sides(
     return source_sides
 
 
+def _gpu_candidate_search_sides(proxy_config: dict, suite_inputs) -> set[str]:
+    """Return every side enabled by an effective independent scenario."""
+
+    configs = (
+        [item["config"] for item in suite_inputs]
+        if suite_inputs
+        else [proxy_config]
+    )
+    return {
+        side
+        for side in ("long", "short")
+        if any(gpu_side_enabled(item, side) for item in configs)
+    }
+
+
 def _ema_multicoin_bound_map(target_side: str, overrides: set[str]) -> dict:
     """Include all bound families that can feed the enabled multicoin side."""
 
@@ -453,14 +484,6 @@ def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
         ),
         eliminate_duplicates=bool(shared["eliminate_duplicates"]),
     )
-
-PINNED_SCOPE_BOUND_VALUES = {
-    f"{side}_{suffix}": expected
-    for side in ("long", "short")
-    for suffix, expected in {
-        "hsl_enabled": 0.0,
-    }.items()
-}
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
     "balance_sample_divider",
@@ -959,10 +982,45 @@ def _validate_scope_config(
         enabled_sides=enabled_sides,
         coin_count=coin_count,
     )
+    hsl_enabled_sides = [
+        side
+        for side in enabled_sides
+        if bool(config["bot"][side].get("hsl", {}).get("enabled"))
+    ]
+    if hsl_enabled_sides:
+        if coin_count != 1 or len(enabled_sides) != 1:
+            raise ValueError(
+                "GPU HSL currently requires one enabled side and one backtest coin"
+            )
+        lookback = parse_pnls_max_lookback_days(
+            config.get("live", {}).get("pnls_max_lookback_days", 30.0),
+            field_name="live.pnls_max_lookback_days",
+        )
+        if not lookback.is_all:
+            raise ValueError(
+                "GPU HSL currently requires live.pnls_max_lookback_days='all'; "
+                "finite rolling HSL peaks remain exact-Rust-only"
+            )
+        signal_mode = str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        ).strip().lower()
+        if signal_mode not in {"coin", "pside", "unified"}:
+            raise ValueError(
+                "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
+                f"unified; got {signal_mode!r}"
+            )
+        for side in hsl_enabled_sides:
+            hsl = config["bot"][side].get("hsl", {})
+            panic_order_type = str(
+                hsl.get("panic_close_order_type", "limit")
+            ).strip().lower()
+            if panic_order_type != "limit":
+                raise ValueError(
+                    f"GPU HSL currently requires bot.{side}.hsl."
+                    "panic_close_order_type=limit"
+                )
     for side in enabled_sides:
         side_config = config["bot"][side]
-        if bool(side_config.get("hsl", {}).get("enabled")):
-            raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
         risk = side_config.get("risk", {})
         required_disabled = []
         if strategy_kind != "trailing_martingale":
@@ -1803,7 +1861,9 @@ def _update_novelty_stall(
     return current
 
 
-def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
+def _gpu_suite_checkpoint_contract(
+    config: dict, suite_inputs=None, *, pinned_hsl_bounds=None
+) -> dict:
     backtest = config.get("backtest", {})
     contract = {
         key: deepcopy(backtest.get(key))
@@ -1822,6 +1882,8 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
         _gpu_pnls_max_lookback_days_checkpoint_value(config)
     )
     contract["unstuck"] = _gpu_unstuck_checkpoint_contract(config)
+    contract["hsl"] = _gpu_hsl_checkpoint_contract(config)
+    contract["pinned_hsl_bounds"] = deepcopy(pinned_hsl_bounds or {})
     if suite_inputs is not None:
         prepared_scenarios = []
         for item in suite_inputs:
@@ -1874,6 +1936,10 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                         )
                     ),
                     "unstuck": _gpu_unstuck_checkpoint_contract(item["config"]),
+                    "hsl": _gpu_hsl_checkpoint_contract(item["config"]),
+                    "pinned_hsl_bounds": deepcopy(
+                        item.get("pinned_hsl_bounds", {})
+                    ),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -1892,7 +1958,9 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     return contract
 
 
-def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
+def _gpu_runtime_checkpoint_contract(
+    config: dict, proxy, *, pinned_hsl_bounds=None
+) -> dict:
     return {
         "max_realized_loss_pct": float(
             config.get("live", {}).get("max_realized_loss_pct", 1.0)
@@ -1904,6 +1972,8 @@ def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
             getattr(proxy, "coin_override_contract", None)
         ),
         "unstuck": _gpu_unstuck_checkpoint_contract(config),
+        "hsl": _gpu_hsl_checkpoint_contract(config),
+        "pinned_hsl_bounds": deepcopy(pinned_hsl_bounds or {}),
     }
 
 
@@ -1931,6 +2001,137 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
             "threshold": float(unstuck.get("threshold", 0.0)),
         }
     return contract
+
+
+def _gpu_hsl_checkpoint_contract(config: dict) -> dict:
+    return {
+        "signal_mode": str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        )
+        .strip()
+        .lower(),
+        "dynamic_wel_by_tradability": bool(
+            config.get("backtest", {}).get("dynamic_wel_by_tradability", True)
+        ),
+        "sides": {
+            side: {
+                "config": deepcopy(
+                    config.get("bot", {}).get(side, {}).get("hsl", {})
+                ),
+                "n_positions": deepcopy(
+                    config.get("bot", {})
+                    .get(side, {})
+                    .get("risk", {})
+                    .get("n_positions")
+                ),
+            }
+            for side in ("long", "short")
+        },
+    }
+
+
+def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
+    return {
+        key: float(bound.low)
+        for key, bound in sorted(bound_by_key.items())
+        if "_hsl_" in key
+        and math.isclose(
+            float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
+        )
+    }
+
+
+def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
+    float32_below_one = float(
+        np.nextafter(np.float32(1.0), np.float32(0.0))
+    )
+    for side in ("long", "short"):
+        enabled = bool(
+            config.get("bot", {})
+            .get(side, {})
+            .get("hsl", {})
+            .get("enabled", False)
+        )
+        enabled_bound = bound_by_key.get(f"{side}_hsl_enabled")
+        if enabled_bound is not None:
+            expected = float(enabled)
+            endpoints = (float(enabled_bound.low), float(enabled_bound.high))
+            if any(
+                not math.isclose(
+                    value, expected, rel_tol=0.0, abs_tol=1.0e-12
+                )
+                for value in endpoints
+            ):
+                raise ValueError(
+                    "GPU HSL requires pinned optimizer enablement to match the "
+                    f"source bot.{side}.hsl.enabled={enabled}; got bounds {endpoints}"
+                )
+        if not enabled:
+            continue
+        red_bound = bound_by_key.get(f"{side}_hsl_red_threshold")
+        if red_bound is not None and float(red_bound.low) <= 0.0:
+            raise ValueError(
+                f"GPU HSL {side}_hsl_red_threshold bounds must remain greater "
+                f"than zero, got {(float(red_bound.low), float(red_bound.high))}"
+            )
+        cooldown_bound = bound_by_key.get(
+            f"{side}_hsl_cooldown_minutes_after_red"
+        )
+        if cooldown_bound is not None and float(cooldown_bound.low) < 0.0:
+            raise ValueError(
+                "GPU HSL "
+                f"{side}_hsl_cooldown_minutes_after_red bounds must remain "
+                "non-negative, got "
+                f"{(float(cooldown_bound.low), float(cooldown_bound.high))}"
+            )
+        for suffix in (
+            "hsl_red_threshold",
+            "hsl_no_restart_drawdown_threshold",
+        ):
+            bound = bound_by_key.get(f"{side}_{suffix}")
+            if bound is None:
+                continue
+            low, high = float(bound.low), float(bound.high)
+            if low < 1.0 and high > float32_below_one:
+                raise ValueError(
+                    f"GPU HSL {side}_{suffix} bounds include values which "
+                    "float32 cannot distinguish from 1.0; require high <= "
+                    f"{float32_below_one} or pin exactly at 1.0, got {(low, high)}"
+                )
+
+
+def _gpu_hsl_search_sides(
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
+) -> set[str]:
+    configs = (
+        [item["config"] for item in suite_inputs]
+        if suite_inputs
+        else [proxy_config]
+    )
+    target_sides = {
+        side
+        for side in ("long", "short")
+        if any(
+            gpu_side_enabled(item, side)
+            and bool(
+                item.get("bot", {})
+                .get(side, {})
+                .get("hsl", {})
+                .get("enabled", False)
+            )
+            for item in configs
+        )
+    }
+    return _gpu_candidate_source_sides(target_sides, overrides or set())
+
+
+def _gpu_hsl_parameter_active(
+    parameter: str, hsl_search_sides: set[str]
+) -> bool:
+    for side in ("long", "short"):
+        if parameter.startswith(f"{side}_hsl_"):
+            return side in hsl_search_sides
+    return True
 
 
 def _gpu_unstuck_search_sides(
@@ -2230,7 +2431,11 @@ def _validate_pinned_scope_bounds(
     strategy_kind: str | None = None,
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
-    pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    pinned = {}
+    if coin_count != 1 or len(enabled_sides) != 1:
+        pinned.update(
+            {f"{side}_hsl_enabled": 0.0 for side in ("long", "short")}
+        )
     if coin_count > 1 and len(enabled_sides) == 2:
         pinned.update(
             {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
@@ -2640,6 +2845,11 @@ def run_backend(
         for index, (bound_key, _path) in enumerate(key_paths)
         if bound_key in bound_map
     }
+    for parameter, (_index, bound) in mapped_all.items():
+        if math.isclose(
+            float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
+        ):
+            fixed_parameter_overrides.setdefault(parameter, float(bound.low))
     missing = sorted(set(bound_map.values()) - set(mapped_all))
     if anchor_parameter_overrides is None and missing:
         raise ValueError(
@@ -2713,8 +2923,11 @@ def run_backend(
             "GPU bounds would disable both sides for exact validation; "
             f"effective seed values: {side_values}"
         )
+    candidate_search_sides = _gpu_candidate_search_sides(
+        proxy_config, suite_inputs
+    )
     candidate_source_sides = _gpu_candidate_source_sides(
-        enabled_sides, gpu_optimizer_overrides
+        candidate_search_sides, gpu_optimizer_overrides
     )
     unstuck_search_sides = (
         _gpu_unstuck_search_sides(
@@ -2722,6 +2935,9 @@ def run_backend(
         )
         if max_coin_count == 1 or len(config_enabled_sides) == 1
         else set()
+    )
+    hsl_search_sides = _gpu_hsl_search_sides(
+        proxy_config, suite_inputs, gpu_optimizer_overrides
     )
     mapped = {
         name: value
@@ -2734,6 +2950,7 @@ def run_backend(
         if bound.high > bound.low
         and name not in fixed_parameter_overrides
         and _gpu_unstuck_parameter_active(name, unstuck_search_sides)
+        and _gpu_hsl_parameter_active(name, hsl_search_sides)
         and not (
             "mirror_short_from_long" in gpu_optimizer_overrides
             and name.startswith("short_")
@@ -2775,6 +2992,7 @@ def run_backend(
         coin_count=max_coin_count,
         strategy_kind=strategy_kind,
     )
+    _validate_hsl_bound_contracts(bound_by_key, proxy_config)
 
     if suite_multicoin_sides is None:
         _validate_directional_search_space(
@@ -2819,22 +3037,32 @@ def run_backend(
             scenario_enabled_sides,
             coin_count=item["coin_count"],
         )
+        _validate_hsl_bound_contracts(scenario_bound_by_key, item["config"])
         item["parameter_overrides"] = parameter_overrides
+        item["pinned_hsl_bounds"] = _gpu_pinned_hsl_bound_contract(
+            scenario_bound_by_key
+        )
 
     for bound_key, bound in bound_by_key.items():
         if bound_key == ANCHOR_GENE_KEY or bound.high <= bound.low:
             continue
         side = bound_key.split("_", 1)[0]
-        if side in {"long", "short"} and side not in enabled_sides:
+        if side in {"long", "short"} and side not in candidate_search_sides:
             continue
         if max_coin_count == 1 and any(
-            bound_key.startswith(f"{side}_forager_") for side in enabled_sides
+            bound_key.startswith(f"{side}_forager_")
+            for side in candidate_search_sides
         ):
             # Forager ranking cannot affect a one-coin backtest.
             continue
-        if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
-            # HSL remains disabled, so its dormant bounds affect neither path.
-            continue
+        if any(
+            bound_key.startswith(f"{side}_hsl_")
+            for side in candidate_search_sides
+        ):
+            bound_side = bound_key.split("_", 1)[0]
+            if bound_side not in hsl_search_sides:
+                # Dormant HSL bounds affect neither proxy nor exact Rust.
+                continue
         if max_coin_count > 1 and len(enabled_sides) == 2 and any(
             bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
         ):
@@ -2843,7 +3071,8 @@ def run_backend(
             continue
         if (
             max_coin_count == 1
-            and bound_key in {f"{side}_n_positions" for side in enabled_sides}
+            and bound_key
+            in {f"{side}_n_positions" for side in candidate_search_sides}
         ):
             continue
         if bound_key not in bound_map:
@@ -3020,14 +3249,22 @@ def run_backend(
         config["optimize"]["scoring"],
         anchor_plan=get_anchor_plan(config),
         suite_contract=(
-            _gpu_suite_checkpoint_contract(config, suite_inputs)
+            _gpu_suite_checkpoint_contract(
+                config,
+                suite_inputs,
+                pinned_hsl_bounds=_gpu_pinned_hsl_bound_contract(bound_by_key),
+            )
             if suite_enabled
             else None
         ),
         runtime_contract=(
             None
             if suite_enabled
-            else _gpu_runtime_checkpoint_contract(proxy_config, proxy)
+            else _gpu_runtime_checkpoint_contract(
+                proxy_config,
+                proxy,
+                pinned_hsl_bounds=_gpu_pinned_hsl_bound_contract(bound_by_key),
+            )
         ),
     )
     budget = int(config["optimize"]["iters"])

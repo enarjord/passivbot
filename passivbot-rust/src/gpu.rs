@@ -43,7 +43,17 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
-        assert!(source.contains("constant int SIDE_PARAMS = 23"));
+        assert!(source.contains("constant int SIDE_PARAMS = 34"));
+        assert!(source.contains("struct HslState"));
+        assert!(source.contains("update_hsl("));
+        assert!(source.contains("try_restart_hsl("));
+        assert!(source.contains("h.slot_count"));
+        assert!(source.contains("h.no_restart_peak_strategy_equity"));
+        assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
+        assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
+        assert!(source.contains("fmax(params[po + 25], 1.0f)"));
+        assert!(source.contains("const float cmp_eps = 1.0e-12f"));
+        assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("total_exposure_reducer_qty"));
         assert!(source.contains("unstuck_reducer_variant"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
@@ -61,7 +71,7 @@ mod tests {
         assert!(source.contains("record_realized_net"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
-        assert_eq!(source.matches("= fma(").count(), 5);
+        assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
@@ -114,7 +124,17 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 40"));
+        assert!(source.contains("constant int SIDE_PARAMS = 51"));
+        assert!(source.contains("struct HslState"));
+        assert!(source.contains("update_hsl("));
+        assert!(source.contains("try_restart_hsl("));
+        assert!(source.contains("h.slot_count"));
+        assert!(source.contains("h.no_restart_peak_strategy_equity"));
+        assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
+        assert!(source.contains("h.pending_stop_k + h.cooldown_minutes"));
+        assert!(source.contains("fmax(params[po + 42], 1.0f)"));
+        assert!(source.contains("const float cmp_eps = 1.0e-12f"));
+        assert_eq!(source.matches("0.9999999403953552f").count(), 3);
         assert!(source.contains("unstuck_reducer_qty"));
         assert!(source.contains("unstuck_ema_gating_enabled"));
         assert!(source.contains("unstuck_loss_allowance_pct"));
@@ -139,7 +159,7 @@ mod tests {
         assert!(source.contains("? unstuck_qty : (use_twel ? twel_qty : wel_qty)"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("twel_entry_gate_enabled"));
-        assert_eq!(source.matches("= fma(").count(), 5);
+        assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);

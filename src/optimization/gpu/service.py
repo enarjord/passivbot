@@ -130,12 +130,97 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
     }
 
 
+def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
+    restart_policy = str(
+        bot.get("hsl_restart_after_red_policy", "threshold")
+    ).strip().lower()
+    restart_policy_ids = {"always": 0.0, "threshold": 1.0, "never": 2.0}
+    if restart_policy not in restart_policy_ids:
+        raise ValueError(
+            "MPS HSL requires restart_after_red_policy to be always, threshold, "
+            f"or never, got {restart_policy!r}"
+        )
+    signal_mode = str(signal_mode).strip().lower()
+    if signal_mode not in {"coin", "pside", "unified"}:
+        raise ValueError(
+            "MPS HSL requires live.hsl_signal_mode to be coin, pside, or "
+            f"unified, got {signal_mode!r}"
+        )
+    orange_mode = str(
+        bot.get("hsl_orange_tier_mode", "tp_only_with_active_entry_cancellation")
+    ).strip().lower()
+    if orange_mode not in {
+        "graceful_stop",
+        "tp_only",
+        "tp_only_with_active_entry_cancellation",
+    }:
+        raise ValueError(
+            "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
+            f"got {orange_mode!r}"
+        )
+    float32_below_one = float(
+        np.nextafter(np.float32(1.0), np.float32(0.0))
+    )
+    for key, default in (
+        ("hsl_red_threshold", 0.15),
+        ("hsl_no_restart_drawdown_threshold", 1.0),
+    ):
+        value = float(bot.get(key, default))
+        if float32_below_one < value < 1.0:
+            raise ValueError(
+                f"MPS HSL cannot represent {key}={value} distinctly from 1.0; "
+                f"use <= {float32_below_one} or exactly 1.0"
+            )
+    return {
+        "hsl_enabled": float(bool(bot.get("hsl_enabled", False))),
+        "hsl_red_threshold": float(bot.get("hsl_red_threshold", 0.15)),
+        "hsl_ema_span_minutes": float(bot.get("hsl_ema_span_minutes", 720.0)),
+        "hsl_cooldown_minutes_after_red": float(
+            bot.get("hsl_cooldown_minutes_after_red", 0.0)
+        ),
+        "hsl_no_restart_drawdown_threshold": float(
+            bot.get("hsl_no_restart_drawdown_threshold", 1.0)
+        ),
+        "hsl_restart_policy": restart_policy_ids[restart_policy],
+        "hsl_tier_ratio_yellow": float(
+            bot.get("hsl_tier_ratio_yellow", 0.5)
+        ),
+        "hsl_tier_ratio_orange": float(
+            bot.get("hsl_tier_ratio_orange", 0.75)
+        ),
+        "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
+        "hsl_signal_coin": float(signal_mode == "coin"),
+        # The single-coin GPU search contract pins authoritative candidate
+        # n_positions to one even if the source config is outside its bounds.
+        "hsl_slot_count": 1.0,
+    }
+
+
 def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
     if int(last_valid_idx) != int(candle_count) - 1:
         raise ValueError(
             "GPU foundation requires the final prepared candle to be valid because "
             "the exact Rust backtest force-realizes open positions at its valid tail; "
             f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
+def _require_no_internal_invalid_hsl_candles(
+    high, low, close, *, first_valid_idx: int, last_valid_idx: int
+) -> None:
+    first = max(0, int(first_valid_idx))
+    last = min(int(last_valid_idx), len(close) - 1)
+    valid = (
+        np.isfinite(high[first : last + 1])
+        & np.isfinite(low[first : last + 1])
+        & np.isfinite(close[first : last + 1])
+        & (np.asarray(close[first : last + 1]) > 0.0)
+    )
+    if not bool(np.all(valid)):
+        first_invalid = first + int(np.flatnonzero(~valid)[0])
+        raise ValueError(
+            "MPS single-coin HSL currently requires contiguous valid candles "
+            f"between first and last valid indices; invalid candle at {first_invalid}"
         )
 
 
@@ -363,10 +448,28 @@ class MpsSingleCoinProxy:
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
+        hsl_enabled_sides = [
+            side
+            for side, bot in (("long", long_bot), ("short", short_bot))
+            if self.enabled[side] and bool(bot.get("hsl_enabled"))
+        ]
+        if hsl_enabled_sides and sum(self.enabled.values()) != 1:
+            raise ValueError(
+                "MPS single-coin HSL currently requires exactly one enabled side"
+            )
+        signal_mode = (
+            backtest_params.get("equity_hard_stop_loss", {})
+            .get("signal_mode", "unified")
+        )
         self.base_params = {}
         for side, bot in (("long", long_bot), ("short", short_bot)):
-            if self.enabled[side] and bool(bot.get("hsl_enabled")):
-                raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
+            if self.enabled[side] and bool(bot.get("hsl_enabled")) and str(
+                bot.get("hsl_panic_close_order_type", "limit")
+            ).strip().lower() != "limit":
+                raise ValueError(
+                    f"MPS single-coin HSL currently requires bot.{side}.hsl."
+                    "panic_close_order_type=limit"
+                )
             strategy = dict(payload.strategy_params_list[0][side])
             risk = config["bot"][side]["risk"]
             if self.strategy_kind == "trailing_martingale":
@@ -388,6 +491,7 @@ class MpsSingleCoinProxy:
                     _total_exposure_enforcer_params(risk, side=side)
                 )
                 strategy.update(_unstuck_params(bot))
+                strategy.update(_hsl_params(bot, signal_mode=signal_mode))
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(
@@ -431,6 +535,14 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
+        if hsl_enabled_sides:
+            _require_no_internal_invalid_hsl_candles(
+                high,
+                low,
+                close,
+                first_valid_idx=self.run.first_valid_idx,
+                last_valid_idx=self.run.last_valid_idx,
+            )
         self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
         runner_cls = (
