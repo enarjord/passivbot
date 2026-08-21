@@ -123,6 +123,8 @@ inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
     thread float& realized_pnl_cumsum_max,
+    thread float& realized_pnl_cumsum_long,
+    thread float& realized_pnl_cumsum_short,
     thread float& day_fill_count,
     thread float& fill_count,
     thread float& fill_count_entry,
@@ -139,6 +141,8 @@ inline void record_realized_net(
     if (is_entry) fill_count_entry += 1.0f;
     if (is_long) fill_count_long += 1.0f;
     realized_pnl_cumsum_last += net_pnl;
+    if (is_long) realized_pnl_cumsum_long += net_pnl;
+    else realized_pnl_cumsum_short += net_pnl;
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
     );
@@ -1111,6 +1115,8 @@ inline void passivbot_single_coin_impl(
     float balance = starting_balance;
     float realized_pnl_cumsum_last = 0.0f;
     float realized_pnl_cumsum_max = 0.0f;
+    float realized_pnl_cumsum_long = 0.0f;
+    float realized_pnl_cumsum_short = 0.0f;
     float pnl_recovery_peak = -INFINITY;
     float pnl_recovery_peak_k = -1.0f;
     float pnl_recovery_max_min = 0.0f;
@@ -1428,6 +1434,8 @@ inline void passivbot_single_coin_impl(
                             pnl - fee,
                             realized_pnl_cumsum_last,
                             realized_pnl_cumsum_max,
+                            realized_pnl_cumsum_long,
+                            realized_pnl_cumsum_short,
                             day_fill_count,
                             fill_count,
                             fill_count_entry,
@@ -1475,6 +1483,8 @@ inline void passivbot_single_coin_impl(
                     pnl - fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -1534,6 +1544,8 @@ inline void passivbot_single_coin_impl(
                         pnl - fee,
                         realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
+                        realized_pnl_cumsum_long,
+                        realized_pnl_cumsum_short,
                         day_fill_count,
                         fill_count,
                         fill_count_entry,
@@ -1616,6 +1628,8 @@ inline void passivbot_single_coin_impl(
                     pnl - fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -1677,6 +1691,8 @@ inline void passivbot_single_coin_impl(
                     -fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -1934,6 +1950,8 @@ inline void passivbot_single_coin_impl(
                             pnl - fee,
                             realized_pnl_cumsum_last,
                             realized_pnl_cumsum_max,
+                            realized_pnl_cumsum_long,
+                            realized_pnl_cumsum_short,
                             day_fill_count,
                             fill_count,
                             fill_count_entry,
@@ -1981,6 +1999,8 @@ inline void passivbot_single_coin_impl(
                     pnl - fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -2040,6 +2060,8 @@ inline void passivbot_single_coin_impl(
                         pnl - fee,
                         realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
+                        realized_pnl_cumsum_long,
+                        realized_pnl_cumsum_short,
                         day_fill_count,
                         fill_count,
                         fill_count_entry,
@@ -2122,6 +2144,8 @@ inline void passivbot_single_coin_impl(
                     pnl - fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -2183,6 +2207,8 @@ inline void passivbot_single_coin_impl(
                     -fee,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
+                    realized_pnl_cumsum_long,
+                    realized_pnl_cumsum_short,
                     day_fill_count,
                     fill_count,
                     fill_count_entry,
@@ -2489,16 +2515,25 @@ inline void passivbot_single_coin_impl(
                 short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
                     || short_side.secondary_close_qty > 0.0f
             );
+            float total_unreal = long_unreal + short_unreal;
+            float long_hsl_realized = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED
+                ? realized_pnl_cumsum_last : realized_pnl_cumsum_long;
+            float short_hsl_realized = short_hsl.signal_mode == HSL_SIGNAL_UNIFIED
+                ? realized_pnl_cumsum_last : realized_pnl_cumsum_short;
+            float long_hsl_unreal = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED
+                ? total_unreal : long_unreal;
+            float short_hsl_unreal = short_hsl.signal_mode == HSL_SIGNAL_UNIFIED
+                ? total_unreal : short_unreal;
             update_hsl(
                 long_hsl, balance, starting_balance,
-                realized_pnl_cumsum_last,
-                long_unreal, long_side.psize > 0.0f,
+                long_hsl_realized,
+                long_hsl_unreal, long_side.psize > 0.0f,
                 long_blocking_orders, kf, interval_ms
             );
             update_hsl(
                 short_hsl, balance, starting_balance,
-                realized_pnl_cumsum_last,
-                short_unreal, short_side.psize > 0.0f,
+                short_hsl_realized,
+                short_hsl_unreal, short_side.psize > 0.0f,
                 short_blocking_orders, kf, interval_ms
             );
             if (long_hsl.enabled || short_hsl.enabled) {

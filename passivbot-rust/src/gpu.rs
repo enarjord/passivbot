@@ -74,6 +74,19 @@ mod tests {
         assert!(source.contains("int ho = po + hsl_param_offset"));
     }
 
+    fn assert_directional_hsl_accounting_contract(source: &str) {
+        assert!(source.contains("thread float& realized_pnl_cumsum_long"));
+        assert!(source.contains("thread float& realized_pnl_cumsum_short"));
+        assert!(source.contains("if (is_long) realized_pnl_cumsum_long += net_pnl"));
+        assert!(source.contains("else realized_pnl_cumsum_short += net_pnl"));
+        assert!(source.contains("long_hsl.signal_mode == HSL_SIGNAL_UNIFIED"));
+        assert!(source.contains("short_hsl.signal_mode == HSL_SIGNAL_UNIFIED"));
+        assert!(source.contains("? realized_pnl_cumsum_last : realized_pnl_cumsum_long"));
+        assert!(source.contains("? realized_pnl_cumsum_last : realized_pnl_cumsum_short"));
+        assert!(source.contains("? total_unreal : long_unreal"));
+        assert!(source.contains("? total_unreal : short_unreal"));
+    }
+
     #[test]
     fn directional_sources_compose_one_shared_hsl_controller() {
         assert_eq!(MPS_EMA_ANCHOR_BODY.matches(MPS_HSL_MARKER).count(), 1);
@@ -85,12 +98,15 @@ mod tests {
         assert!(!MPS_TRAILING_MARTINGALE_BODY.contains("struct HslState"));
         assert_shared_hsl_contract(mps_ema_anchor_source());
         assert_shared_hsl_contract(mps_trailing_martingale_source());
+        assert_directional_hsl_accounting_contract(mps_ema_anchor_source());
+        assert_directional_hsl_accounting_contract(mps_trailing_martingale_source());
     }
 
     #[test]
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert_shared_hsl_contract(source);
+        assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
         assert!(source.contains("constant int SCALAR_COLS = 62"));
@@ -236,6 +252,7 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert_shared_hsl_contract(source);
+        assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
         assert!(source.contains("constant int SIDE_PARAMS = 51"));
         assert!(source.contains("struct HslState"));

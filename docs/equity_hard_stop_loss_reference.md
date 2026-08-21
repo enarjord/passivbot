@@ -128,7 +128,9 @@ These are the main parity surfaces that should be reviewed together:
    - One shared Rust-owned Metal HSL controller is composed into both EMA Anchor and Trailing Martingale directional kernels
    - Unified, pside, and coin signal modes use explicit encoded identities instead of a coin/non-coin boolean
    - Deterministic M3 conformance coverage compares Metal drawdown, EMA, tier, active-RED, latch, and RED-finalization traces against the exact Rust runtime for all three signal modes and restart policies
-   - The supported GPU scope remains one enabled side and one coin; dual-side, multi-coin, and per-coin-override HSL still fail closed
+   - One-sided runs support unified, pside, and coin signals; dual-side runs support pside and coin signals with independent directional realized-PnL state
+   - Dual-side unified HSL remains fail closed because the documented account-wide episode-finalization scope and current exact-backtest per-side flat confirmation disagree
+   - Multi-coin and per-coin-override HSL still fail closed
 
 ### Confirmed Gaps / Risks
 
@@ -140,7 +142,8 @@ These are the main parity surfaces that should be reviewed together:
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 3. GPU HSL topology is intentionally narrow
-   - Dual-side and multi-coin HSL need a shared-balance portfolio controller before they can be screened safely
+   - Dual-side unified HSL needs one resolved account-wide exact-Rust flatten contract before it can be screened safely
+   - Multi-coin HSL needs a shared-balance portfolio controller before it can be screened safely
    - Per-coin HSL overrides require candidate-local resolved settings in that portfolio controller
 
 ### Missing or Weak Test Coverage
@@ -148,7 +151,7 @@ These are the main parity surfaces that should be reviewed together:
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for dual-side, multi-coin, and per-coin-override HSL scopes
+4. Apple MPS parity for dual-side unified, multi-coin, and per-coin-override HSL scopes
 
 ## Optimizer Work
 

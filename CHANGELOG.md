@@ -4,11 +4,17 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added dual-side single-coin HSL to Apple MPS optimization for EMA Anchor and Trailing
+  Martingale in `coin` and `pside` signal modes, including compatible suites. Metal now tracks
+  realized net PnL independently for long and short while retaining shared account balance and
+  exact Rust validation. Dual-side `unified` HSL remains fail closed until its documented
+  account-wide flatten contract and exact-backtest finalization scope are reconciled; multi-coin
+  and per-coin-override HSL remain unsupported.
+
 - Consolidated the supported one-sided single-coin HSL Apple MPS screening behavior into one
   Rust-owned Metal controller shared by EMA Anchor and Trailing Martingale. Signal modes now use
   explicit unified, pside, and coin identities, with direct M3 trace conformance against the exact
-  Rust HSL runtime. Supported GPU behavior is unchanged; dual-side, multi-coin, and per-coin-
-  override HSL continue to fail closed.
+  Rust HSL runtime. That foundation did not itself expand GPU support.
 
 - Added directional close-fill PnL scoring and limits to Apple MPS optimization:
   `loss_profit_ratio_long`, `loss_profit_ratio_short`, `pnl_ratio_long_short`, and its

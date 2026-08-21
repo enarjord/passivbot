@@ -26,7 +26,10 @@ from optimization.backend_shared import (
 from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
-from optimization.gpu.model import gpu_side_enabled
+from optimization.gpu.model import (
+    gpu_side_enabled,
+    validate_single_coin_hsl_signal_topology,
+)
 from optimization.interrupts import (
     InterruptCheck,
     OptimizerBackendInterrupted,
@@ -988,9 +991,9 @@ def _validate_scope_config(
         if bool(config["bot"][side].get("hsl", {}).get("enabled"))
     ]
     if hsl_enabled_sides:
-        if coin_count != 1 or len(enabled_sides) != 1:
+        if coin_count != 1:
             raise ValueError(
-                "GPU HSL currently requires one enabled side and one backtest coin"
+                "GPU HSL currently requires one backtest coin"
             )
         # The proxy deliberately keeps an all-history candidate-local peak for
         # finite windows. That peak is never below Rust's rolling-window peak,
@@ -1003,11 +1006,9 @@ def _validate_scope_config(
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
-        if signal_mode not in {"coin", "pside", "unified"}:
-            raise ValueError(
-                "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
-                f"unified; got {signal_mode!r}"
-            )
+        validate_single_coin_hsl_signal_topology(
+            signal_mode, enabled_side_count=len(enabled_sides)
+        )
         for side in hsl_enabled_sides:
             hsl = config["bot"][side].get("hsl", {})
             panic_order_type = str(

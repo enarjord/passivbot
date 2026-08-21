@@ -9,6 +9,23 @@ import numpy as np
 GAP_BINS = 128
 GAP_MAX_MINUTES = 4_000_000.0
 MPS_MULTICOIN_MAX_COINS = 64
+HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
+
+
+def validate_single_coin_hsl_signal_topology(
+    signal_mode: str, *, enabled_side_count: int
+) -> None:
+    if signal_mode not in HSL_SIGNAL_MODES:
+        raise ValueError(
+            "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
+            f"unified; got {signal_mode!r}"
+        )
+    if enabled_side_count > 1 and signal_mode == "unified":
+        raise ValueError(
+            "GPU dual-side single-coin HSL currently supports only coin or "
+            "pside signal mode; unified remains fail closed pending an "
+            "account-wide exact-Rust flatten contract"
+        )
 
 EMA_ANCHOR_PARAM_KEYS = (
     "base_qty_pct",
