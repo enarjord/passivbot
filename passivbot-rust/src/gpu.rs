@@ -42,7 +42,7 @@ mod tests {
         let source = mps_ema_anchor_source();
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
-        assert!(source.contains("constant int SCALAR_COLS = 58"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -58,6 +58,8 @@ mod tests {
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));
         assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
+        assert!(source.contains("scalars[so + 58] = profit_sum_long"));
+        assert!(source.contains("scalars[so + 61] = loss_sum_short"));
         assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
@@ -186,7 +188,7 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 58"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -202,6 +204,8 @@ mod tests {
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));
         assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
+        assert!(source.contains("scalars[so + 58] = profit_sum_long"));
+        assert!(source.contains("scalars[so + 61] = loss_sum_short"));
         assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));

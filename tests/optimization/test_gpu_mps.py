@@ -604,7 +604,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 58" in source
+    assert "constant int SCALAR_COLS = 62" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -613,6 +613,8 @@ def test_mps_ema_anchor_shader_smoke():
     assert "scalars[so + 55] = held_sum_min * interval_ms" in source
     assert "scalars[so + 56] = held_count" in source
     assert "scalars[so + 57] = account_recovery_max_min * interval_ms" in source
+    assert "scalars[so + 58] = profit_sum_long" in source
+    assert "scalars[so + 61] = loss_sum_short" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -2554,6 +2556,11 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+    other_side = "short" if side == "long" else "long"
+    assert torch.allclose(output[f"profit_sum_{side}"], output["profit_sum"])
+    assert torch.allclose(output[f"loss_sum_{side}"], output["loss_sum"])
+    assert (output[f"profit_sum_{other_side}"] == 0.0).all()
+    assert (output[f"loss_sum_{other_side}"] == 0.0).all()
 
 
 @pytest.mark.skipif(
@@ -2704,6 +2711,11 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+    other_side = "short" if side == "long" else "long"
+    assert torch.allclose(output[f"profit_sum_{side}"], output["profit_sum"])
+    assert torch.allclose(output[f"loss_sum_{side}"], output["loss_sum"])
+    assert (output[f"profit_sum_{other_side}"] == 0.0).all()
+    assert (output[f"loss_sum_{other_side}"] == 0.0).all()
 
 
 @pytest.mark.skipif(
@@ -3777,6 +3789,13 @@ def test_mps_tm_off_tick_grid_precedes_reducer_for_volume(side):
         grid_pnl + reducer_pnl, abs=3.0e-4
     )
     assert output["loss_sum"].item() == 0.0
+    other_side = "short" if side == "long" else "long"
+    assert output[f"profit_sum_{side}"].item() == pytest.approx(
+        grid_pnl + reducer_pnl, abs=3.0e-4
+    )
+    assert output[f"loss_sum_{side}"].item() == 0.0
+    assert output[f"profit_sum_{other_side}"].item() == 0.0
+    assert output[f"loss_sum_{other_side}"].item() == 0.0
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )

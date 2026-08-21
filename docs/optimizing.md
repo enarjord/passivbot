@@ -350,6 +350,11 @@ multiple same-candle ladder fills, and applies Rust's full-run minimum fill coun
 rules across the same ten minute-position suffix boundaries. The compact daily surface includes
 the complete UTC day containing each suffix boundary, so exact Rust validation and drift gates
 remain authoritative for that screening approximation.
+Gross close-fill loss/profit ratios are supported both in aggregate and separately for long and
+short. `pnl_ratio_long_short` and its `long_short_profit_ratio` alias use each side's signed
+realized PnL and Rust's neutral `0.5` result when combined signed PnL is zero. Directional kernels
+retain the four gross side sums, while one-sided and dual-side multi-coin dispatches preserve the
+same side partition before reduction.
 Full-run fill activity is supported for single-coin and one-sided multi-coin topologies: analysis
 duration; total, entry, close, long, and short counts; their daily rates; entry-to-close ratio; and
 combined or side-specific per-configured-position-slot daily rates. Active fill-day count and ratio

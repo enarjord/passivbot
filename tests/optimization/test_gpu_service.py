@@ -24,6 +24,7 @@ from optimization.gpu.service import (
     _candidate_position_slot_outputs,
     _combine_hedged_multicoin_outputs,
     _directional_entry_initial_metrics,
+    _directional_gross_pnl_outputs,
     _hsl_params,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
@@ -82,12 +83,16 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fills_per_day_per_position_slot_short",
         "fills_per_day_short",
         "fills_top_symbol_share",
+        "long_short_profit_ratio",
+        "loss_profit_ratio_long",
+        "loss_profit_ratio_short",
         "mdg_pnl",
         "mdg_pnl_w",
         "peak_recovery_days_equity_usd",
         "peak_recovery_hours_equity_usd",
         "peak_recovery_days_pnl",
         "peak_recovery_hours_pnl",
+        "pnl_ratio_long_short",
         "sharpe_ratio_pnl",
         "sharpe_ratio_pnl_w",
         "sortino_ratio_pnl",
@@ -138,6 +143,21 @@ def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
         0.5,
         0.75,
     ]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_directional_gross_pnl_outputs_zero_the_inactive_side(side):
+    torch = pytest.importorskip("torch")
+    profit = torch.tensor([7.0])
+    loss = torch.tensor([2.0])
+
+    outputs = _directional_gross_pnl_outputs(side, profit, loss)
+    other_side = "short" if side == "long" else "long"
+
+    assert outputs[f"profit_sum_{side}"] is profit
+    assert outputs[f"loss_sum_{side}"] is loss
+    assert outputs[f"profit_sum_{other_side}"].item() == 0.0
+    assert outputs[f"loss_sum_{other_side}"].item() == 0.0
 
 
 def test_candidate_position_slots_follow_candidate_positions_and_enabledness():
@@ -645,6 +665,10 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["liq_step"].item() == -1
     assert combined["profit_sum"].item() == 40.0
     assert combined["loss_sum"].item() == 10.0
+    assert combined["profit_sum_long"].item() == 20.0
+    assert combined["loss_sum_long"].item() == 5.0
+    assert combined["profit_sum_short"].item() == 20.0
+    assert combined["loss_sum_short"].item() == 5.0
     assert combined["fill_count"].item() == 2.0
     assert combined["fill_count_entry"].item() == 2.0
     assert combined["fill_count_long"].item() == 2.0

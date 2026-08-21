@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-constant int SCALAR_COLS = 58;
+constant int SCALAR_COLS = 62;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 51;
 
@@ -158,6 +158,17 @@ inline void record_gross_pnl(
 ) {
     if (pnl > 0.0f) profit_sum += pnl;
     else loss_sum += fabs(pnl);
+}
+
+inline void record_directional_gross_pnl(
+    float pnl,
+    thread float& profit_sum,
+    thread float& loss_sum,
+    thread float& side_profit_sum,
+    thread float& side_loss_sum
+) {
+    record_gross_pnl(pnl, profit_sum, loss_sum);
+    record_gross_pnl(pnl, side_profit_sum, side_loss_sum);
 }
 
 struct TmSide {
@@ -1411,6 +1422,10 @@ inline void passivbot_single_coin_impl(
     float pnl_recovery_max_min = 0.0f;
     float profit_sum = 0.0f;
     float loss_sum = 0.0f;
+    float profit_sum_long = 0.0f;
+    float loss_sum_long = 0.0f;
+    float profit_sum_short = 0.0f;
+    float loss_sum_short = 0.0f;
     float fill_count = 0.0f;
     float fill_count_entry = 0.0f;
     float fill_count_long = 0.0f;
@@ -1710,7 +1725,10 @@ inline void passivbot_single_coin_impl(
                                 )
                             );
                         }
-                        record_gross_pnl(pnl, profit_sum, loss_sum);
+                        record_directional_gross_pnl(
+                            pnl, profit_sum, loss_sum,
+                            profit_sum_long, loss_sum_long
+                        );
                         balance += pnl - fee;
                         record_realized_net(
                             pnl - fee,
@@ -1755,7 +1773,9 @@ inline void passivbot_single_coin_impl(
                         )
                     );
                 }
-                record_gross_pnl(pnl, profit_sum, loss_sum);
+                record_directional_gross_pnl(
+                    pnl, profit_sum, loss_sum, profit_sum_long, loss_sum_long
+                );
                 balance += pnl - fee;
                 record_realized_net(
                     pnl - fee,
@@ -1812,7 +1832,9 @@ inline void passivbot_single_coin_impl(
                             )
                         );
                     }
-                    record_gross_pnl(pnl, profit_sum, loss_sum);
+                    record_directional_gross_pnl(
+                        pnl, profit_sum, loss_sum, profit_sum_long, loss_sum_long
+                    );
                     balance += pnl - fee;
                     record_realized_net(
                         pnl - fee,
@@ -1892,7 +1914,9 @@ inline void passivbot_single_coin_impl(
                         )
                     );
                 }
-                record_gross_pnl(pnl, profit_sum, loss_sum);
+                record_directional_gross_pnl(
+                    pnl, profit_sum, loss_sum, profit_sum_long, loss_sum_long
+                );
                 balance += pnl - fee;
                 record_realized_net(
                     pnl - fee,
@@ -2207,7 +2231,10 @@ inline void passivbot_single_coin_impl(
                                 )
                             );
                         }
-                        record_gross_pnl(pnl, profit_sum, loss_sum);
+                        record_directional_gross_pnl(
+                            pnl, profit_sum, loss_sum,
+                            profit_sum_short, loss_sum_short
+                        );
                         balance += pnl - fee;
                         record_realized_net(
                             pnl - fee,
@@ -2252,7 +2279,9 @@ inline void passivbot_single_coin_impl(
                         )
                     );
                 }
-                record_gross_pnl(pnl, profit_sum, loss_sum);
+                record_directional_gross_pnl(
+                    pnl, profit_sum, loss_sum, profit_sum_short, loss_sum_short
+                );
                 balance += pnl - fee;
                 record_realized_net(
                     pnl - fee,
@@ -2309,7 +2338,9 @@ inline void passivbot_single_coin_impl(
                             )
                         );
                     }
-                    record_gross_pnl(pnl, profit_sum, loss_sum);
+                    record_directional_gross_pnl(
+                        pnl, profit_sum, loss_sum, profit_sum_short, loss_sum_short
+                    );
                     balance += pnl - fee;
                     record_realized_net(
                         pnl - fee,
@@ -2389,7 +2420,9 @@ inline void passivbot_single_coin_impl(
                         )
                     );
                 }
-                record_gross_pnl(pnl, profit_sum, loss_sum);
+                record_directional_gross_pnl(
+                    pnl, profit_sum, loss_sum, profit_sum_short, loss_sum_short
+                );
                 balance += pnl - fee;
                 record_realized_net(
                     pnl - fee,
@@ -2982,6 +3015,10 @@ inline void passivbot_single_coin_impl(
     scalars[so + 55] = held_sum_min * interval_ms;
     scalars[so + 56] = held_count;
     scalars[so + 57] = account_recovery_max_min * interval_ms;
+    scalars[so + 58] = profit_sum_long;
+    scalars[so + 59] = loss_sum_long;
+    scalars[so + 60] = profit_sum_short;
+    scalars[so + 61] = loss_sum_short;
 }
 
 kernel void passivbot_trailing_martingale(

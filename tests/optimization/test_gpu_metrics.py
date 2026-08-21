@@ -11,6 +11,7 @@ from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
     _equity_shape_metrics,
+    _directional_pnl_metrics,
     _fill_activity_metrics,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
@@ -69,6 +70,25 @@ def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
 
     assert actual.tolist() == [0.25, 1_000.0, 1.0, 1_000.0]
     assert "loss_profit_ratio" in SUPPORTED_METRICS
+
+
+def test_directional_pnl_metrics_match_rust_neutral_and_alias_contracts():
+    metrics = _directional_pnl_metrics(
+        {
+            "profit_sum_long": torch.tensor([100.0, 0.0, 0.0]),
+            "loss_sum_long": torch.tensor([25.0, 5.0, 0.0]),
+            "profit_sum_short": torch.tensor([50.0, 0.0, 0.0]),
+            "loss_sum_short": torch.tensor([75.0, 0.0, 0.0]),
+        }
+    )
+
+    assert metrics["loss_profit_ratio_long"].tolist() == [0.25, 1_000.0, 1.0]
+    assert metrics["loss_profit_ratio_short"].tolist() == [1.5, 1.0, 1.0]
+    assert metrics["pnl_ratio_long_short"].tolist() == [1.5, 1.0, 0.5]
+    assert torch.equal(
+        metrics["long_short_profit_ratio"], metrics["pnl_ratio_long_short"]
+    )
+    assert set(metrics) <= set(SUPPORTED_METRICS)
 
 
 def test_equity_shape_metrics_match_rust_daily_series_contract():
