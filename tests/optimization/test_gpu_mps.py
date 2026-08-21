@@ -1083,6 +1083,213 @@ kernel void passivbot_hsl_coin_fill_peak(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_joint_multicoin_account_feeds_exact_pside_hsl_scopes():
+    import passivbot_rust
+
+    trace_kernel = r"""
+kernel void passivbot_joint_multicoin_account_trace(
+    device const float* samples [[buffer(0)]],
+    constant float* params [[buffer(1)]],
+    constant float* settings [[buffer(2)]],
+    constant int* sizes [[buffer(3)]],
+    device float* output [[buffer(4)]],
+    uint b [[thread_position_in_grid]]
+) {
+    const int N = sizes[0];
+    const int SAMPLE_COLS = 8;
+    const int HSL_PARAM_COLS = 11;
+    const int OUTPUT_COLS = 13;
+    if (b > 0) return;
+    JointPortfolioAccount account = init_joint_portfolio_account(settings[0]);
+    HslState long_hsl = load_hsl(params, 0, 0);
+    HslState short_hsl = load_hsl(params, HSL_PARAM_COLS, 0);
+    for (int k = 0; k < N; ++k) {
+        const int si = k * SAMPLE_COLS;
+        // Exact Rust check_for_fills() completes the long-side pass before
+        // the short-side pass for every candle.
+        record_joint_portfolio_fill(account, samples[si + 0], true);
+        record_joint_portfolio_fill(account, samples[si + 1], false);
+        float long_unreal = samples[si + 2];
+        float short_unreal = samples[si + 3];
+        float equity = joint_portfolio_equity(
+            account, long_unreal, short_unreal
+        );
+        bool can_generate = joint_portfolio_can_generate(
+            account, equity, settings[1]
+        );
+        bool long_unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+        bool short_unified = short_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+        HslSignal long_signal;
+        HslSignal short_signal;
+        bool long_valid = can_generate && derive_hsl_signal(
+            long_hsl,
+            account.balance,
+            settings[0],
+            joint_hsl_realized_pnl(account, long_unified, true),
+            joint_hsl_unrealized_pnl(
+                long_unreal, short_unreal, long_unified, true
+            ),
+            long_signal
+        );
+        bool short_valid = can_generate && derive_hsl_signal(
+            short_hsl,
+            account.balance,
+            settings[0],
+            joint_hsl_realized_pnl(account, short_unified, false),
+            joint_hsl_unrealized_pnl(
+                long_unreal, short_unreal, short_unified, false
+            ),
+            short_signal
+        );
+        if (long_valid) {
+            update_hsl_from_signal(
+                long_hsl,
+                long_signal,
+                account.realized_pnl_long,
+                samples[si + 4] > 0.5f,
+                samples[si + 6] > 0.5f,
+                float(k),
+                settings[2]
+            );
+        }
+        if (short_valid) {
+            update_hsl_from_signal(
+                short_hsl,
+                short_signal,
+                account.realized_pnl_short,
+                samples[si + 5] > 0.5f,
+                samples[si + 7] > 0.5f,
+                float(k),
+                settings[2]
+            );
+        }
+        const int oi = k * OUTPUT_COLS;
+        output[oi + 0] = account.balance;
+        output[oi + 1] = account.realized_pnl_total;
+        output[oi + 2] = account.realized_pnl_peak;
+        output[oi + 3] = account.realized_pnl_long;
+        output[oi + 4] = account.realized_pnl_short;
+        output[oi + 5] = equity;
+        output[oi + 6] = can_generate ? 1.0f : 0.0f;
+        output[oi + 7] = long_valid ? long_signal.drawdown_raw : -1.0f;
+        output[oi + 8] = long_hsl.drawdown_ema;
+        output[oi + 9] = float(long_hsl.tier);
+        output[oi + 10] = short_valid ? short_signal.drawdown_raw : -1.0f;
+        output[oi + 11] = short_hsl.drawdown_ema;
+        output[oi + 12] = float(short_hsl.tier);
+    }
+}
+"""
+    source = passivbot_rust.mps_ema_anchor_multicoin_source_py() + trace_kernel
+    library = torch.mps.compile_shader(source)
+
+    starting_balance = 1_000.0
+    samples = np.array(
+        [
+            [-2.0, -3.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+            [12.0, -5.0, -20.0, -10.0, 1.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, -80.0, -40.0, 1.0, 1.0, 0.0, 0.0],
+            [-30.0, 20.0, -120.0, -5.0, 1.0, 1.0, 0.0, 0.0],
+            [5.0, 5.0, -10.0, -80.0, 1.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, -950.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    hsl_params = np.array(
+        [1.0, 0.1, 2.0, 0.0, 1.0, 0.0, 0.5, 0.75, 0.0, 1.0, 1.0],
+        dtype=np.float32,
+    )
+    output = torch.zeros(
+        (len(samples), 13), dtype=torch.float32, device="mps"
+    )
+    library.passivbot_joint_multicoin_account_trace(
+        torch.as_tensor(samples, dtype=torch.float32, device="mps").contiguous(),
+        torch.as_tensor(
+            np.concatenate([hsl_params, hsl_params]),
+            dtype=torch.float32,
+            device="mps",
+        ).contiguous(),
+        torch.tensor(
+            [starting_balance, 100.0, 60_000.0],
+            dtype=torch.float32,
+            device="mps",
+        ),
+        torch.tensor([len(samples)], dtype=torch.int32, device="mps"),
+        output,
+        threads=(1, 1, 1),
+    )
+    actual = output.cpu().numpy()
+
+    realized_long = np.cumsum(samples[:, 0], dtype=np.float64)
+    realized_short = np.cumsum(samples[:, 1], dtype=np.float64)
+    realized_total = realized_long + realized_short
+    balance = starting_balance + realized_total
+    equity = balance + samples[:, 2] + samples[:, 3]
+    np.testing.assert_allclose(actual[:, 0], balance, atol=2.0e-5)
+    np.testing.assert_allclose(actual[:, 1], realized_total, atol=2.0e-5)
+    intraminute_realized_peak = []
+    running_realized = 0.0
+    running_peak = 0.0
+    for long_fill, short_fill in samples[:, :2]:
+        # Rust completes all long fills before starting the short pass. The
+        # loss budget retains a peak reached between those two side passes.
+        running_realized += float(long_fill)
+        running_peak = max(running_peak, running_realized)
+        running_realized += float(short_fill)
+        running_peak = max(running_peak, running_realized)
+        intraminute_realized_peak.append(running_peak)
+    np.testing.assert_allclose(
+        actual[:, 2], intraminute_realized_peak,
+        atol=2.0e-5,
+    )
+    np.testing.assert_allclose(actual[:, 3], realized_long, atol=2.0e-5)
+    np.testing.assert_allclose(actual[:, 4], realized_short, atol=2.0e-5)
+    np.testing.assert_allclose(actual[:, 5], equity, atol=2.0e-5)
+    assert actual[:, 6].tolist() == [1.0] * (len(samples) - 1) + [0.0]
+
+    tier_ids = {"green": 0.0, "yellow": 1.0, "orange": 2.0, "red": 3.0}
+    for side_index, (realized, unrealized) in enumerate(
+        (
+            (realized_long, samples[:, 2]),
+            (realized_short, samples[:, 3]),
+        )
+    ):
+        runtime = passivbot_rust.EquityHardStopRuntime()
+        peak_strategy_pnl = float("-inf")
+        base_column = 7 if side_index == 0 else 10
+        for k, (realized_pnl, unrealized_pnl) in enumerate(
+            zip(realized, unrealized)
+        ):
+            if not bool(actual[k, 6]):
+                assert actual[k, base_column] == -1.0
+                continue
+            strategy_pnl = float(realized_pnl + unrealized_pnl)
+            peak_strategy_pnl = max(peak_strategy_pnl, strategy_pnl)
+            strategy_equity = starting_balance + strategy_pnl
+            peak_strategy_equity = max(
+                starting_balance + peak_strategy_pnl, strategy_equity
+            )
+            exact = runtime.apply_sample(
+                timestamp_ms=k * 60_000,
+                equity=strategy_equity,
+                peak_strategy_equity=peak_strategy_equity,
+                red_threshold=0.1,
+                ema_span_minutes=2.0,
+                tier_ratio_yellow=0.5,
+                tier_ratio_orange=0.75,
+            )
+            assert actual[k, base_column] == pytest.approx(
+                exact["drawdown_raw"], abs=2.0e-6
+            )
+            assert actual[k, base_column + 1] == pytest.approx(
+                exact["drawdown_ema"], abs=2.0e-6
+            )
+            assert actual[k, base_column + 2] == tier_ids[exact["tier"]]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_shared_hsl_trace_matches_exact_rust():
     import passivbot_rust
 
