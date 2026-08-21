@@ -60,6 +60,8 @@ SUPPORTED_METRICS = (
     "omega_ratio_strategy_eq_w",
     "position_held_days_max",
     "position_held_hours_max",
+    "position_unchanged_days_max",
+    "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
@@ -821,6 +823,12 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]
         )
+    if {"position_unchanged_days_max", "position_unchanged_hours_max"} & requested:
+        position_unchanged_hours_max = (
+            out["position_unchanged_max_ms"] / 3_600_000.0
+        )
+        objectives["position_unchanged_hours_max"] = position_unchanged_hours_max
+        objectives["position_unchanged_days_max"] = position_unchanged_hours_max / 24.0
     objectives.update(fill_gap_metrics)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)

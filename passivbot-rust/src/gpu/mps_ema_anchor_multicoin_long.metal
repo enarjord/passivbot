@@ -6,7 +6,7 @@ constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 6;
-constant int SCALAR_COLS = 20;
+constant int SCALAR_COLS = 21;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -292,6 +292,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float twel_close_qty[MAX_COINS];
     float unstuck_close_qty[MAX_COINS];
     float position_open_k[MAX_COINS];
+    float position_last_fill_k[MAX_COINS];
     float score[MAX_COINS];
     float contribution[MAX_COINS];
     float minimum_entry[MAX_COINS];
@@ -336,6 +337,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         twel_close_qty[c] = 0.0f;
         unstuck_close_qty[c] = 0.0f;
         position_open_k[c] = -1.0f;
+        position_last_fill_k[c] = -1.0f;
         score[c] = -INFINITY;
         contribution[c] = 0.0f;
         minimum_entry[c] = 0.0f;
@@ -391,6 +393,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
     float held_max_min = 0.0f;
+    float position_unchanged_max_min = 0.0f;
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -547,6 +550,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 day_volume += fabs(adjusted) * fill_price * c_mult / balance;
                 entry_qty[c] = 0.0f;
                 any_fill = true;
+            }
+            if (executed_close || filled_entry) {
+                if (position_last_fill_k[c] >= 0.0f) {
+                    position_unchanged_max_min = fmax(
+                        position_unchanged_max_min,
+                        float(k) - position_last_fill_k[c]
+                    );
+                }
+                position_last_fill_k[c] = psize[c] > 0.0f ? float(k) : -1.0f;
             }
         }
         if (any_fill) {
@@ -1438,6 +1450,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
         if (position_open_k[c] >= 0.0f && last_eq_k >= 0.0f) {
             held_max_min = fmax(held_max_min, last_eq_k - position_open_k[c]);
         }
+        if (position_last_fill_k[c] >= 0.0f && last_eq_k >= 0.0f) {
+            position_unchanged_max_min = fmax(
+                position_unchanged_max_min,
+                last_eq_k - position_last_fill_k[c]
+            );
+        }
     }
     int scalar_offset = int(b) * SCALAR_COLS;
     scalars[scalar_offset + 0] = max_dd;
@@ -1464,6 +1482,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 16] = short_side ? total_cost : 0.0f;
     scalars[scalar_offset + 18] = profit_sum;
     scalars[scalar_offset + 19] = loss_sum;
+    scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
 }
 
 kernel void passivbot_ema_anchor_multicoin(

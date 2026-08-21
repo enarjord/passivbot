@@ -42,9 +42,10 @@ mod tests {
         let source = mps_ema_anchor_source();
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
-        assert!(source.contains("constant int SCALAR_COLS = 45"));
+        assert!(source.contains("constant int SCALAR_COLS = 46"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
+        assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -108,9 +109,11 @@ mod tests {
         assert!(source.contains("constant int COIN_COLS = 11"));
         assert!(source.contains("constant int DAILY_COLS = 6"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 20"));
+        assert!(source.contains("constant int SCALAR_COLS = 21"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
+        assert!(source
+            .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
@@ -144,9 +147,10 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 45"));
+        assert!(source.contains("constant int SCALAR_COLS = 46"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
+        assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
@@ -249,9 +253,11 @@ mod tests {
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 48"));
         assert!(source.contains("constant int OVERRIDE_COLS = 34"));
-        assert!(source.contains("constant int SCALAR_COLS = 20"));
+        assert!(source.contains("constant int SCALAR_COLS = 21"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
+        assert!(source
+            .contains("scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms"));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("twel_enforcer_enabled"));

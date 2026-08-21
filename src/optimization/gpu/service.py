@@ -31,6 +31,7 @@ CORE_OUTPUT_KEYS = {
     "day_min_balance",
     "max_dd",
     "held_max_ms",
+    "position_unchanged_max_ms",
     "gap_hist",
     "gap_max_ms",
     "first_fill_ts",
@@ -350,6 +351,9 @@ def _combine_hedged_multicoin_outputs(
     ) & active
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
+    combined["position_unchanged_max_ms"] = long[
+        "position_unchanged_max_ms"
+    ].maximum(short["position_unchanged_max_ms"])
     combined["gap_hist"] = long["gap_hist"] + short["gap_hist"]
     combined["gap_max_ms"] = long["gap_max_ms"].maximum(short["gap_max_ms"])
     combined["first_fill_ts"] = _nan_min(

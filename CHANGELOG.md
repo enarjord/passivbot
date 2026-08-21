@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `position_unchanged_hours_max` and `position_unchanged_days_max` scoring and limits to
+  Apple MPS optimization for EMA
+  Anchor and Trailing Martingale across long, short, dual-side, single-coin, multi-coin, and
+  compatible suite runs. Metal tracks the latest fill separately for each coin and position side,
+  including the open tail to the final analyzed sample. Dual-side multi-coin runs reject both held-
+  and unchanged-duration metrics because independent directional maxima cannot be truncated at a
+  shared portfolio liquidation; exact Rust validation and drift gates remain authoritative.
+
 - Added Apple MPS optimizer scoring and limits for `position_held_hours_max` and
   `peak_recovery_hours_strategy_eq`, including its legacy `peak_recovery_hours_hsl` alias. These
   are exact hour-denominated views of the already supported Rust-compatible duration metrics and

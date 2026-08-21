@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 5;
-constant int SCALAR_COLS = 45;
+constant int SCALAR_COLS = 46;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 51;
 
@@ -1388,6 +1388,9 @@ inline void passivbot_single_coin_impl(
     bool alive = true;
     int liq_day = -1;
     float held_max_min = 0.0f;
+    float position_unchanged_max_min = 0.0f;
+    float long_position_last_fill_k = -1.0f;
+    float short_position_last_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float first_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -2340,6 +2343,23 @@ inline void passivbot_single_coin_impl(
             short_side.entry_qty = 0.0f;
         }
 
+        if (long_close_fill || long_entry_fill) {
+            if (long_position_last_fill_k >= 0.0f) {
+                position_unchanged_max_min = fmax(
+                    position_unchanged_max_min, kf - long_position_last_fill_k
+                );
+            }
+            long_position_last_fill_k = long_side.psize > 0.0f ? kf : -1.0f;
+        }
+        if (short_close_fill || short_entry_fill) {
+            if (short_position_last_fill_k >= 0.0f) {
+                position_unchanged_max_min = fmax(
+                    position_unchanged_max_min, kf - short_position_last_fill_k
+                );
+            }
+            short_position_last_fill_k = short_side.psize > 0.0f ? kf : -1.0f;
+        }
+
         bool any_fill = long_close_fill || long_entry_fill
             || short_close_fill || short_entry_fill;
         if (any_fill) {
@@ -2651,6 +2671,16 @@ inline void passivbot_single_coin_impl(
     if (short_side.pos_open_k >= 0.0f && last_eq_k >= 0.0f) {
         held_max_min = fmax(held_max_min, last_eq_k - short_side.pos_open_k);
     }
+    if (long_position_last_fill_k >= 0.0f && last_eq_k >= 0.0f) {
+        position_unchanged_max_min = fmax(
+            position_unchanged_max_min, last_eq_k - long_position_last_fill_k
+        );
+    }
+    if (short_position_last_fill_k >= 0.0f && last_eq_k >= 0.0f) {
+        position_unchanged_max_min = fmax(
+            position_unchanged_max_min, last_eq_k - short_position_last_fill_k
+        );
+    }
     int so = int(b) * SCALAR_COLS;
     scalars[so + 0] = max_dd;
     scalars[so + 1] = held_max_min * interval_ms;
@@ -2737,6 +2767,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 42] = panic_drawdown_count;
     scalars[so + 43] = profit_sum;
     scalars[so + 44] = loss_sum;
+    scalars[so + 45] = position_unchanged_max_min * interval_ms;
 }
 
 kernel void passivbot_trailing_martingale(
