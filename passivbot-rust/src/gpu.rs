@@ -8,6 +8,8 @@ use std::sync::LazyLock;
 
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
+const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
+const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
 const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
 const MPS_TRAILING_MARTINGALE_BODY: &str =
     include_str!("gpu/mps_trailing_martingale_directional.metal");
@@ -24,14 +26,23 @@ fn compose_hsl_source(body: &str) -> String {
     body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
 }
 
+fn compose_multicoin_source(body: &str) -> String {
+    assert_eq!(
+        body.matches(MPS_MULTICOIN_MARKER).count(),
+        1,
+        "MPS multi-coin source must contain exactly one shared-common marker"
+    );
+    compose_hsl_source(&body.replacen(MPS_MULTICOIN_MARKER, MPS_MULTICOIN_COMMON_SOURCE, 1))
+}
+
 pub static MPS_EMA_ANCHOR_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_hsl_source(MPS_EMA_ANCHOR_BODY));
 pub static MPS_EMA_ANCHOR_MULTICOIN_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_hsl_source(MPS_EMA_ANCHOR_MULTICOIN_BODY));
+    LazyLock::new(|| compose_multicoin_source(MPS_EMA_ANCHOR_MULTICOIN_BODY));
 pub static MPS_TRAILING_MARTINGALE_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_hsl_source(MPS_TRAILING_MARTINGALE_BODY));
 pub static MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE: LazyLock<String> =
-    LazyLock::new(|| compose_hsl_source(MPS_TRAILING_MARTINGALE_MULTICOIN_BODY));
+    LazyLock::new(|| compose_multicoin_source(MPS_TRAILING_MARTINGALE_MULTICOIN_BODY));
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE.as_str()
@@ -74,6 +85,26 @@ mod tests {
         assert!(source.contains("constant int HSL_SIGNAL_PSIDE = 1"));
         assert!(source.contains("constant int HSL_SIGNAL_COIN = 2"));
         assert!(source.contains("int ho = po + hsl_param_offset"));
+    }
+
+    fn assert_shared_multicoin_contract(source: &str) {
+        assert!(!source.contains(MPS_MULTICOIN_MARKER));
+        assert!(source.contains(MPS_MULTICOIN_COMMON_SOURCE));
+        for signature in [
+            "inline float round_step(",
+            "inline float ceil_step(",
+            "inline float floor_step(",
+            "inline float min_entry_qty(",
+            "inline bool finite_positive(",
+            "inline float float32_floor_nonnegative(",
+            "inline void record_realized_net(",
+            "inline void record_gross_pnl(",
+            "inline float coin_override_or(",
+            "inline float allowed_wallet_exposure_limit(",
+            "inline float clamped_market_price(",
+        ] {
+            assert_eq!(source.matches(signature).count(), 1, "{signature}");
+        }
     }
 
     fn assert_directional_hsl_accounting_contract(source: &str) {
@@ -185,6 +216,7 @@ mod tests {
     fn ema_anchor_multicoin_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_multicoin_source();
         assert_shared_hsl_contract(source);
+        assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
@@ -407,6 +439,7 @@ mod tests {
     fn trailing_martingale_multicoin_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_multicoin_source();
         assert_shared_hsl_contract(source);
+        assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
