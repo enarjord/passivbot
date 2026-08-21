@@ -74,6 +74,8 @@ SUPPORTED_METRICS = (
     "strategy_eq_recovery_days_max",
     "strategy_eq_underwater_pct_mean",
     "strategy_eq_underwater_pct_median",
+    "total_wallet_exposure_max",
+    "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
 )
 
@@ -825,6 +827,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]
         )
+    for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean"):
+        if name in requested:
+            objectives[name] = out[name].to(torch.float64)
     if {"position_unchanged_days_max", "position_unchanged_hours_max"} & requested:
         position_unchanged_hours_max = (
             out["position_unchanged_max_ms"] / 3_600_000.0

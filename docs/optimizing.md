@@ -184,6 +184,12 @@ The supported slice is intentionally narrow:
   tail through the final analyzed sample. Dual-side multi-coin runs fail closed for both unchanged-
   and held-duration maxima because independent directional summaries cannot truncate a pre-reduced
   maximum at shared portfolio liquidation; exact Rust validation remains authoritative
+- `total_wallet_exposure_max` and `total_wallet_exposure_mean` may be used for scoring and limits
+  in single-coin and one-sided multi-coin runs. Metal samples absolute net long-minus-short wallet
+  exposure after every non-liquidating equity update, including flat zero-exposure samples, and
+  reduces it with bounded maximum and online-mean accumulators. Dual-side multi-coin runs fail
+  closed because independent directional kernels cannot reconstruct the shared minute-level net
+  exposure series
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
@@ -232,10 +238,11 @@ screening also rejects `fills_gap_longest_days`,
 `strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
 `entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
 `position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
-`position_unchanged_hours_max`, and `volume_pct_per_day_avg`: the independent directional
+`position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and
+`volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
-effective coin counts and duration maxima truncated at shared portfolio liquidation, or fill volume
-normalized by the shared balance safely.
+effective coin counts and duration maxima truncated at shared portfolio liquidation, minute-level
+net exposure, or fill volume normalized by the shared balance safely.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer

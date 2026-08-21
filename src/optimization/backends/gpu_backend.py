@@ -1058,6 +1058,8 @@ def _validate_dual_multicoin_metrics(
             "position_unchanged_days_max",
             "position_unchanged_hours_max",
             "strategy_eq_recovery_days_max",
+            "total_wallet_exposure_max",
+            "total_wallet_exposure_mean",
             "volume_pct_per_day_avg",
         }
     )

@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 5;
-constant int SCALAR_COLS = 48;
+constant int SCALAR_COLS = 50;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -1109,6 +1109,9 @@ inline void passivbot_single_coin_impl(
     float gap_max_min = 0.0f;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
+    float total_wallet_exposure_max = 0.0f;
+    float total_wallet_exposure_mean = 0.0f;
+    float total_wallet_exposure_samples = 0.0f;
     float last_high_k = -1.0f;
     float recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
@@ -1680,6 +1683,20 @@ inline void passivbot_single_coin_impl(
             day_min = fmin(day_min, eqf);
             day_dd = fmax(day_dd, dd);
             day_touched = true;
+            if (!liq) {
+                float twe_net = (
+                    long_side.psize * long_side.pprice
+                    - short_side.psize * short_side.pprice
+                ) * c_mult / balance;
+                float twe_abs = fabs(twe_net);
+                total_wallet_exposure_samples += 1.0f;
+                total_wallet_exposure_mean += (
+                    twe_abs - total_wallet_exposure_mean
+                ) / total_wallet_exposure_samples;
+                total_wallet_exposure_max = fmax(
+                    total_wallet_exposure_max, twe_abs
+                );
+            }
             if (liq) {
                 liq_day = di;
                 alive = false;
@@ -1803,6 +1820,8 @@ inline void passivbot_single_coin_impl(
         ? long_side.allowed_wel * long_side.base_qty_pct : 0.0f;
     scalars[so + 47] = short_enabled
         ? short_side.allowed_wel * short_side.base_qty_pct : 0.0f;
+    scalars[so + 48] = total_wallet_exposure_max;
+    scalars[so + 49] = total_wallet_exposure_mean;
 }
 
 kernel void passivbot_ema_anchor(
