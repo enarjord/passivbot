@@ -50,6 +50,19 @@ UNSTUCK_PARAM_KEYS = (
     "unstuck_threshold",
 )
 
+HSL_PARAM_KEYS = (
+    "hsl_enabled",
+    "hsl_red_threshold",
+    "hsl_ema_span_minutes",
+    "hsl_cooldown_minutes_after_red",
+    "hsl_no_restart_drawdown_threshold",
+    "hsl_restart_policy",
+    "hsl_tier_ratio_yellow",
+    "hsl_tier_ratio_orange",
+    "hsl_orange_graceful_stop",
+    "hsl_signal_coin",
+)
+
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     "twel_enforcer_reduce_portfolio",
@@ -63,6 +76,7 @@ EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
     *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
+    *HSL_PARAM_KEYS,
 )
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
@@ -115,6 +129,7 @@ TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
+    *HSL_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (

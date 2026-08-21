@@ -104,6 +104,12 @@ _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES = {
     "unstuck_threshold": "unstuck_threshold",
 }
 
+_SINGLE_COIN_HSL_BOUND_SUFFIXES = {
+    "hsl_cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",
+    "hsl_ema_span_minutes": "hsl_ema_span_minutes",
+    "hsl_red_threshold": "hsl_red_threshold",
+}
+
 EMA_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
@@ -121,6 +127,11 @@ EMA_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
     },
 }
 
@@ -203,6 +214,11 @@ TRAILING_MARTINGALE_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_HSL_BOUND_SUFFIXES.items()
     },
 }
 
@@ -453,14 +469,6 @@ def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
         ),
         eliminate_duplicates=bool(shared["eliminate_duplicates"]),
     )
-
-PINNED_SCOPE_BOUND_VALUES = {
-    f"{side}_{suffix}": expected
-    for side in ("long", "short")
-    for suffix, expected in {
-        "hsl_enabled": 0.0,
-    }.items()
-}
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
     "balance_sample_divider",
@@ -959,10 +967,36 @@ def _validate_scope_config(
         enabled_sides=enabled_sides,
         coin_count=coin_count,
     )
+    hsl_enabled_sides = [
+        side
+        for side in enabled_sides
+        if bool(config["bot"][side].get("hsl", {}).get("enabled"))
+    ]
+    if hsl_enabled_sides:
+        if coin_count != 1 or len(enabled_sides) != 1:
+            raise ValueError(
+                "GPU HSL currently requires one enabled side and one backtest coin"
+            )
+        signal_mode = str(
+            config.get("live", {}).get("hsl_signal_mode", "unified")
+        ).strip().lower()
+        if signal_mode not in {"coin", "pside", "unified"}:
+            raise ValueError(
+                "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
+                f"unified; got {signal_mode!r}"
+            )
+        for side in hsl_enabled_sides:
+            hsl = config["bot"][side].get("hsl", {})
+            panic_order_type = str(
+                hsl.get("panic_close_order_type", "limit")
+            ).strip().lower()
+            if panic_order_type != "limit":
+                raise ValueError(
+                    f"GPU HSL currently requires bot.{side}.hsl."
+                    "panic_close_order_type=limit"
+                )
     for side in enabled_sides:
         side_config = config["bot"][side]
-        if bool(side_config.get("hsl", {}).get("enabled")):
-            raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
         risk = side_config.get("risk", {})
         required_disabled = []
         if strategy_kind != "trailing_martingale":
@@ -2230,7 +2264,11 @@ def _validate_pinned_scope_bounds(
     strategy_kind: str | None = None,
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
-    pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    pinned = {}
+    if coin_count != 1 or len(enabled_sides) != 1:
+        pinned.update(
+            {f"{side}_hsl_enabled": 0.0 for side in ("long", "short")}
+        )
     if coin_count > 1 and len(enabled_sides) == 2:
         pinned.update(
             {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
@@ -2833,8 +2871,12 @@ def run_backend(
             # Forager ranking cannot affect a one-coin backtest.
             continue
         if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
-            # HSL remains disabled, so its dormant bounds affect neither path.
-            continue
+            bound_side = bound_key.split("_", 1)[0]
+            if not bool(
+                config["bot"][bound_side].get("hsl", {}).get("enabled")
+            ):
+                # Dormant HSL bounds affect neither proxy nor exact Rust.
+                continue
         if max_coin_count > 1 and len(enabled_sides) == 2 and any(
             bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
         ):

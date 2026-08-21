@@ -18,6 +18,7 @@ from optimization.gpu.service import (
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
     _combine_hedged_multicoin_outputs,
+    _hsl_params,
     _position_exposure_enforcer_params,
     _require_complete_valid_tail,
     _single_coin_exposure_params,
@@ -126,6 +127,36 @@ def test_single_coin_unstuck_packs_exact_rust_inputs():
         "unstuck_ema_dist": -0.01,
         "unstuck_loss_allowance_pct": 0.02,
         "unstuck_threshold": 0.85,
+    }
+
+
+def test_single_coin_hsl_packs_state_machine_inputs():
+    packed = _hsl_params(
+        {
+            "hsl_enabled": True,
+            "hsl_red_threshold": 0.2,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 120.0,
+            "hsl_no_restart_drawdown_threshold": 0.8,
+            "hsl_restart_after_red_policy": "threshold",
+            "hsl_tier_ratio_yellow": 0.5,
+            "hsl_tier_ratio_orange": 0.75,
+            "hsl_orange_tier_mode": "graceful_stop",
+        },
+        signal_mode="coin",
+    )
+
+    assert packed == {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.2,
+        "hsl_ema_span_minutes": 60.0,
+        "hsl_cooldown_minutes_after_red": 120.0,
+        "hsl_no_restart_drawdown_threshold": 0.8,
+        "hsl_restart_policy": 1.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 1.0,
+        "hsl_signal_coin": 1.0,
     }
 
 

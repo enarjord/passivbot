@@ -380,6 +380,9 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
         "unstuck_ema_dist",
         "unstuck_loss_allowance_pct",
         "unstuck_threshold",
+        "hsl_cooldown_minutes_after_red",
+        "hsl_ema_span_minutes",
+        "hsl_red_threshold",
     }
 
     assert set(TRAILING_MARTINGALE_BOUND_MAP) == {
@@ -1378,10 +1381,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
             "trailing_martingale",
         ),
         (
-            lambda config: config["bot"]["long"]["hsl"].__setitem__("enabled", True),
-            "hsl",
-        ),
-        (
             lambda config: config["backtest"].__setitem__(
                 "btc_collateral_cap", 0.5
             ),
@@ -1411,6 +1410,41 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_accepts_one_sided_single_coin_hsl():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_hsl_fails_closed_for_market_panic_close():
+    config = _long_only_ema_config()
+    config["bot"]["long"]["hsl"].update(
+        {"enabled": True, "panic_close_order_type": "market"}
+    )
+
+    with pytest.raises(ValueError, match="panic_close_order_type=limit"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_hsl_fails_closed_for_dual_side_single_coin():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="one enabled side"):
+        _validate_scope(config, _Evaluator())
+
+
+def test_gpu_hsl_fails_closed_for_multicoin():
+    config = _long_only_ema_config()
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "XRP"]
+    config["bot"]["long"]["risk"]["n_positions"] = 3
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="one backtest coin"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
