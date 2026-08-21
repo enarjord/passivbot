@@ -145,6 +145,31 @@ mod tests {
     }
 
     #[test]
+    fn multicoin_kernels_route_every_fill_through_joint_account_state() {
+        for (body, expected_fill_paths) in [
+            (MPS_EMA_ANCHOR_MULTICOIN_BODY, 2),
+            (MPS_TRAILING_MARTINGALE_MULTICOIN_BODY, 4),
+        ] {
+            assert!(body.contains(
+                "JointPortfolioAccount account = init_joint_portfolio_account(starting_balance)"
+            ));
+            assert!(body.contains("thread float& balance = account.balance"));
+            assert!(body
+                .contains("thread float& realized_pnl_cumsum_last = account.realized_pnl_total"));
+            assert!(
+                body.contains("thread float& realized_pnl_cumsum_max = account.realized_pnl_peak")
+            );
+            assert_eq!(
+                body.matches("record_realized_net(").count(),
+                expected_fill_paths
+            );
+            assert!(!body.contains("float balance = starting_balance"));
+            assert!(!body.contains("balance += net_pnl"));
+            assert!(!body.contains("balance -= fee"));
+        }
+    }
+
+    #[test]
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert_shared_hsl_contract(source);
