@@ -408,7 +408,7 @@ def _require_no_internal_invalid_hsl_candles(
 
 
 def _require_no_internal_invalid_multicoin_hsl_candles(
-    hlcvs, *, first_valid_indices, last_valid_indices
+    hlcvs, *, hsl_enabled_coins, first_valid_indices, last_valid_indices
 ) -> None:
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
@@ -417,12 +417,17 @@ def _require_no_internal_invalid_multicoin_hsl_candles(
         )
     coin_count = values.shape[1]
     if not (
-        len(first_valid_indices) == len(last_valid_indices) == coin_count
+        len(hsl_enabled_coins)
+        == len(first_valid_indices)
+        == len(last_valid_indices)
+        == coin_count
     ):
         raise ValueError(
             "MPS multi-coin HSL valid-index counts must match the coin count"
         )
     for coin in range(coin_count):
+        if not bool(hsl_enabled_coins[coin]):
+            continue
         _require_no_internal_invalid_hsl_candles(
             values[:, coin, 0],
             values[:, coin, 1],
@@ -1391,6 +1396,13 @@ class MpsMulticoinProxy:
             )
             _require_no_internal_invalid_multicoin_hsl_candles(
                 values,
+                hsl_enabled_coins=[
+                    any(
+                        bool(item[side].get("hsl_enabled"))
+                        for side in hsl_enabled_sides
+                    )
+                    for item in payload.bot_params_list
+                ],
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
             )

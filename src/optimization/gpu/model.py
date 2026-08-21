@@ -110,13 +110,14 @@ HSL_COIN_OVERRIDE_PATHS = (
 
 
 def encode_hsl_panic_order_type(value, *, field_name: str) -> float:
-    normalized = str(value).strip().lower()
-    if normalized not in {"limit", "market"}:
+    if not isinstance(value, str):
+        raise TypeError(f"GPU HSL requires {field_name} to be a string")
+    if value not in {"limit", "market"}:
         raise ValueError(
             f"GPU HSL requires {field_name} to be limit or market, got "
             f"{value!r}"
         )
-    return float(normalized == "market")
+    return float(value == "market")
 
 
 def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
@@ -133,6 +134,10 @@ def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
             raise TypeError(f"{field_name}.{key} must be numeric") from exc
         if not math.isfinite(value):
             raise ValueError(f"{field_name}.{key} must be finite")
+        if abs(value) > float(np.finfo(np.float32).max):
+            raise ValueError(
+                f"{field_name}.{key} must be representable as float32"
+            )
         return value
 
     red_threshold = finite_float("red_threshold", 0.15)
@@ -174,19 +179,21 @@ def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
             f"{field_name}.tier_ratios must satisfy 0 < yellow < orange < 1"
         )
 
-    restart_policy = str(
-        settings.get("restart_after_red_policy", "threshold")
-    ).strip().lower()
+    restart_policy = settings.get("restart_after_red_policy", "threshold")
+    if not isinstance(restart_policy, str):
+        raise TypeError(
+            f"{field_name}.restart_after_red_policy must be a string"
+        )
     if restart_policy not in {"always", "threshold", "never"}:
         raise ValueError(
             f"{field_name}.restart_after_red_policy must be always, threshold, "
             f"or never, got {restart_policy!r}"
         )
-    orange_mode = str(
-        settings.get(
-            "orange_tier_mode", "tp_only_with_active_entry_cancellation"
-        )
-    ).strip().lower()
+    orange_mode = settings.get(
+        "orange_tier_mode", "tp_only_with_active_entry_cancellation"
+    )
+    if not isinstance(orange_mode, str):
+        raise TypeError(f"{field_name}.orange_tier_mode must be a string")
     if orange_mode not in {
         "graceful_stop",
         "tp_only_with_active_entry_cancellation",
@@ -196,9 +203,7 @@ def validate_hsl_settings(settings: dict, *, field_name: str) -> dict:
             "tp_only_with_active_entry_cancellation, got "
             f"{orange_mode!r}"
         )
-    panic_order_type = str(
-        settings.get("panic_close_order_type", "limit")
-    ).strip().lower()
+    panic_order_type = settings.get("panic_close_order_type", "limit")
     encode_hsl_panic_order_type(
         panic_order_type,
         field_name=f"{field_name}.panic_close_order_type",

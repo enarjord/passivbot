@@ -2070,19 +2070,30 @@ def test_gpu_multicoin_accepts_complete_coin_hsl_override_group():
         ({"enabled": "yes"}, "enabled must be a boolean"),
         ({"red_threshold": -0.2}, "red_threshold must satisfy"),
         ({"ema_span_minutes": 0.0}, "ema_span_minutes must be >= 1"),
+        (
+            {"ema_span_minutes": float(np.finfo(np.float32).max) * 2.0},
+            "representable as float32",
+        ),
         ({"cooldown_minutes_after_red": -1.0}, "cooldown_minutes_after_red"),
+        (
+            {"cooldown_minutes_after_red": float(np.finfo(np.float32).max) * 2.0},
+            "representable as float32",
+        ),
         (
             {"no_restart_drawdown_threshold": 0.01},
             "no_restart_drawdown_threshold must satisfy",
         ),
         ({"restart_after_red_policy": "sometimes"}, "restart_after_red_policy"),
+        ({"restart_after_red_policy": " ALWAYS "}, "restart_after_red_policy"),
         (
             {"tier_ratios": {"yellow": 0.8, "orange": 0.4}},
             "tier_ratios must satisfy",
         ),
         ({"tier_ratios": None}, "tier_ratios must be a dictionary"),
         ({"orange_tier_mode": "tp_only"}, "orange_tier_mode"),
+        ({"orange_tier_mode": "GRACEFUL_STOP"}, "orange_tier_mode"),
         ({"panic_close_order_type": "makret"}, "to be limit or market"),
+        ({"panic_close_order_type": " market "}, "to be limit or market"),
     ],
 )
 def test_gpu_multicoin_rejects_invalid_coin_hsl_values(hsl_patch, match):

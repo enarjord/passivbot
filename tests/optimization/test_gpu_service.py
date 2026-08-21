@@ -339,9 +339,17 @@ def test_gpu_multicoin_hsl_requires_each_coin_to_have_contiguous_valid_candles()
     with pytest.raises(ValueError, match="invalid candle at 1"):
         _require_no_internal_invalid_multicoin_hsl_candles(
             hlcvs,
+            hsl_enabled_coins=[True, True],
             first_valid_indices=[0, 0],
             last_valid_indices=[2, 2],
         )
+    _require_no_internal_invalid_multicoin_hsl_candles(
+        hlcvs,
+        hsl_enabled_coins=[True, False],
+        first_valid_indices=[0, 0],
+        last_valid_indices=[2, 2],
+    )
+
 
 def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous():
     hlcvs = np.ones((4, 2, 4), dtype=np.float64)
