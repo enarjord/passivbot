@@ -9,7 +9,9 @@ All notable user-facing changes will be documented in this file.
   min/mean/max, and halt-to-restart equity loss. The proxy tags only HSL panic fills and retains
   exact Rust validation and drift gates as authoritative. Trailing Martingale panic closes now
   remain one exclusive full-position order and bypass the ordinary realized-loss gate, matching
-  Rust instead of being reinterpreted as recursive close-grid rungs.
+  Rust instead of being reinterpreted as recursive close-grid rungs. Directional proxy filtering
+  retains every HSL lifecycle and panic-loss accumulator; missing directional output and requests
+  for these metrics on multi-coin kernels fail closed instead of substituting zeros.
 
 - Added non-loss HSL lifecycle scoring and limit metrics to the supported one-sided single-coin
   Apple MPS optimizer path: trigger/restart counts and yearly rates, warning-tier occupancy, halt

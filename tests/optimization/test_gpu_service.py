@@ -13,7 +13,9 @@ from optimization.gpu.model import (
     gpu_side_enabled,
 )
 from optimization.gpu.service import (
+    DIRECTIONAL_HSL_OUTPUT_KEYS,
     MpsEmaAnchorProxy,
+    MpsSingleCoinProxy,
     MpsMulticoinEmaProxy,
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
@@ -26,6 +28,56 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
+    assert {
+        "hsl_triggers_long",
+        "hsl_duration_sum_steps",
+        "hsl_restart_retrigger_count",
+        "hsl_halt_to_restart_equity_loss",
+        "hsl_panic_close_loss_sum",
+        "hsl_panic_loss_drawdown_count",
+    } <= DIRECTIONAL_HSL_OUTPUT_KEYS
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 25
+
+
+def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():
+    torch = pytest.importorskip("torch")
+    proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
+    proxy.batch_size = 1
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": 0.0}
+    proxy.run = SimpleNamespace()
+    proxy.needed_metrics = {"hard_stop_panic_close_loss_sum"}
+    proxy._parameter_matrix = lambda candidates: np.zeros((len(candidates), 0))
+    raw = {
+        key: torch.zeros(1)
+        for key in (
+            "first_fill_ts",
+            "last_fill_ts",
+            "last_high_ts",
+            "first_eq_ts",
+            "last_eq_ts",
+        )
+    }
+    raw["hsl_triggers_long"] = torch.tensor([2.0])
+    raw["hsl_panic_close_loss_sum"] = torch.tensor([37.5])
+    proxy.runner = SimpleNamespace(run=lambda *args, **kwargs: raw)
+
+    def reduce(output, *args, **kwargs):
+        assert output["hsl_triggers_long"].item() == 2.0
+        assert output["hsl_panic_close_loss_sum"].item() == 37.5
+        return {
+            "hard_stop_panic_close_loss_sum": output[
+                "hsl_panic_close_loss_sum"
+            ]
+        }
+
+    proxy._compute_objectives = reduce
+
+    assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
 
 
 def test_gpu_proxy_requires_complete_valid_tail():

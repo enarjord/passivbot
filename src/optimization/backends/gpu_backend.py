@@ -1062,6 +1062,18 @@ def _validate_dual_multicoin_metrics(
         )
 
 
+def _validate_hsl_metric_topology(
+    needed_metrics, *, coin_count: int, hard_stop_metrics
+) -> None:
+    unsupported = sorted(set(needed_metrics) & set(hard_stop_metrics))
+    if int(coin_count) > 1 and unsupported:
+        raise ValueError(
+            "GPU HSL optimizer metrics currently require single-coin directional "
+            "Metal output; multi-coin HSL metrics remain unsupported: "
+            f"{unsupported}"
+        )
+
+
 def _validate_gpu_coin_overrides(
     config: dict,
     *,
@@ -2740,7 +2752,7 @@ def run_backend(
 
     from config.metrics import canonicalize_metric_name
     from config.scoring import extract_objective_specs
-    from optimization.gpu.metrics import SUPPORTED_METRICS
+    from optimization.gpu.metrics import HARD_STOP_PROXY_METRICS, SUPPORTED_METRICS
     from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
     from optimization.warmup import (
         _finalize_optimizer_vector_config,
@@ -3094,6 +3106,11 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
+    _validate_hsl_metric_topology(
+        needed_metrics,
+        coin_count=max_coin_count,
+        hard_stop_metrics=HARD_STOP_PROXY_METRICS,
+    )
     _validate_dual_multicoin_metrics(
         needed_metrics,
         coin_count=max_coin_count,

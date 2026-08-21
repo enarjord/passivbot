@@ -273,15 +273,12 @@ def test_hard_stop_lifecycle_reduction_matches_rust_formulas():
     assert metrics["hard_stop_post_restart_retrigger_pct"].tolist() == [0.5, 0.0]
 
 
-def test_hard_stop_lifecycle_metrics_are_zero_without_directional_hsl_outputs():
-    metrics = _hard_stop_lifecycle_metrics(
-        {"max_dd": torch.tensor([0.1, 0.2])},
-        SimpleNamespace(interval_ms=60_000),
-    )
-
-    assert set(metrics) <= set(SUPPORTED_METRICS)
-    assert len(metrics) == 18
-    assert all(metric.tolist() == [0.0, 0.0] for metric in metrics.values())
+def test_hard_stop_lifecycle_metrics_fail_closed_without_directional_outputs():
+    with pytest.raises(RuntimeError, match="lifecycle outputs are missing"):
+        _hard_stop_lifecycle_metrics(
+            {"max_dd": torch.tensor([0.1, 0.2])},
+            SimpleNamespace(interval_ms=60_000),
+        )
 
 
 def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
@@ -317,14 +314,12 @@ def test_hard_stop_panic_loss_reduction_matches_rust_formulas():
     ].tolist() == pytest.approx([0.05, 0.0])
 
 
-def test_hard_stop_panic_loss_metrics_are_zero_without_directional_outputs():
-    metrics = _hard_stop_panic_loss_metrics(
-        {"max_dd": torch.tensor([0.1, 0.2])},
-        SimpleNamespace(starting_balance=1_000.0),
-    )
-
-    assert len(metrics) == 6
-    assert all(metric.tolist() == [0.0, 0.0] for metric in metrics.values())
+def test_hard_stop_panic_loss_metrics_fail_closed_without_directional_outputs():
+    with pytest.raises(RuntimeError, match="panic-loss outputs are missing"):
+        _hard_stop_panic_loss_metrics(
+            {"max_dd": torch.tensor([0.1, 0.2])},
+            SimpleNamespace(starting_balance=1_000.0),
+        )
 
 
 def test_weighted_strategy_equity_metric_surface_is_supported():

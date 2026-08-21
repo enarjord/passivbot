@@ -42,6 +42,34 @@ CORE_OUTPUT_KEYS = {
     "liq_step",
 }
 
+DIRECTIONAL_HSL_OUTPUT_KEYS = {
+    "hsl_long_enabled",
+    "hsl_short_enabled",
+    "hsl_triggers_long",
+    "hsl_triggers_short",
+    "hsl_restarts_long",
+    "hsl_restarts_short",
+    "hsl_tier_samples_total",
+    "hsl_tier_samples_yellow",
+    "hsl_tier_samples_orange",
+    "hsl_tier_samples_red",
+    "hsl_duration_sum_steps",
+    "hsl_duration_max_steps",
+    "hsl_duration_count",
+    "hsl_trigger_drawdown_sum",
+    "hsl_trigger_drawdown_count",
+    "hsl_flatten_time_sum_steps",
+    "hsl_flatten_time_count",
+    "hsl_restart_retrigger_count",
+    "hsl_halt_to_restart_equity_loss",
+    "hsl_panic_close_loss_sum",
+    "hsl_panic_close_loss_max",
+    "hsl_panic_loss_drawdown_min",
+    "hsl_panic_loss_drawdown_sum",
+    "hsl_panic_loss_drawdown_max",
+    "hsl_panic_loss_drawdown_count",
+}
+
 
 def _single_coin_exposure_params(risk: dict, *, side: str) -> dict[str, float]:
     allowance_mode = str(
@@ -594,7 +622,7 @@ class MpsSingleCoinProxy:
             output = {
                 key: value.cpu()
                 for key, value in output.items()
-                if key in CORE_OUTPUT_KEYS
+                if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
             }
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (

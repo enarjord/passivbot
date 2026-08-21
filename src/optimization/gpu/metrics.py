@@ -111,6 +111,9 @@ _HARD_STOP_PANIC_LOSS_METRICS = {
     "hard_stop_panic_close_loss_max",
     "hard_stop_panic_close_loss_sum",
 }
+HARD_STOP_PROXY_METRICS = tuple(
+    sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
+)
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
 # this minimizing proxy optimistic.
@@ -553,7 +556,9 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     reference = out["max_dd"].to(torch.float64)
     zeros = torch.zeros_like(reference)
     if "hsl_triggers_long" not in out:
-        return {name: zeros for name in _HARD_STOP_LIFECYCLE_METRICS}
+        raise RuntimeError(
+            "MPS directional HSL lifecycle outputs are missing from proxy results"
+        )
 
     def value(name: str):
         return out[name].to(torch.float64)
@@ -633,7 +638,9 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
     reference = out["max_dd"].to(torch.float64)
     zeros = torch.zeros_like(reference)
     if "hsl_panic_close_loss_sum" not in out:
-        return {name: zeros for name in _HARD_STOP_PANIC_LOSS_METRICS}
+        raise RuntimeError(
+            "MPS directional HSL panic-loss outputs are missing from proxy results"
+        )
 
     def value(name: str):
         return out[name].to(torch.float64)
