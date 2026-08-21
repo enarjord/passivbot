@@ -81,9 +81,12 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_panic_loss_drawdown_count",
 }
 
-_DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS = {
+_DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "adg_pnl",
     "adg_pnl_w",
+    "fills_analysis_duration_days",
+    "fills_count",
+    "fills_per_day",
     "mdg_pnl",
     "mdg_pnl_w",
     "sharpe_ratio_pnl",
@@ -95,14 +98,14 @@ _DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS = {
 
 def _require_multicoin_metric_topology(sides, needed_metrics) -> None:
     unsupported = (
-        set(needed_metrics) & _DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS
+        set(needed_metrics) & _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS
         if len(sides) == 2
         else set()
     )
     if unsupported:
         raise ValueError(
             "MPS dual-side multicoin proxy cannot reconstruct the intraday "
-            "shared-liquidation cutoff required by realized PnL metrics: "
+            "shared-liquidation cutoff required by these metrics: "
             + ", ".join(sorted(unsupported))
         )
 
