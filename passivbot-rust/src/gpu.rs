@@ -143,6 +143,13 @@ mod tests {
         assert!(source.contains("long_unreal, short_unreal"));
         assert!(source.contains("long_side.psize > 0.0f, short_side.psize > 0.0f"));
         assert!(source.contains("long_blocking_orders, short_blocking_orders"));
+        assert!(source.contains(
+            "const bool hsl_modes_valid = long_hsl.signal_mode == short_hsl.signal_mode"
+        ));
+        assert!(source.contains("bool hsl_update_valid = update_dual_side_hsl("));
+        assert!(source.contains("if (!hsl_update_valid)"));
+        assert!(source.contains("alive = false"));
+        assert!(source.contains("liq_day = di"));
     }
 
     #[test]

@@ -824,8 +824,9 @@ inline void passivbot_single_coin_impl(
     EmaSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
     HslState long_hsl = load_hsl(params, po, 23);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 23);
+    const bool hsl_modes_valid = long_hsl.signal_mode == short_hsl.signal_mode;
 
-    float balance = starting_balance;
+    float balance = hsl_modes_valid ? starting_balance : 0.0f;
     float realized_pnl_cumsum_last = 0.0f;
     float realized_pnl_cumsum_max = 0.0f;
     float realized_pnl_cumsum_long = 0.0f;
@@ -844,8 +845,8 @@ inline void passivbot_single_coin_impl(
     float fill_count_long = 0.0f;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
-    bool alive = true;
-    int liq_day = -1;
+    bool alive = hsl_modes_valid;
+    int liq_day = hsl_modes_valid ? -1 : 0;
     float held_max_min = 0.0f;
     float held_sum_min = 0.0f;
     float held_count = 0.0f;
@@ -1428,7 +1429,7 @@ inline void passivbot_single_coin_impl(
                 short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
                     || short_side.secondary_close_qty > 0.0f
             );
-            update_dual_side_hsl(
+            bool hsl_update_valid = update_dual_side_hsl(
                 long_hsl, short_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
                 realized_pnl_cumsum_long, realized_pnl_cumsum_short,
@@ -1437,15 +1438,22 @@ inline void passivbot_single_coin_impl(
                 long_blocking_orders, short_blocking_orders,
                 kf, interval_ms
             );
-            if (long_hsl.enabled || short_hsl.enabled) {
+            if (!hsl_update_valid) {
+                balance = 0.0f;
+                alive = false;
+                liq_day = di;
+            }
+            if (hsl_update_valid && (long_hsl.enabled || short_hsl.enabled)) {
                 int hsl_tier = max(long_hsl.tier, short_hsl.tier);
                 hsl_tier_samples_total += 1.0f;
                 hsl_tier_samples_yellow += hsl_tier == 1 ? 1.0f : 0.0f;
                 hsl_tier_samples_orange += hsl_tier == 2 ? 1.0f : 0.0f;
                 hsl_tier_samples_red += hsl_tier == 3 ? 1.0f : 0.0f;
             }
-            try_restart_hsl(long_hsl, kf, equity);
-            try_restart_hsl(short_hsl, kf, equity);
+            if (hsl_update_valid) {
+                try_restart_hsl(long_hsl, kf, equity);
+                try_restart_hsl(short_hsl, kf, equity);
+            }
         }
         bool active = eq_started && alive && valid;
         if (active) {

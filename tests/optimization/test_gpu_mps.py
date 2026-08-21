@@ -2991,11 +2991,16 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
             else "base_qty_pct"
         )
         short_hsl[keys.index(qty_key)] = 0.1
+    mismatched_short_hsl = list(short_hsl)
+    mismatched_short_hsl[keys.index("hsl_signal_mode")] = (
+        hsl[keys.index("hsl_signal_mode")] + 1.0
+    ) % 3.0
     rows = np.asarray(
         [
             long_hsl + inactive,
             inactive + short_hsl,
             long_hsl + short_hsl,
+            long_hsl + mismatched_short_hsl,
         ],
         dtype=np.float64,
     )
@@ -3026,6 +3031,10 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     if signal_mode == "unified":
         assert output["short_psize"][0].item() > 0.0
         assert output["psize"][1].item() > 0.0
+    assert not output["alive"][3].item()
+    assert output["liq_step"][3].item() == 0
+    assert output["balance"][3].item() == 0.0
+    assert output["fill_count"][3].item() == 0.0
 
 
 @pytest.mark.skipif(
