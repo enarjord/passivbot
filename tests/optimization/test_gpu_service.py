@@ -50,6 +50,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "fill_count",
         "fill_count_entry",
         "fill_count_long",
+        "fills_active_days_count",
     } <= CORE_OUTPUT_KEYS
 
 
@@ -59,6 +60,8 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "adg_pnl",
         "adg_pnl_w",
         "fills_analysis_duration_days",
+        "fills_active_days_count",
+        "fills_active_days_ratio",
         "fills_count",
         "fills_count_close",
         "fills_count_entry",
@@ -549,6 +552,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "fill_count": torch.tensor([float(sum(fill))]),
             "fill_count_entry": torch.tensor([float(sum(fill))]),
             "fill_count_long": torch.tensor([float(sum(fill))]),
+            "fills_active_days_count": torch.tensor([float(any(fill))]),
         }
 
     long = side_output(
@@ -598,6 +602,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["fill_count"].item() == 2.0
     assert combined["fill_count_entry"].item() == 2.0
     assert combined["fill_count_long"].item() == 2.0
+    assert combined["fills_active_days_count"].item() == 1.0
     assert combined["position_unchanged_max_ms"].item() == 250.0
 
     short["day_min_eq"][0, 1] = float("inf")
@@ -653,6 +658,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "fill_count": torch.tensor([3.0]),
             "fill_count_entry": torch.tensor([2.0]),
             "fill_count_long": torch.tensor([2.0]),
+            "fills_active_days_count": torch.tensor([1.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(
@@ -698,6 +704,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "fill_count": torch.tensor([3.0]),
             "fill_count_entry": torch.tensor([2.0]),
             "fill_count_long": torch.tensor([2.0]),
+            "fills_active_days_count": torch.tensor([1.0]),
         }
 
     combined = _combine_hedged_multicoin_outputs(

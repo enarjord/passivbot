@@ -64,6 +64,8 @@ SUPPORTED_METRICS = (
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
     "fills_analysis_duration_days",
+    "fills_active_days_count",
+    "fills_active_days_ratio",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -159,6 +161,8 @@ _WEIGHTED_PNL_METRICS = {
 
 _FILL_ACTIVITY_METRICS = {
     "fills_analysis_duration_days",
+    "fills_active_days_count",
+    "fills_active_days_ratio",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -698,7 +702,7 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     return adg, mdg, sharpe, sortino, count
 
 
-def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
+def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
     """Match Rust's full-run fill count and timestamp-span rate contract."""
 
     fill_count = out["fill_count"].to(torch.float64)
@@ -706,6 +710,7 @@ def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
     fills_count_long = out["fill_count_long"].to(torch.float64)
     fills_count_close = (fill_count - fills_count_entry).clamp(min=0.0)
     fills_count_short = (fill_count - fills_count_long).clamp(min=0.0)
+    fills_active_days_count = out["fills_active_days_count"].to(torch.float64)
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
     last_eq_ts = out["last_eq_ts"].to(torch.float64)
     has_span = (
@@ -713,9 +718,17 @@ def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
         & torch.isfinite(last_eq_ts)
         & (last_eq_ts > first_eq_ts)
     )
+    interval_ms = max(float(run.interval_ms), 1.0)
+    # Metal exports integer candle indices multiplied by interval_ms through a
+    # float32 scalar buffer. Recover the indices before subtracting so a span
+    # on a whole-day boundary cannot round slightly upward and add a spurious
+    # active-day denominator bucket.
+    first_eq_step = torch.round(first_eq_ts / interval_ms)
+    last_eq_step = torch.round(last_eq_ts / interval_ms)
     duration_days = torch.where(
         has_span,
-        (last_eq_ts - first_eq_ts) / 86_400_000.0,
+        (last_eq_step - first_eq_step).clamp(min=0.0) * interval_ms
+        / 86_400_000.0,
         torch.zeros_like(first_eq_ts),
     )
     fills_per_day = torch.where(
@@ -735,6 +748,9 @@ def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
     fills_per_day_long = per_day(fills_count_long)
     fills_per_day_short = per_day(fills_count_short)
     metrics = {
+        "fills_active_days_count": fills_active_days_count,
+        "fills_active_days_ratio": fills_active_days_count
+        / duration_days.ceil().clamp(min=1.0),
         "fills_analysis_duration_days": duration_days,
         "fills_count": fill_count,
         "fills_count_close": fills_count_close,
@@ -1073,7 +1089,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
     fill_activity_metrics = (
-        _fill_activity_metrics(out, requested)
+        _fill_activity_metrics(out, run, requested)
         if requested & _FILL_ACTIVITY_METRICS
         else {}
     )

@@ -335,11 +335,13 @@ the complete UTC day containing each suffix boundary, so exact Rust validation a
 remain authoritative for that screening approximation.
 Full-run fill activity is supported for single-coin and one-sided multi-coin topologies: analysis
 duration; total, entry, close, long, and short counts; their daily rates; entry-to-close ratio; and
-combined or side-specific per-configured-position-slot daily rates. Metal classifies every actual
-proxy fill by role and position side, then Python applies each candidate's configured active slot
-counts and Rust's mean-of-enabled-sides contract. All rates use the same first-to-last
-analyzed-equity timestamp span as Rust. Dual-side multi-coin runs fail closed because independent
-directional summaries cannot reconstruct the intraday shared-liquidation cutoff.
+combined or side-specific per-configured-position-slot daily rates. Active fill-day count and ratio
+use distinct 24-hour buckets anchored to the analyzed equity start, matching Rust rather than the
+UTC buckets used by the compact daily equity surface. Metal classifies every actual proxy fill by
+role and position side, then Python applies each candidate's configured active slot counts and
+Rust's mean-of-enabled-sides contract. All rates use the same first-to-last analyzed-equity
+timestamp span as Rust. Dual-side multi-coin runs fail closed because independent directional
+summaries cannot reconstruct the intraday shared-liquidation cutoff.
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and

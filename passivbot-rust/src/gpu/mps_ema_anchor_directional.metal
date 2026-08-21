@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-constant int SCALAR_COLS = 53;
+constant int SCALAR_COLS = 54;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -1111,6 +1111,8 @@ inline void passivbot_single_coin_impl(
     float fill_count = 0.0f;
     float fill_count_entry = 0.0f;
     float fill_count_long = 0.0f;
+    float fills_active_days_count = 0.0f;
+    int last_active_fill_day = -1;
     bool alive = true;
     int liq_day = -1;
     float held_max_min = 0.0f;
@@ -1694,6 +1696,13 @@ inline void passivbot_single_coin_impl(
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;
+            if (any_fill) {
+                int active_fill_day = int(kf - first_eq_k) / 1440;
+                if (active_fill_day != last_active_fill_day) {
+                    fills_active_days_count += 1.0f;
+                    last_active_fill_day = active_fill_day;
+                }
+            }
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
             if (eqf > run_peak) {
@@ -1856,6 +1865,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 50] = fill_count;
     scalars[so + 51] = fill_count_entry;
     scalars[so + 52] = fill_count_long;
+    scalars[so + 53] = fills_active_days_count;
 }
 
 kernel void passivbot_ema_anchor(

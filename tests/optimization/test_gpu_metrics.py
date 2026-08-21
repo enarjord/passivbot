@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
+    _fill_activity_metrics,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
@@ -26,6 +27,30 @@ from optimization.gpu.metrics import (
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
+
+
+def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
+    first_step = 7_509
+    last_step = first_step + 1_440
+    first_ts = np.float32(first_step * 60_000)
+    last_ts = np.float32(last_step * 60_000)
+    assert (float(last_ts) - float(first_ts)) / 86_400_000.0 > 1.0
+
+    metrics = _fill_activity_metrics(
+        {
+            "fill_count": torch.tensor([1.0]),
+            "fill_count_entry": torch.tensor([1.0]),
+            "fill_count_long": torch.tensor([1.0]),
+            "fills_active_days_count": torch.tensor([1.0]),
+            "first_eq_ts": torch.tensor([first_ts]),
+            "last_eq_ts": torch.tensor([last_ts]),
+        },
+        SimpleNamespace(interval_ms=60_000),
+        {"fills_active_days_ratio", "fills_analysis_duration_days"},
+    )
+
+    assert metrics["fills_analysis_duration_days"].item() == 1.0
+    assert metrics["fills_active_days_ratio"].item() == 1.0
 
 
 def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
@@ -54,6 +79,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "fill_count": torch.tensor([5.0, 0.0]),
         "fill_count_entry": torch.tensor([3.0, 0.0]),
         "fill_count_long": torch.tensor([4.0, 0.0]),
+        "fills_active_days_count": torch.tensor([2.0, 0.0]),
         "position_slots_long": torch.tensor([2.0, 1.0]),
         "position_slots_short": torch.tensor([1.0, 0.0]),
         "max_dd": torch.zeros(2),
@@ -64,12 +90,14 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "first_fill_ts": torch.tensor([0.0, float("nan")]),
         "last_fill_ts": torch.tensor([3_600_000.0, float("nan")]),
         "recovery_max_ms": torch.zeros(2),
-        "last_high_ts": torch.tensor([14_400_000.0, 14_400_000.0]),
+        "last_high_ts": torch.tensor([216_000_000.0, 14_400_000.0]),
         "first_eq_ts": torch.tensor([0.0, 0.0]),
-        "last_eq_ts": torch.tensor([14_400_000.0, 14_400_000.0]),
+        "last_eq_ts": torch.tensor([216_000_000.0, 14_400_000.0]),
         "liq_step": torch.tensor([-1.0, -1.0]),
     }
     requested = {
+        "fills_active_days_count",
+        "fills_active_days_ratio",
         "fills_analysis_duration_days",
         "fills_count",
         "fills_count_close",
@@ -99,7 +127,11 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     assert set(metrics) == requested
     assert requested <= set(SUPPORTED_METRICS)
     assert metrics["fills_analysis_duration_days"].tolist() == pytest.approx(
-        [4.0 / 24.0, 4.0 / 24.0]
+        [2.5, 4.0 / 24.0]
+    )
+    assert metrics["fills_active_days_count"].tolist() == [2.0, 0.0]
+    assert metrics["fills_active_days_ratio"].tolist() == pytest.approx(
+        [2.0 / 3.0, 0.0]
     )
     assert metrics["fills_count"].tolist() == [5.0, 0.0]
     assert metrics["fills_count_entry"].tolist() == [3.0, 0.0]
@@ -107,19 +139,19 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     assert metrics["fills_count_long"].tolist() == [4.0, 0.0]
     assert metrics["fills_count_short"].tolist() == [1.0, 0.0]
     assert metrics["fills_entry_per_close"].tolist() == [1.5, 0.0]
-    assert metrics["fills_per_day"].tolist() == pytest.approx([30.0, 0.0])
-    assert metrics["fills_per_day_entry"].tolist() == pytest.approx([18.0, 0.0])
-    assert metrics["fills_per_day_close"].tolist() == pytest.approx([12.0, 0.0])
-    assert metrics["fills_per_day_long"].tolist() == pytest.approx([24.0, 0.0])
-    assert metrics["fills_per_day_short"].tolist() == pytest.approx([6.0, 0.0])
+    assert metrics["fills_per_day"].tolist() == pytest.approx([2.0, 0.0])
+    assert metrics["fills_per_day_entry"].tolist() == pytest.approx([1.2, 0.0])
+    assert metrics["fills_per_day_close"].tolist() == pytest.approx([0.8, 0.0])
+    assert metrics["fills_per_day_long"].tolist() == pytest.approx([1.6, 0.0])
+    assert metrics["fills_per_day_short"].tolist() == pytest.approx([0.4, 0.0])
     assert metrics["fills_per_day_per_position_slot_long"].tolist() == pytest.approx(
-        [12.0, 0.0]
+        [0.8, 0.0]
     )
     assert metrics["fills_per_day_per_position_slot_short"].tolist() == pytest.approx(
-        [6.0, 0.0]
+        [0.4, 0.0]
     )
     assert metrics["fills_per_day_per_position_slot"].tolist() == pytest.approx(
-        [9.0, 0.0]
+        [0.6, 0.0]
     )
 
 
@@ -135,6 +167,7 @@ def test_fill_activity_metrics_ignore_inactive_daily_slots_and_zero_single_sampl
         "fill_count": torch.tensor([2.0]),
         "fill_count_entry": torch.tensor([1.0]),
         "fill_count_long": torch.tensor([2.0]),
+        "fills_active_days_count": torch.tensor([0.0]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
