@@ -211,7 +211,8 @@ The supported slice is intentionally narrow:
   use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
   an unrecovered final tail is not included and a candidate without fills returns zero. Dual-side
   multi-coin runs fail closed because independent directional kernels cannot reconstruct the
-  shared portfolio equity path
+  shared portfolio equity path. These metrics also require contiguous valid candles after equity
+  tracking starts because Rust records an equity sample on every tracked step
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
