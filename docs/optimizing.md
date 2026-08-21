@@ -327,9 +327,12 @@ Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio
 supported for single-coin and one-sided multi-coin runs. Metal groups realized balance changes by
 UTC fill day and divides by that day's last fill balance, matching exact Rust's unweighted daily
 PnL ratio contract. Dual-side multi-coin runs remain unsupported because independent directional
-summaries cannot identify the intraday shared-liquidation cutoff. Weighted PnL variants remain
-unsupported because Rust applies suffix-specific minimum fill-count gating that the proxy does not
-yet model.
+summaries cannot identify the intraday shared-liquidation cutoff. The corresponding weighted PnL
+variants are supported in the same safe topologies. Metal counts each actual proxy fill, including
+multiple same-candle ladder fills, and applies Rust's full-run minimum fill count and empty-suffix
+rules across the same ten minute-position suffix boundaries. The compact daily surface includes
+the complete UTC day containing each suffix boundary, so exact Rust validation and drift gates
+remain authoritative for that screening approximation.
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and

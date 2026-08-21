@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant int DAILY_COLS = 7;
+constant int DAILY_COLS = 8;
 constant int SCALAR_COLS = 50;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 51;
@@ -122,8 +122,10 @@ inline bool realized_loss_proxy_allows_reducer(
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
-    thread float& realized_pnl_cumsum_max
+    thread float& realized_pnl_cumsum_max,
+    thread float& day_fill_count
 ) {
+    day_fill_count += 1.0f;
     realized_pnl_cumsum_last += net_pnl;
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
@@ -1417,6 +1419,7 @@ inline void passivbot_single_coin_impl(
     float day_volume = 0.0f;
     float day_has_fill = 0.0f;
     float day_start_balance = balance;
+    float day_fill_count = 0.0f;
 
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -1453,6 +1456,7 @@ inline void passivbot_single_coin_impl(
                 daily[o + 4] = day_has_fill;
                 daily[o + 5] = balance - day_start_balance;
                 daily[o + 6] = balance;
+                daily[o + 7] = day_fill_count;
             }
             cur_day = di;
             day_touched = false;
@@ -1462,6 +1466,7 @@ inline void passivbot_single_coin_impl(
             day_volume = 0.0f;
             day_has_fill = 0.0f;
             day_start_balance = balance;
+            day_fill_count = 0.0f;
         }
 
         bool long_close_fill = false;
@@ -1676,7 +1681,8 @@ inline void passivbot_single_coin_impl(
                         record_realized_net(
                             pnl - fee,
                             realized_pnl_cumsum_last,
-                            realized_pnl_cumsum_max
+                            realized_pnl_cumsum_max,
+                            day_fill_count
                         );
                         long_side.psize = fmax(
                             round_step(
@@ -1711,7 +1717,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     pnl - fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 float new_psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1757,7 +1764,8 @@ inline void passivbot_single_coin_impl(
                     record_realized_net(
                         pnl - fee,
                         realized_pnl_cumsum_last,
-                        realized_pnl_cumsum_max
+                        realized_pnl_cumsum_max,
+                        day_fill_count
                     );
                     long_side.psize = fmax(
                         round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1826,7 +1834,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     pnl - fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 long_side.psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1874,7 +1883,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     -fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 bool was_flat = long_side.psize <= 0.0f;
                 float new_psize = round_step(long_side.psize + eq, qty_step);
@@ -2118,7 +2128,8 @@ inline void passivbot_single_coin_impl(
                         record_realized_net(
                             pnl - fee,
                             realized_pnl_cumsum_last,
-                            realized_pnl_cumsum_max
+                            realized_pnl_cumsum_max,
+                            day_fill_count
                         );
                         short_side.psize = fmax(
                             round_step(
@@ -2153,7 +2164,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     pnl - fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 float new_psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
@@ -2199,7 +2211,8 @@ inline void passivbot_single_coin_impl(
                     record_realized_net(
                         pnl - fee,
                         realized_pnl_cumsum_last,
-                        realized_pnl_cumsum_max
+                        realized_pnl_cumsum_max,
+                        day_fill_count
                     );
                     short_side.psize = fmax(
                         round_step(short_side.psize - adj, qty_step), 0.0f
@@ -2268,7 +2281,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     pnl - fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 short_side.psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
@@ -2316,7 +2330,8 @@ inline void passivbot_single_coin_impl(
                 record_realized_net(
                     -fee,
                     realized_pnl_cumsum_last,
-                    realized_pnl_cumsum_max
+                    realized_pnl_cumsum_max,
+                    day_fill_count
                 );
                 bool was_flat = short_side.psize <= 0.0f;
                 float new_psize = round_step(short_side.psize + eq, qty_step);
@@ -2686,6 +2701,7 @@ inline void passivbot_single_coin_impl(
         daily[o + 4] = day_has_fill;
         daily[o + 5] = balance - day_start_balance;
         daily[o + 6] = balance;
+        daily[o + 7] = day_fill_count;
     }
 
     if (long_side.pos_open_k >= 0.0f && last_eq_k >= 0.0f) {

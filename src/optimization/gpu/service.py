@@ -30,6 +30,7 @@ CORE_OUTPUT_KEYS = {
     "day_has_fill",
     "day_net_pnl",
     "day_last_fill_balance",
+    "day_fill_count",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -82,9 +83,13 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
 
 _DUAL_SIDE_MULTICOIN_UNSUPPORTED_PNL_METRICS = {
     "adg_pnl",
+    "adg_pnl_w",
     "mdg_pnl",
+    "mdg_pnl_w",
     "sharpe_ratio_pnl",
+    "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
+    "sortino_ratio_pnl_w",
 }
 
 
@@ -430,6 +435,9 @@ def _combine_hedged_multicoin_outputs(
         + short["day_last_fill_balance"]
         - float(starting_balance)
     ).where(active, long["day_last_fill_balance"].new_zeros(()))
+    combined["day_fill_count"] = (
+        long["day_fill_count"] + short["day_fill_count"]
+    ).where(active, long["day_fill_count"].new_zeros(()))
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["position_unchanged_max_ms"] = long[

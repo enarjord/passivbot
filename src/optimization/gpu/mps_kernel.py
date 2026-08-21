@@ -17,8 +17,8 @@ from optimization.gpu.model import (
 )
 
 
-MPS_DAILY_COLS = 7
-MPS_MULTICOIN_DAILY_COLS = 8
+MPS_DAILY_COLS = 8
+MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 24
 MPS_DIRECTIONAL_SCALAR_COLS = 50
 
@@ -102,6 +102,7 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         ),
         "day_net_pnl": daily[:, :, 6],
         "day_last_fill_balance": daily[:, :, 7],
+        "day_fill_count": daily[:, :, 8],
         "max_dd": scalars[:, 0],
         "held_max_ms": scalars[:, 1],
         "gap_hist": gaps,
@@ -150,6 +151,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "day_has_fill": daily[:, :, 4] > 0.0,
         "day_net_pnl": daily[:, :, 5],
         "day_last_fill_balance": daily[:, :, 6],
+        "day_fill_count": daily[:, :, 7],
         "max_dd": scalars[:, 0],
         "held_max_ms": scalars[:, 1],
         "gap_hist": gaps,
