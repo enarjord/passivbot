@@ -2185,7 +2185,6 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "volume_pct_per_day_avg",
-        "volume_pct_per_day_avg_w",
     ],
 )
 def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
@@ -2222,7 +2221,6 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
             "total_wallet_exposure_max",
             "total_wallet_exposure_mean",
             "volume_pct_per_day_avg",
-            "volume_pct_per_day_avg_w",
         },
         coin_count=3,
         enabled_sides={"long"},

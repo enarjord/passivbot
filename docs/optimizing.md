@@ -253,8 +253,8 @@ screening also rejects `fills_gap_longest_days`,
 `entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
 `position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and
-`exposure_ratio_usd`, `exposure_mean_ratio_usd`, `volume_pct_per_day_avg`, and
-`volume_pct_per_day_avg_w`: the independent directional
+`exposure_ratio_usd`, `exposure_mean_ratio_usd`, and `volume_pct_per_day_avg`: the independent
+directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
 effective coin counts and duration maxima truncated at shared portfolio liquidation, minute-level
 net exposure, or fill volume normalized by the shared balance safely.
@@ -345,12 +345,11 @@ proxy fill by role, position side, and—when needed—coin, then Python applies
 configured active slot counts and Rust's mean-of-enabled-sides contract. All rates use the same
 first-to-last analyzed-equity timestamp span as Rust. Dual-side multi-coin runs fail closed because
 independent directional summaries cannot reconstruct the intraday shared-liquidation cutoff.
-Weighted fill volume applies Rust's ten full/tail subset average to the compact daily fill-volume
-surface. Peak strategy-equity recovery is available in both hours and days; peak realized-PnL
-recovery tracks the strict cumulative net-PnL peak at every proxy fill and includes the final
-analyzed tail. These metrics support single-coin and one-sided multi-coin topologies. Dual-side
-multi-coin runs fail closed because independent directional dispatches cannot reconstruct the
-shared fill sequence, balance-normalized volume, or liquidation cutoff.
+Peak strategy-equity recovery is available in both hours and days; peak realized-PnL recovery
+tracks the strict cumulative net-PnL peak at every proxy fill and includes the final analyzed tail.
+These metrics support single-coin and one-sided multi-coin topologies. Dual-side multi-coin runs
+fail closed because independent directional dispatches cannot reconstruct the shared fill sequence
+or liquidation cutoff.
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and

@@ -25,7 +25,6 @@ from optimization.gpu.metrics import (
     _weighted_adg,
     _weighted_subsets,
     _weighted_strategy_eq_metrics,
-    _weighted_volume_pct_per_day,
     compute_objectives,
 )
 
@@ -823,44 +822,6 @@ def test_weighted_strategy_equity_metric_surface_is_supported():
         "sortino_ratio_w_usd",
         "sterling_ratio_w_usd",
     } <= set(SUPPORTED_METRICS)
-
-
-def test_weighted_volume_uses_rust_tail_subset_average():
-    day_volume = torch.tensor([[1.0, 2.0, 3.0, 4.0]], dtype=torch.float64)
-    active = torch.ones_like(day_volume, dtype=torch.bool)
-    last_ts = float((4 * 1440 - 1) * 60_000)
-
-    weighted = _weighted_volume_pct_per_day(
-        day_volume,
-        torch.ones_like(active),
-        torch.tensor([4.0], dtype=torch.float64),
-        active,
-        torch.tensor([0.0], dtype=torch.float64),
-        torch.tensor([last_ts], dtype=torch.float64),
-        0,
-        60_000,
-    )
-
-    assert weighted.item() == pytest.approx(3.75)
-    assert "volume_pct_per_day_avg_w" in SUPPORTED_METRICS
-
-
-def test_weighted_volume_is_zero_with_only_one_fill_like_rust():
-    day_volume = torch.tensor([[2.0, 0.0]], dtype=torch.float64)
-    active = torch.ones_like(day_volume, dtype=torch.bool)
-
-    weighted = _weighted_volume_pct_per_day(
-        day_volume,
-        day_volume > 0.0,
-        torch.tensor([1.0], dtype=torch.float64),
-        active,
-        torch.tensor([0.0], dtype=torch.float64),
-        torch.tensor([86_400_000.0], dtype=torch.float64),
-        0,
-        60_000,
-    )
-
-    assert weighted.item() == 0.0
 
 
 def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
