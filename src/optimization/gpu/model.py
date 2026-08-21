@@ -41,6 +41,15 @@ TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     "twel_enforcer_enabled",
 )
 
+UNSTUCK_PARAM_KEYS = (
+    "unstuck_enabled",
+    "unstuck_ema_gating_enabled",
+    "unstuck_close_pct",
+    "unstuck_ema_dist",
+    "unstuck_loss_allowance_pct",
+    "unstuck_threshold",
+)
+
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     "twel_enforcer_reduce_portfolio",
@@ -53,6 +62,7 @@ EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
     *EMA_ANCHOR_PARAM_KEYS,
     *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
+    *UNSTUCK_PARAM_KEYS,
 )
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
@@ -103,6 +113,7 @@ TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
     *SINGLE_COIN_EXPOSURE_PARAM_KEYS,
     *POSITION_EXPOSURE_ENFORCER_PARAM_KEYS,
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
+    *UNSTUCK_PARAM_KEYS,
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (

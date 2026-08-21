@@ -43,8 +43,12 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
         assert!(source.contains("constant int SCALAR_COLS = 18"));
-        assert!(source.contains("constant int SIDE_PARAMS = 17"));
+        assert!(source.contains("constant int SIDE_PARAMS = 23"));
         assert!(source.contains("total_exposure_reducer_qty"));
+        assert!(source.contains("unstuck_reducer_variant"));
+        assert!(source.contains("unstuck_ema_gating_enabled"));
+        assert!(source.contains("unstuck_loss_allowance_pct"));
+        assert!(source.contains("Exact Rust emits at most one global unstuck intent"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("generate_short_orders"));
         assert!(source.contains("const bool hedge_mode"));
@@ -109,7 +113,11 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 34"));
+        assert!(source.contains("constant int SIDE_PARAMS = 40"));
+        assert!(source.contains("unstuck_reducer_qty"));
+        assert!(source.contains("unstuck_ema_gating_enabled"));
+        assert!(source.contains("unstuck_loss_allowance_pct"));
+        assert!(source.contains("grid_source.unstuck_enabled = false"));
         assert!(source.contains("min_since_open"));
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
@@ -123,9 +131,11 @@ mod tests {
         assert!(source.contains("twel_target"));
         assert!(source.contains("price_now * 0.9995f / price_step"));
         assert!(source.contains("finalized_wel_qty = finalized_reducer_qty"));
-        assert!(source.contains("finalized_twel_qty = finalized_reducer_qty"));
+        assert!(source.contains("finalized_reducer_qty_with_ordinary"));
+        assert!(source.contains("float finalized_twel_qty = ordinary_can_accompany_reducer"));
         assert!(source.contains("finalized_twel_qty > finalized_wel_qty"));
-        assert!(source.contains("reducer_qty = use_twel ? twel_qty : wel_qty"));
+        assert!(source.contains("float reducer_qty = use_unstuck"));
+        assert!(source.contains("? unstuck_qty : (use_twel ? twel_qty : wel_qty)"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("twel_entry_gate_enabled"));
         assert_eq!(source.matches("= fma(").count(), 5);
@@ -150,12 +160,13 @@ mod tests {
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
-        assert!(source.contains("const bool loss_gate_enabled = settings[14] < 1.0f"));
+        assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
+        assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));
         assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));
         assert!(source.contains("short_side.close_gen_psize - strategy_wel_qty"));
-        assert!(source.contains("use_twel && wel_qty <= 0.0f"));
+        assert!(source.contains("(use_twel || use_unstuck) && wel_qty <= 0.0f"));
         assert!(source.contains("long_side.secondary_close_price"));
         assert!(source.contains("short_side.secondary_close_price"));
         assert!(source.contains("dust_remainder"));

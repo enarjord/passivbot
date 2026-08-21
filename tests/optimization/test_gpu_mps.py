@@ -53,8 +53,40 @@ def _tm_wel_enforcer_fields(*, enabled=False, threshold=1.0):
     return [float(enabled), threshold]
 
 
-def _tm_twel_enforcer_fields(*, enabled=False):
-    return [float(enabled)]
+def _tm_twel_enforcer_fields(
+    *,
+    enabled=False,
+    unstuck_enabled=False,
+    unstuck_ema_gating_enabled=True,
+    unstuck_close_pct=0.1,
+    unstuck_ema_dist=0.0,
+    unstuck_loss_allowance_pct=0.1,
+    unstuck_threshold=0.5,
+):
+    return [
+        float(enabled),
+        float(unstuck_enabled),
+        float(unstuck_ema_gating_enabled),
+        unstuck_close_pct,
+        unstuck_ema_dist,
+        unstuck_loss_allowance_pct,
+        unstuck_threshold,
+    ]
+
+
+_UNSTUCK_DISABLED_VALUES = {
+    "unstuck_enabled": 0.0,
+    "unstuck_ema_gating_enabled": 1.0,
+    "unstuck_close_pct": 0.1,
+    "unstuck_ema_dist": 0.0,
+    "unstuck_loss_allowance_pct": 0.1,
+    "unstuck_threshold": 0.5,
+}
+
+
+def _single_coin_param_row(values, keys):
+    merged = {**_UNSTUCK_DISABLED_VALUES, **values}
+    return [merged[key] for key in keys]
 
 
 def _multicoin_exposure_fixture(
@@ -320,7 +352,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 17" in source
+    assert "constant int SIDE_PARAMS = 23" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -1108,6 +1140,12 @@ def _tm_single_row(
     wel_enforcer_enabled=False,
     wel_enforcer_threshold=1.0,
     twel_enforcer_enabled=False,
+    unstuck_enabled=False,
+    unstuck_ema_gating_enabled=True,
+    unstuck_close_pct=0.1,
+    unstuck_ema_dist=0.0,
+    unstuck_loss_allowance_pct=0.1,
+    unstuck_threshold=0.5,
 ):
     return _tm_row(
         initial_ema_dist=initial_ema_dist,
@@ -1123,7 +1161,476 @@ def _tm_single_row(
         threshold=wel_enforcer_threshold,
     ) + _tm_twel_enforcer_fields(
         enabled=twel_enforcer_enabled,
+        unstuck_enabled=unstuck_enabled,
+        unstuck_ema_gating_enabled=unstuck_ema_gating_enabled,
+        unstuck_close_pct=unstuck_close_pct,
+        unstuck_ema_dist=unstuck_ema_dist,
+        unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
+        unstuck_threshold=unstuck_threshold,
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
+    strategy_kind, side
+):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.01)
+    low = np.full(count, 100.0)
+    if side == "long":
+        low[3] = 98.0
+    else:
+        high[:] = 100.0
+        high[3] = 102.0
+        low[:] = 99.99
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+
+    def candidate(unstuck_enabled, *, ema_gating=False, ema_dist=0.0):
+        if strategy_kind == "trailing_martingale":
+            row = _tm_single_row(
+                initial_ema_dist=0.01,
+                gate_initial=1.0,
+                gate_reentry=0.0,
+                entry_gate=True,
+                unstuck_enabled=unstuck_enabled,
+                unstuck_ema_gating_enabled=ema_gating,
+                unstuck_close_pct=0.1,
+                unstuck_ema_dist=ema_dist,
+                unstuck_loss_allowance_pct=0.2,
+                unstuck_threshold=0.5,
+            )
+            row[6] = 1.0
+            row[7] = 10.0
+            row[11] = 0.0
+            row[16] = 0.5
+            row[20] = 0.0
+            row[23] = 100.0
+            return row + row
+        row = [
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+            0.01,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            100.0,
+            1.0,
+        ]
+        row += _single_coin_exposure_fields(entry_gate=True)
+        row += _tm_twel_enforcer_fields(
+            unstuck_enabled=unstuck_enabled,
+            unstuck_ema_gating_enabled=ema_gating,
+            unstuck_close_pct=0.1,
+            unstuck_ema_dist=ema_dist,
+            unstuck_loss_allowance_pct=0.2,
+            unstuck_threshold=0.5,
+        )
+        return row + row
+
+    runner_cls = (
+        MpsTrailingMartingaleRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorRunner
+    )
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.05,
+    ).run(
+        np.asarray(
+            [
+                candidate(False),
+                candidate(True),
+                candidate(True, ema_gating=True, ema_dist=0.1),
+            ],
+            dtype=np.float64,
+        )
+    )
+    torch.mps.synchronize()
+
+    key = "psize" if side == "long" else "short_psize"
+    remaining = output[key].cpu().numpy()
+    initial_size = (
+        9.0 if strategy_kind == "ema_anchor" and side == "short" else 10.0
+    )
+    assert remaining[0] == pytest.approx(initial_size)
+    assert remaining[1] == pytest.approx(initial_size - 1.0)
+    assert remaining[2] == pytest.approx(initial_size)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_auto_unstuck_scales_loss_to_own_allowance(
+    strategy_kind, side
+):
+    count = 6
+    close = np.full(count, 100.0)
+    if side == "long":
+        close[3:] = 98.0
+        high = close + 0.01
+        low = close.copy()
+    else:
+        close[3:] = 102.0
+        high = close.copy()
+        low = close - 0.01
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+
+    def candidate(*, unstuck_enabled, loss_allowance_pct):
+        if strategy_kind == "trailing_martingale":
+            row = _tm_single_row(
+                initial_ema_dist=0.01,
+                gate_initial=1.0,
+                gate_reentry=0.0,
+                entry_gate=True,
+                unstuck_enabled=unstuck_enabled,
+                unstuck_ema_gating_enabled=False,
+                unstuck_close_pct=1.0,
+                unstuck_loss_allowance_pct=loss_allowance_pct,
+                unstuck_threshold=0.5,
+            )
+            row[6] = 1.0
+            row[7] = 10.0
+            row[11] = 0.0
+            row[16] = 0.5
+            row[20] = 0.0
+            row[23] = 100.0
+            return row + row
+        row = [
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+            0.01,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            100.0,
+            1.0,
+        ]
+        row += _single_coin_exposure_fields(entry_gate=True)
+        row += _tm_twel_enforcer_fields(
+            unstuck_enabled=unstuck_enabled,
+            unstuck_ema_gating_enabled=False,
+            unstuck_close_pct=1.0,
+            unstuck_loss_allowance_pct=loss_allowance_pct,
+            unstuck_threshold=0.5,
+        )
+        return row + row
+
+    runner_cls = (
+        MpsTrailingMartingaleRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorRunner
+    )
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.05,
+    ).run(
+        np.asarray(
+            [
+                candidate(unstuck_enabled=False, loss_allowance_pct=0.0005),
+                candidate(unstuck_enabled=True, loss_allowance_pct=0.0005),
+                candidate(unstuck_enabled=True, loss_allowance_pct=0.02),
+            ],
+            dtype=np.float64,
+        )
+    )
+    torch.mps.synchronize()
+
+    key = "psize" if side == "long" else "short_psize"
+    remaining = output[key].cpu().numpy()
+    initial_size = (
+        9.0 if strategy_kind == "ema_anchor" and side == "short" else 10.0
+    )
+    assert remaining[0] == pytest.approx(initial_size)
+    assert remaining[1] == pytest.approx(initial_size - 1.0)
+    generous_remainder = (
+        1.0 if strategy_kind == "trailing_martingale" and side == "short" else 0.0
+    )
+    assert remaining[2] == pytest.approx(generous_remainder)
+
+    strict_output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.0005,
+    ).run(
+        np.asarray(
+            [candidate(unstuck_enabled=True, loss_allowance_pct=0.02)],
+            dtype=np.float64,
+        )
+    )
+    torch.mps.synchronize()
+    assert strict_output[key].item() == pytest.approx(initial_size)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_auto_unstuck_selects_one_least_stuck_side(strategy_kind):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.01)
+    low = np.full(count, 99.99)
+    high[3] = 102.0
+    low[3] = 98.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row(
+            initial_ema_dist=0.01,
+            gate_initial=1.0,
+            gate_reentry=0.0,
+            entry_gate=True,
+            unstuck_enabled=True,
+            unstuck_ema_gating_enabled=False,
+            unstuck_close_pct=0.1,
+            unstuck_loss_allowance_pct=0.2,
+            unstuck_threshold=0.5,
+        )
+        row[6] = 1.0
+        row[7] = 10.0
+        row[11] = 0.0
+        row[16] = 0.5
+        row[20] = 0.0
+        row[23] = 100.0
+    else:
+        row = [
+            1.0,
+            2.0,
+            3.0,
+            0.0,
+            0.01,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            100.0,
+            1.0,
+        ]
+        row += _single_coin_exposure_fields(entry_gate=True)
+        row += _tm_twel_enforcer_fields(
+            unstuck_enabled=True,
+            unstuck_ema_gating_enabled=False,
+            unstuck_close_pct=0.1,
+            unstuck_loss_allowance_pct=0.2,
+            unstuck_threshold=0.5,
+        )
+
+    runner_cls = (
+        MpsTrailingMartingaleRunner
+        if strategy_kind == "trailing_martingale"
+        else MpsEmaAnchorRunner
+    )
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() == pytest.approx(9.0)
+    expected_short = 9.0 if strategy_kind == "ema_anchor" else 10.0
+    assert output["short_psize"].item() == pytest.approx(expected_short)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_equal_unstuck_twel_reducers_keep_nearer_twel(side):
+    count = 6
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    if side == "long":
+        low[3] = 98.0
+    else:
+        high[3] = 102.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.01,
+        gate_initial=1.0,
+        gate_reentry=0.0,
+        entry_gate=True,
+        twel_enforcer_enabled=True,
+        threshold=0.5,
+        unstuck_enabled=True,
+        unstuck_ema_gating_enabled=False,
+        unstuck_close_pct=0.5,
+        unstuck_loss_allowance_pct=0.2,
+        unstuck_threshold=0.5,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[16] = 10.0
+    row[20] = 0.0
+    row[23] = 100.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        max_realized_loss_pct=0.05,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # The equal-size TWEL reducer is one price band more executable than the
+    # auto-unstuck reducer. The next candle crosses TWEL but only touches
+    # unstuck, proving selection follows Rust's reachability tie-break.
+    assert output[size_key].item() == pytest.approx(5.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_unstuck_finalization_keeps_valid_ordinary_close_remainder():
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3] = 98.0
+    high[4] = 201.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.5, 0.01, 0.5, 500.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.01,
+        gate_initial=1.0,
+        gate_reentry=0.0,
+        entry_gate=True,
+        threshold=1.0,
+        wel_enforcer_enabled=True,
+        wel_enforcer_threshold=0.2,
+        unstuck_enabled=True,
+        unstuck_ema_gating_enabled=False,
+        unstuck_close_pct=0.7,
+        unstuck_loss_allowance_pct=0.2,
+        unstuck_threshold=0.5,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[15] = 0.3
+    row[16] = 1.0
+    row[20] = 0.01
+    row[23] = 100.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        max_realized_loss_pct=0.05,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # At the 100 touch, the requested unstuck close is 7 and its minimum is 5.
+    # The ordinary close near 198 has a 3-unit quantity above its ~2.5 minimum,
+    # so exact finalization keeps the unstuck selection key at 7 instead of
+    # promoting it to the full 10. The genuinely larger WEL reducer therefore
+    # wins and leaves less than the unstuck request would have left.
+    assert output["psize"].item() < 3.0
 
 
 @pytest.mark.skipif(
@@ -1405,11 +1912,11 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 0.0,
     }
-    baseline = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    baseline = _single_coin_param_row(values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
     repaired_values = dict(values, twel_enforcer_enabled=1.0)
-    repaired = [
-        repaired_values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
-    ]
+    repaired = _single_coin_param_row(
+        repaired_values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+    )
     output = MpsEmaAnchorRunner(
         market,
         run,
@@ -1493,7 +2000,7 @@ def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
     }
-    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    row = _single_coin_param_row(values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
     kwargs = {
         "long_enabled": side == "long",
         "short_enabled": side == "short",
@@ -1555,7 +2062,7 @@ def test_mps_ema_realized_loss_gate_shares_budget_between_sides():
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
     }
-    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    row = _single_coin_param_row(values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
 
     output = MpsEmaAnchorRunner(
         market,
@@ -1615,7 +2122,7 @@ def test_mps_ema_realized_loss_gate_reserves_unfilled_batch_loss():
         "twel_enforcer_threshold": 0.5,
         "twel_enforcer_enabled": 1.0,
     }
-    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    row = _single_coin_param_row(values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
     common = {
         "long_enabled": True,
         "short_enabled": True,
@@ -1684,7 +2191,7 @@ def test_mps_ema_zero_loss_budget_blocks_loss_below_balance_ulp():
         "twel_enforcer_threshold": 1.0,
         "twel_enforcer_enabled": 0.0,
     }
-    row = [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS]
+    row = _single_coin_param_row(values, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
 
     ungated = MpsEmaAnchorRunner(
         market,
@@ -4330,7 +4837,7 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     )
     row.extend(_single_coin_exposure_fields())
     row.extend(_tm_wel_enforcer_fields())
-    row.extend(_tm_twel_enforcer_fields())
+    row.append(0.0)  # TWEL enforcer disabled
     row.append(0.0)  # TWEL reduce_overweight policy
 
     output = MpsTrailingMartingaleMulticoinRunner(
@@ -4360,7 +4867,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 34" in source
+    assert "constant int SIDE_PARAMS = 40" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
@@ -4373,11 +4880,15 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "close_gen_balance" in source
     assert "merge_reducer" not in source
     assert "finalized_reducer_qty" in source
+    assert "finalized_reducer_qty_with_ordinary" in source
+    assert "reducer_candidate_preferred" in source
+    assert "strict distance to the executable" in source
     assert "for (int rung = 0; rung < 500; ++rung)" in source
     assert "ladder_side, ladder_balance" in source
     assert "recursive_close_groups" in source
     assert "realized_loss_proxy_allows_close" in source
-    assert "const bool loss_gate_enabled = settings[14] < 1.0f" in source
+    assert "const float max_realized_loss_pct = settings[14]" in source
+    assert "const bool loss_gate_enabled = max_realized_loss_pct < 1.0f" in source
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source

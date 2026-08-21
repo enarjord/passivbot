@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 
 from config.metrics import resolve_metric_value
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import (
@@ -96,6 +97,13 @@ _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
     "risk_twel_enforcer_threshold": "twel_enforcer_threshold",
 }
 
+_SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES = {
+    "unstuck_close_pct": "unstuck_close_pct",
+    "unstuck_ema_dist": "unstuck_ema_dist",
+    "unstuck_loss_allowance_pct": "unstuck_loss_allowance_pct",
+    "unstuck_threshold": "unstuck_threshold",
+}
+
 EMA_STRATEGY_BOUND_MAP = {
     f"{side}_{bound_suffix}": f"{side}_{parameter}"
     for side in ("long", "short")
@@ -108,6 +116,11 @@ EMA_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
     },
 }
 
@@ -181,6 +194,11 @@ TRAILING_MARTINGALE_BOUND_MAP = {
         f"{side}_{bound_suffix}": f"{side}_{parameter}"
         for side in ("long", "short")
         for bound_suffix, parameter in _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES.items()
+    },
+    **{
+        f"{side}_{bound_suffix}": f"{side}_{parameter}"
+        for side in ("long", "short")
+        for bound_suffix, parameter in _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES.items()
     },
 }
 
@@ -433,7 +451,6 @@ PINNED_SCOPE_BOUND_VALUES = {
     for side in ("long", "short")
     for suffix, expected in {
         "hsl_enabled": 0.0,
-        "unstuck_enabled": 0.0,
     }.items()
 }
 
@@ -927,9 +944,10 @@ def _validate_scope_config(
         side_config = config["bot"][side]
         if bool(side_config.get("hsl", {}).get("enabled")):
             raise ValueError(f"GPU foundation requires bot.{side}.hsl.enabled=false")
-        if bool(side_config.get("unstuck", {}).get("enabled")):
+        if coin_count > 1 and bool(side_config.get("unstuck", {}).get("enabled")):
             raise ValueError(
-                f"GPU foundation requires bot.{side}.unstuck.enabled=false"
+                "GPU multicoin foundation requires "
+                f"bot.{side}.unstuck.enabled=false"
             )
         risk = side_config.get("risk", {})
         required_disabled = []
@@ -1775,6 +1793,10 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
     contract["max_realized_loss_pct"] = float(
         config.get("live", {}).get("max_realized_loss_pct", 1.0)
     )
+    contract["pnls_max_lookback_days"] = (
+        _gpu_pnls_max_lookback_days_checkpoint_value(config)
+    )
+    contract["unstuck"] = _gpu_unstuck_checkpoint_contract(config)
     if suite_inputs is not None:
         prepared_scenarios = []
         for item in suite_inputs:
@@ -1821,6 +1843,12 @@ def _gpu_suite_checkpoint_contract(config: dict, suite_inputs=None) -> dict:
                         .get("live", {})
                         .get("max_realized_loss_pct", 1.0)
                     ),
+                    "pnls_max_lookback_days": (
+                        _gpu_pnls_max_lookback_days_checkpoint_value(
+                            item["config"]
+                        )
+                    ),
+                    "unstuck": _gpu_unstuck_checkpoint_contract(item["config"]),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -1844,10 +1872,76 @@ def _gpu_runtime_checkpoint_contract(config: dict, proxy) -> dict:
         "max_realized_loss_pct": float(
             config.get("live", {}).get("max_realized_loss_pct", 1.0)
         ),
+        "pnls_max_lookback_days": (
+            _gpu_pnls_max_lookback_days_checkpoint_value(config)
+        ),
         "coin_override_contract": deepcopy(
             getattr(proxy, "coin_override_contract", None)
         ),
+        "unstuck": _gpu_unstuck_checkpoint_contract(config),
     }
+
+
+def _gpu_pnls_max_lookback_days_checkpoint_value(config: dict) -> float:
+    return parse_pnls_max_lookback_days(
+        config.get("live", {}).get("pnls_max_lookback_days", 30.0),
+        field_name="live.pnls_max_lookback_days",
+    ).to_backtest_days_value()
+
+
+def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
+    contract = {}
+    for side in ("long", "short"):
+        unstuck = config.get("bot", {}).get(side, {}).get("unstuck", {})
+        contract[side] = {
+            "enabled": bool(unstuck.get("enabled", False)),
+            "ema_gating_enabled": bool(
+                unstuck.get("ema_gating_enabled", True)
+            ),
+            "close_pct": float(unstuck.get("close_pct", 0.0)),
+            "ema_dist": float(unstuck.get("ema_dist", 0.0)),
+            "loss_allowance_pct": float(
+                unstuck.get("loss_allowance_pct", 0.0)
+            ),
+            "threshold": float(unstuck.get("threshold", 0.0)),
+        }
+    return contract
+
+
+def _single_coin_unstuck_search_sides(
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
+) -> set[str]:
+    """Return target and mirrored source sides whose unstuck genes affect a scenario."""
+
+    configs = (
+        [item["config"] for item in suite_inputs]
+        if suite_inputs
+        else [proxy_config]
+    )
+    target_sides = {
+        side
+        for side in ("long", "short")
+        if any(
+            gpu_side_enabled(item, side)
+            and bool(
+                item.get("bot", {})
+                .get(side, {})
+                .get("unstuck", {})
+                .get("enabled", False)
+            )
+            for item in configs
+        )
+    }
+    return _gpu_candidate_source_sides(target_sides, overrides or set())
+
+
+def _gpu_unstuck_parameter_active(
+    parameter: str, unstuck_search_sides: set[str]
+) -> bool:
+    for side in ("long", "short"):
+        if parameter.startswith(f"{side}_unstuck_"):
+            return side in unstuck_search_sides
+    return True
 
 
 def _checkpoint_signature(
@@ -2100,6 +2194,10 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = dict(PINNED_SCOPE_BOUND_VALUES)
+    if coin_count > 1:
+        pinned.update(
+            {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
+        )
     if strategy_kind != "trailing_martingale":
         pinned.update(
             {
@@ -2581,6 +2679,13 @@ def run_backend(
     candidate_source_sides = _gpu_candidate_source_sides(
         enabled_sides, gpu_optimizer_overrides
     )
+    unstuck_search_sides = (
+        _single_coin_unstuck_search_sides(
+            proxy_config, suite_inputs, gpu_optimizer_overrides
+        )
+        if max_coin_count == 1
+        else set()
+    )
     mapped = {
         name: value
         for name, value in mapped_all.items()
@@ -2591,6 +2696,7 @@ def run_backend(
         for name, (index, bound) in sorted(mapped.items(), key=lambda item: item[1][0])
         if bound.high > bound.low
         and name not in fixed_parameter_overrides
+        and _gpu_unstuck_parameter_active(name, unstuck_search_sides)
         and not (
             "mirror_short_from_long" in gpu_optimizer_overrides
             and name.startswith("short_")
@@ -2689,14 +2795,14 @@ def run_backend(
         ):
             # Forager ranking cannot affect a one-coin backtest.
             continue
-        if any(
-            bound_key.startswith(f"{side}_hsl_")
-            or bound_key.startswith(f"{side}_unstuck_")
-            for side in enabled_sides
+        if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
+            # HSL remains disabled, so its dormant bounds affect neither path.
+            continue
+        if max_coin_count > 1 and any(
+            bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
         ):
-            # The enabling flags are not optimizer bounds. Scope validation
-            # requires both features off, so these dormant values cannot affect
-            # either the exact Rust backtest or the proxy.
+            # Multicoin unstuck remains disabled until the proxy owns the same
+            # global least-stuck selector as exact Rust.
             continue
         if (
             max_coin_count == 1
@@ -2884,7 +2990,7 @@ def run_backend(
         runtime_contract=(
             None
             if suite_enabled
-            else _gpu_runtime_checkpoint_contract(config, proxy)
+            else _gpu_runtime_checkpoint_contract(proxy_config, proxy)
         ),
     )
     budget = int(config["optimize"]["iters"])
