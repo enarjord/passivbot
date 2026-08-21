@@ -1545,7 +1545,7 @@ def test_gpu_hsl_accepts_one_sided_multicoin_market_panic():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_hsl_fails_closed_for_dual_side_multicoin():
+def test_gpu_hsl_accepts_dual_side_multicoin_pside_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     coins = ["BTC", "ETH", "XRP"]
     config["live"]["approved_coins"] = {"long": coins, "short": coins}
@@ -1555,7 +1555,21 @@ def test_gpu_hsl_fails_closed_for_dual_side_multicoin():
         config["bot"][side]["risk"]["n_positions"] = 3
         config["bot"][side]["hsl"]["enabled"] = True
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("signal_mode", ["coin", "unified"])
+def test_gpu_hsl_rejects_dual_side_multicoin_joint_account_modes(signal_mode):
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    coins = ["BTC", "ETH", "XRP"]
+    config["live"]["approved_coins"] = {"long": coins, "short": coins}
+    config["live"]["hsl_signal_mode"] = signal_mode
+    config["live"]["hedge_mode"] = True
+    for side in ("long", "short"):
+        config["bot"][side]["risk"]["n_positions"] = 3
+        config["bot"][side]["hsl"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="supports only pside"):
         _validate_scope(config, _MulticoinEvaluator())
 
 

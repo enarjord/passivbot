@@ -587,10 +587,17 @@ def test_one_sided_multicoin_hsl_accepts_all_signal_modes(signal_mode):
     )
 
 
-def test_dual_side_multicoin_hsl_remains_fail_closed():
-    with pytest.raises(ValueError, match="exactly one enabled side"):
+def test_dual_side_multicoin_hsl_accepts_decomposable_pside_mode():
+    validate_hsl_signal_topology(
+        "pside", coin_count=3, enabled_side_count=2
+    )
+
+
+@pytest.mark.parametrize("signal_mode", ["coin", "unified"])
+def test_dual_side_multicoin_hsl_rejects_joint_account_modes(signal_mode):
+    with pytest.raises(ValueError, match="supports only pside"):
         validate_hsl_signal_topology(
-            "pside", coin_count=3, enabled_side_count=2
+            signal_mode, coin_count=3, enabled_side_count=2
         )
 
 
