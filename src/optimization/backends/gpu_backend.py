@@ -1091,11 +1091,19 @@ def _validate_dual_multicoin_metrics(
 def _validate_hsl_metric_topology(
     needed_metrics, *, coin_count: int, enabled_sides, hard_stop_metrics
 ) -> None:
-    unsupported = sorted(set(needed_metrics) & set(hard_stop_metrics))
+    tier_overlap_metrics = {
+        "hard_stop_time_in_yellow_pct",
+        "hard_stop_time_in_orange_pct",
+        "hard_stop_time_in_red_pct",
+    }
+    unsupported = sorted(
+        set(needed_metrics) & set(hard_stop_metrics) & tier_overlap_metrics
+    )
     if int(coin_count) > 1 and len(set(enabled_sides)) > 1 and unsupported:
         raise ValueError(
-            "GPU HSL optimizer metrics currently require one shared HSL controller; "
-            "dual-side multi-coin HSL metrics remain unsupported: "
+            "GPU dual-side multi-coin HSL time-in-tier metrics require "
+            "minute-level cross-side overlap which directional summaries cannot "
+            "reconstruct: "
             f"{unsupported}"
         )
 

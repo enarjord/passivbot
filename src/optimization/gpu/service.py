@@ -539,6 +539,88 @@ def _prepared_single_coin_side_enabled(config: dict, side: str, bot: dict) -> bo
     return gpu_side_enabled(config, side) and bool(bot["entry_eligible"])
 
 
+def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
+    """Reduce two pside HSL summaries without inventing shared episode state.
+
+    Lifecycle and panic aggregates have the same sum/max/count reductions as
+    exact Rust. Minute-level max-tier overlap is not recoverable from two
+    histograms; the conservative severity-first allocation below is retained
+    only so unrelated lifecycle metrics can share the normal reducer. The
+    optimizer gate rejects all three time-in-tier metrics for this topology.
+    """
+
+    combined = {
+        "hsl_long_enabled": (long["hsl_long_enabled"] > 0)
+        | (short["hsl_long_enabled"] > 0),
+        "hsl_short_enabled": (long["hsl_short_enabled"] > 0)
+        | (short["hsl_short_enabled"] > 0),
+    }
+    for key in (
+        "hsl_triggers_long",
+        "hsl_triggers_short",
+        "hsl_restarts_long",
+        "hsl_restarts_short",
+        "hsl_duration_sum_steps",
+        "hsl_duration_count",
+        "hsl_trigger_drawdown_sum",
+        "hsl_trigger_drawdown_count",
+        "hsl_flatten_time_sum_steps",
+        "hsl_flatten_time_count",
+        "hsl_restart_retrigger_count",
+        "hsl_halt_to_restart_equity_loss",
+        "hsl_panic_close_loss_sum",
+        "hsl_panic_loss_drawdown_sum",
+        "hsl_panic_loss_drawdown_count",
+    ):
+        combined[key] = long[key] + short[key]
+    for key in (
+        "hsl_duration_max_steps",
+        "hsl_panic_close_loss_max",
+        "hsl_panic_loss_drawdown_max",
+    ):
+        combined[key] = long[key].maximum(short[key])
+
+    long_count = long["hsl_panic_loss_drawdown_count"]
+    short_count = short["hsl_panic_loss_drawdown_count"]
+    long_has = long_count > 0.0
+    short_has = short_count > 0.0
+    both_have = long_has & short_has
+    zeros = long_count.new_zeros(long_count.shape)
+    combined["hsl_panic_loss_drawdown_min"] = long[
+        "hsl_panic_loss_drawdown_min"
+    ].minimum(short["hsl_panic_loss_drawdown_min"]).where(
+        both_have,
+        long["hsl_panic_loss_drawdown_min"].where(
+            long_has,
+            short["hsl_panic_loss_drawdown_min"].where(short_has, zeros),
+        ),
+    )
+
+    total = long["hsl_tier_samples_total"].maximum(
+        short["hsl_tier_samples_total"]
+    )
+    red = (long["hsl_tier_samples_red"] + short["hsl_tier_samples_red"]).minimum(
+        total
+    )
+    remaining = (total - red).clamp(min=0.0)
+    orange = (
+        long["hsl_tier_samples_orange"] + short["hsl_tier_samples_orange"]
+    ).minimum(remaining)
+    remaining = (remaining - orange).clamp(min=0.0)
+    yellow = (
+        long["hsl_tier_samples_yellow"] + short["hsl_tier_samples_yellow"]
+    ).minimum(remaining)
+    combined.update(
+        {
+            "hsl_tier_samples_total": total,
+            "hsl_tier_samples_yellow": yellow,
+            "hsl_tier_samples_orange": orange,
+            "hsl_tier_samples_red": red,
+        }
+    )
+    return combined
+
+
 def _combine_hedged_multicoin_outputs(
     long: dict,
     short: dict,
@@ -687,6 +769,10 @@ def _combine_hedged_multicoin_outputs(
     combined["pnl_recovery_max_ms"] = long["pnl_recovery_max_ms"].maximum(
         short["pnl_recovery_max_ms"]
     )
+    if DIRECTIONAL_HSL_OUTPUT_KEYS <= long.keys() and (
+        DIRECTIONAL_HSL_OUTPUT_KEYS <= short.keys()
+    ):
+        combined.update(_combine_hedged_multicoin_hsl_outputs(long, short))
     return combined
 
 
