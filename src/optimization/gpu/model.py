@@ -108,6 +108,17 @@ HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_panic_market", ("panic_close_order_type",)),
 )
 
+
+def encode_hsl_panic_order_type(value, *, field_name: str) -> float:
+    normalized = str(value).strip().lower()
+    if normalized not in {"limit", "market"}:
+        raise ValueError(
+            f"GPU HSL requires {field_name} to be limit or market, got "
+            f"{value!r}"
+        )
+    return float(normalized == "market")
+
+
 MULTICOIN_TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     "twel_enforcer_reduce_portfolio",

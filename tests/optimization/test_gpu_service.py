@@ -1117,6 +1117,44 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
     assert contract["values"][1][19:] == pytest.approx(matrix[1, 19:].tolist())
 
 
+def test_multicoin_coin_overrides_reject_invalid_hsl_panic_order_type():
+    strategy = {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS[:-2]}
+    payload = SimpleNamespace(
+        strategy_params_list=[{"long": strategy}, {"long": strategy}],
+        bot_params_list=[
+            {"long": {}},
+            {
+                "long": {
+                    "hsl_enabled": True,
+                    "hsl_panic_close_order_type": "makret",
+                }
+            },
+        ],
+    )
+    config = {
+        "coin_overrides": {
+            "ETH": {
+                "bot": {
+                    "long": {"hsl": {"panic_close_order_type": "makret"}}
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="to be limit or market"):
+        _build_multicoin_ema_coin_overrides(
+            config=config,
+            mss={"BTC": {}, "ETH": {}},
+            exchange="bybit",
+            coins=["BTC", "ETH"],
+            payload=payload,
+            side="long",
+            resolve_override=lambda config, _mss, _exchange, coin: config[
+                "coin_overrides"
+            ].get(coin, {}),
+        )
+
+
 def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert tuple(
         key for key, _path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS

@@ -19,6 +19,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
+    encode_hsl_panic_order_type,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
     validate_hsl_signal_topology,
@@ -1016,7 +1017,10 @@ def _pack_multicoin_hsl_overrides(
         if value is missing:
             continue
         if key == "hsl_panic_market":
-            encoded = float(str(value).strip().lower() == "market")
+            encoded = encode_hsl_panic_order_type(
+                value,
+                field_name="coin override hsl.panic_close_order_type",
+            )
         else:
             encoded = float(packed[key])
         matrix[row, start_column + offset] = encoded

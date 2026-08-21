@@ -2019,6 +2019,26 @@ def test_gpu_multicoin_accepts_complete_coin_hsl_override_group():
     )
 
 
+def test_gpu_multicoin_rejects_invalid_coin_hsl_panic_order_type():
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {"hsl": {"panic_close_order_type": "makret"}}
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="to be limit or market"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
 @pytest.mark.parametrize(
     ("signal_mode", "enabled_sides"),
     [("pside", ["long"]), ("unified", ["long"]), ("coin", ["long", "short"])],
