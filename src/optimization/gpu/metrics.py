@@ -32,6 +32,19 @@ _USD_STRATEGY_EQ_ALIASES = {
     "sterling_ratio_w_usd": "sterling_ratio_strategy_eq_w",
 }
 
+_USD_PER_EXPOSURE_METRICS = {
+    "adg_per_exposure_long_usd": ("adg_strategy_eq", "long"),
+    "adg_per_exposure_short_usd": ("adg_strategy_eq", "short"),
+    "adg_w_per_exposure_long_usd": ("adg_strategy_eq_w", "long"),
+    "adg_w_per_exposure_short_usd": ("adg_strategy_eq_w", "short"),
+    "gain_per_exposure_long_usd": ("gain_strategy_eq", "long"),
+    "gain_per_exposure_short_usd": ("gain_strategy_eq", "short"),
+    "mdg_per_exposure_long_usd": ("mdg_strategy_eq", "long"),
+    "mdg_per_exposure_short_usd": ("mdg_strategy_eq", "short"),
+    "mdg_w_per_exposure_long_usd": ("mdg_strategy_eq_w", "long"),
+    "mdg_w_per_exposure_short_usd": ("mdg_strategy_eq_w", "short"),
+}
+
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
@@ -101,6 +114,7 @@ SUPPORTED_METRICS = (
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
     *_USD_STRATEGY_EQ_ALIASES,
+    *_USD_PER_EXPOSURE_METRICS,
 )
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
@@ -733,6 +747,10 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         source
         for alias, source in _USD_STRATEGY_EQ_ALIASES.items()
         if alias in requested
+    } | {
+        source
+        for metric, (source, _side) in _USD_PER_EXPOSURE_METRICS.items()
+        if metric in requested
     }
 
     gain, adg = _smoothed_gain_adg(day_end_eq, active)
@@ -882,6 +900,17 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
+    for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
+        if name not in requested:
+            continue
+        denominator = out[
+            f"candidate_total_wallet_exposure_limit_{side}"
+        ].to(torch.float64)
+        objectives[name] = torch.where(
+            denominator > 0.0,
+            objectives[source] / denominator,
+            torch.zeros_like(objectives[source]),
+        )
     for alias, source in _USD_STRATEGY_EQ_ALIASES.items():
         if alias in requested:
             objectives[alias] = objectives[source]

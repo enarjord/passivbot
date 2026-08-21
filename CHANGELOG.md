@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added the canonical USD gain, ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure
+  metrics for both long and short sides to Apple MPS optimization. They reuse the validated
+  strategy-equity proxy reductions and divide by each candidate's effective side
+  `total_wallet_exposure_limit`, including exact-last suite overrides; a zero-exposure side retains
+  the CPU contract's zero value.
+
 - Added the canonical USD account-equity scoring aliases for gain, ADG, MDG, Sharpe, Sortino,
   Omega, expected shortfall, Calmar, Sterling, worst drawdown, and worst-1% drawdown, including the
   available weighted variants, to Apple MPS optimization. With BTC collateral disabled, these

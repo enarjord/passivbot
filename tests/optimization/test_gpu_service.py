@@ -20,6 +20,7 @@ from optimization.gpu.service import (
     MpsMulticoinEmaProxy,
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
+    _candidate_wallet_exposure_limit_outputs,
     _combine_hedged_multicoin_outputs,
     _directional_entry_initial_metrics,
     _hsl_params,
@@ -57,6 +58,31 @@ def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
     other = "short" if side == "long" else "long"
     assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
     assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_candidate_wallet_exposure_limits_preserve_sides_and_base_fallback():
+    torch = pytest.importorskip("torch")
+
+    outputs = _candidate_wallet_exposure_limit_outputs(
+        [
+            {"long_total_wallet_exposure_limit": 1.25},
+            {
+                "long_total_wallet_exposure_limit": 1.5,
+                "short_total_wallet_exposure_limit": 0.75,
+            },
+        ],
+        {"long": 1.0, "short": 0.5},
+        torch=torch,
+    )
+
+    assert outputs["candidate_total_wallet_exposure_limit_long"].tolist() == [
+        1.25,
+        1.5,
+    ]
+    assert outputs["candidate_total_wallet_exposure_limit_short"].tolist() == [
+        0.5,
+        0.75,
+    ]
 
 
 def test_single_coin_side_eligibility_uses_prepared_coin_payload():

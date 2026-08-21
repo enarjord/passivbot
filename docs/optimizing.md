@@ -199,6 +199,10 @@ The supported slice is intentionally narrow:
   and mean total-wallet-exposure accumulators. The exposure ratios support single-coin and
   one-sided multi-coin runs; dual-side multi-coin runs fail closed because independent directional
   kernels cannot reconstruct shared net exposure
+- canonical USD gain, ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure metrics are
+  supported for both long and short sides. The proxy divides the matching validated equity metric
+  by each candidate's effective side `total_wallet_exposure_limit`, after applying any exact-last
+  suite override, and returns zero for a zero-exposure side as the CPU analysis does
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
