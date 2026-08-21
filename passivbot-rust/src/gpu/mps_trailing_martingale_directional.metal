@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant int DAILY_COLS = 5;
+constant int DAILY_COLS = 7;
 constant int SCALAR_COLS = 50;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 51;
@@ -1416,6 +1416,7 @@ inline void passivbot_single_coin_impl(
     float day_dd = 0.0f;
     float day_volume = 0.0f;
     float day_has_fill = 0.0f;
+    float day_start_balance = balance;
 
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -1450,6 +1451,8 @@ inline void passivbot_single_coin_impl(
                 daily[o + 2] = day_dd;
                 daily[o + 3] = day_volume;
                 daily[o + 4] = day_has_fill;
+                daily[o + 5] = balance - day_start_balance;
+                daily[o + 6] = balance;
             }
             cur_day = di;
             day_touched = false;
@@ -1458,6 +1461,7 @@ inline void passivbot_single_coin_impl(
             day_dd = 0.0f;
             day_volume = 0.0f;
             day_has_fill = 0.0f;
+            day_start_balance = balance;
         }
 
         bool long_close_fill = false;
@@ -2680,6 +2684,8 @@ inline void passivbot_single_coin_impl(
         daily[o + 2] = day_dd;
         daily[o + 3] = day_volume;
         daily[o + 4] = day_has_fill;
+        daily[o + 5] = balance - day_start_balance;
+        daily[o + 6] = balance;
     }
 
     if (long_side.pos_open_k >= 0.0f && last_eq_k >= 0.0f) {

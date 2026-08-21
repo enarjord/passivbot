@@ -118,6 +118,62 @@ def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
     assert sortino.item() == 0.0
 
 
+def test_daily_pnl_metrics_match_rust_fill_day_contract():
+    day_end = torch.full((1, 4), 100.0, dtype=torch.float64)
+    day_has_fill = torch.tensor([[True, True, False, True]])
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": day_has_fill,
+        "day_net_pnl": torch.tensor([[10.0, -5.0, 999.0, 0.0]]),
+        "day_last_fill_balance": torch.tensor([[110.0, 105.0, 1.0, 105.0]]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "position_unchanged_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([180_000.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([180_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([180_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+    requested = {
+        "adg_pnl",
+        "mdg_pnl",
+        "sharpe_ratio_pnl",
+        "sortino_ratio_pnl",
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
+        ),
+        {"ts0": 0.0, "n": 4},
+        needed=requested,
+    )
+
+    ratios = torch.tensor([10.0 / 110.0, -5.0 / 105.0, 0.0])
+    mean = ratios.mean()
+    std = torch.sqrt(((ratios - mean) ** 2).mean())
+    downside = torch.sqrt((ratios[ratios < 0.0] ** 2).mean())
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    assert metrics["adg_pnl"].item() == pytest.approx(mean.item())
+    assert metrics["mdg_pnl"].item() == 0.0
+    assert metrics["sharpe_ratio_pnl"].item() == pytest.approx(
+        (mean / std).item()
+    )
+    assert metrics["sortino_ratio_pnl"].item() == pytest.approx(
+        (mean / downside).item()
+    )
+
+
 def test_empty_median_return_series_matches_rust_zero_contract():
     values = torch.empty((1, 0), dtype=torch.float64)
     mask = torch.empty((1, 0), dtype=torch.bool)

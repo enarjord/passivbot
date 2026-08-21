@@ -323,6 +323,13 @@ position-unchanged duration, initial-entry balance percentage for each side, vol
 total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
 variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
 the corresponding canonical USD account-equity names share this strategy-equity surface.
+Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` are also
+supported for single-coin and one-sided multi-coin runs. Metal groups realized balance changes by
+UTC fill day and divides by that day's last fill balance, matching exact Rust's unweighted daily
+PnL ratio contract. Dual-side multi-coin runs remain unsupported because independent directional
+summaries cannot identify the intraday shared-liquidation cutoff. Weighted PnL variants remain
+unsupported because Rust applies suffix-specific minimum fill-count gating that the proxy does not
+yet model.
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and

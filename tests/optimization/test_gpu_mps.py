@@ -270,6 +270,9 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
         output["total_wallet_exposure_max"].item()
         >= output["total_wallet_exposure_mean"].item()
     )
+    fill_days = output["day_has_fill"].bool()
+    assert torch.isfinite(output["day_net_pnl"][fill_days]).all()
+    assert (output["day_last_fill_balance"][fill_days] > 0.0).all()
 
 
 @pytest.mark.skipif(
@@ -566,6 +569,9 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
+    fill_days = output["day_has_fill"]
+    assert torch.isfinite(output["day_net_pnl"][fill_days]).all()
+    assert (output["day_last_fill_balance"][fill_days] > 0.0).all()
     assert (output["total_wallet_exposure_max"] > 0.0).all()
     assert (
         output["total_wallet_exposure_max"]
@@ -593,7 +599,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "secondary_close_qty" in source
     assert "realized_loss_proxy_allows_close" in source
     assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
-    assert "constant int DAILY_COLS = 6" in source
+    assert "constant int DAILY_COLS = 8" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
     assert "const float score_hysteresis = fmax(run_settings[4], 0.0f)" in source
@@ -2108,6 +2114,9 @@ def test_mps_tm_equal_unstuck_twel_reducers_keep_nearer_twel(side):
     # unstuck, proving selection follows Rust's reachability tie-break.
     assert output[size_key].item() == pytest.approx(5.0)
     assert output["total_wallet_exposure_max"].item() > 0.0
+    fill_days = output["day_has_fill"]
+    assert torch.isfinite(output["day_net_pnl"][fill_days]).all()
+    assert (output["day_last_fill_balance"][fill_days] > 0.0).all()
     assert (
         output["total_wallet_exposure_max"].item()
         >= output["total_wallet_exposure_mean"].item()
