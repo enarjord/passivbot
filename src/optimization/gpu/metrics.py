@@ -65,12 +65,24 @@ SUPPORTED_METRICS = (
     "exposure_ratio_usd",
     "fills_analysis_duration_days",
     "fills_count",
+    "fills_count_close",
+    "fills_count_entry",
+    "fills_count_long",
+    "fills_count_short",
+    "fills_entry_per_close",
     "fills_gap_longest_days",
     "fills_gap_mean_hours",
     "fills_gap_median_hours",
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
     "fills_per_day",
+    "fills_per_day_close",
+    "fills_per_day_entry",
+    "fills_per_day_long",
+    "fills_per_day_per_position_slot",
+    "fills_per_day_per_position_slot_long",
+    "fills_per_day_per_position_slot_short",
+    "fills_per_day_short",
     "gain_strategy_eq",
     "hard_stop_duration_minutes_max",
     "hard_stop_duration_minutes_mean",
@@ -148,7 +160,19 @@ _WEIGHTED_PNL_METRICS = {
 _FILL_ACTIVITY_METRICS = {
     "fills_analysis_duration_days",
     "fills_count",
+    "fills_count_close",
+    "fills_count_entry",
+    "fills_count_long",
+    "fills_count_short",
+    "fills_entry_per_close",
     "fills_per_day",
+    "fills_per_day_close",
+    "fills_per_day_entry",
+    "fills_per_day_long",
+    "fills_per_day_per_position_slot",
+    "fills_per_day_per_position_slot_long",
+    "fills_per_day_per_position_slot_short",
+    "fills_per_day_short",
 }
 
 
@@ -674,14 +698,14 @@ def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
     return adg, mdg, sharpe, sortino, count
 
 
-def _fill_activity_metrics(out: dict, active: torch.Tensor) -> dict:
+def _fill_activity_metrics(out: dict, requested: set[str]) -> dict:
     """Match Rust's full-run fill count and timestamp-span rate contract."""
 
-    fill_count = torch.where(
-        active,
-        out["day_fill_count"].to(torch.float64),
-        torch.zeros_like(out["day_fill_count"], dtype=torch.float64),
-    ).sum(dim=1)
+    fill_count = out["fill_count"].to(torch.float64)
+    fills_count_entry = out["fill_count_entry"].to(torch.float64)
+    fills_count_long = out["fill_count_long"].to(torch.float64)
+    fills_count_close = (fill_count - fills_count_entry).clamp(min=0.0)
+    fills_count_short = (fill_count - fills_count_long).clamp(min=0.0)
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
     last_eq_ts = out["last_eq_ts"].to(torch.float64)
     has_span = (
@@ -699,11 +723,66 @@ def _fill_activity_metrics(out: dict, active: torch.Tensor) -> dict:
         fill_count / duration_days.clamp(min=1.0e-9),
         torch.zeros_like(fill_count),
     )
-    return {
+    def per_day(count):
+        return torch.where(
+            duration_days > 0.0,
+            count / duration_days.clamp(min=1.0e-9),
+            torch.zeros_like(count),
+        )
+
+    fills_per_day_entry = per_day(fills_count_entry)
+    fills_per_day_close = per_day(fills_count_close)
+    fills_per_day_long = per_day(fills_count_long)
+    fills_per_day_short = per_day(fills_count_short)
+    metrics = {
         "fills_analysis_duration_days": duration_days,
         "fills_count": fill_count,
+        "fills_count_close": fills_count_close,
+        "fills_count_entry": fills_count_entry,
+        "fills_count_long": fills_count_long,
+        "fills_count_short": fills_count_short,
+        "fills_entry_per_close": fills_count_entry
+        / fills_count_close.clamp(min=1.0),
         "fills_per_day": fills_per_day,
+        "fills_per_day_close": fills_per_day_close,
+        "fills_per_day_entry": fills_per_day_entry,
+        "fills_per_day_long": fills_per_day_long,
+        "fills_per_day_short": fills_per_day_short,
     }
+    slot_metrics = {
+        "fills_per_day_per_position_slot",
+        "fills_per_day_per_position_slot_long",
+        "fills_per_day_per_position_slot_short",
+    }
+    if requested & slot_metrics:
+        slots_long = out["position_slots_long"].to(torch.float64)
+        slots_short = out["position_slots_short"].to(torch.float64)
+        long_slot_rate = torch.where(
+            slots_long > 0.0,
+            fills_per_day_long / slots_long.clamp(min=1.0),
+            torch.zeros_like(fills_per_day_long),
+        )
+        short_slot_rate = torch.where(
+            slots_short > 0.0,
+            fills_per_day_short / slots_short.clamp(min=1.0),
+            torch.zeros_like(fills_per_day_short),
+        )
+        active_slot_sides = (slots_long > 0.0).to(torch.float64) + (
+            slots_short > 0.0
+        ).to(torch.float64)
+        combined_slot_rate = torch.where(
+            active_slot_sides > 0.0,
+            (long_slot_rate + short_slot_rate) / active_slot_sides.clamp(min=1.0),
+            torch.zeros_like(long_slot_rate),
+        )
+        metrics.update(
+            {
+                "fills_per_day_per_position_slot": combined_slot_rate,
+                "fills_per_day_per_position_slot_long": long_slot_rate,
+                "fills_per_day_per_position_slot_short": short_slot_rate,
+            }
+        )
+    return metrics
 
 
 def _weighted_pnl_metrics(
@@ -994,7 +1073,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         else {}
     )
     fill_activity_metrics = (
-        _fill_activity_metrics(out, active)
+        _fill_activity_metrics(out, requested)
         if requested & _FILL_ACTIVITY_METRICS
         else {}
     )

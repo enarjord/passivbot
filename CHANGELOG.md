@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added entry/close and long/short fill counts and daily rates, entry-to-close ratio, and
+  per-configured-position-slot fill rates to Apple MPS optimization for single-coin and one-sided
+  multi-coin EMA Anchor and Trailing Martingale runs. Metal records every proxy fill by role and
+  side, while Python applies each candidate's configured active position-slot denominators using
+  the exact Rust averaging contract. Exact Rust validation remains authoritative, and dual-side
+  multi-coin runs fail closed at the existing intraday shared-liquidation boundary.
+
 - Added `fills_count`, `fills_analysis_duration_days`, and `fills_per_day` scoring and limits to
   Apple MPS optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing
   Martingale runs. The proxy reuses Metal's authoritative per-fill daily counts and the analyzed

@@ -6,7 +6,7 @@ constant int PARAM_COLS = 48;
 constant int OVERRIDE_COLS = 34;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 24;
+constant int SCALAR_COLS = 27;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -68,9 +68,17 @@ inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
     thread float& realized_pnl_cumsum_max,
-    thread float& day_fill_count
+    thread float& day_fill_count,
+    thread float& fill_count,
+    thread float& fill_count_entry,
+    thread float& fill_count_long,
+    bool is_entry,
+    bool is_long
 ) {
     day_fill_count += 1.0f;
+    fill_count += 1.0f;
+    if (is_entry) fill_count_entry += 1.0f;
+    if (is_long) fill_count_long += 1.0f;
     realized_pnl_cumsum_last += net_pnl;
     realized_pnl_cumsum_max = fmax(
         realized_pnl_cumsum_max, realized_pnl_cumsum_last
@@ -647,6 +655,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float realized_pnl_cumsum_max = 0.0f;
     float profit_sum = 0.0f;
     float loss_sum = 0.0f;
+    float fill_count = 0.0f;
+    float fill_count_entry = 0.0f;
+    float fill_count_long = 0.0f;
     bool alive = true;
     bool equity_started = false;
     bool selection_initialized = false;
@@ -961,7 +972,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             record_realized_net(
                                 net_pnl, realized_pnl_cumsum_last,
                                 realized_pnl_cumsum_max,
-                                day_fill_count
+                                day_fill_count, fill_count, fill_count_entry,
+                                fill_count_long, false, !short_side
                             );
                             psize[c] = fmax(
                                 round_step(psize[c] - qty, qty_step), 0.0f
@@ -996,7 +1008,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     record_realized_net(
                         grid_net_pnl, realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
-                        day_fill_count
+                        day_fill_count, fill_count, fill_count_entry,
+                        fill_count_long, false, !short_side
                     );
                     psize[c] = fmax(
                         round_step(psize[c] - grid_qty, qty_step), 0.0f
@@ -1045,7 +1058,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     record_realized_net(
                         net_pnl, realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
-                        day_fill_count
+                        day_fill_count, fill_count, fill_count_entry,
+                        fill_count_long, false, !short_side
                     );
                     psize[c] = fmax(
                         round_step(psize[c] - qty, qty_step), 0.0f
@@ -1088,7 +1102,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 record_realized_net(
                     -fee, realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
-                    day_fill_count
+                    day_fill_count, fill_count, fill_count_entry,
+                    fill_count_long, true, !short_side
                 );
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
@@ -2340,6 +2355,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     ) * entry_initial_qty_pct;
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 24] = fill_count;
+    scalars[scalar_offset + 25] = fill_count_entry;
+    scalars[scalar_offset + 26] = fill_count_long;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

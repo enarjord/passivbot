@@ -23,6 +23,17 @@ from optimization.gpu.mps_kernel import _encode_max_realized_loss_pct
 from optimization.gpu.metrics import _fill_gap_metrics
 
 
+def _assert_fill_scalar_contract(output):
+    fill_count = output["fill_count"]
+    assert torch.equal(fill_count, fill_count.round())
+    assert (fill_count >= 0.0).all()
+    assert (fill_count >= output["fill_count_entry"]).all()
+    assert (fill_count >= output["fill_count_long"]).all()
+    assert torch.equal(
+        fill_count, output["day_fill_count"].sum(dim=1)
+    )
+
+
 @pytest.mark.parametrize(
     "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
 )
@@ -277,6 +288,11 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     assert torch.equal(
         output["day_fill_count"], output["day_fill_count"].round()
     )
+    _assert_fill_scalar_contract(output)
+    if side == "long":
+        assert torch.equal(output["fill_count_long"], output["fill_count"])
+    else:
+        assert (output["fill_count_long"] == 0.0).all()
 
 
 @pytest.mark.skipif(
@@ -491,7 +507,10 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 50" in source
+    assert "constant int SCALAR_COLS = 53" in source
+    assert "scalars[so + 50] = fill_count" in source
+    assert "scalars[so + 51] = fill_count_entry" in source
+    assert "scalars[so + 52] = fill_count_long" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -580,6 +599,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert torch.equal(
         output["day_fill_count"], output["day_fill_count"].round()
     )
+    _assert_fill_scalar_contract(output)
     assert (output["total_wallet_exposure_max"] > 0.0).all()
     assert (
         output["total_wallet_exposure_max"]
@@ -690,6 +710,11 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     ).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
+    _assert_fill_scalar_contract(output)
+    if side == "long":
+        assert torch.equal(output["fill_count_long"], output["fill_count"])
+    else:
+        assert (output["fill_count_long"] == 0.0).all()
 
     with pytest.raises(ValueError, match="finite and non-negative"):
         MpsEmaAnchorMulticoinRunner(
@@ -5622,6 +5647,11 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert output["day_has_fill"].sum().item() > 0
     assert (output["psize"].item() > 0.0) is long_enabled
     assert (output["short_psize"].item() > 0.0) is short_enabled
+    _assert_fill_scalar_contract(output)
+    if long_enabled and not short_enabled:
+        assert torch.equal(output["fill_count_long"], output["fill_count"])
+    if short_enabled and not long_enabled:
+        assert output["fill_count_long"].item() == 0.0
 
 
 @pytest.mark.skipif(

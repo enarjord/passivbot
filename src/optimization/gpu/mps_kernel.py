@@ -19,8 +19,8 @@ from optimization.gpu.model import (
 
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
-MPS_SCALAR_COLS = 24
-MPS_DIRECTIONAL_SCALAR_COLS = 50
+MPS_SCALAR_COLS = 27
+MPS_DIRECTIONAL_SCALAR_COLS = 53
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -127,6 +127,9 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "entry_initial_balance_pct": scalars[:, 21],
         "total_wallet_exposure_max": scalars[:, 22],
         "total_wallet_exposure_mean": scalars[:, 23],
+        "fill_count": scalars[:, 24],
+        "fill_count_entry": scalars[:, 25],
+        "fill_count_long": scalars[:, 26],
     }
 
 
@@ -201,6 +204,9 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "entry_initial_balance_pct_short": scalars[:, 47],
         "total_wallet_exposure_max": scalars[:, 48],
         "total_wallet_exposure_mean": scalars[:, 49],
+        "fill_count": scalars[:, 50],
+        "fill_count_entry": scalars[:, 51],
+        "fill_count_long": scalars[:, 52],
     }
 
 
