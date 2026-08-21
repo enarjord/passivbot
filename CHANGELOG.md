@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added active-symbol count and top-symbol fill-share scoring and limits to Apple MPS optimization
+  for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs. Multi-coin
+  kernels emit per-symbol fill counts only when either metric is requested, preserving the normal
+  proxy's buffer and transfer cost; exact Rust validation remains authoritative.
+
 - Added analyzed-start-anchored active fill-day count and ratio scoring and limits to Apple MPS
   optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs.
   Metal counts distinct 24-hour fill buckets within the candidate's analyzed equity window; exact

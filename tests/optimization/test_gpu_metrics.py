@@ -46,11 +46,18 @@ def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
             "last_eq_ts": torch.tensor([last_ts]),
         },
         SimpleNamespace(interval_ms=60_000),
-        {"fills_active_days_ratio", "fills_analysis_duration_days"},
+        {
+            "fills_active_days_ratio",
+            "fills_active_symbols_count",
+            "fills_analysis_duration_days",
+            "fills_top_symbol_share",
+        },
     )
 
     assert metrics["fills_analysis_duration_days"].item() == 1.0
     assert metrics["fills_active_days_ratio"].item() == 1.0
+    assert metrics["fills_active_symbols_count"].item() == 1.0
+    assert metrics["fills_top_symbol_share"].item() == 1.0
 
 
 def test_loss_profit_ratio_matches_rust_cap_and_neutral_contract():
@@ -80,6 +87,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "fill_count_entry": torch.tensor([3.0, 0.0]),
         "fill_count_long": torch.tensor([4.0, 0.0]),
         "fills_active_days_count": torch.tensor([2.0, 0.0]),
+        "coin_fill_counts": torch.tensor([[4.0, 1.0], [0.0, 0.0]]),
         "position_slots_long": torch.tensor([2.0, 1.0]),
         "position_slots_short": torch.tensor([1.0, 0.0]),
         "max_dd": torch.zeros(2),
@@ -98,6 +106,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     requested = {
         "fills_active_days_count",
         "fills_active_days_ratio",
+        "fills_active_symbols_count",
         "fills_analysis_duration_days",
         "fills_count",
         "fills_count_close",
@@ -113,6 +122,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "fills_per_day_per_position_slot_long",
         "fills_per_day_per_position_slot_short",
         "fills_per_day_short",
+        "fills_top_symbol_share",
     }
 
     metrics = compute_objectives(
@@ -133,6 +143,8 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     assert metrics["fills_active_days_ratio"].tolist() == pytest.approx(
         [2.0 / 3.0, 0.0]
     )
+    assert metrics["fills_active_symbols_count"].tolist() == [2.0, 0.0]
+    assert metrics["fills_top_symbol_share"].tolist() == pytest.approx([0.8, 0.0])
     assert metrics["fills_count"].tolist() == [5.0, 0.0]
     assert metrics["fills_count_entry"].tolist() == [3.0, 0.0]
     assert metrics["fills_count_close"].tolist() == [2.0, 0.0]

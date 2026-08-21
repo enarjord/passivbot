@@ -35,6 +35,7 @@ CORE_OUTPUT_KEYS = {
     "fill_count_entry",
     "fill_count_long",
     "fills_active_days_count",
+    "coin_fill_counts",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -91,6 +92,7 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "fills_analysis_duration_days",
     "fills_active_days_count",
     "fills_active_days_ratio",
+    "fills_active_symbols_count",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -105,6 +107,7 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "fills_per_day_per_position_slot_long",
     "fills_per_day_per_position_slot_short",
     "fills_per_day_short",
+    "fills_top_symbol_share",
     "mdg_pnl",
     "mdg_pnl_w",
     "sharpe_ratio_pnl",
@@ -1380,6 +1383,10 @@ class MpsMulticoinProxy:
                 "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
                 "max_realized_loss_pct": float(
                     backtest_params.get("max_realized_loss_pct", 1.0)
+                ),
+                "collect_coin_fill_counts": bool(
+                    self.needed_metrics
+                    & {"fills_active_symbols_count", "fills_top_symbol_share"}
                 ),
             }
             runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
