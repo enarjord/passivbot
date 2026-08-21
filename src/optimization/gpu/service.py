@@ -354,8 +354,9 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
         ),
         "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_mode": signal_mode_ids[signal_mode],
-        # Coin-mode GPU HSL is single-coin and therefore has one slot. The
-        # value is inert for the unified/pside portfolio signal modes.
+        # Multi-coin kernels replace this initial value with the dynamic
+        # effective slot count before each per-coin HSL sample. The value is
+        # inert for unified/pside and exact for single-coin coin mode.
         "hsl_slot_count": 1.0,
     }
 

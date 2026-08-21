@@ -134,8 +134,10 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed
-- one-sided single-coin EMA Anchor and Trailing Martingale runs support HSL with `coin`, `pside`,
-  or `unified` signals and both resting-limit and market panic closes. Market panic orders fill on
+- one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
+  `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
+  pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
+  coin and scales its loss budget by the dynamic effective position-slot count. Market panic orders fill on
   the next valid bar at its close shifted adversely by `backtest.market_order_slippage_pct`, rounded
   directionally to the exchange price step, and charged the resolved taker fee. The Metal proxy
   models tunable RED
@@ -153,9 +155,9 @@ The supported slice is intentionally narrow:
   yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
   post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
-  Dual-side and multi-coin HSL, per-coin HSL overrides, and HSL strategy-equity
+  Dual-side multi-coin HSL, per-coin HSL setting overrides, and HSL strategy-equity
   EMA/recovery-distribution metrics remain fail closed for now.
-  Compatible single-coin suites may use the supported topology.
+  Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal

@@ -518,6 +518,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float unstuck_loss_allowance_pct = params[po + 46];
     const float unstuck_threshold = params[po + 47];
     HslState hsl = load_hsl(params, po, 48);
+    const bool coin_hsl_mode = hsl.enabled
+        && hsl.signal_mode == HSL_SIGNAL_COIN;
+    HslState coin_hsl[MAX_COINS];
+    ulong coin_hsl_entry_blocked_mask = 0ul;
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -591,6 +595,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float alpha2_coin[MAX_COINS];
     float alpha_1h_coin[MAX_COINS];
     float alpha_1m_coin[MAX_COINS];
+    float coin_realized_pnl[MAX_COINS];
 
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < C ? coin_settings[c * COIN_COLS + 9] : 0.0f;
@@ -642,6 +647,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         filled_coin[c] = false;
         close_is_unstuck_reducer[c] = false;
         close_is_hsl_panic[c] = false;
+        coin_realized_pnl[c] = 0.0f;
+        coin_hsl[c] = load_hsl(params, po, 48);
+        coin_hsl[c].enabled = coin_hsl_mode && hsl.enabled
+            && c < C;
         float coin_span_a = c < C
             ? coin_override_or(coin_overrides, c, 0, span_a) : span_a;
         float coin_span_b = c < C
@@ -1046,6 +1055,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                                 pnl_recovery_peak_k, pnl_recovery_max_min,
                                 float(k), false, !short_side
                             );
+                            coin_realized_pnl[c] += net_pnl;
+                            if (coin_hsl_mode) {
+                                record_coin_hsl_realized_fill(
+                                    coin_hsl[c], coin_realized_pnl[c]
+                                );
+                                advance_coin_hsl_equity_after_close_fill(
+                                    hsl_equity_before_fills,
+                                    net_pnl, qty, pprice[c], close,
+                                    c_mult, short_side
+                                );
+                            }
                             if (collect_coin_fill_counts) {
                                 coin_fill_counts[int(b) * C + c] += 1.0f;
                             }
@@ -1087,6 +1107,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         pnl_recovery_peak_k, pnl_recovery_max_min,
                         float(k), false, !short_side
                     );
+                    coin_realized_pnl[c] += grid_net_pnl;
+                    if (coin_hsl_mode) {
+                        record_coin_hsl_realized_fill(
+                            coin_hsl[c], coin_realized_pnl[c]
+                        );
+                        advance_coin_hsl_equity_after_close_fill(
+                            hsl_equity_before_fills,
+                            grid_net_pnl, grid_qty, pprice[c], close,
+                            c_mult, short_side
+                        );
+                    }
                     if (collect_coin_fill_counts) {
                         coin_fill_counts[int(b) * C + c] += 1.0f;
                     }
@@ -1138,9 +1169,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float net_pnl = pnl - qty * price * c_mult
                         * (market_panic ? taker_fee : maker_fee);
                     if (is_hsl_panic) {
-                        record_hsl_panic_fill(
-                            hsl, net_pnl, hsl_equity_before_fills
-                        );
+                        if (coin_hsl_mode) {
+                            record_hsl_panic_fill(
+                                coin_hsl[c], net_pnl,
+                                hsl_equity_before_fills
+                            );
+                        } else {
+                            record_hsl_panic_fill(
+                                hsl, net_pnl, hsl_equity_before_fills
+                            );
+                        }
                     }
                     record_gross_pnl(pnl, profit_sum, loss_sum);
                     balance += net_pnl;
@@ -1152,6 +1190,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         pnl_recovery_peak_k, pnl_recovery_max_min,
                         float(k), false, !short_side
                     );
+                    coin_realized_pnl[c] += net_pnl;
+                    if (coin_hsl_mode) {
+                        record_coin_hsl_realized_fill(
+                            coin_hsl[c], coin_realized_pnl[c]
+                        );
+                        advance_coin_hsl_equity_after_close_fill(
+                            hsl_equity_before_fills,
+                            net_pnl, qty, pprice[c], close,
+                            c_mult, short_side
+                        );
+                    }
                     if (collect_coin_fill_counts) {
                         coin_fill_counts[int(b) * C + c] += 1.0f;
                     }
@@ -1203,6 +1252,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     pnl_recovery_peak_k, pnl_recovery_max_min,
                     float(k), true, !short_side
                 );
+                coin_realized_pnl[c] -= fee;
+                if (coin_hsl_mode) {
+                    record_coin_hsl_realized_fill(
+                        coin_hsl[c], coin_realized_pnl[c]
+                    );
+                    advance_coin_hsl_equity_after_entry_fill(
+                        hsl_equity_before_fills,
+                        fee, adjusted, fill_price, close,
+                        c_mult, short_side
+                    );
+                }
                 if (collect_coin_fill_counts) {
                     coin_fill_counts[int(b) * C + c] += 1.0f;
                 }
@@ -1343,13 +1403,27 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         for (int c = 0; c < C; ++c) {
             has_hsl_position = has_hsl_position || psize[c] > 0.0f;
         }
-        int current_hsl_mode = hsl_mode(hsl, has_hsl_position);
+        int current_hsl_mode = coin_hsl_mode
+            ? 0 : hsl_mode(hsl, has_hsl_position);
 
         if (can_generate) {
             // Exact Rust ranks flat candidates every minute. Re-ranking only
             // after state changes keeps the proxy inexpensive; independent
             // exact validations and drift gates police this approximation.
+            bool coin_hsl_eligibility_changed = false;
+            if (coin_hsl_mode) {
+                ulong blocked_mask = 0ul;
+                for (int c = 0; c < C; ++c) {
+                    if (hsl_mode(coin_hsl[c], false) != 0) {
+                        blocked_mask |= 1ul << ulong(c);
+                    }
+                }
+                coin_hsl_eligibility_changed =
+                    blocked_mask != coin_hsl_entry_blocked_mask;
+                coin_hsl_entry_blocked_mask = blocked_mask;
+            }
             bool reselect = !selection_initialized || any_fill
+                || coin_hsl_eligibility_changed
                 || effective_n_positions != previous_effective_n_positions;
             if (reselect) {
                 int active_count = 0;
@@ -1371,7 +1445,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         && k >= int(coin_settings[coin_offset + 8])
                         && k <= int(coin_settings[coin_offset + 7])
                         && finite_positive(bars[bar_offset + 2])
-                        && coin_wel != 0.0f;
+                        && coin_wel != 0.0f
+                        && (!coin_hsl_mode || (
+                            coin_hsl_entry_blocked_mask & (1ul << ulong(c))
+                        ) == 0ul);
                     survivor[c] = enabled;
                     if (enabled) enabled_count += 1;
                 }
@@ -2329,11 +2406,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 }
             }
             for (int c = 0; c < C; ++c) {
-                if (current_hsl_mode >= 2
-                    || (current_hsl_mode != 0 && psize[c] <= 0.0f)) {
+                int coin_mode = coin_hsl_mode
+                    ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
+                    : current_hsl_mode;
+                if (coin_mode >= 2
+                    || (coin_mode != 0 && psize[c] <= 0.0f)) {
                     entry_qty[c] = 0.0f;
                 }
-                if (current_hsl_mode == 3 && psize[c] > 0.0f) {
+                if (coin_mode == 3 && psize[c] > 0.0f) {
                     int tick_offset = (k * C + c) * 2;
                     close_qty[c] = psize[c];
                     close_tick[c] = max(
@@ -2373,7 +2453,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 unrealized += psize[c] * coin_settings[coin_offset + 4]
                     * (short_side ? pprice[c] - close : close - pprice[c]);
             }
-            if (current_hsl_mode != 3 && (
+            int coin_mode = coin_hsl_mode
+                ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
+                : current_hsl_mode;
+            if (coin_mode != 3 && (
                     entry_qty[c] > 0.0f || close_qty[c] > 0.0f
                         || secondary_close_qty[c] > 0.0f
                 )) {
@@ -2383,19 +2466,53 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         float equity = balance + unrealized;
         if (can_generate && any_valid && alive
             && balance > 0.0f && equity > liquidation_floor) {
-            update_hsl(
-                hsl, balance, starting_balance,
-                realized_pnl_cumsum_last, unrealized,
-                has_open_position, has_blocking_orders,
-                float(k), interval_ms
-            );
+            int sampled_hsl_tier = 0;
+            if (coin_hsl_mode) {
+                for (int c = 0; c < C; ++c) {
+                    int coin_offset = c * COIN_COLS;
+                    int bar_offset = (k * C + c) * 4;
+                    float close = bars[bar_offset + 2];
+                    float coin_unrealized = psize[c] > 0.0f
+                        && finite_positive(close)
+                        ? psize[c] * coin_settings[coin_offset + 4]
+                            * (short_side ? pprice[c] - close : close - pprice[c])
+                        : 0.0f;
+                    int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
+                    bool coin_has_blocking_orders = coin_mode != 3 && (
+                        entry_qty[c] > 0.0f || close_qty[c] > 0.0f
+                            || secondary_close_qty[c] > 0.0f
+                    );
+                    coin_hsl[c].slot_count = float(effective_n_positions);
+                    update_hsl(
+                        coin_hsl[c], balance, starting_balance,
+                        coin_realized_pnl[c], coin_unrealized,
+                        psize[c] > 0.0f, coin_has_blocking_orders,
+                        float(k), interval_ms
+                    );
+                    sampled_hsl_tier = max(sampled_hsl_tier, coin_hsl[c].tier);
+                }
+            } else {
+                update_hsl(
+                    hsl, balance, starting_balance,
+                    realized_pnl_cumsum_last, unrealized,
+                    has_open_position, has_blocking_orders,
+                    float(k), interval_ms
+                );
+                sampled_hsl_tier = hsl.tier;
+            }
             if (hsl.enabled) {
                 hsl_tier_samples_total += 1.0f;
-                hsl_tier_samples_yellow += hsl.tier == 1 ? 1.0f : 0.0f;
-                hsl_tier_samples_orange += hsl.tier == 2 ? 1.0f : 0.0f;
-                hsl_tier_samples_red += hsl.tier == 3 ? 1.0f : 0.0f;
+                hsl_tier_samples_yellow += sampled_hsl_tier == 1 ? 1.0f : 0.0f;
+                hsl_tier_samples_orange += sampled_hsl_tier == 2 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += sampled_hsl_tier == 3 ? 1.0f : 0.0f;
             }
-            try_restart_hsl(hsl, float(k), equity);
+            if (coin_hsl_mode) {
+                for (int c = 0; c < C; ++c) {
+                    try_restart_hsl(coin_hsl[c], float(k), equity);
+                }
+            } else {
+                try_restart_hsl(hsl, float(k), equity);
+            }
         }
         bool active = equity_started && alive && any_valid;
         if (active) {
@@ -2541,16 +2658,29 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
     scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
-    write_one_side_hsl_outputs(
-        hsl, short_side,
-        hsl_tier_samples_total,
-        hsl_tier_samples_yellow,
-        hsl_tier_samples_orange,
-        hsl_tier_samples_red,
-        last_eq_k,
-        scalars,
-        scalar_offset + 32
-    );
+    if (coin_hsl_mode) {
+        write_one_side_coin_hsl_outputs(
+            coin_hsl, C, short_side,
+            hsl_tier_samples_total,
+            hsl_tier_samples_yellow,
+            hsl_tier_samples_orange,
+            hsl_tier_samples_red,
+            last_eq_k,
+            scalars,
+            scalar_offset + 32
+        );
+    } else {
+        write_one_side_hsl_outputs(
+            hsl, short_side,
+            hsl_tier_samples_total,
+            hsl_tier_samples_yellow,
+            hsl_tier_samples_orange,
+            hsl_tier_samples_red,
+            last_eq_k,
+            scalars,
+            scalar_offset + 32
+        );
+    }
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

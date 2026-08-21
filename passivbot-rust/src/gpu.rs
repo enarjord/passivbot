@@ -199,6 +199,26 @@ mod tests {
         assert!(source.contains("load_hsl(params, po, 31)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
+        assert_eq!(
+            MPS_EMA_ANCHOR_MULTICOIN_BODY
+                .matches("record_coin_hsl_realized_fill(")
+                .count(),
+            2
+        );
+        assert_eq!(
+            MPS_EMA_ANCHOR_MULTICOIN_BODY
+                .matches("advance_coin_hsl_equity_after_close_fill(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            MPS_EMA_ANCHOR_MULTICOIN_BODY
+                .matches("advance_coin_hsl_equity_after_entry_fill(")
+                .count(),
+            1
+        );
+        assert!(source.contains("coin_hsl_eligibility_changed"));
+        assert!(source.contains("coin_hsl_entry_blocked_mask"));
         assert!(source.contains("market_panic ? taker_fee : maker_fee"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
@@ -394,6 +414,26 @@ mod tests {
         assert!(source.contains("load_hsl(params, po, 48)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("record_coin_hsl_realized_fill(")
+                .count(),
+            4
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("advance_coin_hsl_equity_after_close_fill(")
+                .count(),
+            3
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("advance_coin_hsl_equity_after_entry_fill(")
+                .count(),
+            1
+        );
+        assert!(source.contains("coin_hsl_eligibility_changed"));
+        assert!(source.contains("coin_hsl_entry_blocked_mask"));
         assert!(source.contains("market_panic ? taker_fee : maker_fee"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));

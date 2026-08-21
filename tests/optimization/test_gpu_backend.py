@@ -1476,8 +1476,8 @@ def test_gpu_hsl_fails_closed_for_dual_side_single_coin_unified_mode():
         _validate_scope(config, _Evaluator())
 
 
-@pytest.mark.parametrize("signal_mode", ["unified", "pside"])
-def test_gpu_hsl_accepts_one_sided_multicoin_account_modes(signal_mode):
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_gpu_hsl_accepts_one_sided_multicoin_signal_modes(signal_mode):
     config = _long_only_ema_config()
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "XRP"]
     config["live"]["hsl_signal_mode"] = signal_mode
@@ -1485,17 +1485,6 @@ def test_gpu_hsl_accepts_one_sided_multicoin_account_modes(signal_mode):
     config["bot"]["long"]["hsl"]["enabled"] = True
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
-
-
-def test_gpu_hsl_fails_closed_for_multicoin_coin_mode():
-    config = _long_only_ema_config()
-    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "XRP"]
-    config["live"]["hsl_signal_mode"] = "coin"
-    config["bot"]["long"]["risk"]["n_positions"] = 3
-    config["bot"]["long"]["hsl"]["enabled"] = True
-
-    with pytest.raises(ValueError, match="per-coin HSL remains fail closed"):
-        _validate_scope(config, _MulticoinEvaluator())
 
 
 def test_gpu_hsl_accepts_one_sided_multicoin_market_panic():

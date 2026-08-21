@@ -25,11 +25,6 @@ def validate_hsl_signal_topology(
             raise ValueError(
                 "GPU multi-coin HSL currently requires exactly one enabled side"
             )
-        if signal_mode == "coin":
-            raise ValueError(
-                "GPU one-sided multi-coin HSL currently supports only unified "
-                "or pside signal mode; per-coin HSL remains fail closed"
-            )
         return
     if enabled_side_count > 1 and signal_mode == "unified":
         raise ValueError(
