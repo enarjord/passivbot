@@ -142,16 +142,19 @@ The supported slice is intentionally narrow:
   threshold, drawdown-EMA span, and cooldown, plus fixed yellow/orange ratios, orange entry
   suppression, RED latching, panic flattening, two-sample flat confirmation,
   positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
-  effective coin-slot scaling, and terminal no-restart policy. Its candidate-local realized-PnL
-  and strategy-equity peaks require `live.pnls_max_lookback_days: all`, and the selected history
-  must have no internal invalid candles between its first and last valid samples. Thresholds in
-  the float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
-  drift gates remain authoritative. The non-loss HSL lifecycle metrics (trigger/restart counts and
+  effective coin-slot scaling, and terminal no-restart policy. For a finite
+  `live.pnls_max_lookback_days`, Metal deliberately retains its candidate-local all-history
+  realized-PnL and strategy-equity peaks. This is a conservative envelope over Rust's rolling
+  peak: it may trigger HSL early after an old peak ages out, but cannot suppress a drawdown for
+  that reason. The selected history must have no internal invalid candles between its first and
+  last valid samples. Thresholds in the float32-unrepresentable interval immediately below `1.0`
+  fail closed. Exact validation and drift gates remain authoritative. The non-loss HSL lifecycle
+  metrics (trigger/restart counts and
   yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
   post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
-  Finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and HSL
-  strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
+  Dual-side and multi-coin HSL, per-coin HSL overrides, and HSL strategy-equity
+  EMA/recovery-distribution metrics remain fail closed for now.
   Compatible single-coin suites may use the supported topology.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs

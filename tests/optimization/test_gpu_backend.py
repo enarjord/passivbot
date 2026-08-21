@@ -1426,12 +1426,13 @@ def test_gpu_foundation_accepts_one_sided_single_coin_hsl():
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_hsl_fails_closed_for_finite_pnl_lookback():
+@pytest.mark.parametrize("lookback", [0.0, 30.0, "all"])
+def test_gpu_hsl_accepts_conservative_pnl_lookback_envelope(lookback):
     config = _long_only_ema_config()
     config["bot"]["long"]["hsl"]["enabled"] = True
+    config["live"]["pnls_max_lookback_days"] = lookback
 
-    with pytest.raises(ValueError, match="pnls_max_lookback_days='all'"):
-        _validate_scope(config, _Evaluator())
+    assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
 def test_gpu_hsl_accepts_market_panic_close():

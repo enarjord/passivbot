@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added finite `live.pnls_max_lookback_days` support to the existing one-sided single-coin HSL
+  Apple MPS optimizer path. Metal deliberately retains an all-history candidate-local peak as a
+  conservative envelope over Rust's rolling peak, so it may trigger HSL early after an old peak
+  expires but cannot hide a drawdown for that reason. Exact Rust validation and drift gates remain
+  authoritative.
+
 - Added HSL market panic-close execution to the supported one-sided single-coin EMA Anchor and
   Trailing Martingale Apple MPS optimizer path. The Metal proxy guarantees the persisted panic
   order on the next valid bar, uses that bar's close with directionally adverse configured
