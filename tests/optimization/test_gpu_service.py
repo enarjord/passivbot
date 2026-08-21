@@ -257,6 +257,7 @@ def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous()
     with pytest.raises(ValueError, match="coin index 1, invalid candle at 2"):
         _require_no_internal_invalid_account_recovery_candles(
             hlcvs,
+            exposure_eligible_coins=[True, True],
             first_valid_indices=[0, 0],
             last_valid_indices=[3, 3],
             tracking_start_indices=[1, 1],
@@ -264,9 +265,18 @@ def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous()
 
     _require_no_internal_invalid_account_recovery_candles(
         hlcvs,
+        exposure_eligible_coins=[True, True],
         first_valid_indices=[0, 0],
         last_valid_indices=[3, 3],
         tracking_start_indices=[1, 3],
+    )
+
+    _require_no_internal_invalid_account_recovery_candles(
+        hlcvs,
+        exposure_eligible_coins=[True, False],
+        first_valid_indices=[0, 0],
+        last_valid_indices=[3, 3],
+        tracking_start_indices=[1, 1],
     )
 
 

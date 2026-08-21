@@ -384,6 +384,7 @@ def _require_no_internal_invalid_hsl_candles(
 def _require_no_internal_invalid_account_recovery_candles(
     hlcvs,
     *,
+    exposure_eligible_coins,
     first_valid_indices,
     last_valid_indices,
     tracking_start_indices,
@@ -396,6 +397,8 @@ def _require_no_internal_invalid_account_recovery_candles(
             "MPS account-equity recovery requires HLCVs shaped [time, coin, fields]"
         )
     for coin in range(values.shape[1]):
+        if not bool(exposure_eligible_coins[coin]):
+            continue
         first = max(
             0,
             int(tracking_start_indices[coin]),
@@ -809,6 +812,7 @@ class MpsSingleCoinProxy:
         if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
             _require_no_internal_invalid_account_recovery_candles(
                 hlcvs,
+                exposure_eligible_coins=[True],
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
                 tracking_start_indices=[self.run.trade_start_idx],
@@ -1437,8 +1441,20 @@ class MpsMulticoinProxy:
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
         if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
+            side = self.sides[0]
+            wallet_exposure_column = (
+                11
+                if self.strategy_kind == "ema_anchor"
+                else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
+            )
+            fixed_coin_wels = per_side_coin_overrides[side][
+                :, wallet_exposure_column
+            ]
             _require_no_internal_invalid_account_recovery_candles(
                 values,
+                exposure_eligible_coins=(
+                    ~np.isfinite(fixed_coin_wels) | (fixed_coin_wels != 0.0)
+                ),
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
                 tracking_start_indices=[run.trade_start_idx for run in runs],
