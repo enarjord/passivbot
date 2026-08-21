@@ -43,6 +43,18 @@ def _assert_fill_scalar_contract(output):
     assert (pnl_recovery >= 0.0).all()
     no_fills = fill_count == 0.0
     assert (pnl_recovery[no_fills] == 0.0).all()
+    held_count = output["held_count"]
+    held_sum = output["held_sum_ms"]
+    assert torch.equal(held_count, held_count.round())
+    assert (held_count >= 0.0).all()
+    assert (held_sum >= 0.0).all()
+    assert (held_sum[held_count == 0.0] == 0.0).all()
+    if (held_count > 0.0).any():
+        assert (
+            held_sum[held_count > 0.0]
+            <= output["held_max_ms"][held_count > 0.0]
+            * held_count[held_count > 0.0]
+        ).all()
     has_fills = ~no_fills
     if has_fills.any():
         first_fill_step = torch.round(output["first_fill_ts"] / 60_000.0)
@@ -584,12 +596,14 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 55" in source
+    assert "constant int SCALAR_COLS = 57" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
     assert "scalars[so + 53] = fills_active_days_count" in source
     assert "scalars[so + 54] = pnl_recovery_max_min * interval_ms" in source
+    assert "scalars[so + 55] = held_sum_min * interval_ms" in source
+    assert "scalars[so + 56] = held_count" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -1497,6 +1511,10 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
     assert output["position_unchanged_max_ms"].item() == pytest.approx(
         expected_open_tail_ms.item()
     )
+    expected_held_ms = output["last_eq_ts"] - output["first_fill_ts"]
+    assert output["held_count"].item() == 1.0
+    assert output["held_sum_ms"].item() == pytest.approx(expected_held_ms.item())
+    assert output["held_max_ms"].item() == pytest.approx(expected_held_ms.item())
     expected_long = 0.1 if side == "long" else 0.0
     expected_short = 0.1 if side == "short" else 0.0
     assert output["entry_initial_balance_pct_long"].item() == pytest.approx(

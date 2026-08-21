@@ -6,7 +6,7 @@ constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 29;
+constant int SCALAR_COLS = 31;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -434,6 +434,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
     float held_max_min = 0.0f;
+    float held_sum_min = 0.0f;
+    float held_count = 0.0f;
     float position_unchanged_max_min = 0.0f;
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
@@ -563,7 +565,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 if (went_flat) {
                     pprice[c] = 0.0f;
                     if (position_open_k[c] >= 0.0f) {
-                        held_max_min = fmax(held_max_min, float(k) - position_open_k[c]);
+                        float held_min = float(k) - position_open_k[c];
+                        held_max_min = fmax(held_max_min, held_min);
+                        held_sum_min += held_min;
+                        held_count += 1.0f;
                     }
                     position_open_k[c] = -1.0f;
                 }
@@ -1536,7 +1541,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
         total_cost += psize[c] * pprice[c] * coin_settings[c * COIN_COLS + 4];
         open_positions += 1;
         if (position_open_k[c] >= 0.0f && last_eq_k >= 0.0f) {
-            held_max_min = fmax(held_max_min, last_eq_k - position_open_k[c]);
+            float held_min = last_eq_k - position_open_k[c];
+            held_max_min = fmax(held_max_min, held_min);
+            held_sum_min += held_min;
+            held_count += 1.0f;
         }
         if (position_last_fill_k[c] >= 0.0f && last_eq_k >= 0.0f) {
             position_unchanged_max_min = fmax(
@@ -1595,6 +1603,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 26] = fill_count_long;
     scalars[scalar_offset + 27] = fills_active_days_count;
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
+    scalars[scalar_offset + 29] = held_sum_min * interval_ms;
+    scalars[scalar_offset + 30] = held_count;
 }
 
 kernel void passivbot_ema_anchor_multicoin(
