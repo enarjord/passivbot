@@ -317,6 +317,36 @@ def test_mps_multicoin_initial_entry_pct_freezes_denominator_at_liquidation(
     assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_initial_entry_pct_freezes_before_post_fill_balance_depletion(
+    strategy_kind, side
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 2.0),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 2.0),
+    ]
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=12,
+        markets=markets,
+        first_valid_indices=(0, 3),
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert not output["alive"].item()
+    # Coin one fills and its fee depletes balance on the same candle that coin
+    # two first becomes tradable. Exact Rust liquidates before growing the
+    # effective-position denominator.
+    assert output["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+
+
 def test_directional_touch_ticks_preserve_alignment_and_round_non_aligned_prices():
     down, up, nearest = _directional_touch_ticks(
         np.array([100.0, 100.006, 0.1 + 0.2]), 0.01

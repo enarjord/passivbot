@@ -121,7 +121,10 @@ mod tests {
         assert!(source.contains("entry_tick[c] > fill_ticks[tick_offset + 1]"));
         assert!(source.contains("const float volume_drop = clamp(params[po + 14]"));
         assert!(source.contains("effective_n_positions"));
-        assert!(source.contains("if (alive) max_tradable_seen = max("));
+        assert!(source.contains(
+            "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
+        ));
+        assert!(source.contains("if (alive && !post_fill_balance_depleted)"));
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
         assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
@@ -272,7 +275,10 @@ mod tests {
         assert!(source.contains("twel_close_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
-        assert!(source.contains("if (alive) max_tradable_seen = max("));
+        assert!(source.contains(
+            "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
+        ));
+        assert!(source.contains("if (alive && !post_fill_balance_depleted)"));
         assert!(source.contains("market_price * 0.9995f / price_step"));
         assert_eq!(source.matches("clamped_market_price(").count(), 3);
         assert!(source.contains("finalized_twel_reducer_qty = ordinary_can_accompany_reducer"));

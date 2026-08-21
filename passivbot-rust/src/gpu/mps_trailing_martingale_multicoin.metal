@@ -1199,7 +1199,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 tradable_count += 1;
             }
         }
-        if (alive) max_tradable_seen = max(max_tradable_seen, tradable_count);
+        const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
+        if (alive && !post_fill_balance_depleted) {
+            max_tradable_seen = max(max_tradable_seen, tradable_count);
+        }
         const int effective_n_positions = min(n_positions, max_tradable_seen);
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;
