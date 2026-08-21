@@ -219,8 +219,9 @@ mod tests {
         assert!(source.contains("close_gen_allowed_wel"));
         assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("close_grid_gen_psize"));
-        assert!(source.contains("psize[c] - wel_reducer_qty"));
         assert!(source.contains("(use_twel || use_unstuck) && wel_reducer_qty <= 0.0f"));
+        assert!(source.contains("float reserved_grid_qty = use_unstuck"));
+        assert!(source.contains("psize[c] - reserved_grid_qty"));
         assert!(source.contains("dust_remainder"));
         assert!(!source.contains("float primary_diff = fabs"));
         assert!(source.contains("coin_override_or"));

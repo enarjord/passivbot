@@ -1480,17 +1480,42 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
     gated = list(enabled)
     gated[keys.index("unstuck_ema_gating_enabled")] = 1.0
     gated[keys.index("unstuck_ema_dist")] = 0.1
+    allowance_disabled = list(disabled)
+    allowance_disabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_disabled[keys.index("twel_entry_gate_enabled")] = 1.0
+    allowance_disabled[keys.index("twel_enforcer_threshold")] = 0.5
+    allowance_enabled = list(enabled)
+    allowance_enabled[keys.index("we_excess_allowance_pct")] = 1.0
+    allowance_enabled[keys.index("twel_entry_gate_enabled")] = 1.0
+    allowance_enabled[keys.index("twel_enforcer_threshold")] = 0.5
 
-    output = runner.run(np.asarray([disabled, enabled, gated], dtype=np.float64))
+    output = runner.run(
+        np.asarray(
+            [
+                disabled,
+                enabled,
+                gated,
+                allowance_disabled,
+                allowance_enabled,
+            ],
+            dtype=np.float64,
+        )
+    )
     torch.mps.synchronize()
     key = "psize" if side == "long" else "short_psize"
     remaining = output[key].cpu().numpy()
-    assert output["open_positions"].cpu().tolist() == [2.0, 2.0, 2.0]
+    open_positions = output["open_positions"].cpu().tolist()
+    assert open_positions[:3] == [2.0] * 3
     assert remaining[0] > 1.0
     # Coin one is less stuck and has a two-unit minimum. Selecting coin zero,
     # or selecting both coins, would produce a different aggregate remainder.
     assert remaining[1] == pytest.approx(remaining[0] - 2.0)
     assert remaining[2] == pytest.approx(remaining[0])
+    # The bounded allowance doubles each 0.5 per-coin WEL to 1.0, while the
+    # side-wide entry gate caps exposure at 0.5. Exact Rust evaluates unstuck's
+    # threshold against the allowed limit, so the position does not exceed it.
+    assert open_positions[4] == open_positions[3]
+    assert remaining[4] == pytest.approx(remaining[3])
 
     strict_runner, _ = _multicoin_exposure_fixture(
         strategy_kind,
@@ -3424,6 +3449,49 @@ def _tm_multicoin_off_tick_reducer_case(
         run, data, side=side, coin_overrides=overrides
     )
     return runner, candidate, market
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_unstuck_reserves_passive_grid_like_equal_wel():
+    runner, wel_candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        "long", maker_fee=0.0
+    )
+    values = dict(
+        zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, wel_candidate)
+    )
+    values.update(
+        {
+            "wel_enforcer_enabled": 0.0,
+            "unstuck_enabled": 1.0,
+            "unstuck_ema_gating_enabled": 0.0,
+            "unstuck_close_pct": 0.5102,
+            "unstuck_loss_allowance_pct": 0.2,
+            "unstuck_threshold": 0.5,
+        }
+    )
+    unstuck_candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(
+        np.asarray([wel_candidate, unstuck_candidate], dtype=np.float64)
+    )
+    torch.mps.synchronize()
+
+    # These candidates request the same touch and finalized reducer quantity.
+    # The ordinary passive grid must therefore be generated from the same
+    # reducer-reserved position size for WEL and unstuck.
+    assert output["psize"][1].item() == pytest.approx(
+        output["psize"][0].item(), abs=2.0e-4
+    )
+    assert output["balance"][1].item() == pytest.approx(
+        output["balance"][0].item(), abs=2.0e-4
+    )
+    assert output["day_volume"][1].sum().item() == pytest.approx(
+        output["day_volume"][0].sum().item(), rel=2.0e-5
+    )
 
 
 @pytest.mark.skipif(

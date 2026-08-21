@@ -942,11 +942,17 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 );
                 float coin_wel = fixed_coin_wel >= 0.0f
                     ? fixed_coin_wel : effective_wel;
+                float coin_allowance_pct = coin_override_or(
+                    coin_overrides, c, 12, allowance_pct
+                );
+                float allowed_coin_wel = allowed_wallet_exposure_limit(
+                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
+                );
                 if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
                     && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
                     && balance > 0.0f && balance_peak > 0.0f
                     && psize[c] > 0.0f && pprice[c] > 0.0f
-                    && coin_wel > 0.0f && price_now > 0.0f)) {
+                    && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
                     continue;
                 }
                 float allowance = float32_floor_nonnegative(fmax(
@@ -957,7 +963,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 ));
                 float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
                 if (!(allowance > 0.0f
-                    && wallet_exposure / coin_wel > coin_threshold)) {
+                    && wallet_exposure / allowed_coin_wel > coin_threshold)) {
                     continue;
                 }
                 if (coin_ema_gate) {
@@ -988,7 +994,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     reducer_price, qty_step, min_qty, min_cost, c_mult
                 );
                 float target_qty = floor_step(
-                    balance * coin_wel * coin_close_pct
+                    balance * allowed_coin_wel * coin_close_pct
                         / fmax(reducer_price * c_mult, 1.0e-12f),
                     qty_step
                 );
