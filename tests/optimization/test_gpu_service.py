@@ -466,6 +466,10 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             "day_volume": torch.tensor([[0.4, 0.5]]),
             "day_has_fill": torch.tensor([fill]),
             "day_min_balance": torch.tensor([[1_000.0, 1_000.0]]),
+            "day_net_pnl": torch.tensor(
+                [[end[0] - 1_000.0, end[1] - end[0]]]
+            ),
+            "day_last_fill_balance": torch.tensor([end]),
             "max_dd": torch.tensor([0.20]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -517,6 +521,8 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["max_dd"].item() == pytest.approx(0.50)
     np.testing.assert_allclose(combined["day_volume"].numpy(), [[0.5, 0.7]])
     assert combined["day_has_fill"].tolist() == [[True, True]]
+    assert combined["day_net_pnl"].tolist() == [[50.0, 50.0]]
+    assert combined["day_last_fill_balance"].tolist() == [[1_050.0, 1_100.0]]
     assert combined["first_fill_ts"].item() == 300.0
     assert combined["last_fill_ts"].item() == 700.0
     assert combined["last_high_ts"].item() == 800.0
@@ -558,6 +564,8 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_volume": torch.tensor([[0.1, 0.1, 0.1]]),
             "day_has_fill": torch.tensor([[True, True, True]]),
             "day_min_balance": torch.tensor([[900.0, 900.0, 900.0]]),
+            "day_net_pnl": torch.zeros((1, 3)),
+            "day_last_fill_balance": torch.full((1, 3), 1_000.0),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -597,6 +605,8 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "day_volume": torch.tensor([[0.1, 0.1, 0.1]]),
             "day_has_fill": torch.tensor([[True, True, True]]),
             "day_min_balance": torch.tensor([[900.0, 450.0, 700.0]]),
+            "day_net_pnl": torch.zeros((1, 3)),
+            "day_last_fill_balance": torch.full((1, 3), 1_000.0),
             "max_dd": torch.tensor([0.40]),
             "held_max_ms": torch.tensor([100.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),

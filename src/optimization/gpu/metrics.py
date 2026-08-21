@@ -49,6 +49,7 @@ _USD_PER_EXPOSURE_METRICS = {
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
 SUPPORTED_METRICS = (
+    "adg_pnl",
     "adg_strategy_eq",
     "adg_strategy_eq_w",
     "backtest_completion_ratio",
@@ -94,6 +95,7 @@ SUPPORTED_METRICS = (
     "loss_profit_ratio",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
+    "mdg_pnl",
     "omega_ratio_strategy_eq",
     "omega_ratio_strategy_eq_w",
     "position_held_days_max",
@@ -103,8 +105,10 @@ SUPPORTED_METRICS = (
     "peak_recovery_hours_strategy_eq",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
+    "sharpe_ratio_pnl",
     "sortino_ratio_strategy_eq",
     "sortino_ratio_strategy_eq_w",
+    "sortino_ratio_pnl",
     "sterling_ratio_strategy_eq",
     "sterling_ratio_strategy_eq_w",
     "strategy_eq_recovery_days_max",
@@ -119,6 +123,13 @@ SUPPORTED_METRICS = (
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
 EXTRA_KERNEL_METRICS = ("loss_profit_ratio",)
+
+_PNL_METRICS = {
+    "adg_pnl",
+    "mdg_pnl",
+    "sharpe_ratio_pnl",
+    "sortino_ratio_pnl",
+}
 
 
 _GAP_HIST_BINS = 128
@@ -783,6 +794,32 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     volume_days = day_has_fill.sum(dim=1).clamp(min=1).to(torch.float64)
     volume_pct = day_volume.sum(dim=1) / volume_days
 
+    zeros = torch.zeros_like(adg)
+    adg_pnl = mdg_pnl = sharpe_pnl = sortino_pnl = zeros
+    if requested & _PNL_METRICS:
+        day_net_pnl = out["day_net_pnl"].to(torch.float64)
+        day_last_fill_balance = out["day_last_fill_balance"].to(torch.float64)
+        pnl_mask = (
+            day_has_fill
+            & active
+            & torch.isfinite(day_net_pnl)
+            & torch.isfinite(day_last_fill_balance)
+        )
+        daily_pnl_ratios = torch.where(
+            pnl_mask,
+            day_net_pnl / day_last_fill_balance.abs().clamp(min=1e-12),
+            torch.zeros_like(day_net_pnl),
+        )
+        pnl_days = pnl_mask.sum(dim=1)
+        adg_pnl = daily_pnl_ratios.sum(dim=1) / pnl_days.clamp(min=1).to(
+            daily_pnl_ratios.dtype
+        )
+        adg_pnl = torch.where(pnl_days > 0, adg_pnl, torch.zeros_like(adg_pnl))
+        mdg_pnl = _masked_median(daily_pnl_ratios, pnl_mask)
+        sharpe_pnl, sortino_pnl = _sharpe_sortino(
+            daily_pnl_ratios, pnl_mask, adg_pnl
+        )
+
     last_eq_ts = out["last_eq_ts"]
     first_eq_ts = out["first_eq_ts"]
     has_equity = (
@@ -849,6 +886,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     )
 
     objectives = {
+        "adg_pnl": adg_pnl,
         "adg_strategy_eq": adg,
         "backtest_completion_ratio": completion,
         "calmar_ratio_strategy_eq": calmar,
@@ -858,11 +896,14 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "fills_gap_longest_days": gap_longest_days,
         "gain_strategy_eq": gain,
         "mdg_strategy_eq": mdg,
+        "mdg_pnl": mdg_pnl,
         "omega_ratio_strategy_eq": omega,
         "position_held_days_max": held_days,
         "position_held_hours_max": held_days * 24.0,
         "sharpe_ratio_strategy_eq": sharpe,
+        "sharpe_ratio_pnl": sharpe_pnl,
         "sortino_ratio_strategy_eq": sortino,
+        "sortino_ratio_pnl": sortino_pnl,
         "sterling_ratio_strategy_eq": sterling,
         "strategy_eq_recovery_days_max": recovery_max_days,
         "peak_recovery_hours_strategy_eq": recovery_max_days * 24.0,

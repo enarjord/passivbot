@@ -28,6 +28,8 @@ CORE_OUTPUT_KEYS = {
     "day_max_dd",
     "day_volume",
     "day_has_fill",
+    "day_net_pnl",
+    "day_last_fill_balance",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -399,6 +401,14 @@ def _combine_hedged_multicoin_outputs(
     combined["day_has_fill"] = (
         long["day_has_fill"] | short["day_has_fill"]
     ) & active
+    combined["day_net_pnl"] = (
+        long["day_net_pnl"] + short["day_net_pnl"]
+    ).where(active, long["day_net_pnl"].new_zeros(()))
+    combined["day_last_fill_balance"] = (
+        long["day_last_fill_balance"]
+        + short["day_last_fill_balance"]
+        - float(starting_balance)
+    ).where(active, long["day_last_fill_balance"].new_zeros(()))
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["position_unchanged_max_ms"] = long[
