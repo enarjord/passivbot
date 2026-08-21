@@ -230,11 +230,12 @@ screening also rejects `fills_gap_longest_days`,
 `fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
 `fills_gap_p99_hours`,
 `strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
+`entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
 `position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
-duration maxima truncated at shared portfolio liquidation, or fill volume normalized by the shared
-balance safely.
+effective coin counts and duration maxima truncated at shared portfolio liquidation, or fill volume
+normalized by the shared balance safely.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer

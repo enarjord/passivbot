@@ -24,6 +24,7 @@ from optimization.gpu.service import (
     _directional_entry_initial_metrics,
     _hsl_params,
     _position_exposure_enforcer_params,
+    _prepared_single_coin_side_enabled,
     _require_complete_valid_tail,
     _require_no_internal_invalid_hsl_candles,
     _single_coin_exposure_params,
@@ -54,6 +55,27 @@ def test_directional_entry_initial_metrics_preserve_candidate_batch_shape(side):
     other = "short" if side == "long" else "long"
     assert metrics[f"entry_initial_balance_pct_{other}"].shape == values.shape
     assert metrics[f"entry_initial_balance_pct_{other}"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_single_coin_side_eligibility_uses_prepared_coin_payload():
+    config = {
+        "bot": {
+            "long": {"risk": {"total_wallet_exposure_limit": 1.0, "n_positions": 1}}
+        },
+        "live": {"approved_coins": {"long": ["BTC"]}},
+    }
+
+    assert _prepared_single_coin_side_enabled(
+        config, "long", {"entry_eligible": True}
+    )
+    assert not _prepared_single_coin_side_enabled(
+        config, "long", {"entry_eligible": False}
+    )
+
+
+def test_single_coin_side_eligibility_requires_canonical_payload_flag():
+    with pytest.raises(ValueError, match="entry_eligible"):
+        _prepared_single_coin_side_enabled({}, "short", {})
 
 
 def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():

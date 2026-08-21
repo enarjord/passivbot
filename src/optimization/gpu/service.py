@@ -292,6 +292,16 @@ def _directional_entry_initial_metrics(side: str, entry_pct):
     }
 
 
+def _prepared_single_coin_side_enabled(config: dict, side: str, bot: dict) -> bool:
+    """Match exact Rust eligibility for the one coin prepared by the payload."""
+
+    if "entry_eligible" not in bot:
+        raise ValueError(
+            f"GPU single-coin payload for {side} is missing entry_eligible"
+        )
+    return gpu_side_enabled(config, side) and bool(bot["entry_eligible"])
+
+
 def _combine_hedged_multicoin_outputs(
     long: dict,
     short: dict,
@@ -495,7 +505,8 @@ class MpsSingleCoinProxy:
         long_bot = payload.bot_params_list[0]["long"]
         short_bot = payload.bot_params_list[0]["short"]
         self.enabled = {
-            side: gpu_side_enabled(config, side) for side in ("long", "short")
+            side: _prepared_single_coin_side_enabled(config, side, bot)
+            for side, bot in (("long", long_bot), ("short", short_bot))
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
