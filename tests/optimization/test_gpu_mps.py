@@ -375,7 +375,9 @@ def test_mps_ema_anchor_shader_smoke():
     assert "float32_floor_nonnegative" in source
     assert "record_realized_net" in source
     assert "const float max_realized_loss_pct = settings[14]" in source
-    assert "constant int SCALAR_COLS = 18" in source
+    assert "constant int SCALAR_COLS = 36" in source
+    assert "hsl_tier_samples_total" in source
+    assert "h.restart_retrigger_count" in source
     assert "side.psize * price_now * c_mult / balance" in source
     assert "short_side.psize * c_mult * (short_side.pprice - close)" in source
     assert "long_close_fill || long_entry_fill" in source
@@ -1328,6 +1330,23 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         output["balance"][1].item(), abs=1.0e-4
     )
     assert output["day_volume"][1].sum().item() > 1.0
+    trigger_key = f"hsl_triggers_{side}"
+    other_trigger_key = (
+        "hsl_triggers_short" if side == "long" else "hsl_triggers_long"
+    )
+    restart_key = f"hsl_restarts_{side}"
+    assert output[trigger_key][0].item() == 0.0
+    assert output[trigger_key][1].item() == 1.0
+    assert output[other_trigger_key][1].item() == 0.0
+    assert output[restart_key][1].item() == 0.0
+    assert output[restart_key][2].item() >= 1.0
+    assert output["hsl_tier_samples_total"][1].item() > 0.0
+    assert output["hsl_tier_samples_red"][1].item() > 0.0
+    assert output["hsl_duration_count"][1].item() == 1.0
+    assert output["hsl_duration_max_steps"][1].item() > 0.0
+    assert output["hsl_trigger_drawdown_sum"][1].item() > 0.0
+    assert output["hsl_trigger_drawdown_count"][1].item() == 1.0
+    assert output["hsl_flatten_time_count"][1].item() == 1.0
 
 
 @pytest.mark.skipif(

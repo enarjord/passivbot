@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added non-loss HSL lifecycle scoring and limit metrics to the supported one-sided single-coin
+  Apple MPS optimizer path: trigger/restart counts and yearly rates, warning-tier occupancy, halt
+  and flatten durations, trigger drawdown, and post-restart retriggers. Exact Rust validation and
+  drift gates remain authoritative; panic-loss and HSL strategy-equity time-series metrics remain
+  fail closed.
+
 - Added the first HSL slice to Apple MPS optimization for one-sided single-coin EMA Anchor and
   Trailing Martingale runs, in both long and short directions and compatible suites. The Metal
   proxy models coin, pside, and unified drawdown signals; tunable RED threshold, EMA span, and
@@ -11,8 +17,8 @@ All notable user-facing changes will be documented in this file.
   flat confirmation; positive-cooldown restart; zero-cooldown indefinite halt; cumulative
   no-restart peak tracking; effective coin-slot scaling; and terminal no-restart. The initial
   slice requires all-history PnL peaks and contiguous valid candles. Market panic execution,
-  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, and
-  HSL-specific optimizer metrics remain fail closed.
+  finite rolling PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, panic-loss
+  metrics, and HSL strategy-equity time-series metrics remain fail closed.
 
 - Added auto-unstuck to Apple MPS EMA Anchor and Trailing Martingale optimization for single-coin
   long-only, short-only, dual-side hedge/one-way, and compatible suite runs, plus one-sided

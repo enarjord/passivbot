@@ -143,9 +143,12 @@ The supported slice is intentionally narrow:
   and strategy-equity peaks require `live.pnls_max_lookback_days: all`, and the selected history
   must have no internal invalid candles between its first and last valid samples. Thresholds in
   the float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
-  drift gates remain authoritative. Market panic closes, finite rolling PnL lookbacks, dual-side
-  and multi-coin HSL, per-coin HSL overrides, and HSL-specific scoring/limit metrics remain fail
-  closed for now. Compatible single-coin suites may use the supported topology.
+  drift gates remain authoritative. The non-loss HSL lifecycle metrics (trigger/restart counts and
+  yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
+  post-restart retriggers) may be used for scoring and limits. Market panic closes, finite rolling
+  PnL lookbacks, dual-side and multi-coin HSL, per-coin HSL overrides, panic-loss metrics, and
+  HSL strategy-equity EMA/recovery-distribution metrics remain fail closed for now. Compatible
+  single-coin suites may use the supported topology.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal

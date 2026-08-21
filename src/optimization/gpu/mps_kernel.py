@@ -20,6 +20,7 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 5
 MPS_MULTICOIN_DAILY_COLS = 6
 MPS_SCALAR_COLS = 18
+MPS_DIRECTIONAL_SCALAR_COLS = 36
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -117,6 +118,63 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "open_positions": scalars[:, 14],
         "short_psize": scalars[:, 15],
         "short_pprice": scalars[:, 16],
+    }
+
+
+def _decode_directional_outputs(daily, scalars, gaps) -> dict:
+    active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
+
+    def timestamp_column(index: int):
+        values = scalars[:, index]
+        return torch.where(
+            values >= 0.0, values, torch.full_like(values, float("nan"))
+        )
+
+    return {
+        "day_end_eq": daily[:, :, 0],
+        "day_min_eq": torch.where(
+            active_days,
+            daily[:, :, 1],
+            torch.full_like(daily[:, :, 1], float("inf")),
+        ),
+        "day_max_dd": daily[:, :, 2],
+        "day_volume": daily[:, :, 3],
+        "day_has_fill": daily[:, :, 4] > 0.0,
+        "max_dd": scalars[:, 0],
+        "held_max_ms": scalars[:, 1],
+        "gap_hist": gaps,
+        "gap_max_ms": scalars[:, 2],
+        "first_fill_ts": timestamp_column(3),
+        "last_fill_ts": timestamp_column(4),
+        "recovery_max_ms": scalars[:, 5],
+        "last_high_ts": timestamp_column(6),
+        "first_eq_ts": timestamp_column(7),
+        "last_eq_ts": timestamp_column(8),
+        "liq_step": scalars[:, 9].to(torch.int64),
+        "balance": scalars[:, 10],
+        "psize": scalars[:, 11],
+        "pprice": scalars[:, 12],
+        "alive": scalars[:, 13] > 0.0,
+        "short_psize": scalars[:, 15],
+        "short_pprice": scalars[:, 16],
+        "hsl_long_enabled": scalars[:, 18] > 0.0,
+        "hsl_short_enabled": scalars[:, 19] > 0.0,
+        "hsl_triggers_long": scalars[:, 20],
+        "hsl_triggers_short": scalars[:, 21],
+        "hsl_restarts_long": scalars[:, 22],
+        "hsl_restarts_short": scalars[:, 23],
+        "hsl_tier_samples_total": scalars[:, 24],
+        "hsl_tier_samples_yellow": scalars[:, 25],
+        "hsl_tier_samples_orange": scalars[:, 26],
+        "hsl_tier_samples_red": scalars[:, 27],
+        "hsl_duration_sum_steps": scalars[:, 28],
+        "hsl_duration_max_steps": scalars[:, 29],
+        "hsl_duration_count": scalars[:, 30],
+        "hsl_trigger_drawdown_sum": scalars[:, 31],
+        "hsl_trigger_drawdown_count": scalars[:, 32],
+        "hsl_flatten_time_sum_steps": scalars[:, 33],
+        "hsl_flatten_time_count": scalars[:, 34],
+        "hsl_restart_retrigger_count": scalars[:, 35],
     }
 
 
@@ -234,7 +292,9 @@ class MpsEmaAnchorRunner:
                         device="mps",
                     ),
                     torch.zeros(
-                        (batch_size, MPS_SCALAR_COLS), dtype=torch.float32, device="mps"
+                        (batch_size, MPS_DIRECTIONAL_SCALAR_COLS),
+                        dtype=torch.float32,
+                        device="mps",
                     ),
                     torch.zeros(
                         (batch_size, GAP_BINS), dtype=torch.int32, device="mps"
@@ -298,42 +358,7 @@ class MpsEmaAnchorRunner:
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
-
-        def timestamp_column(index: int):
-            values = scalars[:, index]
-            return torch.where(
-                values >= 0.0, values, torch.full_like(values, float("nan"))
-            )
-
-        return {
-            "day_end_eq": daily[:, :, 0],
-            "day_min_eq": torch.where(
-                active_days,
-                daily[:, :, 1],
-                torch.full_like(daily[:, :, 1], float("inf")),
-            ),
-            "day_max_dd": daily[:, :, 2],
-            "day_volume": daily[:, :, 3],
-            "day_has_fill": daily[:, :, 4] > 0.0,
-            "max_dd": scalars[:, 0],
-            "held_max_ms": scalars[:, 1],
-            "gap_hist": gaps,
-            "gap_max_ms": scalars[:, 2],
-            "first_fill_ts": timestamp_column(3),
-            "last_fill_ts": timestamp_column(4),
-            "recovery_max_ms": scalars[:, 5],
-            "last_high_ts": timestamp_column(6),
-            "first_eq_ts": timestamp_column(7),
-            "last_eq_ts": timestamp_column(8),
-            "liq_step": scalars[:, 9].to(torch.int64),
-            "balance": scalars[:, 10],
-            "psize": scalars[:, 11],
-            "pprice": scalars[:, 12],
-            "alive": scalars[:, 13] > 0.0,
-            "short_psize": scalars[:, 15],
-            "short_pprice": scalars[:, 16],
-        }
+        return _decode_directional_outputs(daily, scalars, gaps)
 
 
 class MpsEmaAnchorMulticoinRunner:
@@ -690,41 +715,4 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        active_days = torch.isfinite(daily[:, :, 1]) & (
-            daily[:, :, 1] < float("inf")
-        )
-
-        def timestamp_column(index: int):
-            values = scalars[:, index]
-            return torch.where(
-                values >= 0.0, values, torch.full_like(values, float("nan"))
-            )
-
-        return {
-            "day_end_eq": daily[:, :, 0],
-            "day_min_eq": torch.where(
-                active_days,
-                daily[:, :, 1],
-                torch.full_like(daily[:, :, 1], float("inf")),
-            ),
-            "day_max_dd": daily[:, :, 2],
-            "day_volume": daily[:, :, 3],
-            "day_has_fill": daily[:, :, 4] > 0.0,
-            "max_dd": scalars[:, 0],
-            "held_max_ms": scalars[:, 1],
-            "gap_hist": gaps,
-            "gap_max_ms": scalars[:, 2],
-            "first_fill_ts": timestamp_column(3),
-            "last_fill_ts": timestamp_column(4),
-            "recovery_max_ms": scalars[:, 5],
-            "last_high_ts": timestamp_column(6),
-            "first_eq_ts": timestamp_column(7),
-            "last_eq_ts": timestamp_column(8),
-            "liq_step": scalars[:, 9].to(torch.int64),
-            "balance": scalars[:, 10],
-            "psize": scalars[:, 11],
-            "pprice": scalars[:, 12],
-            "alive": scalars[:, 13] > 0.0,
-            "short_psize": scalars[:, 15],
-            "short_pprice": scalars[:, 16],
-        }
+        return _decode_directional_outputs(daily, scalars, gaps)
