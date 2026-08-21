@@ -179,17 +179,19 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
             controller(1) + controller(1),
             controller(2) + controller(2),
             controller(0) + controller(1),
+            controller(0) + controller(0),
         ],
         dtype=torch.float32,
         device="mps",
     )
-    samples = torch.zeros((4, 4, 8), dtype=torch.float32, device="mps")
+    samples = torch.zeros((5, 4, 8), dtype=torch.float32, device="mps")
     samples[:, :2, 4] = 1.0
     samples[:, :2, 5] = 1.0
     samples[:, 1:, 3] = -10.0
+    samples[4, :, 4] = 1.0
     settings = torch.tensor([100.0, 60_000.0], device="mps")
-    sizes = torch.tensor([4, 4], dtype=torch.int32, device="mps")
-    output = torch.zeros((4, 8), dtype=torch.float32, device="mps")
+    sizes = torch.tensor([5, 4], dtype=torch.int32, device="mps")
+    output = torch.zeros((5, 8), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -200,7 +202,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
         settings,
         sizes,
         output,
-        threads=(4, 1, 1),
+        threads=(5, 1, 1),
     )
     torch.mps.synchronize()
     values = output.cpu().numpy()
@@ -209,8 +211,9 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     assert values[1, :4].tolist() == [0.0, 3.0, 0.0, 1.0]
     assert values[2, :4].tolist() == [0.0, 0.0, 0.0, 0.0]
     assert values[3, :4].tolist() == [0.0, 0.0, 0.0, 0.0]
-    assert values[:, 6].tolist() == [90.0, 90.0, 90.0, 90.0]
-    assert values[:, 7].tolist() == [3.0, 3.0, 0.0, 0.0]
+    assert values[4, :4].tolist() == [3.0, 3.0, 0.0, 0.0]
+    assert values[:, 6].tolist() == [90.0, 90.0, 90.0, 90.0, 90.0]
+    assert values[:, 7].tolist() == [3.0, 3.0, 0.0, 0.0, 3.0]
 
 
 def _single_coin_exposure_fields(

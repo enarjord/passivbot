@@ -206,6 +206,9 @@ inline bool update_joint_pside_hsl(
         || short_hsl.signal_mode == HSL_SIGNAL_COIN
         || long_hsl.signal_mode != short_hsl.signal_mode) return false;
     const bool unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    const bool shared_has_position = has_position_long || has_position_short;
+    const bool shared_has_blocking_orders = has_blocking_orders_long
+        || has_blocking_orders_short;
     update_hsl(
         long_hsl,
         account.balance,
@@ -214,8 +217,8 @@ inline bool update_joint_pside_hsl(
         joint_hsl_unrealized_pnl(
             unrealized_pnl_long, unrealized_pnl_short, unified, true
         ),
-        has_position_long,
-        has_blocking_orders_long,
+        unified ? shared_has_position : has_position_long,
+        unified ? shared_has_blocking_orders : has_blocking_orders_long,
         kf,
         interval_ms
     );
@@ -227,8 +230,8 @@ inline bool update_joint_pside_hsl(
         joint_hsl_unrealized_pnl(
             unrealized_pnl_long, unrealized_pnl_short, unified, false
         ),
-        has_position_short,
-        has_blocking_orders_short,
+        unified ? shared_has_position : has_position_short,
+        unified ? shared_has_blocking_orders : has_blocking_orders_short,
         kf,
         interval_ms
     );

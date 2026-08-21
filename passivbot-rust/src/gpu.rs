@@ -118,6 +118,12 @@ mod tests {
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
+        assert!(source.contains(
+            "const bool shared_has_position = has_position_long || has_position_short"
+        ));
+        assert!(source.contains(
+            "const bool shared_has_blocking_orders = has_blocking_orders_long"
+        ));
         assert!(source.contains("joint_hsl_realized_pnl(account, unified, true)"));
         assert!(source.contains("joint_hsl_realized_pnl(account, unified, false)"));
     }
