@@ -32,6 +32,12 @@ SUPPORTED_METRICS = (
     "hard_stop_duration_minutes_max",
     "hard_stop_duration_minutes_mean",
     "hard_stop_flatten_time_minutes_mean",
+    "hard_stop_halt_to_restart_equity_loss_pct",
+    "hard_stop_panic_close_loss_drawdown_pct_max",
+    "hard_stop_panic_close_loss_drawdown_pct_mean",
+    "hard_stop_panic_close_loss_drawdown_pct_min",
+    "hard_stop_panic_close_loss_max",
+    "hard_stop_panic_close_loss_sum",
     "hard_stop_post_restart_retrigger_pct",
     "hard_stop_restarts",
     "hard_stop_restarts_long",
@@ -96,6 +102,14 @@ _HARD_STOP_LIFECYCLE_METRICS = {
     "hard_stop_triggers_long",
     "hard_stop_triggers_per_year",
     "hard_stop_triggers_short",
+}
+_HARD_STOP_PANIC_LOSS_METRICS = {
+    "hard_stop_halt_to_restart_equity_loss_pct",
+    "hard_stop_panic_close_loss_drawdown_pct_max",
+    "hard_stop_panic_close_loss_drawdown_pct_mean",
+    "hard_stop_panic_close_loss_drawdown_pct_min",
+    "hard_stop_panic_close_loss_max",
+    "hard_stop_panic_close_loss_sum",
 }
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
@@ -613,6 +627,39 @@ def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
     }
 
 
+def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
+    """Reduce resting-limit panic-fill losses using the Rust HSL formulas."""
+
+    reference = out["max_dd"].to(torch.float64)
+    zeros = torch.zeros_like(reference)
+    if "hsl_panic_close_loss_sum" not in out:
+        return {name: zeros for name in _HARD_STOP_PANIC_LOSS_METRICS}
+
+    def value(name: str):
+        return out[name].to(torch.float64)
+
+    drawdown_count = value("hsl_panic_loss_drawdown_count")
+    return {
+        "hard_stop_halt_to_restart_equity_loss_pct": value(
+            "hsl_halt_to_restart_equity_loss"
+        )
+        / max(float(run.starting_balance), 1.0e-12),
+        "hard_stop_panic_close_loss_sum": value("hsl_panic_close_loss_sum"),
+        "hard_stop_panic_close_loss_max": value("hsl_panic_close_loss_max"),
+        "hard_stop_panic_close_loss_drawdown_pct_min": value(
+            "hsl_panic_loss_drawdown_min"
+        ),
+        "hard_stop_panic_close_loss_drawdown_pct_mean": torch.where(
+            drawdown_count > 0.0,
+            value("hsl_panic_loss_drawdown_sum") / drawdown_count,
+            zeros,
+        ),
+        "hard_stop_panic_close_loss_drawdown_pct_max": value(
+            "hsl_panic_loss_drawdown_max"
+        ),
+    }
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -698,6 +745,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_LIFECYCLE_METRICS
         else {}
     )
+    hard_stop_panic_loss_metrics = (
+        _hard_stop_panic_loss_metrics(out, run)
+        if requested & _HARD_STOP_PANIC_LOSS_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -736,6 +788,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     }
     objectives.update(fill_gap_metrics)
     objectives.update(hard_stop_metrics)
+    objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
     if needed is None:
         return objectives

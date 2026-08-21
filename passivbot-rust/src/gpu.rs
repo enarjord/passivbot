@@ -42,7 +42,7 @@ mod tests {
         let source = mps_ema_anchor_source();
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 5"));
-        assert!(source.contains("constant int SCALAR_COLS = 36"));
+        assert!(source.contains("constant int SCALAR_COLS = 43"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -50,6 +50,8 @@ mod tests {
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
+        assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("h.panic_loss_drawdown_sum"));
         assert!(source.contains("h.slot_count"));
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
@@ -131,10 +133,16 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 36"));
+        assert!(source.contains("constant int SCALAR_COLS = 43"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
+        assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("h.panic_loss_drawdown_sum"));
+        assert!(source.contains("&& !long_side.close_is_panic"));
+        assert!(source.contains("&& !short_side.close_is_panic"));
+        assert!(source.contains("if (!long_side.close_is_panic"));
+        assert!(source.contains("if (!short_side.close_is_panic"));
         assert!(source.contains("h.slot_count"));
         assert!(source.contains("h.no_restart_peak_strategy_equity"));
         assert!(source.contains("terminal || h.cooldown_minutes <= 0.0f"));
