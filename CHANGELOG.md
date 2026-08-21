@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `total_wallet_exposure_max` and `total_wallet_exposure_mean` scoring and limits to Apple
+  MPS optimization for EMA Anchor and Trailing Martingale across single-coin, one-sided multi-coin,
+  and compatible suite runs. Metal samples absolute net long-minus-short exposure after each
+  non-liquidating equity update, matching Rust's analysis series timing. Dual-side multi-coin runs
+  fail closed because independent directional kernels cannot reconstruct the minute-level net
+  portfolio exposure; exact Rust validation and drift gates remain authoritative.
+
 - Added `entry_initial_balance_pct_long` and `entry_initial_balance_pct_short` scoring and limits
   to Apple MPS optimization for EMA Anchor and Trailing Martingale across single-coin,
   one-sided multi-coin, and compatible suite runs. Metal derives the value from each candidate's

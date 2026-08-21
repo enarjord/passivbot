@@ -41,6 +41,8 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "entry_initial_balance_pct",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "total_wallet_exposure_max",
+        "total_wallet_exposure_mean",
     } <= CORE_OUTPUT_KEYS
 
 

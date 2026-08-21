@@ -6,7 +6,7 @@ constant int PARAM_COLS = 31;
 constant int COIN_COLS = 11;
 constant int OVERRIDE_COLS = 19;
 constant int DAILY_COLS = 6;
-constant int SCALAR_COLS = 22;
+constant int SCALAR_COLS = 24;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -392,6 +392,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int previous_effective_n_positions = 0;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
+    float total_wallet_exposure_max = 0.0f;
+    float total_wallet_exposure_mean = 0.0f;
+    float total_wallet_exposure_samples = 0.0f;
     float held_max_min = 0.0f;
     float position_unchanged_max_min = 0.0f;
     float first_fill_k = -1.0f;
@@ -1385,6 +1388,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
 
         float unrealized = 0.0f;
+        float position_cost = 0.0f;
         bool any_valid = false;
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
@@ -1396,6 +1400,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 any_valid = true;
             }
             if (psize[c] > 0.0f) {
+                position_cost += psize[c] * pprice[c]
+                    * coin_settings[coin_offset + 4];
                 unrealized += psize[c] * coin_settings[coin_offset + 4]
                     * (short_side ? pprice[c] - close : close - pprice[c]);
             }
@@ -1425,6 +1431,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_min_balance = fmin(day_min_balance, balance);
             day_dd = fmax(day_dd, drawdown);
             day_touched = true;
+            if (!liquidated) {
+                float twe_abs = position_cost / balance;
+                total_wallet_exposure_samples += 1.0f;
+                total_wallet_exposure_mean += (
+                    twe_abs - total_wallet_exposure_mean
+                ) / total_wallet_exposure_samples;
+                total_wallet_exposure_max = fmax(
+                    total_wallet_exposure_max, twe_abs
+                );
+            }
             if (liquidated) {
                 alive = false;
                 liquidation_day = day_index;
@@ -1498,6 +1514,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 21] = allowed_wallet_exposure_limit(
         entry_base_limit, twel, entry_allowance_pct, legacy_raw_allowance
     ) * entry_initial_qty_pct;
+    scalars[scalar_offset + 22] = total_wallet_exposure_max;
+    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
 }
 
 kernel void passivbot_ema_anchor_multicoin(

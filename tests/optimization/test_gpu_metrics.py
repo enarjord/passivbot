@@ -61,6 +61,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "liq_step": torch.tensor([-1.0], dtype=torch.float64),
         "entry_initial_balance_pct_long": torch.tensor([0.125]),
         "entry_initial_balance_pct_short": torch.tensor([0.075]),
+        "total_wallet_exposure_max": torch.tensor([1.25]),
+        "total_wallet_exposure_mean": torch.tensor([0.625]),
     }
     run = SimpleNamespace(
         requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
@@ -74,6 +76,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "peak_recovery_hours_strategy_eq",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "total_wallet_exposure_max",
+        "total_wallet_exposure_mean",
     }
 
     metrics = compute_objectives(
@@ -92,6 +96,8 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     assert metrics["peak_recovery_hours_strategy_eq"].item() == pytest.approx(30.0)
     assert metrics["entry_initial_balance_pct_long"].item() == pytest.approx(0.125)
     assert metrics["entry_initial_balance_pct_short"].item() == pytest.approx(0.075)
+    assert metrics["total_wallet_exposure_max"].item() == pytest.approx(1.25)
+    assert metrics["total_wallet_exposure_mean"].item() == pytest.approx(0.625)
     assert requested <= set(SUPPORTED_METRICS)
 
 

@@ -265,6 +265,11 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
     assert unchanged_ms > 0.0
     assert unchanged_ms <= output["held_max_ms"].item()
     assert output["entry_initial_balance_pct"].item() == pytest.approx(0.5)
+    assert output["total_wallet_exposure_max"].item() > 0.0
+    assert (
+        output["total_wallet_exposure_max"].item()
+        >= output["total_wallet_exposure_mean"].item()
+    )
 
 
 @pytest.mark.skipif(
@@ -479,7 +484,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 48" in source
+    assert "constant int SCALAR_COLS = 50" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -561,6 +566,11 @@ def test_mps_ema_anchor_shader_smoke():
     assert output["balance"].shape == (2,)
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
+    assert (output["total_wallet_exposure_max"] > 0.0).all()
+    assert (
+        output["total_wallet_exposure_max"]
+        >= output["total_wallet_exposure_mean"]
+    ).all()
 
 
 @pytest.mark.skipif(
@@ -2097,6 +2107,11 @@ def test_mps_tm_equal_unstuck_twel_reducers_keep_nearer_twel(side):
     # auto-unstuck reducer. The next candle crosses TWEL but only touches
     # unstuck, proving selection follows Rust's reachability tie-break.
     assert output[size_key].item() == pytest.approx(5.0)
+    assert output["total_wallet_exposure_max"].item() > 0.0
+    assert (
+        output["total_wallet_exposure_max"].item()
+        >= output["total_wallet_exposure_mean"].item()
+    )
 
 
 @pytest.mark.skipif(

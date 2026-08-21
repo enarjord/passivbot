@@ -46,6 +46,8 @@ CORE_OUTPUT_KEYS = {
     "entry_initial_balance_pct",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
+    "total_wallet_exposure_max",
+    "total_wallet_exposure_mean",
 }
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
