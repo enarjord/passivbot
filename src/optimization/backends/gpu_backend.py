@@ -1046,6 +1046,8 @@ def _validate_dual_multicoin_metrics(
         & {
             "entry_initial_balance_pct_long",
             "entry_initial_balance_pct_short",
+            "exposure_mean_ratio_usd",
+            "exposure_ratio_usd",
             "fills_gap_longest_days",
             "fills_gap_mean_hours",
             "fills_gap_median_hours",

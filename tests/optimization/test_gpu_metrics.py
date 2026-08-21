@@ -78,6 +78,9 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "entry_initial_balance_pct_short",
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
+        "adg_strategy_eq",
+        "exposure_ratio_usd",
+        "exposure_mean_ratio_usd",
     }
 
     metrics = compute_objectives(
@@ -98,6 +101,9 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     assert metrics["entry_initial_balance_pct_short"].item() == pytest.approx(0.075)
     assert metrics["total_wallet_exposure_max"].item() == pytest.approx(1.25)
     assert metrics["total_wallet_exposure_mean"].item() == pytest.approx(0.625)
+    adg = metrics["adg_strategy_eq"].item()
+    assert metrics["exposure_ratio_usd"].item() == pytest.approx(adg / 1.25)
+    assert metrics["exposure_mean_ratio_usd"].item() == pytest.approx(adg / 0.625)
     assert requested <= set(SUPPORTED_METRICS)
 
 
@@ -265,6 +271,21 @@ def test_strategy_equity_summary_metric_surface_is_supported():
         "sterling_ratio_strategy_eq",
         "strategy_eq_underwater_pct_median",
     } <= set(SUPPORTED_METRICS)
+    assert {
+        "adg_usd",
+        "calmar_ratio_usd",
+        "drawdown_worst_mean_1pct_usd",
+        "drawdown_worst_usd",
+        "expected_shortfall_1pct_usd",
+        "gain_usd",
+        "mdg_usd",
+        "omega_ratio_usd",
+        "sharpe_ratio_usd",
+        "sortino_ratio_usd",
+        "sterling_ratio_usd",
+        "exposure_ratio_usd",
+        "exposure_mean_ratio_usd",
+    } <= set(SUPPORTED_METRICS)
 
 
 def test_hard_stop_lifecycle_metric_surface_is_supported():
@@ -406,6 +427,15 @@ def test_weighted_strategy_equity_metric_surface_is_supported():
         "calmar_ratio_strategy_eq_w",
         "sterling_ratio_strategy_eq_w",
     } <= set(SUPPORTED_METRICS)
+    assert {
+        "adg_w_usd",
+        "calmar_ratio_w_usd",
+        "mdg_w_usd",
+        "omega_ratio_w_usd",
+        "sharpe_ratio_w_usd",
+        "sortino_ratio_w_usd",
+        "sterling_ratio_w_usd",
+    } <= set(SUPPORTED_METRICS)
 
 
 def test_smoothed_gain_and_adg_match_rust_terminal_contract():
@@ -515,13 +545,41 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         requested_start_ts_ms=0, guard_ts_ms=0, interval_ms=60_000
     )
     requested = {
+        "adg_strategy_eq",
+        "drawdown_worst_mean_1pct_strategy_eq",
+        "drawdown_worst_strategy_eq",
         "gain_strategy_eq",
+        "mdg_strategy_eq",
         "omega_ratio_strategy_eq",
+        "sharpe_ratio_strategy_eq",
+        "sortino_ratio_strategy_eq",
         "expected_shortfall_1pct_strategy_eq",
         "calmar_ratio_strategy_eq",
         "sterling_ratio_strategy_eq",
         "strategy_eq_underwater_pct_median",
     }
+    alias_sources = {
+        "adg_usd": "adg_strategy_eq",
+        "adg_w_usd": "adg_strategy_eq_w",
+        "calmar_ratio_usd": "calmar_ratio_strategy_eq",
+        "calmar_ratio_w_usd": "calmar_ratio_strategy_eq_w",
+        "drawdown_worst_mean_1pct_usd": "drawdown_worst_mean_1pct_strategy_eq",
+        "drawdown_worst_usd": "drawdown_worst_strategy_eq",
+        "expected_shortfall_1pct_usd": "expected_shortfall_1pct_strategy_eq",
+        "gain_usd": "gain_strategy_eq",
+        "mdg_usd": "mdg_strategy_eq",
+        "mdg_w_usd": "mdg_strategy_eq_w",
+        "omega_ratio_usd": "omega_ratio_strategy_eq",
+        "omega_ratio_w_usd": "omega_ratio_strategy_eq_w",
+        "sharpe_ratio_usd": "sharpe_ratio_strategy_eq",
+        "sharpe_ratio_w_usd": "sharpe_ratio_strategy_eq_w",
+        "sortino_ratio_usd": "sortino_ratio_strategy_eq",
+        "sortino_ratio_w_usd": "sortino_ratio_strategy_eq_w",
+        "sterling_ratio_usd": "sterling_ratio_strategy_eq",
+        "sterling_ratio_w_usd": "sterling_ratio_strategy_eq_w",
+    }
+    requested.update(alias_sources)
+    requested.update(alias_sources.values())
 
     metrics = compute_objectives(out, run, {"ts0": 0.0, "n": 4}, needed=requested)
 
@@ -542,6 +600,8 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         (90.0 - 110.0) / 110.0
     )
     assert metrics["omega_ratio_strategy_eq"].item() == pytest.approx(expected_omega)
+    for alias, source in alias_sources.items():
+        assert metrics[alias].item() == pytest.approx(metrics[source].item())
 
 
 def test_objectives_include_final_active_calendar_day():
