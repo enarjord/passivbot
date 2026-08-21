@@ -223,7 +223,8 @@ multi-coin auto-unstuck are not silently approximated by this release. Dual-side
 screening also rejects `fills_gap_longest_days`,
 `fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
 `fills_gap_p99_hours`,
-`strategy_eq_recovery_days_max`, and `volume_pct_per_day_avg`: the independent directional
+`strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`, and
+`volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
 or fill volume normalized by the shared balance safely.
 

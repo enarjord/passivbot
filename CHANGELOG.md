@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS optimizer scoring and limits for `position_held_hours_max` and
+  `peak_recovery_hours_strategy_eq`, including its legacy `peak_recovery_hours_hsl` alias. These
+  are exact hour-denominated views of the already supported Rust-compatible duration metrics and
+  require no additional Metal approximation. Dual-side multi-coin recovery metrics remain fail
+  closed because independent directional summaries cannot reconstruct portfolio recovery.
+
 - Added `loss_profit_ratio` scoring and limits to Apple MPS optimization for EMA Anchor and
   Trailing Martingale across long, short, and dual-side single-coin runs and one-sided multi-coin
   runs. Metal accumulates gross winning and losing close-fill PnL, excluding entry and close fees
