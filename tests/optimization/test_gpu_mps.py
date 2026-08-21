@@ -255,6 +255,60 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     np.testing.assert_allclose(values[:, 54:58], [[0.1, 0.6, 0.2, 4.0]] * 5)
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_side_states_are_isolated_for_fused_execution():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_ema_multicoin_side_state_isolation_probe(
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    EmaMulticoinSideState long_side;
+    EmaMulticoinSideState short_side;
+    long_side.psize[0] = 1.0f;
+    short_side.psize[0] = 2.0f;
+    long_side.entry_tick[0] = 3;
+    short_side.entry_tick[0] = 4;
+    long_side.selected[0] = true;
+    short_side.selected[0] = false;
+    long_side.hsl.enabled = true;
+    short_side.hsl.enabled = false;
+    long_side.coin_hsl[0].triggers = 5.0f;
+    short_side.coin_hsl[0].triggers = 6.0f;
+    long_side.coin_hsl_entry_blocked_mask = 7ul;
+    short_side.coin_hsl_entry_blocked_mask = 8ul;
+    output[0] = long_side.psize[0];
+    output[1] = short_side.psize[0];
+    output[2] = float(long_side.entry_tick[0]);
+    output[3] = float(short_side.entry_tick[0]);
+    output[4] = long_side.selected[0] && !short_side.selected[0] ? 1.0f : 0.0f;
+    output[5] = long_side.hsl.enabled && !short_side.hsl.enabled ? 1.0f : 0.0f;
+    output[6] = long_side.coin_hsl[0].triggers
+        + short_side.coin_hsl[0].triggers;
+    output[7] = float(
+        long_side.coin_hsl_entry_blocked_mask
+            + short_side.coin_hsl_entry_blocked_mask
+    );
+}
+"""
+
+    output = torch.zeros(8, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_ema_multicoin_side_state_isolation_probe(
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 11.0, 15.0]
+
+
 def _single_coin_exposure_fields(
     *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
 ):

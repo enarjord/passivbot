@@ -313,6 +313,13 @@ mod tests {
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
+        assert!(source.contains("EmaMulticoinSideState side"));
+        assert!(source.contains("thread HslState& hsl = side.hsl"));
+        assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
+        assert!(source.contains("thread float* psize = side.psize"));
+        assert!(source.contains("thread int* entry_tick = side.entry_tick"));
+        assert!(source.contains("thread bool* selected = side.selected"));
         assert!(source.contains("load_hsl(params, po, 31)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
