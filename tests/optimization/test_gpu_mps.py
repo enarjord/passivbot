@@ -380,6 +380,8 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
     closes[20:60] *= 1.3
     closes[60:] *= 0.65
     outputs = {}
+    runners = {}
+    rows = {}
     for side in ("long", "short"):
         runner, row = _multicoin_exposure_fixture(
             strategy_kind,
@@ -407,6 +409,8 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
             "hsl_slot_count": 1.0,
         }.items():
             row[keys.index(key)] = value
+        runners[side] = runner
+        rows[side] = row
         outputs[side] = runner.run(np.asarray([row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -420,6 +424,52 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
         assert output["hsl_trigger_drawdown_count"].item() == 1.0
         assert output["hsl_panic_loss_drawdown_count"].item() == 1.0
         assert output["open_positions"].item() == 0.0
+
+    from optimization.gpu.metrics import (
+        _hard_stop_lifecycle_metrics,
+        _hard_stop_panic_loss_metrics,
+    )
+    from optimization.gpu.service import (
+        CORE_OUTPUT_KEYS,
+        DIRECTIONAL_HSL_OUTPUT_KEYS,
+        _combine_hedged_multicoin_outputs,
+    )
+
+    side_outputs = {
+        side: {
+            key: value.cpu()
+            for key, value in outputs[side].items()
+            if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+        }
+        for side in ("long", "short")
+    }
+    run = runners["long"].run_config
+    combined = _combine_hedged_multicoin_outputs(
+        side_outputs["long"],
+        side_outputs["short"],
+        run.starting_balance,
+        run.liquidation_threshold,
+        runners["long"].start_minute_of_day,
+        run.interval_ms,
+    )
+    lifecycle = _hard_stop_lifecycle_metrics(combined, run)
+    panic = _hard_stop_panic_loss_metrics(combined, run)
+    assert lifecycle["hard_stop_triggers"].item() == 2.0
+    assert lifecycle["hard_stop_triggers_long"].item() == 1.0
+    assert lifecycle["hard_stop_triggers_short"].item() == 1.0
+    assert panic["hard_stop_panic_close_loss_sum"].item() > 0.0
+    assert panic["hard_stop_panic_close_loss_drawdown_pct_max"].item() > 0.0
+
+    truncated = {
+        side: runners[side].run(
+            np.asarray([rows[side]], dtype=np.float64),
+            end_steps=np.asarray([60], dtype=np.int32),
+        )
+        for side in ("long", "short")
+    }
+    torch.mps.synchronize()
+    assert truncated["long"]["hsl_triggers_long"].item() == 0.0
+    assert truncated["short"]["hsl_triggers_short"].item() == 1.0
 
 
 @pytest.mark.skipif(

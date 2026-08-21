@@ -25,6 +25,7 @@ from optimization.gpu.service import (
     _build_multicoin_tm_coin_overrides,
     _candidate_wallet_exposure_limit_outputs,
     _candidate_position_slot_outputs,
+    _combine_hedged_multicoin_hsl_outputs,
     _combine_hedged_multicoin_outputs,
     _directional_entry_initial_metrics,
     _directional_gross_pnl_outputs,
@@ -36,6 +37,7 @@ from optimization.gpu.service import (
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
+    _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
     _unstuck_params,
@@ -226,7 +228,147 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
         "hsl_panic_close_loss_sum",
         "hsl_panic_loss_drawdown_count",
     } <= DIRECTIONAL_HSL_OUTPUT_KEYS
+
+
+def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
+    torch = pytest.importorskip("torch")
+    from optimization.gpu.metrics import (
+        _hard_stop_lifecycle_metrics,
+        _hard_stop_panic_loss_metrics,
+    )
+
+    def side_output(*, side, triggers, restarts, minimum, drawdown_count):
+        zeros = torch.zeros(1)
+        output = {key: zeros.clone() for key in DIRECTIONAL_HSL_OUTPUT_KEYS}
+        output[f"hsl_{side}_enabled"] = torch.ones(1, dtype=torch.bool)
+        output[f"hsl_triggers_{side}"] = torch.tensor([triggers])
+        output[f"hsl_restarts_{side}"] = torch.tensor([restarts])
+        output["hsl_tier_samples_total"] = torch.tensor([10.0])
+        output["hsl_tier_samples_yellow"] = torch.tensor([2.0])
+        output["hsl_tier_samples_orange"] = torch.tensor([3.0])
+        output["hsl_tier_samples_red"] = torch.tensor([4.0])
+        output["hsl_duration_sum_steps"] = torch.tensor([7.0])
+        output["hsl_duration_max_steps"] = torch.tensor([5.0])
+        output["hsl_duration_count"] = torch.tensor([2.0])
+        output["hsl_trigger_drawdown_sum"] = torch.tensor([0.3])
+        output["hsl_trigger_drawdown_count"] = torch.tensor([1.0])
+        output["hsl_flatten_time_sum_steps"] = torch.tensor([4.0])
+        output["hsl_flatten_time_count"] = torch.tensor([1.0])
+        output["hsl_restart_retrigger_count"] = torch.tensor([1.0])
+        output["hsl_halt_to_restart_equity_loss"] = torch.tensor([12.0])
+        output["hsl_panic_close_loss_sum"] = torch.tensor([8.0])
+        output["hsl_panic_close_loss_max"] = torch.tensor([6.0])
+        output["hsl_panic_loss_drawdown_min"] = torch.tensor([minimum])
+        output["hsl_panic_loss_drawdown_sum"] = torch.tensor([0.4])
+        output["hsl_panic_loss_drawdown_max"] = torch.tensor([0.3])
+        output["hsl_panic_loss_drawdown_count"] = torch.tensor(
+            [drawdown_count]
+        )
+        return output
+
+    combined = _combine_hedged_multicoin_hsl_outputs(
+        side_output(
+            side="long", triggers=2.0, restarts=1.0, minimum=0.2, drawdown_count=2.0
+        ),
+        side_output(
+            side="short", triggers=3.0, restarts=2.0, minimum=0.1, drawdown_count=1.0
+        ),
+    )
+
+    assert combined["hsl_long_enabled"].item()
+    assert combined["hsl_short_enabled"].item()
+    assert combined["hsl_triggers_long"].item() == 2.0
+    assert combined["hsl_triggers_short"].item() == 3.0
+    assert combined["hsl_restarts_long"].item() == 1.0
+    assert combined["hsl_restarts_short"].item() == 2.0
+    assert combined["hsl_duration_sum_steps"].item() == 14.0
+    assert combined["hsl_duration_max_steps"].item() == 5.0
+    assert combined["hsl_duration_count"].item() == 4.0
+    assert combined["hsl_panic_close_loss_sum"].item() == 16.0
+    assert combined["hsl_panic_close_loss_max"].item() == 6.0
+    assert combined["hsl_panic_loss_drawdown_min"].item() == pytest.approx(0.1)
+    assert combined["hsl_panic_loss_drawdown_count"].item() == 3.0
+    assert combined["hsl_tier_samples_total"].item() == 10.0
+    assert combined["hsl_tier_samples_red"].item() == 8.0
+    assert combined["hsl_tier_samples_orange"].item() == 2.0
+    assert combined["hsl_tier_samples_yellow"].item() == 0.0
+
+    combined.update(
+        {
+            "max_dd": torch.tensor([0.2]),
+            "first_eq_ts": torch.tensor([0.0]),
+            "last_eq_ts": torch.tensor([86_400_000.0]),
+        }
+    )
+    run = SimpleNamespace(interval_ms=60_000, starting_balance=1_000.0)
+    lifecycle = _hard_stop_lifecycle_metrics(combined, run)
+    panic = _hard_stop_panic_loss_metrics(combined, run)
+    assert lifecycle["hard_stop_triggers"].item() == 5.0
+    assert lifecycle["hard_stop_restarts"].item() == 3.0
+    assert lifecycle["hard_stop_duration_minutes_mean"].item() == 3.5
+    assert panic["hard_stop_panic_close_loss_sum"].item() == 16.0
+    assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
+        pytest.approx(0.8 / 3.0)
+    )
     assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 25
+
+
+def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
+    torch = pytest.importorskip("torch")
+
+    class FakeRunner:
+        def __init__(self, replacement):
+            self.replacement = replacement
+            self.calls = []
+
+        def run(self, params, *, end_steps):
+            self.calls.append((params.copy(), end_steps.copy()))
+            return {
+                key: torch.full(
+                    (len(params),),
+                    bool(self.replacement)
+                    if key.endswith("_enabled")
+                    else self.replacement,
+                    dtype=(
+                        torch.bool if key.endswith("_enabled") else torch.float32
+                    ),
+                )
+                for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+            }
+
+    side_outputs = {
+        side: {
+            key: torch.tensor(
+                [True, True]
+                if key.endswith("_enabled")
+                else [10.0, 20.0],
+                dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+            )
+            for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+        }
+        for side in ("long", "short")
+    }
+    runners = {"long": FakeRunner(3.0), "short": FakeRunner(4.0)}
+    matrices = {
+        "long": np.asarray([[1.0], [2.0]]),
+        "short": np.asarray([[3.0], [4.0]]),
+    }
+
+    refreshed = _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+        side_outputs=side_outputs,
+        runners=runners,
+        parameter_matrices=matrices,
+        combined_output={"liq_step": torch.tensor([-1.0, 2.0])},
+        start_minute_of_day=60,
+    )
+
+    assert refreshed
+    assert runners["long"].calls[0][0].tolist() == [[2.0]]
+    assert runners["short"].calls[0][0].tolist() == [[4.0]]
+    assert runners["long"].calls[0][1].tolist() == [2820]
+    assert runners["short"].calls[0][1].tolist() == [2820]
+    assert side_outputs["long"]["hsl_triggers_long"].tolist() == [10.0, 3.0]
+    assert side_outputs["short"]["hsl_triggers_short"].tolist() == [10.0, 4.0]
 
 
 def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():

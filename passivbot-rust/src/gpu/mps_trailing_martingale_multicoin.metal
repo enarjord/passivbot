@@ -339,6 +339,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
+    constant int* end_steps,
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -354,8 +355,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
     const int start_hour_minute = sizes[7];
-    const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
     if (b >= uint(B)) return;
+    const int stop_k = clamp(end_steps[b], 1, T - 1);
+    const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
     if (collect_coin_fill_counts) {
         for (int c = 0; c < C; ++c) {
             coin_fill_counts[int(b) * C + c] = 0.0f;
@@ -640,7 +642,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float day_start_balance = balance;
     float day_fill_count = 0.0f;
 
-    for (int k = 1; k < T - 1; ++k) {
+    for (int k = 1; k < stop_k; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
         if (day_index != current_day) {
             if (day_touched && current_day >= 0 && current_day < D) {
@@ -2595,6 +2597,7 @@ kernel void passivbot_trailing_martingale_multicoin(
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
+    constant int* end_steps,
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -2606,7 +2609,7 @@ kernel void passivbot_trailing_martingale_multicoin(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         coin_overrides, params, run_settings,
-        sizes, daily, scalars, gap_hist, coin_fill_counts, b, short_side
+        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts, b, short_side
     );
 }
 
@@ -2622,6 +2625,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     constant float* params,
     constant float* run_settings,
     constant int* sizes,
+    constant int* end_steps,
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -2632,6 +2636,6 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         bars, fill_ticks, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation, coin_settings,
         coin_overrides, params, run_settings,
-        sizes, daily, scalars, gap_hist, coin_fill_counts, b, false
+        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts, b, false
     );
 }

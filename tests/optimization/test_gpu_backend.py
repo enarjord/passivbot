@@ -1573,7 +1573,7 @@ def test_gpu_hsl_rejects_dual_side_multicoin_joint_account_modes(signal_mode):
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_hsl_metrics_accept_one_sided_multicoin_proxy_outputs():
+def test_gpu_hsl_metrics_reject_only_dual_multicoin_tier_overlap():
     _validate_hsl_metric_topology(
         {"hard_stop_panic_close_loss_sum"},
         coin_count=3,
@@ -1581,12 +1581,32 @@ def test_gpu_hsl_metrics_accept_one_sided_multicoin_proxy_outputs():
         hard_stop_metrics={"hard_stop_panic_close_loss_sum"},
     )
 
-    with pytest.raises(ValueError, match="dual-side multi-coin HSL metrics"):
+    _validate_hsl_metric_topology(
+        {"hard_stop_panic_close_loss_sum", "hard_stop_triggers"},
+        coin_count=3,
+        enabled_sides=["long", "short"],
+        hard_stop_metrics={
+            "hard_stop_panic_close_loss_sum",
+            "hard_stop_triggers",
+        },
+    )
+
+    with pytest.raises(ValueError, match="cross-side tier overlap"):
         _validate_hsl_metric_topology(
-            {"hard_stop_panic_close_loss_sum"},
+            {"hard_stop_time_in_red_pct"},
             coin_count=3,
             enabled_sides=["long", "short"],
-            hard_stop_metrics={"hard_stop_panic_close_loss_sum"},
+            hard_stop_metrics={"hard_stop_time_in_red_pct"},
+        )
+
+    with pytest.raises(ValueError, match="shared event-level account equity"):
+        _validate_hsl_metric_topology(
+            {"hard_stop_panic_close_loss_drawdown_pct_mean"},
+            coin_count=3,
+            enabled_sides=["long", "short"],
+            hard_stop_metrics={
+                "hard_stop_panic_close_loss_drawdown_pct_mean"
+            },
         )
 
     _validate_hsl_metric_topology(

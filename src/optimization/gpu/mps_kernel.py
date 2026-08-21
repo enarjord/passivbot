@@ -545,6 +545,7 @@ class MpsEmaAnchorMulticoinRunner:
         )
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
+        self._full_end_steps: dict[int, torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
         self.start_minute_of_day = int(data["start_minute_of_day"])
         self.start_minute_of_hour = int(data["start_minute_of_hour"])
@@ -598,12 +599,36 @@ class MpsEmaAnchorMulticoinRunner:
         self._buffers[batch_size][0][:, :, 5].fill_(float("inf"))
         return self._buffers[batch_size]
 
-    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+    def _end_steps(self, end_steps: np.ndarray | None, batch_size: int):
+        if end_steps is None:
+            if batch_size not in self._full_end_steps:
+                self._full_end_steps[batch_size] = torch.full(
+                    (batch_size,), self.n - 1, dtype=torch.int32, device="mps"
+                )
+            return self._full_end_steps[batch_size]
+        values = np.asarray(end_steps, dtype=np.int32)
+        if values.shape != (batch_size,):
+            raise ValueError(
+                f"expected one multi-coin end step per candidate, got {values.shape}"
+            )
+        values = np.clip(values, 1, self.n - 1)
+        return torch.as_tensor(
+            np.ascontiguousarray(values), dtype=torch.int32, device="mps"
+        )
+
+    def run(
+        self,
+        params: np.ndarray,
+        *,
+        profile: bool = False,
+        end_steps: np.ndarray | None = None,
+    ) -> dict:
         started = time.perf_counter()
         matrix = self._pack_params(params)
         packed = time.perf_counter()
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
+        end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
@@ -638,6 +663,7 @@ class MpsEmaAnchorMulticoinRunner:
             params_mps,
             self.settings,
             self._sizes[sizes_key],
+            end_steps_mps,
             daily,
             scalars,
             gaps,
@@ -715,12 +741,19 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             )
         return np.ascontiguousarray(params, dtype=np.float32)
 
-    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+    def run(
+        self,
+        params: np.ndarray,
+        *,
+        profile: bool = False,
+        end_steps: np.ndarray | None = None,
+    ) -> dict:
         started = time.perf_counter()
         matrix = self._pack_params(params)
         packed = time.perf_counter()
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
+        end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
@@ -758,6 +791,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             params_mps,
             self.settings,
             self._sizes[sizes_key],
+            end_steps_mps,
             daily,
             scalars,
             gaps,
