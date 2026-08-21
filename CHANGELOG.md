@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added analyzed-start-anchored active fill-day count and ratio scoring and limits to Apple MPS
+  optimization for single-coin and one-sided multi-coin EMA Anchor and Trailing Martingale runs.
+  Metal counts distinct 24-hour fill buckets within the candidate's analyzed equity window; exact
+  Rust validation remains authoritative, and dual-side multi-coin runs fail closed at the existing
+  intraday shared-liquidation boundary.
+
 - Added entry/close and long/short fill counts and daily rates, entry-to-close ratio, and
   per-configured-position-slot fill rates to Apple MPS optimization for single-coin and one-sided
   multi-coin EMA Anchor and Trailing Martingale runs. Metal records every proxy fill by role and

@@ -32,6 +32,13 @@ def _assert_fill_scalar_contract(output):
     assert torch.equal(
         fill_count, output["day_fill_count"].sum(dim=1)
     )
+    active_days = output["fills_active_days_count"]
+    assert torch.equal(active_days, active_days.round())
+    assert (active_days >= 0.0).all()
+    duration_days = (
+        output["last_eq_ts"] - output["first_eq_ts"]
+    ).clamp(min=0.0) / 86_400_000.0
+    assert (active_days <= duration_days.ceil().clamp(min=1.0)).all()
 
 
 @pytest.mark.parametrize(
@@ -300,6 +307,39 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_active_fill_days_use_equity_start_buckets(
+    strategy_kind, side
+):
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, count=3 * 1440 + 32
+    )
+    if strategy_kind == "trailing_martingale":
+        row[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "entry_threshold_base_pct"
+            )
+        ] = 0.0
+        row[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "close_threshold_base_pct"
+            )
+        ] = 0.0
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    duration_days = (
+        output["last_eq_ts"] - output["first_eq_ts"]
+    ).item() / 86_400_000.0
+    assert output["fills_active_days_count"].item() == int(np.ceil(duration_days))
+    assert output["fills_active_days_count"].item() >= 3.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_multicoin_initial_entry_pct_uses_first_coin_override(
     strategy_kind, side
 ):
@@ -507,10 +547,11 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 53" in source
+    assert "constant int SCALAR_COLS = 54" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
+    assert "scalars[so + 53] = fills_active_days_count" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source

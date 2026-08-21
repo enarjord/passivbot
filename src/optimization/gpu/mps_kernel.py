@@ -19,8 +19,8 @@ from optimization.gpu.model import (
 
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
-MPS_SCALAR_COLS = 27
-MPS_DIRECTIONAL_SCALAR_COLS = 53
+MPS_SCALAR_COLS = 28
+MPS_DIRECTIONAL_SCALAR_COLS = 54
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -130,6 +130,7 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "fill_count": scalars[:, 24],
         "fill_count_entry": scalars[:, 25],
         "fill_count_long": scalars[:, 26],
+        "fills_active_days_count": scalars[:, 27],
     }
 
 
@@ -207,6 +208,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "fill_count": scalars[:, 50],
         "fill_count_entry": scalars[:, 51],
         "fill_count_long": scalars[:, 52],
+        "fills_active_days_count": scalars[:, 53],
     }
 
 

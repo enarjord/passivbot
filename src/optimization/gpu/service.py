@@ -34,6 +34,7 @@ CORE_OUTPUT_KEYS = {
     "fill_count",
     "fill_count_entry",
     "fill_count_long",
+    "fills_active_days_count",
     "day_min_balance",
     "max_dd",
     "held_max_ms",
@@ -88,6 +89,8 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "adg_pnl",
     "adg_pnl_w",
     "fills_analysis_duration_days",
+    "fills_active_days_count",
+    "fills_active_days_ratio",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -536,6 +539,12 @@ def _combine_hedged_multicoin_outputs(
     combined["fill_count_long"] = (
         long["fill_count_long"] + short["fill_count_long"]
     )
+    # Preserve the core output shape for unrelated dual-side metrics. Requests
+    # for active-day metrics fail closed before this conservative placeholder
+    # can be consumed because overlapping directional buckets need a true union.
+    combined["fills_active_days_count"] = long[
+        "fills_active_days_count"
+    ].maximum(short["fills_active_days_count"])
     return combined
 
 

@@ -6,7 +6,7 @@ constant int PARAM_COLS = 48;
 constant int OVERRIDE_COLS = 34;
 constant int COIN_COLS = 11;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 27;
+constant int SCALAR_COLS = 28;
 constant int GAP_BINS = 128;
 
 inline float round_step(float value, float step) {
@@ -658,6 +658,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float fill_count = 0.0f;
     float fill_count_entry = 0.0f;
     float fill_count_long = 0.0f;
+    float fills_active_days_count = 0.0f;
+    int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
     bool selection_initialized = false;
@@ -2247,6 +2249,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
+            if (any_fill) {
+                int active_fill_day = int(float(k) - first_eq_k) / 1440;
+                if (active_fill_day != last_active_fill_day) {
+                    fills_active_days_count += 1.0f;
+                    last_active_fill_day = active_fill_day;
+                }
+            }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
             float effective_equity = liquidated ? liquidation_floor : equity;
             if (effective_equity > run_peak) {
@@ -2358,6 +2367,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 24] = fill_count;
     scalars[scalar_offset + 25] = fill_count_entry;
     scalars[scalar_offset + 26] = fill_count_long;
+    scalars[scalar_offset + 27] = fills_active_days_count;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(
