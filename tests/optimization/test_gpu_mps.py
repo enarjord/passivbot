@@ -381,6 +381,7 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
     closes[60:] *= 0.65
     outputs = {}
     runners = {}
+    rows = {}
     for side in ("long", "short"):
         runner, row = _multicoin_exposure_fixture(
             strategy_kind,
@@ -409,6 +410,7 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
         }.items():
             row[keys.index(key)] = value
         runners[side] = runner
+        rows[side] = row
         outputs[side] = runner.run(np.asarray([row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -457,6 +459,17 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
     assert lifecycle["hard_stop_triggers_short"].item() == 1.0
     assert panic["hard_stop_panic_close_loss_sum"].item() > 0.0
     assert panic["hard_stop_panic_close_loss_drawdown_pct_max"].item() > 0.0
+
+    truncated = {
+        side: runners[side].run(
+            np.asarray([rows[side]], dtype=np.float64),
+            end_steps=np.asarray([60], dtype=np.int32),
+        )
+        for side in ("long", "short")
+    }
+    torch.mps.synchronize()
+    assert truncated["long"]["hsl_triggers_long"].item() == 0.0
+    assert truncated["short"]["hsl_triggers_short"].item() == 1.0
 
 
 @pytest.mark.skipif(

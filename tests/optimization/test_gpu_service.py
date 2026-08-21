@@ -37,6 +37,7 @@ from optimization.gpu.service import (
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
+    _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
     _unstuck_params,
@@ -310,6 +311,64 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
         pytest.approx(0.8 / 3.0)
     )
     assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 25
+
+
+def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
+    torch = pytest.importorskip("torch")
+
+    class FakeRunner:
+        def __init__(self, replacement):
+            self.replacement = replacement
+            self.calls = []
+
+        def run(self, params, *, end_steps):
+            self.calls.append((params.copy(), end_steps.copy()))
+            return {
+                key: torch.full(
+                    (len(params),),
+                    bool(self.replacement)
+                    if key.endswith("_enabled")
+                    else self.replacement,
+                    dtype=(
+                        torch.bool if key.endswith("_enabled") else torch.float32
+                    ),
+                )
+                for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+            }
+
+    side_outputs = {
+        side: {
+            key: torch.tensor(
+                [True, True]
+                if key.endswith("_enabled")
+                else [10.0, 20.0],
+                dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+            )
+            for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+        }
+        for side in ("long", "short")
+    }
+    runners = {"long": FakeRunner(3.0), "short": FakeRunner(4.0)}
+    matrices = {
+        "long": np.asarray([[1.0], [2.0]]),
+        "short": np.asarray([[3.0], [4.0]]),
+    }
+
+    refreshed = _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+        side_outputs=side_outputs,
+        runners=runners,
+        parameter_matrices=matrices,
+        combined_output={"liq_step": torch.tensor([-1.0, 2.0])},
+        start_minute_of_day=60,
+    )
+
+    assert refreshed
+    assert runners["long"].calls[0][0].tolist() == [[2.0]]
+    assert runners["short"].calls[0][0].tolist() == [[4.0]]
+    assert runners["long"].calls[0][1].tolist() == [2820]
+    assert runners["short"].calls[0][1].tolist() == [2820]
+    assert side_outputs["long"]["hsl_triggers_long"].tolist() == [10.0, 3.0]
+    assert side_outputs["short"]["hsl_triggers_short"].tolist() == [10.0, 4.0]
 
 
 def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():

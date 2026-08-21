@@ -6,9 +6,10 @@ All notable user-facing changes will be documented in this file.
 
 - Added dual-side multi-coin `pside` HSL lifecycle and panic-loss scoring/limits to Apple MPS
   optimization. The proxy now reduces directional episode counters, durations, drawdowns,
-  restarts, and panic losses with the same aggregate formulas used by exact Rust, which remains
-  authoritative. Yellow/orange/RED time percentages remain fail closed because two directional
-  histograms cannot reconstruct minute-level cross-side tier overlap.
+  restarts, and absolute panic losses with the same aggregate formulas used by exact Rust, and
+  replays HSL summaries through the conservative combined liquidation cutoff. Exact Rust remains
+  authoritative. Account-normalized event losses and yellow/orange/RED time percentages remain
+  fail closed until the proxy owns shared event-level equity and minute-level tier state.
 
 - Added dual-side multi-coin HSL behavior to Apple MPS optimization for EMA Anchor and Trailing
   Martingale in `pside` signal mode. Each directional Metal controller owns its exact pside

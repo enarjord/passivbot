@@ -621,6 +621,41 @@ def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
     return combined
 
 
+def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+    *,
+    side_outputs: dict,
+    runners: dict,
+    parameter_matrices: dict,
+    combined_output: dict,
+    start_minute_of_day: int,
+) -> bool:
+    """Replace full-run directional HSL summaries at a portfolio cutoff.
+
+    The conservative hedged reducer may stop before either isolated side. Re-run
+    only those candidates through the last complete pre-liquidation day so
+    scalar HSL events after the combined coverage boundary cannot leak into
+    proxy objectives or limits.
+    """
+
+    cutoff_days = combined_output["liq_step"]
+    cutoff_mask = cutoff_days >= 0
+    if not bool(cutoff_mask.any().item()):
+        return False
+    indices = np.flatnonzero(cutoff_mask.cpu().numpy())
+    end_steps = (
+        np.rint(cutoff_days[cutoff_mask].cpu().numpy()).astype(np.int64) * 1440
+        - int(start_minute_of_day)
+    )
+    end_steps = np.maximum(end_steps, 1).astype(np.int32)
+    for side in ("long", "short"):
+        truncated = runners[side].run(
+            parameter_matrices[side][indices], end_steps=end_steps
+        )
+        for key in DIRECTIONAL_HSL_OUTPUT_KEYS:
+            side_outputs[side][key][cutoff_mask] = truncated[key].cpu()
+    return True
+
+
 def _combine_hedged_multicoin_outputs(
     long: dict,
     short: dict,
@@ -1812,6 +1847,25 @@ class MpsMulticoinProxy:
                     self.runners["long"].start_minute_of_day,
                     self.run.interval_ms,
                 )
+                if any(
+                    name.startswith("hard_stop_") for name in self.needed_metrics
+                ) and _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+                    side_outputs=side_outputs,
+                    runners=self.runners,
+                    parameter_matrices=parameter_matrices,
+                    combined_output=output,
+                    start_minute_of_day=self.runners[
+                        "long"
+                    ].start_minute_of_day,
+                ):
+                    output = _combine_hedged_multicoin_outputs(
+                        side_outputs["long"],
+                        side_outputs["short"],
+                        self.run.starting_balance,
+                        self.run.liquidation_threshold,
+                        self.runners["long"].start_minute_of_day,
+                        self.run.interval_ms,
+                    )
                 output["entry_initial_balance_pct_long"] = side_outputs[
                     "long"
                 ]["entry_initial_balance_pct"]

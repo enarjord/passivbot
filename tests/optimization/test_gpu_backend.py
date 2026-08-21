@@ -1591,12 +1591,22 @@ def test_gpu_hsl_metrics_reject_only_dual_multicoin_tier_overlap():
         },
     )
 
-    with pytest.raises(ValueError, match="minute-level cross-side overlap"):
+    with pytest.raises(ValueError, match="cross-side tier overlap"):
         _validate_hsl_metric_topology(
             {"hard_stop_time_in_red_pct"},
             coin_count=3,
             enabled_sides=["long", "short"],
             hard_stop_metrics={"hard_stop_time_in_red_pct"},
+        )
+
+    with pytest.raises(ValueError, match="shared event-level account equity"):
+        _validate_hsl_metric_topology(
+            {"hard_stop_panic_close_loss_drawdown_pct_mean"},
+            coin_count=3,
+            enabled_sides=["long", "short"],
+            hard_stop_metrics={
+                "hard_stop_panic_close_loss_drawdown_pct_mean"
+            },
         )
 
     _validate_hsl_metric_topology(
