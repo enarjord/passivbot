@@ -144,7 +144,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
             unrealized_long, unrealized_short, float(k)
         );
     }
-    int oo = int(b) * 8;
+    int oo = int(b) * 58;
     output[oo + 0] = float(long_hsl.tier);
     output[oo + 1] = float(short_hsl.tier);
     output[oo + 2] = long_hsl.triggers;
@@ -155,6 +155,35 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
         account, unrealized_long, unrealized_short
     );
     output[oo + 7] = float(joint_pside_hsl_global_tier(long_hsl, short_hsl));
+    long_hsl.halt_duration_sum_steps = 2.0f;
+    long_hsl.halt_duration_max_steps = 2.0f;
+    long_hsl.halt_duration_count = 1.0f;
+    short_hsl.halt_duration_sum_steps = 3.0f;
+    short_hsl.halt_duration_max_steps = 3.0f;
+    short_hsl.halt_duration_count = 1.0f;
+    long_hsl.panic_loss_drawdown_min = 0.2f;
+    long_hsl.panic_loss_drawdown_sum = 0.2f;
+    long_hsl.panic_loss_drawdown_max = 0.2f;
+    long_hsl.panic_loss_drawdown_count = 1.0f;
+    short_hsl.panic_loss_drawdown_min = 0.1f;
+    short_hsl.panic_loss_drawdown_sum = 0.1f;
+    short_hsl.panic_loss_drawdown_max = 0.1f;
+    short_hsl.panic_loss_drawdown_count = 1.0f;
+    write_dual_side_hsl_outputs(
+        long_hsl, short_hsl, 4.0f, 1.0f, 2.0f, 3.0f, -1.0f,
+        output, oo + 8
+    );
+    HslState long_coin_hsl[2];
+    HslState short_coin_hsl[2];
+    long_coin_hsl[0] = long_hsl;
+    long_coin_hsl[1] = long_hsl;
+    short_coin_hsl[0] = short_hsl;
+    short_coin_hsl[1] = short_hsl;
+    write_dual_side_coin_hsl_outputs(
+        long_coin_hsl, short_coin_hsl, 2,
+        4.0f, 1.0f, 2.0f, 3.0f, -1.0f,
+        output, oo + 33
+    );
 }
 """
 
@@ -191,7 +220,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     samples[4, :, 4] = 1.0
     settings = torch.tensor([100.0, 60_000.0], device="mps")
     sizes = torch.tensor([5, 4], dtype=torch.int32, device="mps")
-    output = torch.zeros((5, 8), dtype=torch.float32, device="mps")
+    output = torch.zeros((5, 58), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -214,6 +243,16 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     assert values[4, :4].tolist() == [3.0, 3.0, 0.0, 0.0]
     assert values[:, 6].tolist() == [90.0, 90.0, 90.0, 90.0, 90.0]
     assert values[:, 7].tolist() == [3.0, 3.0, 0.0, 0.0, 3.0]
+    assert values[0, 8:14].tolist() == [1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+    assert values[1, 8:14].tolist() == [1.0, 1.0, 0.0, 1.0, 0.0, 0.0]
+    assert values[:, 14:18].tolist() == [[4.0, 1.0, 2.0, 3.0]] * 5
+    assert values[:, 18:21].tolist() == [[5.0, 3.0, 2.0]] * 5
+    np.testing.assert_allclose(values[:, 29:33], [[0.1, 0.3, 0.2, 2.0]] * 5)
+    assert values[0, 33:39].tolist() == [1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
+    assert values[1, 33:39].tolist() == [1.0, 1.0, 0.0, 2.0, 0.0, 0.0]
+    assert values[:, 39:43].tolist() == [[4.0, 1.0, 2.0, 3.0]] * 5
+    assert values[:, 43:46].tolist() == [[10.0, 3.0, 4.0]] * 5
+    np.testing.assert_allclose(values[:, 54:58], [[0.1, 0.6, 0.2, 4.0]] * 5)
 
 
 def _single_coin_exposure_fields(

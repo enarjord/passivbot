@@ -85,6 +85,18 @@ mod tests {
             source.matches("inline bool update_dual_side_hsl(").count(),
             1
         );
+        assert_eq!(source.matches("struct HslOutputAggregate").count(), 1);
+        for signature in [
+            "inline HslOutputAggregate init_hsl_output_aggregate(",
+            "inline void accumulate_hsl_output(",
+            "inline void write_hsl_output_aggregate(",
+            "inline void write_one_side_hsl_outputs(",
+            "inline void write_one_side_coin_hsl_outputs(",
+            "inline void write_dual_side_hsl_outputs(",
+            "inline void write_dual_side_coin_hsl_outputs(",
+        ] {
+            assert_eq!(source.matches(signature).count(), 1, "{signature}");
+        }
         assert!(source.contains("constant int HSL_SIGNAL_UNIFIED = 0"));
         assert!(source.contains("constant int HSL_SIGNAL_PSIDE = 1"));
         assert!(source.contains("constant int HSL_SIGNAL_COIN = 2"));

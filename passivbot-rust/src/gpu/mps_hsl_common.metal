@@ -478,6 +478,153 @@ inline void record_hsl_panic_fill(
     h.panic_close_loss_max = fmax(h.panic_close_loss_max, panic_loss);
 }
 
+// Keep every HSL scalar reduction in one contract. Existing one-side kernels
+// and future fused dual-side kernels therefore share identical sum/max/count
+// and conditional-min semantics.
+struct HslOutputAggregate {
+    float enabled_long;
+    float enabled_short;
+    float triggers_long;
+    float triggers_short;
+    float restarts_long;
+    float restarts_short;
+    float tier_samples_total;
+    float tier_samples_yellow;
+    float tier_samples_orange;
+    float tier_samples_red;
+    float duration_sum;
+    float duration_max;
+    float duration_count;
+    float trigger_drawdown_sum;
+    float trigger_drawdown_count;
+    float flatten_time_sum;
+    float flatten_time_count;
+    float restart_retrigger_count;
+    float halt_to_restart_equity_loss;
+    float panic_close_loss_sum;
+    float panic_close_loss_max;
+    float panic_loss_drawdown_min;
+    float panic_loss_drawdown_sum;
+    float panic_loss_drawdown_max;
+    float panic_loss_drawdown_count;
+};
+
+inline HslOutputAggregate init_hsl_output_aggregate(
+    float tier_samples_total,
+    float tier_samples_yellow,
+    float tier_samples_orange,
+    float tier_samples_red
+) {
+    HslOutputAggregate output;
+    output.enabled_long = 0.0f;
+    output.enabled_short = 0.0f;
+    output.triggers_long = 0.0f;
+    output.triggers_short = 0.0f;
+    output.restarts_long = 0.0f;
+    output.restarts_short = 0.0f;
+    output.tier_samples_total = tier_samples_total;
+    output.tier_samples_yellow = tier_samples_yellow;
+    output.tier_samples_orange = tier_samples_orange;
+    output.tier_samples_red = tier_samples_red;
+    output.duration_sum = 0.0f;
+    output.duration_max = 0.0f;
+    output.duration_count = 0.0f;
+    output.trigger_drawdown_sum = 0.0f;
+    output.trigger_drawdown_count = 0.0f;
+    output.flatten_time_sum = 0.0f;
+    output.flatten_time_count = 0.0f;
+    output.restart_retrigger_count = 0.0f;
+    output.halt_to_restart_equity_loss = 0.0f;
+    output.panic_close_loss_sum = 0.0f;
+    output.panic_close_loss_max = 0.0f;
+    output.panic_loss_drawdown_min = 0.0f;
+    output.panic_loss_drawdown_sum = 0.0f;
+    output.panic_loss_drawdown_max = 0.0f;
+    output.panic_loss_drawdown_count = 0.0f;
+    return output;
+}
+
+inline void accumulate_hsl_output(
+    thread HslOutputAggregate& output,
+    thread HslState& h,
+    bool short_side,
+    float last_equity_k
+) {
+    if (!h.enabled) return;
+    float terminal_count = h.halted
+        && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
+        ? 1.0f : 0.0f;
+    float terminal_duration = terminal_count > 0.0f
+        ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
+    if (short_side) {
+        output.enabled_short = 1.0f;
+        output.triggers_short += h.triggers;
+        output.restarts_short += h.restarts;
+    } else {
+        output.enabled_long = 1.0f;
+        output.triggers_long += h.triggers;
+        output.restarts_long += h.restarts;
+    }
+    output.duration_sum += h.halt_duration_sum_steps + terminal_duration;
+    output.duration_max = fmax(
+        output.duration_max,
+        fmax(h.halt_duration_max_steps, terminal_duration)
+    );
+    output.duration_count += h.halt_duration_count + terminal_count;
+    output.trigger_drawdown_sum += h.trigger_drawdown_sum;
+    output.trigger_drawdown_count += h.trigger_drawdown_count;
+    output.flatten_time_sum += h.flatten_time_sum_steps;
+    output.flatten_time_count += h.flatten_time_count;
+    output.restart_retrigger_count += h.restart_retrigger_count;
+    output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
+    output.panic_close_loss_sum += h.panic_close_loss_sum;
+    output.panic_close_loss_max = fmax(
+        output.panic_close_loss_max, h.panic_close_loss_max
+    );
+    if (h.panic_loss_drawdown_count > 0.0f) {
+        output.panic_loss_drawdown_min = output.panic_loss_drawdown_count > 0.0f
+            ? fmin(output.panic_loss_drawdown_min, h.panic_loss_drawdown_min)
+            : h.panic_loss_drawdown_min;
+    }
+    output.panic_loss_drawdown_sum += h.panic_loss_drawdown_sum;
+    output.panic_loss_drawdown_max = fmax(
+        output.panic_loss_drawdown_max, h.panic_loss_drawdown_max
+    );
+    output.panic_loss_drawdown_count += h.panic_loss_drawdown_count;
+}
+
+inline void write_hsl_output_aggregate(
+    thread const HslOutputAggregate& output,
+    device float* scalars,
+    int scalar_offset
+) {
+    scalars[scalar_offset + 0] = output.enabled_long;
+    scalars[scalar_offset + 1] = output.enabled_short;
+    scalars[scalar_offset + 2] = output.triggers_long;
+    scalars[scalar_offset + 3] = output.triggers_short;
+    scalars[scalar_offset + 4] = output.restarts_long;
+    scalars[scalar_offset + 5] = output.restarts_short;
+    scalars[scalar_offset + 6] = output.tier_samples_total;
+    scalars[scalar_offset + 7] = output.tier_samples_yellow;
+    scalars[scalar_offset + 8] = output.tier_samples_orange;
+    scalars[scalar_offset + 9] = output.tier_samples_red;
+    scalars[scalar_offset + 10] = output.duration_sum;
+    scalars[scalar_offset + 11] = output.duration_max;
+    scalars[scalar_offset + 12] = output.duration_count;
+    scalars[scalar_offset + 13] = output.trigger_drawdown_sum;
+    scalars[scalar_offset + 14] = output.trigger_drawdown_count;
+    scalars[scalar_offset + 15] = output.flatten_time_sum;
+    scalars[scalar_offset + 16] = output.flatten_time_count;
+    scalars[scalar_offset + 17] = output.restart_retrigger_count;
+    scalars[scalar_offset + 18] = output.halt_to_restart_equity_loss;
+    scalars[scalar_offset + 19] = output.panic_close_loss_sum;
+    scalars[scalar_offset + 20] = output.panic_close_loss_max;
+    scalars[scalar_offset + 21] = output.panic_loss_drawdown_min;
+    scalars[scalar_offset + 22] = output.panic_loss_drawdown_sum;
+    scalars[scalar_offset + 23] = output.panic_loss_drawdown_max;
+    scalars[scalar_offset + 24] = output.panic_loss_drawdown_count;
+}
+
 inline void write_one_side_hsl_outputs(
     thread HslState& h,
     bool short_side,
@@ -489,38 +636,12 @@ inline void write_one_side_hsl_outputs(
     device float* scalars,
     int scalar_offset
 ) {
-    float terminal_count = h.halted
-        && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
-        ? 1.0f : 0.0f;
-    float terminal_duration = terminal_count > 0.0f
-        ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
-    scalars[scalar_offset + 0] = !short_side && h.enabled ? 1.0f : 0.0f;
-    scalars[scalar_offset + 1] = short_side && h.enabled ? 1.0f : 0.0f;
-    scalars[scalar_offset + 2] = !short_side ? h.triggers : 0.0f;
-    scalars[scalar_offset + 3] = short_side ? h.triggers : 0.0f;
-    scalars[scalar_offset + 4] = !short_side ? h.restarts : 0.0f;
-    scalars[scalar_offset + 5] = short_side ? h.restarts : 0.0f;
-    scalars[scalar_offset + 6] = tier_samples_total;
-    scalars[scalar_offset + 7] = tier_samples_yellow;
-    scalars[scalar_offset + 8] = tier_samples_orange;
-    scalars[scalar_offset + 9] = tier_samples_red;
-    scalars[scalar_offset + 10] = h.halt_duration_sum_steps + terminal_duration;
-    scalars[scalar_offset + 11] = fmax(
-        h.halt_duration_max_steps, terminal_duration
+    HslOutputAggregate output = init_hsl_output_aggregate(
+        tier_samples_total, tier_samples_yellow,
+        tier_samples_orange, tier_samples_red
     );
-    scalars[scalar_offset + 12] = h.halt_duration_count + terminal_count;
-    scalars[scalar_offset + 13] = h.trigger_drawdown_sum;
-    scalars[scalar_offset + 14] = h.trigger_drawdown_count;
-    scalars[scalar_offset + 15] = h.flatten_time_sum_steps;
-    scalars[scalar_offset + 16] = h.flatten_time_count;
-    scalars[scalar_offset + 17] = h.restart_retrigger_count;
-    scalars[scalar_offset + 18] = h.halt_to_restart_equity_loss;
-    scalars[scalar_offset + 19] = h.panic_close_loss_sum;
-    scalars[scalar_offset + 20] = h.panic_close_loss_max;
-    scalars[scalar_offset + 21] = h.panic_loss_drawdown_min;
-    scalars[scalar_offset + 22] = h.panic_loss_drawdown_sum;
-    scalars[scalar_offset + 23] = h.panic_loss_drawdown_max;
-    scalars[scalar_offset + 24] = h.panic_loss_drawdown_count;
+    accumulate_hsl_output(output, h, short_side, last_equity_k);
+    write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
 
 inline void write_one_side_coin_hsl_outputs(
@@ -535,82 +656,57 @@ inline void write_one_side_coin_hsl_outputs(
     device float* scalars,
     int scalar_offset
 ) {
-    float enabled = 0.0f;
-    float triggers = 0.0f;
-    float restarts = 0.0f;
-    float duration_sum = 0.0f;
-    float duration_max = 0.0f;
-    float duration_count = 0.0f;
-    float trigger_drawdown_sum = 0.0f;
-    float trigger_drawdown_count = 0.0f;
-    float flatten_time_sum = 0.0f;
-    float flatten_time_count = 0.0f;
-    float restart_retrigger_count = 0.0f;
-    float halt_to_restart_equity_loss = 0.0f;
-    float panic_close_loss_sum = 0.0f;
-    float panic_close_loss_max = 0.0f;
-    float panic_loss_drawdown_min = 0.0f;
-    float panic_loss_drawdown_sum = 0.0f;
-    float panic_loss_drawdown_max = 0.0f;
-    float panic_loss_drawdown_count = 0.0f;
+    HslOutputAggregate output = init_hsl_output_aggregate(
+        tier_samples_total, tier_samples_yellow,
+        tier_samples_orange, tier_samples_red
+    );
     for (int c = 0; c < controller_count; ++c) {
-        thread HslState& h = controllers[c];
-        if (!h.enabled) continue;
-        enabled = 1.0f;
-        triggers += h.triggers;
-        restarts += h.restarts;
-        float terminal_count = h.halted
-            && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
-            ? 1.0f : 0.0f;
-        float terminal_duration = terminal_count > 0.0f
-            ? fmax(last_equity_k - h.current_halt_start_k, 0.0f) : 0.0f;
-        duration_sum += h.halt_duration_sum_steps + terminal_duration;
-        duration_max = fmax(
-            duration_max, fmax(h.halt_duration_max_steps, terminal_duration)
+        accumulate_hsl_output(
+            output, controllers[c], short_side, last_equity_k
         );
-        duration_count += h.halt_duration_count + terminal_count;
-        trigger_drawdown_sum += h.trigger_drawdown_sum;
-        trigger_drawdown_count += h.trigger_drawdown_count;
-        flatten_time_sum += h.flatten_time_sum_steps;
-        flatten_time_count += h.flatten_time_count;
-        restart_retrigger_count += h.restart_retrigger_count;
-        halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
-        panic_close_loss_sum += h.panic_close_loss_sum;
-        panic_close_loss_max = fmax(panic_close_loss_max, h.panic_close_loss_max);
-        if (h.panic_loss_drawdown_count > 0.0f) {
-            panic_loss_drawdown_min = panic_loss_drawdown_count > 0.0f
-                ? fmin(panic_loss_drawdown_min, h.panic_loss_drawdown_min)
-                : h.panic_loss_drawdown_min;
-        }
-        panic_loss_drawdown_sum += h.panic_loss_drawdown_sum;
-        panic_loss_drawdown_max = fmax(
-            panic_loss_drawdown_max, h.panic_loss_drawdown_max
-        );
-        panic_loss_drawdown_count += h.panic_loss_drawdown_count;
     }
-    scalars[scalar_offset + 0] = !short_side ? enabled : 0.0f;
-    scalars[scalar_offset + 1] = short_side ? enabled : 0.0f;
-    scalars[scalar_offset + 2] = !short_side ? triggers : 0.0f;
-    scalars[scalar_offset + 3] = short_side ? triggers : 0.0f;
-    scalars[scalar_offset + 4] = !short_side ? restarts : 0.0f;
-    scalars[scalar_offset + 5] = short_side ? restarts : 0.0f;
-    scalars[scalar_offset + 6] = tier_samples_total;
-    scalars[scalar_offset + 7] = tier_samples_yellow;
-    scalars[scalar_offset + 8] = tier_samples_orange;
-    scalars[scalar_offset + 9] = tier_samples_red;
-    scalars[scalar_offset + 10] = duration_sum;
-    scalars[scalar_offset + 11] = duration_max;
-    scalars[scalar_offset + 12] = duration_count;
-    scalars[scalar_offset + 13] = trigger_drawdown_sum;
-    scalars[scalar_offset + 14] = trigger_drawdown_count;
-    scalars[scalar_offset + 15] = flatten_time_sum;
-    scalars[scalar_offset + 16] = flatten_time_count;
-    scalars[scalar_offset + 17] = restart_retrigger_count;
-    scalars[scalar_offset + 18] = halt_to_restart_equity_loss;
-    scalars[scalar_offset + 19] = panic_close_loss_sum;
-    scalars[scalar_offset + 20] = panic_close_loss_max;
-    scalars[scalar_offset + 21] = panic_loss_drawdown_min;
-    scalars[scalar_offset + 22] = panic_loss_drawdown_sum;
-    scalars[scalar_offset + 23] = panic_loss_drawdown_max;
-    scalars[scalar_offset + 24] = panic_loss_drawdown_count;
+    write_hsl_output_aggregate(output, scalars, scalar_offset);
+}
+
+inline void write_dual_side_hsl_outputs(
+    thread HslState& long_hsl,
+    thread HslState& short_hsl,
+    float tier_samples_total,
+    float tier_samples_yellow,
+    float tier_samples_orange,
+    float tier_samples_red,
+    float last_equity_k,
+    device float* scalars,
+    int scalar_offset
+) {
+    HslOutputAggregate output = init_hsl_output_aggregate(
+        tier_samples_total, tier_samples_yellow,
+        tier_samples_orange, tier_samples_red
+    );
+    accumulate_hsl_output(output, long_hsl, false, last_equity_k);
+    accumulate_hsl_output(output, short_hsl, true, last_equity_k);
+    write_hsl_output_aggregate(output, scalars, scalar_offset);
+}
+
+inline void write_dual_side_coin_hsl_outputs(
+    thread HslState* long_controllers,
+    thread HslState* short_controllers,
+    int controller_count,
+    float tier_samples_total,
+    float tier_samples_yellow,
+    float tier_samples_orange,
+    float tier_samples_red,
+    float last_equity_k,
+    device float* scalars,
+    int scalar_offset
+) {
+    HslOutputAggregate output = init_hsl_output_aggregate(
+        tier_samples_total, tier_samples_yellow,
+        tier_samples_orange, tier_samples_red
+    );
+    for (int c = 0; c < controller_count; ++c) {
+        accumulate_hsl_output(output, long_controllers[c], false, last_equity_k);
+        accumulate_hsl_output(output, short_controllers[c], true, last_equity_k);
+    }
+    write_hsl_output_aggregate(output, scalars, scalar_offset);
 }
