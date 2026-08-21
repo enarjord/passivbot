@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added the canonical USD account-equity scoring aliases for gain, ADG, MDG, Sharpe, Sortino,
+  Omega, expected shortfall, Calmar, Sterling, worst drawdown, and worst-1% drawdown, including the
+  available weighted variants, to Apple MPS optimization. With BTC collateral disabled, these
+  aliases reuse the already validated strategy-equity proxy series while exact Rust metrics remain
+  authoritative. Also added `exposure_ratio_usd` and `exposure_mean_ratio_usd` for single-coin and
+  one-sided multi-coin runs; dual-side multi-coin runs fail closed because independent directional
+  kernels cannot reconstruct net portfolio exposure.
+
 - Added `total_wallet_exposure_max` and `total_wallet_exposure_mean` scoring and limits to Apple
   MPS optimization for EMA Anchor and Trailing Martingale across single-coin, one-sided multi-coin,
   and compatible suite runs. Metal samples absolute net long-minus-short exposure after each

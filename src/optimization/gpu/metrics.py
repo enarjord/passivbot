@@ -11,6 +11,27 @@ import math
 
 import torch
 
+_USD_STRATEGY_EQ_ALIASES = {
+    "adg_usd": "adg_strategy_eq",
+    "adg_w_usd": "adg_strategy_eq_w",
+    "calmar_ratio_usd": "calmar_ratio_strategy_eq",
+    "calmar_ratio_w_usd": "calmar_ratio_strategy_eq_w",
+    "drawdown_worst_mean_1pct_usd": "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_usd": "drawdown_worst_strategy_eq",
+    "expected_shortfall_1pct_usd": "expected_shortfall_1pct_strategy_eq",
+    "gain_usd": "gain_strategy_eq",
+    "mdg_usd": "mdg_strategy_eq",
+    "mdg_w_usd": "mdg_strategy_eq_w",
+    "omega_ratio_usd": "omega_ratio_strategy_eq",
+    "omega_ratio_w_usd": "omega_ratio_strategy_eq_w",
+    "sharpe_ratio_usd": "sharpe_ratio_strategy_eq",
+    "sharpe_ratio_w_usd": "sharpe_ratio_strategy_eq_w",
+    "sortino_ratio_usd": "sortino_ratio_strategy_eq",
+    "sortino_ratio_w_usd": "sortino_ratio_strategy_eq_w",
+    "sterling_ratio_usd": "sterling_ratio_strategy_eq",
+    "sterling_ratio_w_usd": "sterling_ratio_strategy_eq_w",
+}
+
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
@@ -25,6 +46,8 @@ SUPPORTED_METRICS = (
     "expected_shortfall_1pct_strategy_eq",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
+    "exposure_mean_ratio_usd",
+    "exposure_ratio_usd",
     "fills_gap_longest_days",
     "fills_gap_mean_hours",
     "fills_gap_median_hours",
@@ -77,6 +100,7 @@ SUPPORTED_METRICS = (
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
+    *_USD_STRATEGY_EQ_ALIASES,
 )
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
@@ -705,6 +729,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     day_has_fill = out["day_has_fill"]
     active = _daily_series_masks(out["day_min_eq"])
     requested = set(SUPPORTED_METRICS if needed is None else needed)
+    requested_sources = requested | {
+        source
+        for alias, source in _USD_STRATEGY_EQ_ALIASES.items()
+        if alias in requested
+    }
 
     gain, adg = _smoothed_gain_adg(day_end_eq, active)
     daily_changes, change_mask = _pct_change(day_end_eq, active)
@@ -722,7 +751,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         out["last_eq_ts"],
         data["ts0"],
         run.interval_ms,
-        requested,
+        requested_sources,
     )
 
     underwater = torch.where(active, day_max_dd, torch.zeros_like(day_max_dd)).sum(
@@ -830,6 +859,15 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     for name in ("total_wallet_exposure_max", "total_wallet_exposure_mean"):
         if name in requested:
             objectives[name] = out[name].to(torch.float64)
+    exposure_ratio_denominators = {
+        "exposure_ratio_usd": "total_wallet_exposure_max",
+        "exposure_mean_ratio_usd": "total_wallet_exposure_mean",
+    }
+    for name, denominator in exposure_ratio_denominators.items():
+        if name in requested:
+            objectives[name] = adg / out[denominator].to(torch.float64).abs().clamp(
+                min=1e-12
+            )
     if {"position_unchanged_days_max", "position_unchanged_hours_max"} & requested:
         position_unchanged_hours_max = (
             out["position_unchanged_max_ms"] / 3_600_000.0
@@ -844,6 +882,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
+    for alias, source in _USD_STRATEGY_EQ_ALIASES.items():
+        if alias in requested:
+            objectives[alias] = objectives[source]
     if needed is None:
         return objectives
     return {key: value for key, value in objectives.items() if key in requested}

@@ -2165,6 +2165,8 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
     [
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "exposure_mean_ratio_usd",
+        "exposure_ratio_usd",
         "fills_gap_longest_days",
         "fills_gap_mean_hours",
         "fills_gap_median_hours",
@@ -2196,6 +2198,8 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
         {
             "entry_initial_balance_pct_long",
             "entry_initial_balance_pct_short",
+            "exposure_mean_ratio_usd",
+            "exposure_ratio_usd",
             "fills_gap_longest_days",
             "fills_gap_mean_hours",
             "fills_gap_median_hours",

@@ -190,6 +190,15 @@ The supported slice is intentionally narrow:
   reduces it with bounded maximum and online-mean accumulators. Dual-side multi-coin runs fail
   closed because independent directional kernels cannot reconstruct the shared minute-level net
   exposure series
+- canonical USD account-equity metrics may use the same MPS surface as their strategy-equity
+  counterparts while BTC collateral is disabled: `gain_usd`, `adg_usd`, `mdg_usd`,
+  `sharpe_ratio_usd`, `sortino_ratio_usd`, `omega_ratio_usd`,
+  `expected_shortfall_1pct_usd`, `calmar_ratio_usd`, `sterling_ratio_usd`,
+  `drawdown_worst_usd`, and `drawdown_worst_mean_1pct_usd`, plus the available `_w_usd` weighted
+  variants. `exposure_ratio_usd` and `exposure_mean_ratio_usd` combine proxy ADG with the maximum
+  and mean total-wallet-exposure accumulators. The exposure ratios support single-coin and
+  one-sided multi-coin runs; dual-side multi-coin runs fail closed because independent directional
+  kernels cannot reconstruct shared net exposure
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
   and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
@@ -239,7 +248,7 @@ screening also rejects `fills_gap_longest_days`,
 `entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
 `position_held_days_max`, `position_held_hours_max`, `position_unchanged_days_max`,
 `position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and
-`volume_pct_per_day_avg`: the independent directional
+`exposure_ratio_usd`, `exposure_mean_ratio_usd`, and `volume_pct_per_day_avg`: the independent directional
 summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
 effective coin counts and duration maxima truncated at shared portfolio liquidation, minute-level
 net exposure, or fill volume normalized by the shared balance safely.
@@ -307,8 +316,10 @@ Proxy scoring and limits are likewise fail-closed. The supported strategy-equity
 gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
 drawdown, mean and median underwater percentage, maximum recovery and position-held duration,
 position-unchanged duration, initial-entry balance percentage for each side, volume per active day,
-backtest completion, and weighted variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and
-Sterling. Initial-entry allocation uses the candidate's effective position count and the same
+total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
+variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
+the corresponding canonical USD account-equity names share this strategy-equity surface.
+Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and
 records positive inter-candle gaps
