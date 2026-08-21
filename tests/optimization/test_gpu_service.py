@@ -703,18 +703,13 @@ def test_single_coin_hsl_packs_explicit_signal_mode_ids(signal_mode, expected_id
     assert packed["hsl_signal_mode"] == expected_id
 
 
-@pytest.mark.parametrize("signal_mode", ["coin", "pside"])
-def test_dual_side_single_coin_hsl_accepts_scoped_signal_modes(signal_mode):
+@pytest.mark.parametrize("signal_mode", ["unified", "coin", "pside"])
+def test_dual_side_single_coin_hsl_accepts_all_signal_modes(signal_mode):
     validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=2)
 
 
 def test_one_sided_single_coin_hsl_accepts_unified_signal_mode():
     validate_single_coin_hsl_signal_topology("unified", enabled_side_count=1)
-
-
-def test_dual_side_single_coin_hsl_rejects_unified_signal_mode():
-    with pytest.raises(ValueError, match="account-wide exact-Rust flatten contract"):
-        validate_single_coin_hsl_signal_topology("unified", enabled_side_count=2)
 
 
 def test_single_coin_hsl_rejects_unknown_signal_mode():

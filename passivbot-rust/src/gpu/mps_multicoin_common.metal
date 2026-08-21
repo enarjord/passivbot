@@ -205,37 +205,15 @@ inline bool update_joint_pside_hsl(
     if (long_hsl.signal_mode == HSL_SIGNAL_COIN
         || short_hsl.signal_mode == HSL_SIGNAL_COIN
         || long_hsl.signal_mode != short_hsl.signal_mode) return false;
-    const bool unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
-    const bool shared_has_position = has_position_long || has_position_short;
-    const bool shared_has_blocking_orders = has_blocking_orders_long
-        || has_blocking_orders_short;
-    update_hsl(
-        long_hsl,
-        account.balance,
-        starting_balance,
-        joint_hsl_realized_pnl(account, unified, true),
-        joint_hsl_unrealized_pnl(
-            unrealized_pnl_long, unrealized_pnl_short, unified, true
-        ),
-        unified ? shared_has_position : has_position_long,
-        unified ? shared_has_blocking_orders : has_blocking_orders_long,
-        kf,
-        interval_ms
+    return update_dual_side_hsl(
+        long_hsl, short_hsl, account.balance, starting_balance,
+        account.realized_pnl_total,
+        account.realized_pnl_long, account.realized_pnl_short,
+        unrealized_pnl_long, unrealized_pnl_short,
+        has_position_long, has_position_short,
+        has_blocking_orders_long, has_blocking_orders_short,
+        kf, interval_ms
     );
-    update_hsl(
-        short_hsl,
-        account.balance,
-        starting_balance,
-        joint_hsl_realized_pnl(account, unified, false),
-        joint_hsl_unrealized_pnl(
-            unrealized_pnl_long, unrealized_pnl_short, unified, false
-        ),
-        unified ? shared_has_position : has_position_short,
-        unified ? shared_has_blocking_orders : has_blocking_orders_short,
-        kf,
-        interval_ms
-    );
-    return true;
 }
 
 inline void try_restart_joint_pside_hsl(

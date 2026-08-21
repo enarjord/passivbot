@@ -2749,6 +2749,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         )
         keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
         runner_cls = MpsEmaAnchorRunner
+    baseline[keys.index("hsl_signal_mode")] = 2.0
     hsl = list(baseline)
     for key, value in {
         "hsl_enabled": 1.0,
@@ -2902,8 +2903,8 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("signal_mode", ["pside", "coin"])
-def test_mps_dual_side_single_coin_hsl_keeps_directional_state_separate(
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     strategy_kind, signal_mode
 ):
     count = 48
@@ -2971,15 +2972,30 @@ def test_mps_dual_side_single_coin_hsl_keeps_directional_state_separate(
         "hsl_tier_ratio_yellow": 0.5,
         "hsl_tier_ratio_orange": 0.75,
         "hsl_orange_graceful_stop": 0.0,
-        "hsl_signal_mode": 1.0 if signal_mode == "pside" else 2.0,
+        "hsl_signal_mode": {"unified": 0.0, "pside": 1.0, "coin": 2.0}[
+            signal_mode
+        ],
         "hsl_slot_count": 1.0,
     }.items():
         hsl[keys.index(key)] = value
+    inactive = list(baseline)
+    inactive[keys.index("hsl_signal_mode")] = hsl[
+        keys.index("hsl_signal_mode")
+    ]
+    long_hsl = list(hsl)
+    short_hsl = list(hsl)
+    if signal_mode == "unified":
+        qty_key = (
+            "entry_initial_qty_pct"
+            if strategy_kind == "trailing_martingale"
+            else "base_qty_pct"
+        )
+        short_hsl[keys.index(qty_key)] = 0.1
     rows = np.asarray(
         [
-            hsl + baseline,
-            baseline + hsl,
-            hsl + hsl,
+            long_hsl + inactive,
+            inactive + short_hsl,
+            long_hsl + short_hsl,
         ],
         dtype=np.float64,
     )
@@ -2992,14 +3008,24 @@ def test_mps_dual_side_single_coin_hsl_keeps_directional_state_separate(
     ).run(rows)
     torch.mps.synchronize()
 
-    assert output["hsl_triggers_long"][0].item() == 1.0
+    assert output["hsl_triggers_long"][0].item() == (
+        0.0 if signal_mode == "unified" else 1.0
+    )
     assert output["hsl_triggers_short"][0].item() == 0.0
     assert output["hsl_triggers_long"][1].item() == 0.0
-    assert output["hsl_triggers_short"][1].item() == 1.0
+    assert output["hsl_triggers_short"][1].item() == (
+        0.0 if signal_mode == "unified" else 1.0
+    )
     assert output["hsl_triggers_long"][2].item() == 1.0
     assert output["hsl_triggers_short"][2].item() == 1.0
     assert output["hsl_trigger_drawdown_count"][2].item() == 2.0
-    assert output["hsl_panic_loss_drawdown_count"][2].item() == 2.0
+    if signal_mode == "unified":
+        assert output["hsl_panic_loss_drawdown_count"][2].item() >= 1.0
+    else:
+        assert output["hsl_panic_loss_drawdown_count"][2].item() == 2.0
+    if signal_mode == "unified":
+        assert output["short_psize"][0].item() > 0.0
+        assert output["psize"][1].item() > 0.0
 
 
 @pytest.mark.skipif(

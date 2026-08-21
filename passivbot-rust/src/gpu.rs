@@ -81,10 +81,18 @@ mod tests {
             1
         );
         assert_eq!(source.matches("inline void update_hsl(").count(), 1);
+        assert_eq!(
+            source.matches("inline bool update_dual_side_hsl(").count(),
+            1
+        );
         assert!(source.contains("constant int HSL_SIGNAL_UNIFIED = 0"));
         assert!(source.contains("constant int HSL_SIGNAL_PSIDE = 1"));
         assert!(source.contains("constant int HSL_SIGNAL_COIN = 2"));
         assert!(source.contains("int ho = po + hsl_param_offset"));
+        assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
+        assert!(source
+            .contains("const bool shared_has_position = has_position_long || has_position_short"));
+        assert!(source.contains("const bool shared_has_blocking_orders = has_blocking_orders_long"));
     }
 
     fn assert_shared_multicoin_contract(source: &str) {
@@ -118,12 +126,9 @@ mod tests {
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
-        assert!(source.contains(
-            "const bool shared_has_position = has_position_long || has_position_short"
-        ));
-        assert!(source.contains(
-            "const bool shared_has_blocking_orders = has_blocking_orders_long"
-        ));
+        assert!(source.contains("return update_dual_side_hsl("));
+        assert!(source.contains("account.realized_pnl_total"));
+        assert!(source.contains("account.realized_pnl_long, account.realized_pnl_short"));
         assert!(source.contains("joint_hsl_realized_pnl(account, unified, true)"));
         assert!(source.contains("joint_hsl_realized_pnl(account, unified, false)"));
     }
@@ -133,12 +138,11 @@ mod tests {
         assert!(source.contains("thread float& realized_pnl_cumsum_short"));
         assert!(source.contains("if (is_long) realized_pnl_cumsum_long += net_pnl"));
         assert!(source.contains("else realized_pnl_cumsum_short += net_pnl"));
-        assert!(source.contains("long_hsl.signal_mode == HSL_SIGNAL_UNIFIED"));
-        assert!(source.contains("short_hsl.signal_mode == HSL_SIGNAL_UNIFIED"));
-        assert!(source.contains("? realized_pnl_cumsum_last : realized_pnl_cumsum_long"));
-        assert!(source.contains("? realized_pnl_cumsum_last : realized_pnl_cumsum_short"));
-        assert!(source.contains("? total_unreal : long_unreal"));
-        assert!(source.contains("? total_unreal : short_unreal"));
+        assert_eq!(source.matches("update_dual_side_hsl(").count(), 2);
+        assert!(source.contains("realized_pnl_cumsum_long, realized_pnl_cumsum_short"));
+        assert!(source.contains("long_unreal, short_unreal"));
+        assert!(source.contains("long_side.psize > 0.0f, short_side.psize > 0.0f"));
+        assert!(source.contains("long_blocking_orders, short_blocking_orders"));
     }
 
     #[test]

@@ -1428,26 +1428,14 @@ inline void passivbot_single_coin_impl(
                 short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
                     || short_side.secondary_close_qty > 0.0f
             );
-            float total_unreal = long_unreal + short_unreal;
-            float long_hsl_realized = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED
-                ? realized_pnl_cumsum_last : realized_pnl_cumsum_long;
-            float short_hsl_realized = short_hsl.signal_mode == HSL_SIGNAL_UNIFIED
-                ? realized_pnl_cumsum_last : realized_pnl_cumsum_short;
-            float long_hsl_unreal = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED
-                ? total_unreal : long_unreal;
-            float short_hsl_unreal = short_hsl.signal_mode == HSL_SIGNAL_UNIFIED
-                ? total_unreal : short_unreal;
-            update_hsl(
-                long_hsl, balance, starting_balance,
-                long_hsl_realized,
-                long_hsl_unreal, long_side.psize > 0.0f,
-                long_blocking_orders, kf, interval_ms
-            );
-            update_hsl(
-                short_hsl, balance, starting_balance,
-                short_hsl_realized,
-                short_hsl_unreal, short_side.psize > 0.0f,
-                short_blocking_orders, kf, interval_ms
+            update_dual_side_hsl(
+                long_hsl, short_hsl, balance, starting_balance,
+                realized_pnl_cumsum_last,
+                realized_pnl_cumsum_long, realized_pnl_cumsum_short,
+                long_unreal, short_unreal,
+                long_side.psize > 0.0f, short_side.psize > 0.0f,
+                long_blocking_orders, short_blocking_orders,
+                kf, interval_ms
             );
             if (long_hsl.enabled || short_hsl.enabled) {
                 int hsl_tier = max(long_hsl.tier, short_hsl.tier);

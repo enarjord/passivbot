@@ -28,12 +28,6 @@ def validate_hsl_signal_topology(
                 "unified requires one cross-side episode controller"
             )
         return
-    if enabled_side_count > 1 and signal_mode == "unified":
-        raise ValueError(
-            "GPU dual-side single-coin HSL currently supports only coin or "
-            "pside signal mode; unified remains fail closed pending an "
-            "account-wide exact-Rust flatten contract"
-        )
 
 
 def validate_single_coin_hsl_signal_topology(

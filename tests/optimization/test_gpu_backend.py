@@ -1502,26 +1502,14 @@ def test_gpu_hsl_fails_closed_for_unknown_panic_close_type():
         _validate_scope(config, _Evaluator())
 
 
-@pytest.mark.parametrize("signal_mode", ["coin", "pside"])
-def test_gpu_hsl_accepts_dual_side_single_coin_scoped_modes(signal_mode):
+@pytest.mark.parametrize("signal_mode", ["unified", "coin", "pside"])
+def test_gpu_hsl_accepts_dual_side_single_coin_signal_modes(signal_mode):
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["bot"]["long"]["hsl"]["enabled"] = True
     config["bot"]["short"]["hsl"]["enabled"] = True
     config["live"]["hsl_signal_mode"] = signal_mode
 
     assert _validate_scope(config, _Evaluator()) == "bybit"
-
-
-def test_gpu_hsl_fails_closed_for_dual_side_single_coin_unified_mode():
-    config = _directional_ema_config(long_enabled=True, short_enabled=True)
-    config["bot"]["long"]["hsl"]["enabled"] = True
-    config["bot"]["short"]["hsl"]["enabled"] = True
-    config["live"]["hsl_signal_mode"] = "unified"
-
-    with pytest.raises(ValueError, match="account-wide exact-Rust flatten contract"):
-        _validate_scope(config, _Evaluator())
-
-
 @pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
 def test_gpu_hsl_accepts_one_sided_multicoin_signal_modes(signal_mode):
     config = _long_only_ema_config()

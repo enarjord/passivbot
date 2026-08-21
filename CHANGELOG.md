@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
+  Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized
+  PnL and require positions and blocking orders on both sides to be flat before ending a RED
+  episode, matching exact Rust. Dual-side multi-coin `coin` and `unified` remain fail closed.
+
 - Fixed exact Rust backtests so `unified` HSL confirms the whole account is flat before ending a
   RED episode. A position or blocking order on either side now prevents both unified controllers
   from halting or beginning cooldown, matching the documented live HSL scope.
