@@ -227,7 +227,10 @@ inline void update_hsl(
             starting_balance + h.peak_strategy_pnl, strategy_equity
         );
         if (!(strategy_equity > 0.0f && peak_strategy_equity > 0.0f)) return;
-        drawdown_raw = fmax(1.0f - strategy_equity / peak_strategy_equity, 0.0f);
+        drawdown_raw = fmin(
+            fmax(1.0f - strategy_equity / peak_strategy_equity, 0.0f),
+            0.9999999403953552f
+        );
     }
     if (!h.initialized) {
         h.initialized = true;

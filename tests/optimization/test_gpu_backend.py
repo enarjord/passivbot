@@ -31,6 +31,7 @@ from optimization.backends.gpu_backend import (
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
     _gpu_candidate_source_sides,
+    _gpu_hsl_search_sides,
     _gpu_hsl_parameter_active,
     _gpu_pinned_hsl_bound_contract,
     _validate_hsl_bound_contracts,
@@ -3980,6 +3981,28 @@ def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
         _validate_hsl_bound_contracts(
             {"long_hsl_red_threshold": Bound(0.9, 1.0)}, config
         )
+    with pytest.raises(ValueError, match="red_threshold bounds must remain greater"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(-0.1, 0.2)}, config
+        )
+    with pytest.raises(ValueError, match="cooldown_minutes_after_red bounds"):
+        _validate_hsl_bound_contracts(
+            {
+                "long_hsl_cooldown_minutes_after_red": Bound(-10.0, 10.0)
+            },
+            config,
+        )
+
+    base = _long_only_ema_config()
+    scenario = copy.deepcopy(base)
+    scenario["bot"]["long"]["hsl"]["enabled"] = True
+    search_sides = _gpu_hsl_search_sides(
+        base, [{"config": scenario}], set()
+    )
+    assert search_sides == {"long"}
+    assert _gpu_hsl_parameter_active(
+        "long_hsl_no_restart_drawdown_threshold", search_sides
+    )
 
 
 def test_gpu_checkpoint_signature_tracks_prepared_coin_override_contract():

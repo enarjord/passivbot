@@ -2053,6 +2053,22 @@ def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
                 )
         if not enabled:
             continue
+        red_bound = bound_by_key.get(f"{side}_hsl_red_threshold")
+        if red_bound is not None and float(red_bound.low) <= 0.0:
+            raise ValueError(
+                f"GPU HSL {side}_hsl_red_threshold bounds must remain greater "
+                f"than zero, got {(float(red_bound.low), float(red_bound.high))}"
+            )
+        cooldown_bound = bound_by_key.get(
+            f"{side}_hsl_cooldown_minutes_after_red"
+        )
+        if cooldown_bound is not None and float(cooldown_bound.low) < 0.0:
+            raise ValueError(
+                "GPU HSL "
+                f"{side}_hsl_cooldown_minutes_after_red bounds must remain "
+                "non-negative, got "
+                f"{(float(cooldown_bound.low), float(cooldown_bound.high))}"
+            )
         for suffix in (
             "hsl_red_threshold",
             "hsl_no_restart_drawdown_threshold",
@@ -3022,9 +3038,7 @@ def run_backend(
             continue
         if any(bound_key.startswith(f"{side}_hsl_") for side in enabled_sides):
             bound_side = bound_key.split("_", 1)[0]
-            if not bool(
-                config["bot"][bound_side].get("hsl", {}).get("enabled")
-            ):
+            if bound_side not in hsl_search_sides:
                 # Dormant HSL bounds affect neither proxy nor exact Rust.
                 continue
         if max_coin_count > 1 and len(enabled_sides) == 2 and any(
