@@ -4171,6 +4171,17 @@ def test_gpu_hsl_gene_activity_and_pinned_contract_helpers():
             config,
         )
 
+    override_enabled = _long_only_ema_config()
+    override_enabled["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
+    }
+    with pytest.raises(ValueError, match="red_threshold bounds must remain greater"):
+        _validate_hsl_bound_contracts(
+            {"long_hsl_red_threshold": Bound(-0.1, 0.2)},
+            override_enabled,
+        )
+    assert _gpu_hsl_search_sides(override_enabled, [], set()) == {"long"}
+
     base = _long_only_ema_config()
     scenario = copy.deepcopy(base)
     scenario["bot"]["long"]["hsl"]["enabled"] = True

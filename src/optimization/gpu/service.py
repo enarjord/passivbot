@@ -324,6 +324,12 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
             "MPS HSL requires orange_tier_mode to be graceful_stop or tp_only, "
             f"got {orange_mode!r}"
         )
+    tier_ratios = bot.get("hsl_tier_ratios", {}) or {}
+    if not isinstance(tier_ratios, dict):
+        raise ValueError(
+            "MPS HSL requires tier_ratios to be a dictionary, got "
+            f"{type(tier_ratios).__name__}"
+        )
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
@@ -349,10 +355,10 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
         ),
         "hsl_restart_policy": restart_policy_ids[restart_policy],
         "hsl_tier_ratio_yellow": float(
-            bot.get("hsl_tier_ratio_yellow", 0.5)
+            bot.get("hsl_tier_ratio_yellow", tier_ratios.get("yellow", 0.5))
         ),
         "hsl_tier_ratio_orange": float(
-            bot.get("hsl_tier_ratio_orange", 0.75)
+            bot.get("hsl_tier_ratio_orange", tier_ratios.get("orange", 0.75))
         ),
         "hsl_orange_graceful_stop": float(orange_mode == "graceful_stop"),
         "hsl_signal_mode": signal_mode_ids[signal_mode],

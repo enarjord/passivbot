@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
@@ -39,6 +40,21 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+def test_hsl_params_preserve_grouped_tier_ratios_after_flattening():
+    bot = flatten_shared_bot_side(
+        {
+            "hsl": {
+                "tier_ratios": {"yellow": 0.31, "orange": 0.82},
+            }
+        }
+    )
+
+    packed = _hsl_params(bot, signal_mode="coin")
+
+    assert packed["hsl_tier_ratio_yellow"] == pytest.approx(0.31)
+    assert packed["hsl_tier_ratio_orange"] == pytest.approx(0.82)
 
 
 def test_core_output_contract_retains_gross_pnl_aggregates():

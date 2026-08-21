@@ -994,22 +994,9 @@ def _validate_scope_config(
         enabled_sides=enabled_sides,
         coin_count=coin_count,
     )
-    hsl_enabled_sides = []
-    for side in enabled_sides:
-        globally_enabled = bool(
-            config["bot"][side].get("hsl", {}).get("enabled")
-        )
-        override_enabled = any(
-            bool(
-                (patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}).get(
-                    "enabled", globally_enabled
-                )
-            )
-            for patch in (config.get("coin_overrides") or {}).values()
-            if isinstance(patch, dict)
-        )
-        if globally_enabled or override_enabled:
-            hsl_enabled_sides.append(side)
+    hsl_enabled_sides = [
+        side for side in enabled_sides if _gpu_hsl_side_enabled(config, side)
+    ]
     if hsl_enabled_sides:
         # The proxy deliberately keeps an all-history candidate-local peak for
         # finite windows. That peak is never below Rust's rolling-window peak,
@@ -2107,20 +2094,41 @@ def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
     }
 
 
+def _gpu_hsl_side_enabled(config: dict, side: str) -> bool:
+    globally_enabled = bool(
+        config.get("bot", {})
+        .get(side, {})
+        .get("hsl", {})
+        .get("enabled", False)
+    )
+    if globally_enabled:
+        return True
+    for patch in (config.get("coin_overrides") or {}).values():
+        if not isinstance(patch, dict):
+            continue
+        hsl_patch = (
+            patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
+        )
+        if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
+            return True
+    return False
+
+
 def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
     for side in ("long", "short"):
-        enabled = bool(
+        globally_enabled = bool(
             config.get("bot", {})
             .get(side, {})
             .get("hsl", {})
             .get("enabled", False)
         )
+        enabled = _gpu_hsl_side_enabled(config, side)
         enabled_bound = bound_by_key.get(f"{side}_hsl_enabled")
         if enabled_bound is not None:
-            expected = float(enabled)
+            expected = float(globally_enabled)
             endpoints = (float(enabled_bound.low), float(enabled_bound.high))
             if any(
                 not math.isclose(
@@ -2179,12 +2187,7 @@ def _gpu_hsl_search_sides(
         for side in ("long", "short")
         if any(
             gpu_side_enabled(item, side)
-            and bool(
-                item.get("bot", {})
-                .get(side, {})
-                .get("hsl", {})
-                .get("enabled", False)
-            )
+            and _gpu_hsl_side_enabled(item, side)
             for item in configs
         )
     }
