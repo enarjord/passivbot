@@ -634,6 +634,162 @@ inline void init_trailing_martingale_multicoin_side_state(
     }
 }
 
+inline float accumulate_tm_multicoin_side_unrealized_pnl(
+    thread const TrailingMartingaleMulticoinSideState& side,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count,
+    bool short_side,
+    float accumulator
+) {
+    for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        float close = bars[bar_offset + 2];
+        if (side.psize[c] > 0.0f && finite_positive(close)) {
+            accumulator += side.psize[c]
+                * coin_settings[coin_offset + 4]
+                * (short_side
+                    ? side.pprice[c] - close
+                    : close - side.pprice[c]);
+        }
+    }
+    return accumulator;
+}
+
+inline void update_tm_multicoin_side_indicators(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count,
+    int start_hour_minute
+) {
+    const bool hour_boundary = ((start_hour_minute + k) % 60) == 0;
+    for (int c = 0; c < coin_count; ++c) {
+        const int coin_offset = c * COIN_COLS;
+        const int bar_offset = (k * coin_count + c) * 4;
+        const float high = bars[bar_offset + 0];
+        const float low = bars[bar_offset + 1];
+        const float close = bars[bar_offset + 2];
+        const float volume = bars[bar_offset + 3];
+        const int first_valid = int(coin_settings[coin_offset + 6]);
+        const int last_valid = int(coin_settings[coin_offset + 7]);
+        const bool valid = k >= first_valid && k <= last_valid
+            && finite_positive(high) && finite_positive(low)
+            && finite_positive(close);
+        if (hour_boundary) {
+            if (side.hour_high[c] > 0.0f
+                && isfinite(side.hour_low[c]) && side.hour_low[c] > 0.0f
+                && side.alpha_1h_coin[c] > 0.0f) {
+                float hour_range = log(side.hour_high[c] / side.hour_low[c]);
+                side.volatility_1h[c] = fma(
+                    side.alpha_1h_coin[c],
+                    hour_range - side.volatility_1h[c],
+                    side.volatility_1h[c]
+                );
+            }
+            side.hour_high[c] = -INFINITY;
+            side.hour_low[c] = INFINITY;
+        }
+        if (!valid) continue;
+        side.hour_high[c] = fmax(side.hour_high[c], high);
+        side.hour_low[c] = fmin(side.hour_low[c], low);
+        float log_range = log(high / low);
+        side.ema0[c] = fma(
+            side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
+        );
+        side.ema1[c] = fma(
+            side.alpha1_coin[c], close - side.ema1[c], side.ema1[c]
+        );
+        side.ema2[c] = fma(
+            side.alpha2_coin[c], close - side.ema2[c], side.ema2[c]
+        );
+        if (side.alpha_1m_coin[c] > 0.0f) {
+            side.volatility_1m[c] = fma(
+                side.alpha_1m_coin[c],
+                log_range - side.volatility_1m[c],
+                side.volatility_1m[c]
+            );
+        }
+        if (config.alpha_forager_volatility > 0.0f) {
+            side.forager_volatility[c] = fma(
+                config.alpha_forager_volatility,
+                log_range - side.forager_volatility[c],
+                side.forager_volatility[c]
+            );
+        }
+        if (config.alpha_forager_volume > 0.0f) {
+            float typical = (high + low + close) / 3.0f;
+            float quote_volume = fmax(volume, 0.0f) * typical;
+            side.forager_volume[c] = fma(
+                config.alpha_forager_volume,
+                quote_volume - side.forager_volume[c],
+                side.forager_volume[c]
+            );
+        }
+        if (side.psize[c] > 0.0f) {
+            if (side.filled_coin[c]) {
+                side.min_since_open[c] = INFINITY;
+                side.max_since_min[c] = 0.0f;
+                side.max_since_open[c] = 0.0f;
+                side.min_since_max[c] = INFINITY;
+            } else {
+                if (low < side.min_since_open[c]) {
+                    side.min_since_open[c] = low;
+                    side.max_since_min[c] = close;
+                } else {
+                    side.max_since_min[c] = fmax(
+                        side.max_since_min[c], high
+                    );
+                }
+                if (high > side.max_since_open[c]) {
+                    side.max_since_open[c] = high;
+                    side.min_since_max[c] = close;
+                } else {
+                    side.min_since_max[c] = fmin(
+                        side.min_since_max[c], low
+                    );
+                }
+            }
+        }
+    }
+}
+
+inline int count_tm_multicoin_tradable_coins(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int k,
+    int coin_count
+) {
+    int tradable_count = 0;
+    for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        float close = bars[bar_offset + 2];
+        float coin_wel = coin_override_or(coin_overrides, c, 24, -1.0f);
+        if (k >= int(coin_settings[coin_offset + 8])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(close) && coin_wel != 0.0f) {
+            tradable_count += 1;
+        }
+    }
+    return tradable_count;
+}
+
+inline bool tm_multicoin_side_has_position(
+    thread const TrailingMartingaleMulticoinSideState& side,
+    int coin_count
+) {
+    for (int c = 0; c < coin_count; ++c) {
+        if (side.psize[c] > 0.0f) return true;
+    }
+    return false;
+}
+
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -727,8 +883,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread HslState* coin_hsl = side.coin_hsl;
     thread ulong& coin_hsl_entry_blocked_mask =
         side.coin_hsl_entry_blocked_mask;
-    const float alpha_forager_volume = config.alpha_forager_volume;
-    const float alpha_forager_volatility = config.alpha_forager_volatility;
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -747,8 +901,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread float* volatility_1h = side.volatility_1h;
     thread float* forager_volume = side.forager_volume;
     thread float* forager_volatility = side.forager_volatility;
-    thread float* hour_high = side.hour_high;
-    thread float* hour_low = side.hour_low;
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
     thread float* last_increase_k = side.last_increase_k;
@@ -785,11 +937,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread bool* close_is_unstuck_reducer =
         side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
-    thread float* alpha0_coin = side.alpha0_coin;
-    thread float* alpha1_coin = side.alpha1_coin;
-    thread float* alpha2_coin = side.alpha2_coin;
-    thread float* alpha_1h_coin = side.alpha_1h_coin;
-    thread float* alpha_1m_coin = side.alpha_1m_coin;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -879,17 +1026,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
 
         bool any_fill = false;
-        float hsl_equity_before_fills = balance;
-        for (int c = 0; c < C; ++c) {
-            int coin_offset = c * COIN_COLS;
-            int bar_offset = (k * C + c) * 4;
-            float close = bars[bar_offset + 2];
-            if (psize[c] > 0.0f && finite_positive(close)) {
-                hsl_equity_before_fills += psize[c]
-                    * coin_settings[coin_offset + 4]
-                    * (short_side ? pprice[c] - close : close - pprice[c]);
-            }
-        }
+        float hsl_equity_before_fills =
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                side, bars, coin_settings, k, C, short_side, balance
+            );
         for (int c = 0; c < C; ++c) filled_coin[c] = false;
         for (int c = 0; c < C; ++c) {
             const int coin_offset = c * COIN_COLS;
@@ -1412,94 +1552,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             last_fill_k = float(k);
         }
 
-        const bool hour_boundary = ((start_hour_minute + k) % 60) == 0;
-        for (int c = 0; c < C; ++c) {
-            const int coin_offset = c * COIN_COLS;
-            const int bar_offset = (k * C + c) * 4;
-            const float high = bars[bar_offset + 0];
-            const float low = bars[bar_offset + 1];
-            const float close = bars[bar_offset + 2];
-            const float volume = bars[bar_offset + 3];
-            const int first_valid = int(coin_settings[coin_offset + 6]);
-            const int last_valid = int(coin_settings[coin_offset + 7]);
-            const bool valid = k >= first_valid && k <= last_valid
-                && finite_positive(high) && finite_positive(low) && finite_positive(close);
-            if (hour_boundary) {
-                if (hour_high[c] > 0.0f && isfinite(hour_low[c]) && hour_low[c] > 0.0f
-                    && alpha_1h_coin[c] > 0.0f) {
-                    float hour_range = log(hour_high[c] / hour_low[c]);
-                    volatility_1h[c] = fma(
-                        alpha_1h_coin[c], hour_range - volatility_1h[c], volatility_1h[c]
-                    );
-                }
-                hour_high[c] = -INFINITY;
-                hour_low[c] = INFINITY;
-            }
-            if (!valid) continue;
-            hour_high[c] = fmax(hour_high[c], high);
-            hour_low[c] = fmin(hour_low[c], low);
-            float log_range = log(high / low);
-            ema0[c] = fma(alpha0_coin[c], close - ema0[c], ema0[c]);
-            ema1[c] = fma(alpha1_coin[c], close - ema1[c], ema1[c]);
-            ema2[c] = fma(alpha2_coin[c], close - ema2[c], ema2[c]);
-            if (alpha_1m_coin[c] > 0.0f) {
-                volatility_1m[c] = fma(
-                    alpha_1m_coin[c], log_range - volatility_1m[c], volatility_1m[c]
-                );
-            }
-            if (alpha_forager_volatility > 0.0f) {
-                forager_volatility[c] = fma(
-                    alpha_forager_volatility,
-                    log_range - forager_volatility[c],
-                    forager_volatility[c]
-                );
-            }
-            if (alpha_forager_volume > 0.0f) {
-                float typical = (high + low + close) / 3.0f;
-                float quote_volume = fmax(volume, 0.0f) * typical;
-                forager_volume[c] = fma(
-                    alpha_forager_volume,
-                    quote_volume - forager_volume[c],
-                    forager_volume[c]
-                );
-            }
-            if (psize[c] > 0.0f) {
-                if (filled_coin[c]) {
-                    min_since_open[c] = INFINITY;
-                    max_since_min[c] = 0.0f;
-                    max_since_open[c] = 0.0f;
-                    min_since_max[c] = INFINITY;
-                } else {
-                    if (low < min_since_open[c]) {
-                        min_since_open[c] = low;
-                        max_since_min[c] = close;
-                    } else {
-                        max_since_min[c] = fmax(max_since_min[c], high);
-                    }
-                    if (high > max_since_open[c]) {
-                        max_since_open[c] = high;
-                        min_since_max[c] = close;
-                    } else {
-                        min_since_max[c] = fmin(min_since_max[c], low);
-                    }
-                }
-            }
-        }
+        update_tm_multicoin_side_indicators(
+            side, config, bars, coin_settings, k, C, start_hour_minute
+        );
 
-        int tradable_count = 0;
-        for (int c = 0; c < C; ++c) {
-            int coin_offset = c * COIN_COLS;
-            int bar_offset = (k * C + c) * 4;
-            float close = bars[bar_offset + 2];
-            float coin_wel = coin_override_or(
-                coin_overrides, c, 24, -1.0f
-            );
-            if (k >= int(coin_settings[coin_offset + 8])
-                && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close) && coin_wel != 0.0f) {
-                tradable_count += 1;
-            }
-        }
+        int tradable_count = count_tm_multicoin_tradable_coins(
+            bars, coin_settings, coin_overrides, k, C
+        );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
         if (alive && !post_fill_balance_depleted) {
             max_tradable_seen = max(max_tradable_seen, tradable_count);
@@ -1508,10 +1567,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;
         equity_started = equity_started || can_generate;
-        bool has_hsl_position = false;
-        for (int c = 0; c < C; ++c) {
-            has_hsl_position = has_hsl_position || psize[c] > 0.0f;
-        }
+        bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
 
