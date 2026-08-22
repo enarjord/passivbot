@@ -164,6 +164,10 @@ mod tests {
         assert!(source.contains("liq_day = di"));
         assert!(source.contains("HslRollingPnlWindow long_rolling_pnl"));
         assert!(source.contains("HslRollingPnlWindow short_rolling_pnl"));
+        assert!(source.contains("const bool long_coin_hsl_rolling"));
+        assert!(source.contains("const bool short_coin_hsl_rolling"));
+        assert!(source.contains("long_coin_hsl_rolling && long_rolling_pnl.overflowed"));
+        assert!(source.contains("short_coin_hsl_rolling && short_rolling_pnl.overflowed"));
         assert!(source.contains("prepare_coin_hsl_rolling_signal("));
         assert!(source.contains("reset_hsl_rolling_pnl_window("));
         assert!(source.contains("const int pnl_lookback_bars"));

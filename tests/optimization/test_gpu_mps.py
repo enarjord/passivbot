@@ -131,13 +131,13 @@ kernel void passivbot_hsl_rolling_pnl_probe(
     const int capacity = 4;
     const int lookback_bars = 2;
     record_hsl_rolling_pnl(
-        window, values, indices, 0, capacity, 0, lookback_bars, 50.0f
+        window, values, indices, 0, capacity, 0, lookback_bars, true, 50.0f
     );
     HslRollingPnlSignal first = effective_hsl_rolling_pnl(
         window, values, indices, 0, capacity, 0, lookback_bars
     );
     record_hsl_rolling_pnl(
-        window, values, indices, 0, capacity, 1, lookback_bars, -80.0f
+        window, values, indices, 0, capacity, 1, lookback_bars, true, -80.0f
     );
     HslRollingPnlSignal second = effective_hsl_rolling_pnl(
         window, values, indices, 0, capacity, 1, lookback_bars
@@ -146,7 +146,7 @@ kernel void passivbot_hsl_rolling_pnl_probe(
         window, values, indices, 0, capacity, 3, lookback_bars
     );
     record_hsl_rolling_pnl(
-        window, values, indices, 0, capacity, 4, lookback_bars, 55.0f
+        window, values, indices, 0, capacity, 4, lookback_bars, true, 55.0f
     );
     HslRollingPnlSignal final_signal = effective_hsl_rolling_pnl(
         window, values, indices, 0, capacity, 4, lookback_bars
@@ -167,22 +167,34 @@ kernel void passivbot_hsl_rolling_pnl_probe(
     output[8] = reset_signal.peak;
     output[9] = reset_signal.current;
 
+    HslRollingPnlWindow inactive = init_hsl_rolling_pnl_window();
+    record_hsl_rolling_pnl(
+        inactive, values, indices, 4, 2, 0, 10, false, 1.0f
+    );
+    record_hsl_rolling_pnl(
+        inactive, values, indices, 4, 2, 1, 10, false, 1.0f
+    );
+    record_hsl_rolling_pnl(
+        inactive, values, indices, 4, 2, 2, 10, false, 1.0f
+    );
+    output[10] = inactive.overflowed ? 1.0f : 0.0f;
+
     HslRollingPnlWindow overflow = init_hsl_rolling_pnl_window();
     record_hsl_rolling_pnl(
-        overflow, values, indices, 4, 2, 0, 10, 1.0f
+        overflow, values, indices, 4, 2, 0, 10, true, 1.0f
     );
     record_hsl_rolling_pnl(
-        overflow, values, indices, 4, 2, 1, 10, 1.0f
+        overflow, values, indices, 4, 2, 1, 10, true, 1.0f
     );
     record_hsl_rolling_pnl(
-        overflow, values, indices, 4, 2, 2, 10, 1.0f
+        overflow, values, indices, 4, 2, 2, 10, true, 1.0f
     );
-    output[10] = overflow.overflowed ? 1.0f : 0.0f;
+    output[11] = overflow.overflowed ? 1.0f : 0.0f;
 }
 """
     values = torch.empty((6, 2), dtype=torch.float32, device="mps")
     indices = torch.empty((6, 2), dtype=torch.int32, device="mps")
-    output = torch.zeros(11, dtype=torch.float32, device="mps")
+    output = torch.zeros(12, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
     )
@@ -201,6 +213,7 @@ kernel void passivbot_hsl_rolling_pnl_probe(
         -80.0,
         55.0,
         55.0,
+        0.0,
         0.0,
         0.0,
         1.0,

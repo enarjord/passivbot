@@ -77,9 +77,10 @@ inline void record_hsl_rolling_pnl(
     int capacity,
     int k,
     int lookback_bars,
+    bool active,
     float pnl
 ) {
-    if (lookback_bars <= 0 || window.overflowed) return;
+    if (!active || lookback_bars <= 0 || window.overflowed) return;
     window.absolute_cumulative += pnl;
     prune_hsl_rolling_pnl_window(
         window, values, indices, base, capacity, k, lookback_bars
