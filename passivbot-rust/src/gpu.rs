@@ -326,6 +326,7 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_side_indicators("));
         assert!(source.contains("count_ema_multicoin_tradable_coins("));
         assert!(source.contains("ema_multicoin_side_has_position("));
+        assert!(source.contains("update_ema_multicoin_side_selection("));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));
@@ -337,6 +338,13 @@ mod tests {
         ));
         assert!(source.contains(
             "bool any_fill = process_ema_multicoin_side_fills("
+        ));
+        assert!(source.contains(
+            "update_ema_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
+        ));
+        assert!(source.contains("side.max_tradable_seen = max("));
+        assert!(source.contains(
+            "side.previous_effective_n_positions = effective_n_positions"
         ));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));

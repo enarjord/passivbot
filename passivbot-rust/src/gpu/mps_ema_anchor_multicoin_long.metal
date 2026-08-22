@@ -142,6 +142,9 @@ struct EmaMulticoinSideState {
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
+    bool selection_initialized;
+    int max_tradable_seen;
+    int previous_effective_n_positions;
     float alpha0_coin[MAX_COINS];
     float alpha1_coin[MAX_COINS];
     float alpha2_coin[MAX_COINS];
@@ -310,6 +313,9 @@ inline void init_ema_multicoin_side_state(
 ) {
     side.hsl = config.hsl_template;
     side.coin_hsl_entry_blocked_mask = 0ul;
+    side.selection_initialized = false;
+    side.max_tradable_seen = 0;
+    side.previous_effective_n_positions = 0;
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
         float seed_volume = c < coin_count ? coin_settings[c * COIN_COLS + 10] : 0.0f;
@@ -530,6 +536,210 @@ inline bool ema_multicoin_side_has_position(
         if (side.psize[c] > 0.0f) return true;
     }
     return false;
+}
+
+inline void update_ema_multicoin_side_selection(
+    thread EmaMulticoinSideState& side,
+    thread const EmaMulticoinSideConfig& config,
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int k,
+    int coin_count,
+    bool short_side,
+    bool any_fill,
+    int effective_n_positions,
+    float score_hysteresis
+) {
+    thread HslState* coin_hsl = side.coin_hsl;
+    thread ulong& coin_hsl_entry_blocked_mask =
+        side.coin_hsl_entry_blocked_mask;
+    thread float* ema0 = side.ema0;
+    thread float* ema1 = side.ema1;
+    thread float* ema2 = side.ema2;
+    thread float* forager_volume = side.forager_volume;
+    thread float* forager_volatility = side.forager_volatility;
+    thread float* psize = side.psize;
+    thread float* score = side.score;
+    thread bool* selected = side.selected;
+    thread bool* incumbent = side.incumbent;
+    thread bool* survivor = side.survivor;
+
+    // Exact Rust ranks flat candidates every minute. Re-ranking only after
+    // state changes keeps the proxy inexpensive; independent exact
+    // validations and drift gates police this approximation.
+    bool coin_hsl_eligibility_changed = false;
+    if (config.coin_hsl_mode) {
+        ulong blocked_mask = 0ul;
+        for (int c = 0; c < coin_count; ++c) {
+            if (hsl_mode(coin_hsl[c], false) != 0) {
+                blocked_mask |= 1ul << ulong(c);
+            }
+        }
+        coin_hsl_eligibility_changed =
+            blocked_mask != coin_hsl_entry_blocked_mask;
+        coin_hsl_entry_blocked_mask = blocked_mask;
+    }
+    bool reselect = !side.selection_initialized || any_fill
+        || coin_hsl_eligibility_changed
+        || effective_n_positions != side.previous_effective_n_positions;
+    if (!reselect) return;
+
+    int active_count = 0;
+    for (int c = 0; c < coin_count; ++c) {
+        incumbent[c] = selected[c] && psize[c] <= 0.0f;
+        selected[c] = psize[c] > 0.0f;
+        if (selected[c]) active_count += 1;
+        survivor[c] = false;
+    }
+    int slots = max(effective_n_positions - active_count, 0);
+    int enabled_count = 0;
+    for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
+        bool enabled = !selected[c]
+            && k >= int(coin_settings[coin_offset + 8])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(bars[bar_offset + 2])
+            && coin_wel != 0.0f
+            && (!config.coin_hsl_mode || (
+                coin_hsl_entry_blocked_mask & (1ul << ulong(c))
+            ) == 0ul);
+        survivor[c] = enabled;
+        if (enabled) enabled_count += 1;
+    }
+    int keep = int(floor(
+        float(enabled_count) * (1.0f - config.volume_drop) + 0.5f
+    ));
+    keep = min(
+        enabled_count,
+        max(max(keep, slots), enabled_count > 0 ? 1 : 0)
+    );
+    if (keep < enabled_count) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (!survivor[c]) continue;
+            int better = 0;
+            for (int j = 0; j < coin_count; ++j) {
+                if (!survivor[j]) continue;
+                if (forager_volume[j] > forager_volume[c]
+                    || (forager_volume[j] == forager_volume[c] && j < c)) {
+                    better += 1;
+                }
+            }
+            if (better >= keep) survivor[c] = false;
+        }
+    }
+
+    float volume_min = INFINITY;
+    float volume_max = -INFINITY;
+    float ready_min = INFINITY;
+    float ready_max = -INFINITY;
+    float volatility_min = INFINITY;
+    float volatility_max = -INFINITY;
+    for (int c = 0; c < coin_count; ++c) {
+        if (!survivor[c]) continue;
+        int bar_offset = (k * coin_count + c) * 4;
+        float close = bars[bar_offset + 2];
+        float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
+        float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+        float coin_offset_pct = coin_override_or(
+            coin_overrides, c, 4, config.offset
+        );
+        float threshold = short_side
+            ? upper * (1.0f + coin_offset_pct)
+            : lower * (1.0f - coin_offset_pct);
+        float readiness = threshold > 0.0f
+            ? (short_side
+                ? 1.0f - close / threshold
+                : close / threshold - 1.0f)
+            : INFINITY;
+        volume_min = fmin(volume_min, forager_volume[c]);
+        volume_max = fmax(volume_max, forager_volume[c]);
+        ready_min = fmin(ready_min, readiness);
+        ready_max = fmax(ready_max, readiness);
+        volatility_min = fmin(volatility_min, forager_volatility[c]);
+        volatility_max = fmax(volatility_max, forager_volatility[c]);
+    }
+    for (int c = 0; c < coin_count; ++c) {
+        score[c] = -INFINITY;
+        if (!survivor[c]) continue;
+        int bar_offset = (k * coin_count + c) * 4;
+        float close = bars[bar_offset + 2];
+        float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
+        float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+        float coin_offset_pct = coin_override_or(
+            coin_overrides, c, 4, config.offset
+        );
+        float threshold = short_side
+            ? upper * (1.0f + coin_offset_pct)
+            : lower * (1.0f - coin_offset_pct);
+        float readiness = threshold > 0.0f
+            ? (short_side
+                ? 1.0f - close / threshold
+                : close / threshold - 1.0f)
+            : INFINITY;
+        float volume_component = volume_max > volume_min
+            ? (forager_volume[c] - volume_min) / (volume_max - volume_min)
+            : 1.0f;
+        float ready_component = ready_max > ready_min
+            ? (ready_max - readiness) / (ready_max - ready_min)
+            : 1.0f;
+        float volatility_component = volatility_max > volatility_min
+            ? (forager_volatility[c] - volatility_min)
+                / (volatility_max - volatility_min)
+            : 1.0f;
+        score[c] = config.w_volume * volume_component
+            + config.w_ready * ready_component
+            + config.w_volatility * volatility_component;
+    }
+    for (int pick = 0; pick < slots; ++pick) {
+        int best = -1;
+        for (int c = 0; c < coin_count; ++c) {
+            if (!survivor[c] || selected[c]) continue;
+            if (best < 0 || score[c] > score[best]
+                || (score[c] == score[best] && c < best)) {
+                best = c;
+            }
+        }
+        if (best >= 0) selected[best] = true;
+    }
+    if (score_hysteresis > 0.0f) {
+        // Match Rust's score hysteresis: consider incumbent flat candidates
+        // from best to worst, then displace only the weakest selected
+        // non-incumbent challenger within the configured gap.
+        for (int rank = 0; rank < coin_count; ++rank) {
+            int incumbent_coin = -1;
+            for (int c = 0; c < coin_count; ++c) {
+                if (!survivor[c] || !incumbent[c] || selected[c]) continue;
+                if (incumbent_coin < 0 || score[c] > score[incumbent_coin]
+                    || (score[c] == score[incumbent_coin]
+                        && c < incumbent_coin)) {
+                    incumbent_coin = c;
+                }
+            }
+            if (incumbent_coin < 0) break;
+
+            int challenger = -1;
+            for (int c = 0; c < coin_count; ++c) {
+                if (!selected[c] || incumbent[c] || !survivor[c]) continue;
+                if (challenger < 0 || score[c] < score[challenger]
+                    || (score[c] == score[challenger] && c > challenger)) {
+                    challenger = c;
+                }
+            }
+            if (challenger < 0) break;
+            if (score[challenger] - score[incumbent_coin]
+                <= score_hysteresis) {
+                selected[challenger] = false;
+                selected[incumbent_coin] = true;
+            } else {
+                break;
+            }
+        }
+    }
+    side.selection_initialized = true;
+    side.previous_effective_n_positions = effective_n_positions;
 }
 
 inline bool process_ema_multicoin_side_fills(
@@ -826,10 +1036,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float weight_1m = config.weight_1m;
     const float cooldown_min = config.cooldown_min;
     const float twel = config.twel;
-    const float volume_drop = config.volume_drop;
-    const float w_volume = config.w_volume;
-    const float w_ready = config.w_ready;
-    const float w_volatility = config.w_volatility;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
     const bool legacy_raw_allowance = config.legacy_raw_allowance;
@@ -867,8 +1073,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float* ema2 = side.ema2;
     thread float* volatility_1m = side.volatility_1m;
     thread float* volatility_1h = side.volatility_1h;
-    thread float* forager_volume = side.forager_volume;
-    thread float* forager_volatility = side.forager_volatility;
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
     thread float* last_increase_k = side.last_increase_k;
@@ -879,7 +1083,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float* unstuck_close_qty = side.unstuck_close_qty;
     thread float* position_open_k = side.position_open_k;
     thread float* position_last_fill_k = side.position_last_fill_k;
-    thread float* score = side.score;
     thread float* contribution = side.contribution;
     thread float* minimum_entry = side.minimum_entry;
     thread int* entry_tick = side.entry_tick;
@@ -890,8 +1093,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread bool* close_is_unstuck_reducer = side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
     thread bool* selected = side.selected;
-    thread bool* incumbent = side.incumbent;
-    thread bool* survivor = side.survivor;
     thread bool* entry_candidate = side.entry_candidate;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
     for (int j = 0; j < GAP_BINS; ++j) {
@@ -915,9 +1116,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
-    bool selection_initialized = false;
-    int max_tradable_seen = 0;
-    int previous_effective_n_positions = 0;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
@@ -1016,9 +1214,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
         );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
         if (alive && !post_fill_balance_depleted) {
-            max_tradable_seen = max(max_tradable_seen, tradable_count);
+            side.max_tradable_seen = max(
+                side.max_tradable_seen, tradable_count
+            );
         }
-        const int effective_n_positions = min(n_positions, max_tradable_seen);
+        const int effective_n_positions = min(
+            n_positions, side.max_tradable_seen
+        );
         const bool can_generate = alive && effective_n_positions > 0
             && k > max(global_warmup, 1) && k >= requested_start_k;
         equity_started = equity_started || can_generate;
@@ -1027,173 +1229,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
             ? 0 : hsl_mode(hsl, has_hsl_position);
 
         if (can_generate) {
-            // Exact Rust ranks flat candidates every minute. Re-ranking only
-            // after state changes keeps the proxy inexpensive; independent
-            // exact validations and drift gates police this approximation.
-            bool coin_hsl_eligibility_changed = false;
-            if (coin_hsl_mode) {
-                ulong blocked_mask = 0ul;
-                for (int c = 0; c < C; ++c) {
-                    if (hsl_mode(coin_hsl[c], false) != 0) {
-                        blocked_mask |= 1ul << ulong(c);
-                    }
-                }
-                coin_hsl_eligibility_changed =
-                    blocked_mask != coin_hsl_entry_blocked_mask;
-                coin_hsl_entry_blocked_mask = blocked_mask;
-            }
-            bool reselect = !selection_initialized || any_fill
-                || coin_hsl_eligibility_changed
-                || effective_n_positions != previous_effective_n_positions;
-            if (reselect) {
-                int active_count = 0;
-                for (int c = 0; c < C; ++c) {
-                    incumbent[c] = selected[c] && psize[c] <= 0.0f;
-                    selected[c] = psize[c] > 0.0f;
-                    if (selected[c]) active_count += 1;
-                    survivor[c] = false;
-                }
-                int slots = max(effective_n_positions - active_count, 0);
-                int enabled_count = 0;
-                for (int c = 0; c < C; ++c) {
-                    int coin_offset = c * COIN_COLS;
-                    int bar_offset = (k * C + c) * 4;
-                    float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
-                    bool enabled = !selected[c]
-                        && k >= int(coin_settings[coin_offset + 8])
-                        && k <= int(coin_settings[coin_offset + 7])
-                        && finite_positive(bars[bar_offset + 2])
-                        && coin_wel != 0.0f
-                        && (!coin_hsl_mode || (
-                            coin_hsl_entry_blocked_mask & (1ul << ulong(c))
-                        ) == 0ul);
-                    survivor[c] = enabled;
-                    if (enabled) enabled_count += 1;
-                }
-                int keep = int(floor(float(enabled_count) * (1.0f - volume_drop) + 0.5f));
-                keep = min(enabled_count, max(max(keep, slots), enabled_count > 0 ? 1 : 0));
-                if (keep < enabled_count) {
-                    for (int c = 0; c < C; ++c) {
-                        if (!survivor[c]) continue;
-                        int better = 0;
-                        for (int j = 0; j < C; ++j) {
-                            if (!survivor[j]) continue;
-                            if (forager_volume[j] > forager_volume[c]
-                                || (forager_volume[j] == forager_volume[c] && j < c)) {
-                                better += 1;
-                            }
-                        }
-                        if (better >= keep) survivor[c] = false;
-                    }
-                }
-
-                float volume_min = INFINITY;
-                float volume_max = -INFINITY;
-                float ready_min = INFINITY;
-                float ready_max = -INFINITY;
-                float volatility_min = INFINITY;
-                float volatility_max = -INFINITY;
-                for (int c = 0; c < C; ++c) {
-                    if (!survivor[c]) continue;
-                    int bar_offset = (k * C + c) * 4;
-                    float close = bars[bar_offset + 2];
-                    float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-                    float coin_offset_pct = coin_override_or(
-                        coin_overrides, c, 4, offset
-                    );
-                    float threshold = short_side
-                        ? upper * (1.0f + coin_offset_pct)
-                        : lower * (1.0f - coin_offset_pct);
-                    float readiness = threshold > 0.0f
-                        ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
-                        : INFINITY;
-                    volume_min = fmin(volume_min, forager_volume[c]);
-                    volume_max = fmax(volume_max, forager_volume[c]);
-                    ready_min = fmin(ready_min, readiness);
-                    ready_max = fmax(ready_max, readiness);
-                    volatility_min = fmin(volatility_min, forager_volatility[c]);
-                    volatility_max = fmax(volatility_max, forager_volatility[c]);
-                }
-                for (int c = 0; c < C; ++c) {
-                    score[c] = -INFINITY;
-                    if (!survivor[c]) continue;
-                    int bar_offset = (k * C + c) * 4;
-                    float close = bars[bar_offset + 2];
-                    float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-                    float coin_offset_pct = coin_override_or(
-                        coin_overrides, c, 4, offset
-                    );
-                    float threshold = short_side
-                        ? upper * (1.0f + coin_offset_pct)
-                        : lower * (1.0f - coin_offset_pct);
-                    float readiness = threshold > 0.0f
-                        ? (short_side ? 1.0f - close / threshold : close / threshold - 1.0f)
-                        : INFINITY;
-                    float volume_component = volume_max > volume_min
-                        ? (forager_volume[c] - volume_min) / (volume_max - volume_min) : 1.0f;
-                    float ready_component = ready_max > ready_min
-                        ? (ready_max - readiness) / (ready_max - ready_min) : 1.0f;
-                    float volatility_component = volatility_max > volatility_min
-                        ? (forager_volatility[c] - volatility_min)
-                            / (volatility_max - volatility_min) : 1.0f;
-                    score[c] = w_volume * volume_component
-                        + w_ready * ready_component
-                        + w_volatility * volatility_component;
-                }
-                for (int pick = 0; pick < slots; ++pick) {
-                    int best = -1;
-                    for (int c = 0; c < C; ++c) {
-                        if (!survivor[c] || selected[c]) continue;
-                        if (best < 0 || score[c] > score[best]
-                            || (score[c] == score[best] && c < best)) {
-                            best = c;
-                        }
-                    }
-                    if (best >= 0) selected[best] = true;
-                }
-                if (score_hysteresis > 0.0f) {
-                    // Match Rust's score hysteresis: consider incumbent flat
-                    // candidates from best to worst, then displace only the
-                    // weakest selected non-incumbent challenger when its
-                    // normalized-score lead is within the configured gap.
-                    for (int rank = 0; rank < C; ++rank) {
-                        int incumbent_coin = -1;
-                        for (int c = 0; c < C; ++c) {
-                            if (!survivor[c] || !incumbent[c] || selected[c]) continue;
-                            if (incumbent_coin < 0 || score[c] > score[incumbent_coin]
-                                || (score[c] == score[incumbent_coin]
-                                    && c < incumbent_coin)) {
-                                incumbent_coin = c;
-                            }
-                        }
-                        if (incumbent_coin < 0) break;
-
-                        int challenger = -1;
-                        for (int c = 0; c < C; ++c) {
-                            if (!selected[c] || incumbent[c] || !survivor[c]) continue;
-                            if (challenger < 0 || score[c] < score[challenger]
-                                || (score[c] == score[challenger] && c > challenger)) {
-                                challenger = c;
-                            }
-                        }
-                        if (challenger < 0) break;
-                        if (score[challenger] - score[incumbent_coin]
-                            <= score_hysteresis) {
-                            selected[challenger] = false;
-                            selected[incumbent_coin] = true;
-                        } else {
-                            // Rust continues to lower-scored incumbents, but
-                            // none can satisfy the gap once the best cannot.
-                            break;
-                        }
-                    }
-                }
-                selection_initialized = true;
-                previous_effective_n_positions = effective_n_positions;
-            }
-
+            update_ema_multicoin_side_selection(
+                side, config, bars, coin_settings, coin_overrides,
+                k, C, short_side, any_fill, effective_n_positions,
+                score_hysteresis
+            );
             const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
             float current_twe = 0.0f;
             int open_position_count = 0;
@@ -2008,7 +2048,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 18] = profit_sum;
     scalars[scalar_offset + 19] = loss_sum;
     scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
-    int entry_effective_n_positions = min(n_positions, max_tradable_seen);
+    int entry_effective_n_positions = min(
+        n_positions, side.max_tradable_seen
+    );
     float entry_base_limit = entry_effective_n_positions > 0
         ? twel / float(entry_effective_n_positions) : 0.0f;
     float entry_initial_qty_pct = coin_override_or(
